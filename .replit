@@ -32,23 +32,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "Start application"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
 args = "Website"
-
-[[workflows.workflow]]
-name = "Start application"
-author = "agent"
-
-[workflows.workflow.metadata]
-outputType = "webview"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "npx tsx server/index.ts"
-waitForPort = 5000
 
 [[workflows.workflow]]
 name = "Start Dev Server"
@@ -67,13 +51,13 @@ args = "npm run dev"
 name = "Website"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "npx tsx website.js"
-waitForPort = 5000
-
 [workflows.workflow.metadata]
 outputType = "webview"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx tsx website.cjs"
+waitForPort = 5000
 
 [agent]
 expertMode = true
