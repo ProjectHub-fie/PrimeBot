@@ -1,0 +1,31 @@
+{
+  "1338901116561391689": {
+    "channelId": "1338901116561391689",
+    "startedBy": "1310654136290639894",
+    "currentPlayer": "1310654136290639894",
+    "board": [
+      [
+        "1310654136290639894",
+        null,
+        null
+      ],
+      [
+        null,
+        null,
+        null
+      ],
+      [
+        null,
+        null,
+        null
+      ]
+    ],
+    "status": "active",
+    "winner": null,
+    "startTime": 1744368188646,
+    "players": [
+      "1310654136290639894"
+    ],
+    "moves": 1
+  }
+}

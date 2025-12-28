@@ -1,0 +1,210 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Discord Bot Database Admin</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .header {
+            border-bottom: 2px solid #007cba;
+            padding-bottom: 15px;
+            margin-bottom: 20px;
+        }
+        .query-box {
+            margin: 20px 0;
+        }
+        textarea {
+            width: 100%;
+            height: 100px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-family: monospace;
+        }
+        button {
+            background: #007cba;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #005a87;
+        }
+        .results {
+            margin-top: 20px;
+            overflow-x: auto;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background: #007cba;
+            color: white;
+        }
+        .error {
+            color: red;
+            background: #fee;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .success {
+            color: green;
+            background: #efe;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .quick-queries {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 10px;
+            margin: 20px 0;
+        }
+        .quick-query {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 4px;
+            border: 1px solid #dee2e6;
+        }
+        .quick-query h4 {
+            margin: 0 0 10px 0;
+            color: #495057;
+        }
+        .quick-query button {
+            background: #28a745;
+            font-size: 12px;
+            padding: 5px 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Discord Bot Database Admin</h1>
+            <p>Manage your Discord bot's MySQL database</p>
+        </div>
+
+        <div class="quick-queries">
+            <div class="quick-query">
+                <h4>Show All Tables</h4>
+                <button onclick="runQuickQuery('SHOW TABLES')">Execute</button>
+            </div>
+            <div class="quick-query">
+                <h4>User Levels Stats</h4>
+                <button onclick="runQuickQuery('SELECT guild_id, COUNT(*) as users, AVG(level) as avg_level FROM user_levels GROUP BY guild_id')">Execute</button>
+            </div>
+            <div class="quick-query">
+                <h4>Active Polls</h4>
+                <button onclick="runQuickQuery('SELECT * FROM live_polls WHERE is_active = 1')">Execute</button>
+            </div>
+            <div class="quick-query">
+                <h4>Recent Giveaways</h4>
+                <button onclick="runQuickQuery('SELECT * FROM giveaways ORDER BY created_at DESC LIMIT 10')">Execute</button>
+            </div>
+            <div class="quick-query">
+                <h4>Top Users by Level</h4>
+                <button onclick="runQuickQuery('SELECT user_id, level, xp FROM user_levels ORDER BY level DESC, xp DESC LIMIT 10')">Execute</button>
+            </div>
+            <div class="quick-query">
+                <h4>Badge Distribution</h4>
+                <button onclick="runQuickQuery('SELECT badge_name, COUNT(*) as count FROM user_badges GROUP BY badge_name ORDER BY count DESC')">Execute</button>
+            </div>
+        </div>
+
+        <div class="query-box">
+            <h3>Custom SQL Query</h3>
+            <textarea id="sqlQuery" placeholder="Enter your SQL query here...">SELECT * FROM user_levels LIMIT 10;</textarea>
+            <br><br>
+            <button onclick="executeQuery()">Execute Query</button>
+        </div>
+
+        <div id="results" class="results"></div>
+    </div>
+
+    <script>
+        function runQuickQuery(query) {
+            document.getElementById('sqlQuery').value = query;
+            executeQuery();
+        }
+
+        async function executeQuery() {
+            const query = document.getElementById('sqlQuery').value.trim();
+            const resultsDiv = document.getElementById('results');
+            
+            if (!query) {
+                resultsDiv.innerHTML = '<div class="error">Please enter a query</div>';
+                return;
+            }
+
+            resultsDiv.innerHTML = '<div>Executing query...</div>';
+
+            try {
+                const response = await fetch(`/api/query?q=${encodeURIComponent(query)}`);
+                const data = await response.json();
+
+                if (data.error) {
+                    resultsDiv.innerHTML = `<div class="error">Error: ${data.error}</div>`;
+                    return;
+                }
+
+                if (!data.data || data.data.length === 0) {
+                    resultsDiv.innerHTML = '<div class="success">Query executed successfully. No results returned.</div>';
+                    return;
+                }
+
+                let html = '<div class="success">Query executed successfully</div>';
+                html += '<table>';
+                
+                // Headers
+                if (data.data[0]) {
+                    html += '<tr>';
+                    Object.keys(data.data[0]).forEach(key => {
+                        html += `<th>${key}</th>`;
+                    });
+                    html += '</tr>';
+                }
+
+                // Data rows
+                data.data.forEach(row => {
+                    html += '<tr>';
+                    Object.values(row).forEach(value => {
+                        html += `<td>${value !== null ? value : 'NULL'}</td>`;
+                    });
+                    html += '</tr>';
+                });
+
+                html += '</table>';
+                resultsDiv.innerHTML = html;
+
+            } catch (error) {
+                resultsDiv.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+            }
+        }
+    </script>
+</body>
+</html>

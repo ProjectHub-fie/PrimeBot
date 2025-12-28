@@ -1,0 +1,21 @@
+
+# Vercel Environment Variables for Test Database
+# Copy these to your Vercel project settings under Environment Variables
+
+# Option 1: Separate test database
+TEST_MYSQL_HOST=your-mysql-host.com
+TEST_MYSQL_PORT=3306
+TEST_MYSQL_USER=your-username
+TEST_MYSQL_PASSWORD=your-password
+TEST_MYSQL_DATABASE=projecthub_test
+
+# Option 2: Use main database (simpler setup)
+MYSQL_HOST=your-mysql-host.com
+MYSQL_PORT=3306
+MYSQL_USER=your-username
+MYSQL_PASSWORD=your-password
+MYSQL_DATABASE=projecthub
+
+# Other required environment variables
+NODE_ENV=production
+PORT=5000

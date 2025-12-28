@@ -1,0 +1,13 @@
+{
+  "1317011851732844566": {
+    "currentNumber": 0,
+    "goalNumber": 100,
+    "startNumber": 1,
+    "lastUserId": null,
+    "highestNumber": 1,
+    "failCount": 1,
+    "participants": {
+      "1310654136290639894": 1
+    }
+  }
+}

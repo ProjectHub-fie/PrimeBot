@@ -1,0 +1,342 @@
+{
+  "1317411980625313893": {
+    "receiveBroadcasts": true,
+    "welcomeEnabled": false,
+    "welcomeChannelId": null,
+    "welcomeMessage": "Welcome to the server, {member}! Enjoy your stay!",
+    "welcomeBannerUrl": "https://i.imgur.com/hxGEQJh.png",
+    "welcomeColor": "#5865F2",
+    "welcomeDmEnabled": true,
+    "welcomeDmMessage": "Hey {username}! Welcome to **{server}**!\n\nWe're excited to have you join our community. If you have any questions, feel free to ask in the help channel.\n\nHere are a few things to check out:\n• Read the rules in the rules channel\n• Introduce yourself in the introductions channel\n• Get roles in the roles channel",
+    "welcomeShowMemberCount": true,
+    "welcomeShowJoinDate": true,
+    "welcomeShowAccountAge": true,
+    "welcomeCustomTitle": null,
+    "welcomeCustomFooter": null,
+    "leveling": {
+      "enabled": true,
+      "levelUpChannelId": null,
+      "xpMultiplier": 1,
+      "xpCooldown": 60000
+    },
+    "autoReactions": {
+      "enabled": false,
+      "reactions": []
+    },
+    "noPrefixUsers": {
+      "1310654136290639894": 1753716058398
+    }
+  },
+  "1342037642358951998": {
+    "receiveBroadcasts": true,
+    "welcomeEnabled": false,
+    "welcomeChannelId": null,
+    "welcomeMessage": "Welcome to the server, {member}! Enjoy your stay!",
+    "welcomeBannerUrl": "https://i.imgur.com/hxGEQJh.png",
+    "welcomeColor": "#5865F2",
+    "welcomeDmEnabled": true,
+    "welcomeDmMessage": "Hey {username}! Welcome to **{server}**!\n\nWe're excited to have you join our community. If you have any questions, feel free to ask in the help channel.\n\nHere are a few things to check out:\n• Read the rules in the rules channel\n• Introduce yourself in the introductions channel\n• Get roles in the roles channel",
+    "welcomeShowMemberCount": true,
+    "welcomeShowJoinDate": true,
+    "welcomeShowAccountAge": true,
+    "welcomeCustomTitle": null,
+    "welcomeCustomFooter": null,
+    "leveling": {
+      "enabled": true,
+      "levelUpChannelId": null,
+      "xpMultiplier": 1,
+      "xpCooldown": 60000
+    },
+    "autoReactions": {
+      "enabled": false,
+      "reactions": []
+    },
+    "noPrefixUsers": {}
+  },
+  "1371881712061251736": {
+    "leveling": {
+      "enabled": true,
+      "levelUpChannelId": null,
+      "xpMultiplier": 1,
+      "xpCooldown": 60000,
+      "roleRewards": [
+        {
+          "level": 10,
+          "roleId": "1377574844186624050"
+        },
+        {
+          "level": 5,
+          "roleId": "1377574714393886771"
+        },
+        {
+          "level": 1,
+          "roleId": "1377574578062102694"
+        },
+        {
+          "level": 15,
+          "roleId": "1377574796111511612"
+        }
+      ]
+    }
+  },
+  "110373943822540800": {
+    "receiveBroadcasts": true,
+    "welcomeEnabled": false,
+    "welcomeChannelId": null,
+    "welcomeMessage": "Welcome to the server, {member}! Enjoy your stay!",
+    "welcomeBannerUrl": "https://i.imgur.com/hxGEQJh.png",
+    "welcomeColor": "#5865F2",
+    "welcomeDmEnabled": true,
+    "welcomeDmMessage": "Hey {username}! Welcome to **{server}**!\n\nWe're excited to have you join our community. If you have any questions, feel free to ask in the help channel.\n\nHere are a few things to check out:\n• Read the rules in the rules channel\n• Introduce yourself in the introductions channel\n• Get roles in the roles channel",
+    "welcomeShowMemberCount": true,
+    "welcomeShowJoinDate": true,
+    "welcomeShowAccountAge": true,
+    "welcomeCustomTitle": null,
+    "welcomeCustomFooter": null,
+    "leveling": {
+      "enabled": true,
+      "levelUpChannelId": null,
+      "xpMultiplier": 1,
+      "xpCooldown": 60000
+    },
+    "autoReactions": {
+      "enabled": false,
+      "reactions": []
+    },
+    "noPrefixUsers": {}
+  },
+  "1371048215968747590": {
+    "receiveBroadcasts": true,
+    "welcomeEnabled": false,
+    "welcomeChannelId": null,
+    "welcomeMessage": "Welcome to the server, {member}! Enjoy your stay!",
+    "welcomeBannerUrl": "https://i.imgur.com/hxGEQJh.png",
+    "welcomeColor": "#5865F2",
+    "welcomeDmEnabled": true,
+    "welcomeDmMessage": "Hey {username}! Welcome to **{server}**!\n\nWe're excited to have you join our community. If you have any questions, feel free to ask in the help channel.\n\nHere are a few things to check out:\n• Read the rules in the rules channel\n• Introduce yourself in the introductions channel\n• Get roles in the roles channel",
+    "welcomeShowMemberCount": true,
+    "welcomeShowJoinDate": true,
+    "welcomeShowAccountAge": true,
+    "welcomeCustomTitle": null,
+    "welcomeCustomFooter": null,
+    "leveling": {
+      "enabled": true,
+      "levelUpChannelId": null,
+      "xpMultiplier": 1,
+      "xpCooldown": 60000
+    },
+    "autoReactions": {
+      "enabled": false,
+      "reactions": []
+    },
+    "noPrefixUsers": {}
+  },
+  "1364640554515959919": {
+    "receiveBroadcasts": true,
+    "welcomeEnabled": false,
+    "welcomeChannelId": null,
+    "welcomeMessage": "Welcome to the server, {member}! Enjoy your stay!",
+    "welcomeBannerUrl": "https://i.imgur.com/hxGEQJh.png",
+    "welcomeColor": "#5865F2",
+    "welcomeDmEnabled": true,
+    "welcomeDmMessage": "Hey {username}! Welcome to **{server}**!\n\nWe're excited to have you join our community. If you have any questions, feel free to ask in the help channel.\n\nHere are a few things to check out:\n• Read the rules in the rules channel\n• Introduce yourself in the introductions channel\n• Get roles in the roles channel",
+    "welcomeShowMemberCount": true,
+    "welcomeShowJoinDate": true,
+    "welcomeShowAccountAge": true,
+    "welcomeCustomTitle": null,
+    "welcomeCustomFooter": null,
+    "leveling": {
+      "enabled": true,
+      "levelUpChannelId": null,
+      "xpMultiplier": 1,
+      "xpCooldown": 60000
+    },
+    "autoReactions": {
+      "enabled": false,
+      "reactions": []
+    },
+    "noPrefixUsers": {}
+  },
+  "1395300801819316264": {
+    "receiveBroadcasts": true,
+    "welcomeEnabled": false,
+    "welcomeChannelId": null,
+    "welcomeMessage": "Welcome to the server, {member}! Enjoy your stay!",
+    "welcomeBannerUrl": "https://i.imgur.com/hxGEQJh.png",
+    "welcomeColor": "#5865F2",
+    "welcomeDmEnabled": true,
+    "welcomeDmMessage": "Hey {username}! Welcome to **{server}**!\n\nWe're excited to have you join our community. If you have any questions, feel free to ask in the help channel.\n\nHere are a few things to check out:\n• Read the rules in the rules channel\n• Introduce yourself in the introductions channel\n• Get roles in the roles channel",
+    "welcomeShowMemberCount": true,
+    "welcomeShowJoinDate": true,
+    "welcomeShowAccountAge": true,
+    "welcomeCustomTitle": null,
+    "welcomeCustomFooter": null,
+    "leveling": {
+      "enabled": true,
+      "levelUpChannelId": null,
+      "xpMultiplier": 1,
+      "xpCooldown": 60000
+    },
+    "autoReactions": {
+      "enabled": false,
+      "reactions": []
+    },
+    "noPrefixUsers": {}
+  },
+  "1256300598438138010": {
+    "receiveBroadcasts": true,
+    "welcomeEnabled": false,
+    "welcomeChannelId": null,
+    "welcomeMessage": "Welcome to the server, {member}! Enjoy your stay!",
+    "welcomeBannerUrl": "https://i.imgur.com/hxGEQJh.png",
+    "welcomeColor": "#5865F2",
+    "welcomeDmEnabled": true,
+    "welcomeDmMessage": "Hey {username}! Welcome to **{server}**!\n\nWe're excited to have you join our community. If you have any questions, feel free to ask in the help channel.\n\nHere are a few things to check out:\n• Read the rules in the rules channel\n• Introduce yourself in the introductions channel\n• Get roles in the roles channel",
+    "welcomeShowMemberCount": true,
+    "welcomeShowJoinDate": true,
+    "welcomeShowAccountAge": true,
+    "welcomeCustomTitle": null,
+    "welcomeCustomFooter": null,
+    "leveling": {
+      "enabled": true,
+      "levelUpChannelId": null,
+      "xpMultiplier": 1,
+      "xpCooldown": 60000
+    },
+    "autoReactions": {
+      "enabled": false,
+      "reactions": []
+    },
+    "noPrefixUsers": {}
+  },
+  "1395714159940997190": {
+    "receiveBroadcasts": true,
+    "welcomeEnabled": false,
+    "welcomeChannelId": null,
+    "welcomeMessage": "Welcome to the server, {member}! Enjoy your stay!",
+    "welcomeBannerUrl": "https://i.imgur.com/hxGEQJh.png",
+    "welcomeColor": "#5865F2",
+    "welcomeDmEnabled": true,
+    "welcomeDmMessage": "Hey {username}! Welcome to **{server}**!\n\nWe're excited to have you join our community. If you have any questions, feel free to ask in the help channel.\n\nHere are a few things to check out:\n• Read the rules in the rules channel\n• Introduce yourself in the introductions channel\n• Get roles in the roles channel",
+    "welcomeShowMemberCount": true,
+    "welcomeShowJoinDate": true,
+    "welcomeShowAccountAge": true,
+    "welcomeCustomTitle": null,
+    "welcomeCustomFooter": null,
+    "leveling": {
+      "enabled": true,
+      "levelUpChannelId": null,
+      "xpMultiplier": 1,
+      "xpCooldown": 60000
+    },
+    "autoReactions": {
+      "enabled": false,
+      "reactions": []
+    },
+    "noPrefixUsers": {}
+  },
+  "1317011851493511228": {
+    "receiveBroadcasts": true,
+    "welcomeEnabled": false,
+    "welcomeChannelId": null,
+    "welcomeMessage": "Welcome to the server, {member}! Enjoy your stay!",
+    "welcomeBannerUrl": "https://i.imgur.com/hxGEQJh.png",
+    "welcomeColor": "#5865F2",
+    "welcomeDmEnabled": true,
+    "welcomeDmMessage": "Hey {username}! Welcome to **{server}**!\n\nWe're excited to have you join our community. If you have any questions, feel free to ask in the help channel.\n\nHere are a few things to check out:\n• Read the rules in the rules channel\n• Introduce yourself in the introductions channel\n• Get roles in the roles channel",
+    "welcomeShowMemberCount": true,
+    "welcomeShowJoinDate": true,
+    "welcomeShowAccountAge": true,
+    "welcomeCustomTitle": null,
+    "welcomeCustomFooter": null,
+    "leveling": {
+      "enabled": true,
+      "levelUpChannelId": null,
+      "xpMultiplier": 1,
+      "xpCooldown": 60000
+    },
+    "autoReactions": {
+      "enabled": false,
+      "reactions": []
+    },
+    "noPrefixUsers": {}
+  },
+  "1405995174043062353": {
+    "receiveBroadcasts": true,
+    "welcomeEnabled": false,
+    "welcomeChannelId": null,
+    "welcomeMessage": "Welcome to the server, {member}! Enjoy your stay!",
+    "welcomeBannerUrl": "https://i.imgur.com/hxGEQJh.png",
+    "welcomeColor": "#5865F2",
+    "welcomeDmEnabled": true,
+    "welcomeDmMessage": "Hey {username}! Welcome to **{server}**!\n\nWe're excited to have you join our community. If you have any questions, feel free to ask in the help channel.\n\nHere are a few things to check out:\n• Read the rules in the rules channel\n• Introduce yourself in the introductions channel\n• Get roles in the roles channel",
+    "welcomeShowMemberCount": true,
+    "welcomeShowJoinDate": true,
+    "welcomeShowAccountAge": true,
+    "welcomeCustomTitle": null,
+    "welcomeCustomFooter": null,
+    "leveling": {
+      "enabled": true,
+      "levelUpChannelId": null,
+      "xpMultiplier": 1,
+      "xpCooldown": 60000
+    },
+    "autoReactions": {
+      "enabled": false,
+      "reactions": []
+    },
+    "noPrefixUsers": {}
+  },
+  "1321903001304305707": {
+    "receiveBroadcasts": true,
+    "welcomeEnabled": false,
+    "welcomeChannelId": null,
+    "welcomeMessage": "Welcome to the server, {member}! Enjoy your stay!",
+    "welcomeBannerUrl": "https://i.imgur.com/hxGEQJh.png",
+    "welcomeColor": "#5865F2",
+    "welcomeDmEnabled": true,
+    "welcomeDmMessage": "Hey {username}! Welcome to **{server}**!\n\nWe're excited to have you join our community. If you have any questions, feel free to ask in the help channel.\n\nHere are a few things to check out:\n• Read the rules in the rules channel\n• Introduce yourself in the introductions channel\n• Get roles in the roles channel",
+    "welcomeShowMemberCount": true,
+    "welcomeShowJoinDate": true,
+    "welcomeShowAccountAge": true,
+    "welcomeCustomTitle": null,
+    "welcomeCustomFooter": null,
+    "leveling": {
+      "enabled": true,
+      "levelUpChannelId": null,
+      "xpMultiplier": 1,
+      "xpCooldown": 60000
+    },
+    "autoReactions": {
+      "enabled": false,
+      "reactions": []
+    },
+    "noPrefixUsers": {}
+  },
+  "1379014476715659355": {
+    "receiveBroadcasts": true,
+    "welcomeEnabled": false,
+    "welcomeChannelId": null,
+    "welcomeMessage": "Welcome to the server, {member}! Enjoy your stay!",
+    "welcomeBannerUrl": "https://i.imgur.com/hxGEQJh.png",
+    "welcomeColor": "#5865F2",
+    "welcomeDmEnabled": true,
+    "welcomeDmMessage": "Hey {username}! Welcome to **{server}**!\n\nWe're excited to have you join our community. If you have any questions, feel free to ask in the help channel.\n\nHere are a few things to check out:\n• Read the rules in the rules channel\n• Introduce yourself in the introductions channel\n• Get roles in the roles channel",
+    "welcomeShowMemberCount": true,
+    "welcomeShowJoinDate": true,
+    "welcomeShowAccountAge": true,
+    "welcomeCustomTitle": null,
+    "welcomeCustomFooter": null,
+    "leveling": {
+      "enabled": true,
+      "levelUpChannelId": null,
+      "xpMultiplier": 1,
+      "xpCooldown": 60000
+    },
+    "autoReactions": {
+      "enabled": false,
+      "reactions": []
+    },
+    "noPrefixUsers": {}
+  }
+}
