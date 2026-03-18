@@ -202,9 +202,6 @@ client.on('guildDelete', (guild) => {
 // Make client globally available for the website
 global.client = client;
 
-// Start website
-const website = require('./website');
-
 // Function to handle reconnection
 async function connectBot() {
     try {
