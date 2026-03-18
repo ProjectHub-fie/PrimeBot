@@ -32,36 +32,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "Website"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
 args = "Discord Bot"
-
-[[workflows.workflow]]
-name = "Start Dev Server"
-author = 47122379
-mode = "sequential"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "pkill -f \"node.*server\" || true"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "npm run dev"
-
-[[workflows.workflow]]
-name = "Website"
-author = "agent"
-
-[workflows.workflow.metadata]
-outputType = "webview"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "npx tsx website.cjs"
-waitForPort = 5000
 
 [[workflows.workflow]]
 name = "Discord Bot"
