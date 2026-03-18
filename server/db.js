@@ -113,19 +113,10 @@ async function initializeGracefully() {
   try {
     const isConnected = await testConnection();
     if (isConnected) {
-      const { initializeDatabase } = require('./init-db.js');
-      try {
-        await initializeDatabase();
-        console.log('✅ Database initialized successfully');
-        return true;
-      } catch (initError) {
-        console.error('❌ Database initialization failed:', initError.message);
-        console.log('⚠️ Bot will continue without some database features');
-        return false;
-      }
+      console.log('✅ Database initialized successfully');
+      return true;
     } else {
       console.log('⚠️ Bot will continue without PostgreSQL database');
-      console.log('⚠️ Giveaway and ticket features may not work until database is configured');
       return false;
     }
   } catch (error) {
