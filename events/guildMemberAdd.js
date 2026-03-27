@@ -1,6 +1,8 @@
 const { EmbedBuilder } = require('discord.js');
 const config = require('../config');
 
+const DEFAULT_WELCOME_GIF = 'https://www.mockofun.com/wp-content/uploads/2024/10/animated-discord-banners.gif';
+
 module.exports = {
     name: 'guildMemberAdd',
     async execute(member, client) {
@@ -133,15 +135,13 @@ async function handleServerWelcome(member, welcomeSettings, client) {
                 text: welcomeSettings?.customFooter || `User ID: ${member.user.id}` 
             }).setTimestamp();
             
-            // Add banner image if defined
-            if (bannerUrl) {
-                welcomeEmbed.setImage(bannerUrl);
-            }
+            // Add banner image (use custom bannerUrl or default welcome GIF)
+            welcomeEmbed.setImage(bannerUrl || DEFAULT_WELCOME_GIF);
             
             // Send welcome message to channel
             await welcomeChannel.send({ 
                 content: `Welcome, ${member}! We hope you enjoy your stay in **${member.guild.name}**!`, 
-                embeds: [welcomeEmbed] 
+                embeds: [welcomeEmbed]
             }).catch(error => {
                 console.error(`[WELCOME] Could not send welcome message in guild ${member.guild.name}:`, error.message);
             });
