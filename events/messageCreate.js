@@ -2614,20 +2614,18 @@ module.exports = {
                         message.reply("You don't have permission to configure welcome settings.");
                         return;
                     }
-                    
+
                     // Enable welcome system
-                    const welcomeResult = client.serverSettingsManager.updateWelcomeSettings(message.guild.id, {
-                        enabled: true
-                    });
-                    
+                    client.serverSettingsManager.updateGuildSetting(message.guild.id, 'welcomeEnabled', true);
+
                     // Create success embed
                     const welcomeEnableEmbed = new EmbedBuilder()
                         .setColor(config.colors.success)
                         .setTitle("✅ Welcome System Enabled")
                         .setDescription("The welcome system has been enabled for this server.")
                         .addFields(
-                            { 
-                                name: "Additional Configuration", 
+                            {
+                                name: "Additional Configuration",
                                 value: "Use the following commands to further customize the welcome system:\n" +
                                        "• `$welcome-channel #channel` - Set the welcome channel\n" +
                                        "• `$welcome-message your message` - Set a custom welcome message\n" +
@@ -2636,7 +2634,7 @@ module.exports = {
                         )
                         .setFooter({ text: "Server settings updated successfully", iconURL: client.user.displayAvatarURL() })
                         .setTimestamp();
-                    
+
                     message.reply({ embeds: [welcomeEnableEmbed] });
                     break;
                     
@@ -2648,12 +2646,10 @@ module.exports = {
                         message.reply("You don't have permission to configure welcome settings.");
                         return;
                     }
-                    
+
                     // Disable welcome system
-                    client.serverSettingsManager.updateWelcomeSettings(message.guild.id, {
-                        enabled: false
-                    });
-                    
+                    client.serverSettingsManager.updateGuildSetting(message.guild.id, 'welcomeEnabled', false);
+
                     // Create success embed
                     const welcomeDisableEmbed = new EmbedBuilder()
                         .setColor(config.colors.error)
@@ -2661,7 +2657,7 @@ module.exports = {
                         .setDescription("The welcome system has been disabled for this server.")
                         .setFooter({ text: "Server settings updated successfully", iconURL: client.user.displayAvatarURL() })
                         .setTimestamp();
-                    
+
                     message.reply({ embeds: [welcomeDisableEmbed] });
                     break;
                     
@@ -2943,20 +2939,18 @@ module.exports = {
                         message.reply("You don't have permission to configure welcome settings.");
                         return;
                     }
-                    
+
                     // Check if a channel is mentioned
                     if (message.mentions.channels.size === 0) {
                         message.reply("Please specify a channel: `$welcome-channel #channel`");
                         return;
                     }
-                    
+
                     const welcomeChannel = message.mentions.channels.first();
-                    
+
                     // Update welcome channel
-                    client.serverSettingsManager.updateWelcomeSettings(message.guild.id, {
-                        channelId: welcomeChannel.id
-                    });
-                    
+                    client.serverSettingsManager.setWelcomeChannel(message.guild.id, welcomeChannel.id);
+
                     // Create success embed
                     const welcomeChannelEmbed = new EmbedBuilder()
                         .setColor(config.colors.success)
@@ -2964,7 +2958,7 @@ module.exports = {
                         .setDescription(`Welcome messages will now be sent to ${welcomeChannel}.`)
                         .setFooter({ text: "Server settings updated successfully", iconURL: client.user.displayAvatarURL() })
                         .setTimestamp();
-                    
+
                     message.reply({ embeds: [welcomeChannelEmbed] });
                     break;
                     
