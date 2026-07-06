@@ -217,6 +217,36 @@ const users = pgTable('users', {
   updatedAt: timestamp('updated_at').defaultNow(),
 });
 
+// Birthdays tables
+const birthdaysGuilds = pgTable('birthdays_guilds', {
+  guildId: varchar('guild_id', { length: 50 }).primaryKey(),
+  announcementChannel: varchar('announcement_channel', { length: 50 }),
+  roleId: varchar('role_id', { length: 50 }),
+});
+
+const birthdays = pgTable('birthdays', {
+  id: serial('id').primaryKey(),
+  guildId: varchar('guild_id', { length: 50 }).notNull(),
+  userId: varchar('user_id', { length: 50 }).notNull(),
+  month: integer('month').notNull(),
+  day: integer('day').notNull(),
+  year: integer('year'),
+  lastCelebrated: varchar('last_celebrated', { length: 50 }),
+});
+
+// Counting games table
+const countingGames = pgTable('counting_games', {
+  channelId: varchar('channel_id', { length: 50 }).primaryKey(),
+  startNumber: integer('start_number').notNull().default(1),
+  currentNumber: integer('current_number').notNull().default(0),
+  goalNumber: integer('goal_number').notNull().default(100),
+  lastUserId: varchar('last_user_id', { length: 50 }),
+  highestNumber: integer('highest_number').notNull().default(0),
+  failCount: integer('fail_count').notNull().default(0),
+  participants: text('participants'), // JSON string of participant counts
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
 // Exports
 module.exports = {
   livePolls,
@@ -243,4 +273,8 @@ module.exports = {
   userBadgesRelations,
   sessions,
   users
+  ,
+  birthdaysGuilds,
+  birthdays,
+  countingGames
 };

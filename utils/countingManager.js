@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder } = require('discord.js');
 const config = require('../config');
+const { pool } = require('../server/db');
 
 class CountingManager {
     constructor(client) {
@@ -15,25 +16,34 @@ class CountingManager {
     /**
      * Load saved counting games from the data file
      */
-    loadCounting() {
+    async loadCounting() {
         try {
-            if (fs.existsSync(this.dataPath)) {
-                const data = JSON.parse(fs.readFileSync(this.dataPath, 'utf8'));
-                
-                // Load each channel's counting data
-                for (const [channelId, countData] of Object.entries(data)) {
-                    this.counting.set(channelId, countData);
+            // Reset
+            this.counting.clear();
+
+            const res = await pool.query('SELECT channel_id, start_number, current_number, goal_number, last_user_id, highest_number, fail_count, participants FROM counting_games');
+            for (const row of res.rows) {
+                let participants = {};
+                try {
+                    participants = row.participants ? JSON.parse(row.participants) : {};
+                } catch (e) {
+                    participants = {};
                 }
-                
-                console.log(`Loaded counting data for ${this.counting.size} channels.`);
-            } else {
-                // Create an empty file if it doesn't exist
-                this.saveCounting();
-                console.log('Created empty counting data file.');
+
+                this.counting.set(row.channel_id, {
+                    currentNumber: row.current_number,
+                    goalNumber: row.goal_number,
+                    startNumber: row.start_number,
+                    lastUserId: row.last_user_id,
+                    highestNumber: row.highest_number,
+                    failCount: row.fail_count,
+                    participants
+                });
             }
+
+            console.log(`Loaded counting data for ${this.counting.size} channels (from DB).`);
         } catch (error) {
-            console.error('Error loading counting data:', error);
-            // Initialize empty map if loading fails
+            console.error('Error loading counting data from DB:', error);
             this.counting = new Map();
         }
     }
@@ -41,18 +51,19 @@ class CountingManager {
     /**
      * Save counting data to file
      */
-    saveCounting() {
+    async saveCounting() {
         try {
-            const data = {};
-            
-            // Convert Map to object for JSON storage
             for (const [channelId, countData] of this.counting.entries()) {
-                data[channelId] = countData;
+                const participantsJson = JSON.stringify(countData.participants || {});
+                await pool.query(
+                    `INSERT INTO counting_games (channel_id, start_number, current_number, goal_number, last_user_id, highest_number, fail_count, participants, updated_at)
+                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8, NOW())
+                     ON CONFLICT (channel_id) DO UPDATE SET start_number = EXCLUDED.start_number, current_number = EXCLUDED.current_number, goal_number = EXCLUDED.goal_number, last_user_id = EXCLUDED.last_user_id, highest_number = EXCLUDED.highest_number, fail_count = EXCLUDED.fail_count, participants = EXCLUDED.participants, updated_at = NOW()`,
+                    [channelId, countData.startNumber, countData.currentNumber, countData.goalNumber, countData.lastUserId, countData.highestNumber, countData.failCount, participantsJson]
+                );
             }
-            
-            fs.writeFileSync(this.dataPath, JSON.stringify(data, null, 2));
         } catch (error) {
-            console.error('Error saving counting data:', error);
+            console.error('Error saving counting data to DB:', error);
         }
     }
     
@@ -88,7 +99,7 @@ class CountingManager {
             
             // Save the game
             this.counting.set(channelId, countData);
-            this.saveCounting();
+            await this.saveCounting();
             
             // Get the channel
             const channel = await this.client.channels.fetch(channelId);
@@ -165,7 +176,7 @@ class CountingManager {
             }
             
             // Save the updated game state
-            this.saveCounting();
+            await this.saveCounting();
             return true;
         } 
         // If it's wrong (wrong number or same user twice)
@@ -200,7 +211,7 @@ class CountingManager {
                 countData.lastUserId = null;
                 
                 // Save the updated game state
-                this.saveCounting();
+                await this.saveCounting();
                 return true;
             } catch (error) {
                 console.error('Error handling wrong count:', error);
@@ -263,7 +274,7 @@ class CountingManager {
             await channel.send({ embeds: [newGameEmbed] });
             
             // Save the updated game state
-            this.saveCounting();
+            await this.saveCounting();
         } catch (error) {
             console.error('Error handling game win:', error);
         }
@@ -305,7 +316,7 @@ class CountingManager {
     endCountingGame(channelId) {
         if (this.counting.has(channelId)) {
             this.counting.delete(channelId);
-            this.saveCounting();
+            this.saveCounting().catch(err => console.error('Error saving counting after end:', err));
             return true;
         }
         return false;

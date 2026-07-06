@@ -2,6 +2,7 @@ const { EmbedBuilder } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 const config = require('../config');
+const { pool } = require('../server/db');
 const ms = require('ms');
 
 class BirthdayManager {
@@ -19,47 +20,51 @@ class BirthdayManager {
             fs.mkdirSync(dataDir, { recursive: true });
         }
         
-        this.loadBirthdays();
-        this.startCheckingBirthdays();
+        // Load from DB then start checking to avoid race conditions
+        this.loadBirthdays().then(() => this.startCheckingBirthdays());
     }
     
     /**
      * Load saved birthdays from the data file
      */
-    loadBirthdays() {
+    async loadBirthdays() {
         try {
-            if (fs.existsSync(this.dataPath)) {
-                const data = JSON.parse(fs.readFileSync(this.dataPath, 'utf8'));
-                
-                // Reset the Map
-                this.birthdays.clear();
-                
-                // Process each guild's birthday data
-                for (const [guildId, guildData] of Object.entries(data)) {
-                    if (!this.birthdays.has(guildId)) {
-                        this.birthdays.set(guildId, {
-                            users: new Map(),
-                            announcementChannel: guildData.announcementChannel || null,
-                            role: guildData.role || null
-                        });
-                    }
-                    
-                    // Process users in this guild
-                    if (guildData.users) {
-                        for (const [userId, userData] of Object.entries(guildData.users)) {
-                            const guildMap = this.birthdays.get(guildId);
-                            guildMap.users.set(userId, userData);
-                        }
-                    }
-                }
-                
-                console.log(`Loaded birthdays for ${this.birthdays.size} guilds.`);
-            } else {
-                // Create the file if it doesn't exist
-                this.saveBirthdays();
+            // Reset the Map
+            this.birthdays.clear();
+
+            // Load guild configs
+            const guildRes = await pool.query('SELECT guild_id, announcement_channel, role_id FROM birthdays_guilds');
+            for (const row of guildRes.rows) {
+                this.birthdays.set(row.guild_id, {
+                    users: new Map(),
+                    announcementChannel: row.announcement_channel || null,
+                    role: row.role_id || null
+                });
             }
+
+            // Load user birthdays
+            const userRes = await pool.query('SELECT guild_id, user_id, month, day, year, last_celebrated FROM birthdays');
+            for (const row of userRes.rows) {
+                if (!this.birthdays.has(row.guild_id)) {
+                    this.birthdays.set(row.guild_id, {
+                        users: new Map(),
+                        announcementChannel: null,
+                        role: null
+                    });
+                }
+
+                const guildMap = this.birthdays.get(row.guild_id);
+                guildMap.users.set(row.user_id, {
+                    month: row.month,
+                    day: row.day,
+                    year: row.year,
+                    lastCelebrated: row.last_celebrated
+                });
+            }
+
+            console.log(`Loaded birthdays for ${this.birthdays.size} guilds (from DB).`);
         } catch (error) {
-            console.error('Error loading birthdays:', error);
+            console.error('Error loading birthdays from DB:', error);
             this.birthdays = new Map();
         }
     }
@@ -67,26 +72,31 @@ class BirthdayManager {
     /**
      * Save birthdays to the data file
      */
-    saveBirthdays() {
+    async saveBirthdays() {
         try {
-            const data = {};
-            
-            // Convert the nested Map structure to a plain object for JSON serialization
+            // For each guild, upsert guild config and replace user rows
             for (const [guildId, guildData] of this.birthdays.entries()) {
-                data[guildId] = {
-                    announcementChannel: guildData.announcementChannel,
-                    role: guildData.role,
-                    users: {}
-                };
-                
+                // Upsert guild config
+                await pool.query(
+                    `INSERT INTO birthdays_guilds (guild_id, announcement_channel, role_id)
+                     VALUES ($1, $2, $3)
+                     ON CONFLICT (guild_id) DO UPDATE SET announcement_channel = EXCLUDED.announcement_channel, role_id = EXCLUDED.role_id`,
+                    [guildId, guildData.announcementChannel, guildData.role]
+                );
+
+                // Replace users for this guild
+                await pool.query('DELETE FROM birthdays WHERE guild_id = $1', [guildId]);
+
                 for (const [userId, userData] of guildData.users.entries()) {
-                    data[guildId].users[userId] = userData;
+                    await pool.query(
+                        `INSERT INTO birthdays (guild_id, user_id, month, day, year, last_celebrated)
+                         VALUES ($1, $2, $3, $4, $5, $6)`,
+                        [guildId, userId, userData.month, userData.day, userData.year || null, userData.lastCelebrated || null]
+                    );
                 }
             }
-            
-            fs.writeFileSync(this.dataPath, JSON.stringify(data, null, 2));
         } catch (error) {
-            console.error('Error saving birthdays:', error);
+            console.error('Error saving birthdays to DB:', error);
         }
     }
     
@@ -186,7 +196,7 @@ class BirthdayManager {
             
             // Save changes if we updated any users
             if (updatedUsers.size > 0) {
-                this.saveBirthdays();
+                await this.saveBirthdays();
             }
             
             // Send birthday celebration messages (only once per day per user)
@@ -318,7 +328,7 @@ class BirthdayManager {
                 lastCelebrated: null // Will be set when celebrated
             });
             
-            this.saveBirthdays();
+            await this.saveBirthdays();
             return true;
         } catch (error) {
             console.error('Error setting birthday:', error);
@@ -361,7 +371,7 @@ class BirthdayManager {
         
         const deleted = guildData.users.delete(userId);
         if (deleted) {
-            this.saveBirthdays();
+            this.saveBirthdays().catch(err => console.error('Error saving birthdays after remove:', err));
         }
         
         return deleted;
@@ -386,7 +396,7 @@ class BirthdayManager {
         const guildData = this.birthdays.get(guildId);
         guildData.announcementChannel = channelId;
         
-        this.saveBirthdays();
+        this.saveBirthdays().catch(err => console.error('Error saving birthdays after setAnnouncementChannel:', err));
         return true;
     }
     
@@ -409,7 +419,7 @@ class BirthdayManager {
         const guildData = this.birthdays.get(guildId);
         guildData.role = roleId;
         
-        this.saveBirthdays();
+        this.saveBirthdays().catch(err => console.error('Error saving birthdays after setBirthdayRole:', err));
         return true;
     }
     
