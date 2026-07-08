@@ -75,6 +75,7 @@ class ServerSettingsManager {
             // Initialize with default settings
             const defaultSettings = {
                 receiveBroadcasts: true, // By default, servers receive broadcasts
+                broadcastChannelId: null, // Custom channel for developer broadcasts (null = auto-select)
                 
                 // Welcome system settings
                 welcomeEnabled: false,
@@ -159,6 +160,26 @@ class ServerSettingsManager {
         return newValue;
     }
     
+    /**
+     * Set (or clear) the custom broadcast channel for a guild
+     * @param {string} guildId - Discord Guild ID
+     * @param {string|null} channelId - Channel ID to send broadcasts to, or null to auto-select
+     * @returns {boolean} Whether the channel was successfully set
+     */
+    setBroadcastChannel(guildId, channelId) {
+        return this.updateGuildSetting(guildId, 'broadcastChannelId', channelId);
+    }
+
+    /**
+     * Get the custom broadcast channel for a guild
+     * @param {string} guildId - Discord Guild ID
+     * @returns {string|null} Channel ID, or null if not set
+     */
+    getBroadcastChannel(guildId) {
+        const guildSettings = this.getGuildSettings(guildId);
+        return guildSettings.broadcastChannelId || null;
+    }
+
     /**
      * Enable no-prefix mode for a user
      * @param {string} guildId - Discord Guild ID

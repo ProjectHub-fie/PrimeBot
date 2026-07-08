@@ -81,9 +81,11 @@ module.exports = {
                 .setColor(embedColor)
                 .setTitle(customTitle)
                 .setDescription(broadcastMessage)
-                .setFooter({ text: 'Version 2.5.0', iconURL: this.client?.user?.displayAvatarURL() || client?.user?.displayAvatarURL() }).setTimestamp()
-                .setFooter({ text: 'Sent by ${interaction.user.tag} • ${interaction.client.user.username} • Version 2.5.0', iconURL: interaction.client.user.displayAvatarURL()
-                 });
+                .setTimestamp()
+                .setFooter({
+                    text: `Sent by ${interaction.user.tag} • ${interaction.client.user.username} • Version 2.5.0`,
+                    iconURL: interaction.client.user.displayAvatarURL()
+                });
                 
             // Add image if provided
             if (imageUrl) {
@@ -106,6 +108,11 @@ module.exports = {
                     name: '📊 Servers', 
                     value: `This announcement is being sent to ${receptiveServers} servers that have enabled broadcasts. ${optedOutCount} servers have opted out.`, 
                     inline: false 
+                },
+                {
+                    name: '⚙️ Manage This Server\'s Broadcasts',
+                    value: 'Use `$broadcast enable` / `$broadcast disable` to control broadcast. Use `$broadcast channel` to set the channel.',
+                    inline: false
                 }
             );
 
@@ -133,9 +140,9 @@ module.exports = {
                         { name: 'Server Stats', value: `Total: ${totalServers} | Receiving: ${receptiveServers} | Opted Out: ${optedOutCount}`, inline: false },
                         { name: '💬 Visibility', value: 'This broadcast will be sent to the first available text channel in each server that has not opted out.', inline: false },
                         { name: '⏰ Timing', value: `Estimated time to complete: ${Math.ceil(receptiveServers * 0.5)} seconds`, inline: false },
-                        { name: 'Opt-Out Compliance', value: 'Servers can opt out using the `/broadcastsettings toggle` command to comply with Discord ToS.', inline: false }
+                        { name: 'Opt-Out Compliance', value: 'Servers can opt out using `/broadcastsettings disable` or `$broadcast disable` to comply with Discord ToS.', inline: false }
                     )
-                    .setFooter({ text: 'Version 2.5.0', iconURL: this.client?.user?.displayAvatarURL() || client?.user?.displayAvatarURL() }).setTimestamp();
+                    .setFooter({ text: 'Version 2.5.0', iconURL: interaction.client.user.displayAvatarURL() }).setTimestamp();
                 
                 // Send the preview with buttons
                 await interaction.reply({
@@ -185,11 +192,17 @@ module.exports = {
                             continue;
                         }
                         
-                        // Find the first available text channel
-                        const channel = guild.channels.cache
-                            .filter(ch => ch.type === 0) // 0 is GuildText channel type
-                            .sort((a, b) => a.position - b.position)
-                            .first();
+                        // Use the guild's configured broadcast channel if set, otherwise fall back
+                        // to the first available text channel
+                        const customChannelId = interaction.client.serverSettingsManager.getBroadcastChannel(guild.id);
+                        let channel = customChannelId ? guild.channels.cache.get(customChannelId) : null;
+
+                        if (!channel || channel.type !== 0) {
+                            channel = guild.channels.cache
+                                .filter(ch => ch.type === 0) // 0 is GuildText channel type
+                                .sort((a, b) => a.position - b.position)
+                                .first();
+                        }
                         
                         if (!channel) {
                             console.log(`[BROADCAST] No suitable text channel found in guild: ${guild.name}`);
@@ -256,11 +269,11 @@ Progress: ${processedCount}/${totalGuilds} servers
                         { name: "🔕 Opted Out", value: `${skippedOptOut} servers`, inline: true },
                         { name: "📊 Success Rate", value: `${successRate}%`, inline: true },
                         { name: "⏰ Time Taken", value: `${completionTime} seconds`, inline: true },
-                        { name: "📝 Opt-Out Note", value: "Servers can configure broadcast preferences with `/broadcastsettings toggle`", inline: false },
+                        { name: "📝 Opt-Out Note", value: "Servers can configure broadcast preferences with `/broadcastsettings` or `$broadcast enable/disable/channel`", inline: false },
                         { name: "💬 Potential Reach", value: `Message potentially reached all members across ${successCount} servers`, inline: false }
                     )
-                    .setFooter({ text: 'Version 2.5.0', iconURL: this.client?.user?.displayAvatarURL() || client?.user?.displayAvatarURL() }).setTimestamp()
-                    .setFooter({ text: 'Broadcast ID: ${Date.now().toString(36)} • Version 2.5.0' });
+                    .setTimestamp()
+                    .setFooter({ text: `Broadcast ID: ${Date.now().toString(36)} • Version 2.5.0` });
                     
                 await interaction.editReply({
                     content: "✅ Broadcast successfully completed!",

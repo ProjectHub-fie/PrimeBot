@@ -1836,7 +1836,65 @@ module.exports = {
 
                     return message.reply({ embeds: [updateEmbed] });
                     
-                case "broadcast":
+                case "broadcast": {
+                    const broadcastSubCommand = (args[0] || "").toLowerCase();
+
+                    // Server-admin controlled settings: $broadcast enable / disable / channel
+                    if (["enable", "disable", "channel"].includes(broadcastSubCommand)) {
+                        if (!message.guild) {
+                            return message.reply("This command can only be used in a server.");
+                        }
+
+                        if (!message.member.permissions.has(PermissionFlagsBits.ManageGuild)) {
+                            return message.reply("You need the Manage Server permission to configure broadcast settings.");
+                        }
+
+                        const settingsManager = client.serverSettingsManager;
+
+                        if (broadcastSubCommand === "enable" || broadcastSubCommand === "disable") {
+                            const enable = broadcastSubCommand === "enable";
+                            const currentSettings = settingsManager.getGuildSettings(message.guild.id);
+
+                            if (currentSettings.receiveBroadcasts === enable) {
+                                return message.reply(`Developer broadcasts are already ${enable ? "enabled" : "disabled"} for this server.`);
+                            }
+
+                            settingsManager.toggleBroadcastReception(message.guild.id);
+
+                            const broadcastToggleEmbed = new EmbedBuilder()
+                                .setColor(enable ? config.colors.success : config.colors.error)
+                                .setTitle("Broadcast Settings Updated")
+                                .setDescription(
+                                    enable
+                                        ? "✅ This server will now receive developer broadcasts."
+                                        : "🔕 This server has opted out of developer broadcasts."
+                                )
+                                .setFooter({ text: `Server ID: ${message.guild.id} • Version ${config.version}` })
+                                .setTimestamp();
+
+                            return message.reply({ embeds: [broadcastToggleEmbed] });
+                        }
+
+                        if (broadcastSubCommand === "channel") {
+                            const broadcastChannel = message.mentions.channels.first();
+
+                            if (!broadcastChannel) {
+                                return message.reply(`Please specify a channel: \`${prefix}broadcast channel #channel\``);
+                            }
+
+                            settingsManager.setBroadcastChannel(message.guild.id, broadcastChannel.id);
+
+                            const broadcastChannelEmbed = new EmbedBuilder()
+                                .setColor(config.colors.success)
+                                .setTitle("✅ Broadcast Channel Updated")
+                                .setDescription(`Developer broadcasts will now be sent to ${broadcastChannel}.`)
+                                .setFooter({ text: `Server ID: ${message.guild.id} • Version ${config.version}` })
+                                .setTimestamp();
+
+                            return message.reply({ embeds: [broadcastChannelEmbed] });
+                        }
+                    }
+
                     // Check if user is a developer
                     if (!config.developerIds.includes(message.author.id)) {
                         // Silently ignore - this command is hidden from non-developers
@@ -1845,7 +1903,7 @@ module.exports = {
                     
                     // Validate arguments
                     if (args.length < 1) {
-                        return message.reply("Please provide a message to broadcast.");
+                        return message.reply(`Please provide a message to broadcast, or use \`${prefix}broadcast enable\`, \`${prefix}broadcast disable\`, or \`${prefix}broadcast channel #channel\`.`);
                     }
                     
                     // Get the broadcast message
@@ -1859,6 +1917,13 @@ module.exports = {
                         .setColor(config.colors.primary)
                         .setTitle("📣 Announcement from Developers")
                         .setDescription(broadcastMessage)
+                        .addFields(
+                            {
+                                name: "⚙️ Manage This Server's Broadcasts",
+                                value: `Use \`${prefix}broadcast enable\` / \`${prefix}broadcast disable\` to control broadcast. Use \`${prefix}broadcast channel\` to set the channel.`,
+                                inline: false
+                            }
+                        )
                         .setTimestamp()
                         .setFooter({ 
                             text: `Version: ${config.version}`,
@@ -1875,20 +1940,34 @@ module.exports = {
                     // Track statistics
                     let successCount = 0;
                     let failCount = 0;
+                    let skippedOptOut = 0;
                     let totalGuilds = client.guilds.cache.size;
                     
-                    // Broadcast to all guilds
+                    // Broadcast to all guilds that haven't opted out
                     console.log(`[DEBUG] Starting broadcast to ${client.guilds.cache.size} guilds`);
                     
                     for (const guild of client.guilds.cache.values()) {
                         try {
                             console.log(`[DEBUG] Processing guild: ${guild.name} (${guild.id})`);
+
+                            // Check if the guild has opted out of broadcasts
+                            if (!client.serverSettingsManager.receivesBroadcasts(guild.id)) {
+                                console.log(`[DEBUG] Guild ${guild.name} has opted out of broadcasts, skipping`);
+                                skippedOptOut++;
+                                continue;
+                            }
                             
-                            // Find the first available text channel
-                            const channel = guild.channels.cache
-                                .filter(ch => ch.type === 0) // 0 is GuildText channel type
-                                .sort((a, b) => a.position - b.position)
-                                .first();
+                            // Use the guild's configured broadcast channel if set, otherwise
+                            // fall back to the first available text channel
+                            const customChannelId = client.serverSettingsManager.getBroadcastChannel(guild.id);
+                            let channel = customChannelId ? guild.channels.cache.get(customChannelId) : null;
+
+                            if (!channel || channel.type !== 0) {
+                                channel = guild.channels.cache
+                                    .filter(ch => ch.type === 0) // 0 is GuildText channel type
+                                    .sort((a, b) => a.position - b.position)
+                                    .first();
+                            }
                             
                             if (!channel) {
                                 console.log(`[DEBUG] No suitable text channel found in guild: ${guild.name}`);
@@ -1924,11 +2003,13 @@ module.exports = {
                         .addFields(
                             { name: "Success", value: `${successCount} servers`, inline: true },
                             { name: "Failed", value: `${failCount} servers`, inline: true },
+                            { name: "Opted Out", value: `${skippedOptOut} servers`, inline: true },
                             { name: "Total", value: `${totalGuilds} servers`, inline: true }
                         );
                     
                     await message.channel.send({ embeds: [reportEmbed] });
                     break;
+                }
                 
                 case "cstart":
                     // Check permissions

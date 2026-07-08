@@ -84,9 +84,19 @@ async function deployCommands() {
             return cmd;
         });
 
+        // Discord requires any existing "Entry Point" commands (e.g. Activities launch
+        // commands, type 4) to be included in a bulk overwrite, or the request is rejected.
+        const existingCommands = await rest.get(
+            Routes.applicationCommands(process.env.CLIENT_ID),
+        );
+        const entryPointCommands = existingCommands.filter(cmd => cmd.type === 4);
+        if (entryPointCommands.length > 0) {
+            console.log(`Preserving ${entryPointCommands.length} Entry Point command(s) in bulk update.`);
+        }
+
         const data = await rest.put(
             Routes.applicationCommands(process.env.CLIENT_ID),
-            { body: processedCommands },
+            { body: [...processedCommands, ...entryPointCommands] },
         );
 
         console.log(`Successfully reloaded ${data.length} application (/) commands.`);
