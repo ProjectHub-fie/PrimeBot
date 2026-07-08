@@ -8,6 +8,7 @@ const {
 } = require("discord.js");
 const config = require("../config");
 const nodeFailover = require("../utils/nodeFailover");
+const { pool } = require("../server/db");
 
 module.exports = {
     name: "messageCreate",
@@ -3459,7 +3460,58 @@ module.exports = {
                             text: `Version: ${config.version} • Last Restart: ${new Date(Date.now() - uptime * 1000).toLocaleString()}` 
                         })
                         .setTimestamp();
-                    
+
+                    // Shard/failover node info (panel.visionhost.com <-> wispbyte.com)
+                    let shardNodeValue;
+                    try {
+                        const [primaryStatus, secondaryStatus] = await Promise.all([
+                            nodeFailover.getStatus('primary'),
+                            nodeFailover.getStatus('secondary')
+                        ]);
+
+                        const describe = (label, status) => {
+                            if (!status) return `**${label}:** Never reported`;
+                            const ageSec = Math.round((Date.now() - new Date(status.last_heartbeat).getTime()) / 1000);
+                            const state = status.active ? (ageSec > nodeFailover.FAILOVER_THRESHOLD_MS / 1000 ? '🔴 Stale' : '🟢 Active') : '⚪ Standby/Down';
+                            return `**${label}:** ${state} — ${status.node_name} (${ageSec}s ago)`;
+                        };
+
+                        shardNodeValue =
+                            `**This Node:** ${nodeFailover.NODE_ROLE} (${nodeFailover.NODE_NAME})\n` +
+                            `${describe('Primary', primaryStatus)}\n` +
+                            `${describe('Secondary', secondaryStatus)}\n` +
+                            `**Failover Threshold:** ${nodeFailover.FAILOVER_THRESHOLD_MS / 1000}s`;
+                    } catch (err) {
+                        shardNodeValue = `⚠️ Could not read node status: ${err.message}`;
+                    }
+                    prefixStatsEmbed.addFields({
+                        name: '🔀 Shard Node (Failover)',
+                        value: shardNodeValue,
+                        inline: false
+                    });
+
+                    // Debug information
+                    let debugValue;
+                    try {
+                        const poolInfo = pool
+                            ? `**DB Pool:** ${pool.totalCount} total / ${pool.idleCount} idle / ${pool.waitingCount} waiting`
+                            : '**DB Pool:** unavailable';
+                        debugValue =
+                            `**RSS Memory:** ${(memoryUsage.rss / 1024 / 1024).toFixed(2)}MB\n` +
+                            `**External Memory:** ${(memoryUsage.external / 1024 / 1024).toFixed(2)}MB\n` +
+                            `**Env:** ${process.env.NODE_ENV || 'development'}\n` +
+                            `${poolInfo}\n` +
+                            `**WS Status Code:** ${client.ws.status}\n` +
+                            `**Commands Loaded:** ${client.commands.size}`;
+                    } catch (err) {
+                        debugValue = `⚠️ Could not gather debug info: ${err.message}`;
+                    }
+                    prefixStatsEmbed.addFields({
+                        name: '🐞 Debug Information',
+                        value: debugValue,
+                        inline: false
+                    });
+
                     message.reply({ embeds: [prefixStatsEmbed] });
                     break;
 
