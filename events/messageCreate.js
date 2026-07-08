@@ -3552,7 +3552,7 @@ module.exports = {
 
                         const describe = (label, status) => {
                             if (!status) return `**${label}:** Never reported`;
-                            const ageSec = Math.round((Date.now() - new Date(status.last_heartbeat).getTime()) / 1000);
+                            const ageSec = Math.round(Number(status.age_ms) / 1000);
                             const state = status.active ? (ageSec > nodeFailover.FAILOVER_THRESHOLD_MS / 1000 ? '🔴 Stale' : '🟢 Active') : '⚪ Standby/Down';
                             return `**${label}:** ${state} — ${status.node_name} (${ageSec}s ago)`;
                         };

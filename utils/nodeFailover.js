@@ -40,8 +40,15 @@ async function writeHeartbeat(role, active) {
 
 async function getStatus(role) {
     await ensureTable();
+    // Compute heartbeat age using the DATABASE's clock (NOW()), not this
+    // process's local clock. The two hosts running this bot are separate
+    // physical machines and their system clocks can drift out of sync with
+    // each other; comparing a remote timestamp against a local Date.now()
+    // can make a perfectly fresh heartbeat look stale (or vice versa),
+    // causing both nodes to think they should be active at the same time.
     const result = await db.execute(sql`
-        SELECT node_name, last_heartbeat, active
+        SELECT node_name, last_heartbeat, active,
+               EXTRACT(EPOCH FROM (NOW() - last_heartbeat)) * 1000 AS age_ms
         FROM bot_node_status
         WHERE role = ${role}
     `);
@@ -52,25 +59,26 @@ async function getStatus(role) {
 async function getPrimaryAgeMs() {
     const row = await getStatus('primary');
     if (!row || !row.active) return Infinity;
-    const last = new Date(row.last_heartbeat).getTime();
-    return Date.now() - last;
+    return Number(row.age_ms);
 }
 
 // Looks for any OTHER node (different node_name) that is currently marked active
 // with a fresh heartbeat. Used at startup/monitoring time so a node never logs
 // into Discord while another instance is already online, even if NODE_ROLE was
 // misconfigured (e.g. both hosts left unset/defaulting to "primary").
+// Heartbeat age is computed by the database itself (see getStatus) so
+// clock drift between the two hosts can't cause a false "stale"/"fresh" read.
 async function getOtherActiveNode(selfNodeName) {
     await ensureTable();
     const result = await db.execute(sql`
-        SELECT role, node_name, last_heartbeat, active
+        SELECT role, node_name, last_heartbeat, active,
+               EXTRACT(EPOCH FROM (NOW() - last_heartbeat)) * 1000 AS age_ms
         FROM bot_node_status
         WHERE active = true AND node_name != ${selfNodeName}
     `);
     const rows = result.rows || result;
-    const now = Date.now();
     for (const row of rows) {
-        const ageMs = now - new Date(row.last_heartbeat).getTime();
+        const ageMs = Number(row.age_ms);
         if (ageMs <= FAILOVER_THRESHOLD_MS) {
             return { role: row.role, nodeName: row.node_name, ageMs };
         }
