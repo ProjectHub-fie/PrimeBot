@@ -271,15 +271,25 @@ async function startStandbyMonitor() {
 }
 
 // Before connecting, check whether another host is already online and
-// healthy. If so, stand down instead of connecting, so two hosts never reply
-// to the same command at once. This check runs regardless of configured role.
+// healthy. Behavior depends on this host's configured role:
+//   - "primary" always wins: it connects/takes over even if a "secondary" is
+//     currently active. The active secondary will notice the primary's
+//     heartbeat on its next standby check (~10s) and step itself down, so
+//     there's only a brief overlap during a deliberate handover, not a
+//     permanent duplicate.
+//   - "secondary" defers to any already-active node and only connects if
+//     nothing else is currently healthy (unchanged failover behavior).
 async function startWithFailoverCheck() {
     try {
         const other = await nodeFailover.getOtherActiveNode(nodeFailover.NODE_NAME);
         if (other) {
-            console.warn(`[FAILOVER] Detected another active node "${other.nodeName}" (role: ${other.role}, last heartbeat ${Math.round(other.ageMs / 1000)}s ago). Standing down to avoid duplicate replies.`);
-            startStandbyMonitor();
-            return;
+            if (nodeFailover.NODE_ROLE === 'primary') {
+                console.warn(`[FAILOVER] Detected another active node "${other.nodeName}" (role: ${other.role}, last heartbeat ${Math.round(other.ageMs / 1000)}s ago), but this node is the designated PRIMARY. Taking over — the other node will step down shortly.`);
+            } else {
+                console.warn(`[FAILOVER] Detected another active node "${other.nodeName}" (role: ${other.role}, last heartbeat ${Math.round(other.ageMs / 1000)}s ago). Standing down to avoid duplicate replies.`);
+                startStandbyMonitor();
+                return;
+            }
         }
     } catch (error) {
         console.error('[FAILOVER] Startup check failed, proceeding to connect:', error.message);
