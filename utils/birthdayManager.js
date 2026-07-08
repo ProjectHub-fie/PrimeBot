@@ -10,6 +10,7 @@ class BirthdayManager {
         this.client = client;
         this.birthdays = new Map();
         this.dataPath = path.join(__dirname, '../data/birthdays.json');
+        this.isReady = false; // Add a ready state
         
         // Track which embed style to use next (cycles through 0-3)
         this.currentEmbedIndex = 0;
@@ -21,7 +22,13 @@ class BirthdayManager {
         }
         
         // Load from DB then start checking to avoid race conditions
-        this.loadBirthdays().then(() => this.startCheckingBirthdays());
+        this.loadBirthdays().then(() => {
+            this.isReady = true;
+            this.startCheckingBirthdays();
+        }).catch(err => {
+            console.error('Failed to initialize BirthdayManager:', err);
+            this.isReady = false;
+        });
     }
     
     /**
@@ -66,6 +73,21 @@ class BirthdayManager {
         } catch (error) {
             console.error('Error loading birthdays from DB:', error);
             this.birthdays = new Map();
+        }
+    }
+    
+    /**
+     * Wait for the birthday manager to be ready
+     * @returns {Promise<void>}
+     */
+    async waitForReady() {
+        let attempts = 0;
+        while (!this.isReady && attempts < 50) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+            attempts++;
+        }
+        if (!this.isReady) {
+            console.warn('BirthdayManager did not become ready in time');
         }
     }
     

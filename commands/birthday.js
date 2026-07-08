@@ -95,6 +95,9 @@ module.exports = {
                         });
                     }
                     
+                    // Wait for birthday manager to be ready
+                    await birthdayManager.waitForReady();
+                    
                     // Set the birthday
                     const success = await birthdayManager.setBirthday({
                         guildId: interaction.guild.id,
@@ -134,6 +137,9 @@ module.exports = {
                         });
                     }
                     
+                    // Wait for birthday manager to be ready
+                    await birthdayManager.waitForReady();
+                    
                     // Remove the birthday
                     const success = birthdayManager.removeBirthday(interaction.guild.id, targetUser.id);
                     
@@ -156,6 +162,9 @@ module.exports = {
                 case 'list': {
                     const limit = interaction.options.getInteger('limit') || 10;
                     
+                    // Wait for birthday manager to be ready
+                    await birthdayManager.waitForReady();
+                    
                     // Get upcoming birthdays
                     const birthdays = birthdayManager.getUpcomingBirthdays(interaction.guild.id, limit);
                     
@@ -168,9 +177,9 @@ module.exports = {
                         .setColor(config.colors.primary)
                         .setTitle('🎂 Upcoming Birthdays')
                         .setDescription(birthdays.map((b, index) => {
-                            const user = interaction.client.users.cache.get(b.userId).setFooter({ text: 'Version 2.5.0' });
+                            const user = interaction.client.users.cache.get(b.userId);
                             const username = user ? user.username : 'Unknown User';
-                            return `${index + 1}. **${username}** - ${b.formattedDate}${b.daysUntil === 0 ? ' (Today! 🎉)' : ` (in ${b.daysUntil} days)`}`;
+                            return `${index + 1}. **${username}** - ${b.formattedDate || `${['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][b.month - 1]} ${b.day}`}${b.daysUntil === 0 ? ' (Today! 🎉)' : ` (in ${b.daysUntil} days)`}`;
                         }).join('\n'));
                     
                     return interaction.reply({ embeds: [embed] });
@@ -178,6 +187,10 @@ module.exports = {
                 
                 case 'check': {
                     const targetUser = interaction.options.getUser('user') || interaction.user;
+                    
+                    // Wait for birthday manager to be ready
+                    await birthdayManager.waitForReady();
+                    
                     const birthday = birthdayManager.getBirthday(interaction.guild.id, targetUser.id);
                     
                     if (!birthday) {
