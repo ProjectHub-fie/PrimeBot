@@ -56,6 +56,28 @@ async function getPrimaryAgeMs() {
     return Date.now() - last;
 }
 
+// Looks for any OTHER node (different node_name) that is currently marked active
+// with a fresh heartbeat. Used at startup/monitoring time so a node never logs
+// into Discord while another instance is already online, even if NODE_ROLE was
+// misconfigured (e.g. both hosts left unset/defaulting to "primary").
+async function getOtherActiveNode(selfNodeName) {
+    await ensureTable();
+    const result = await db.execute(sql`
+        SELECT role, node_name, last_heartbeat, active
+        FROM bot_node_status
+        WHERE active = true AND node_name != ${selfNodeName}
+    `);
+    const rows = result.rows || result;
+    const now = Date.now();
+    for (const row of rows) {
+        const ageMs = now - new Date(row.last_heartbeat).getTime();
+        if (ageMs <= FAILOVER_THRESHOLD_MS) {
+            return { role: row.role, nodeName: row.node_name, ageMs };
+        }
+    }
+    return null;
+}
+
 function startHeartbeatLoop(role) {
     stopHeartbeatLoop();
     writeHeartbeat(role, true).catch(err => console.error(`[FAILOVER] Heartbeat write failed for ${role}:`, err.message));
@@ -89,6 +111,7 @@ module.exports = {
     writeHeartbeat,
     getStatus,
     getPrimaryAgeMs,
+    getOtherActiveNode,
     startHeartbeatLoop,
     stopHeartbeatLoop,
     markInactive,

@@ -213,7 +213,6 @@ global.client = client;
 // Two-host failover (panel.visionhost.com = primary, wispbyte.com = secondary).
 // Controlled via NODE_ROLE env var on each host.
 const nodeFailover = require('./utils/nodeFailover');
-let secondaryTookOver = false;
 
 // Function to handle reconnection
 async function connectBot() {
@@ -242,30 +241,50 @@ async function connectBot() {
     }
 }
 
-// Secondary node (wispbyte.com) stays on standby, watching the primary's
-// heartbeat in the shared database. If the primary goes quiet for too long,
-// the secondary logs the bot in itself. If the primary comes back online,
-// the secondary exits so its host can restart it back into standby mode.
-async function startAsSecondaryStandby() {
-    console.log(`[FAILOVER] Running as SECONDARY node (${nodeFailover.NODE_NAME}). Watching primary heartbeat...`);
+// Generalized standby loop. Used whenever this node detects that ANOTHER node
+// (identified by a different node_name) is already active with a fresh
+// heartbeat — regardless of which role each host is configured with. This
+// guards against duplicate replies if NODE_ROLE is ever misconfigured (e.g.
+// both hosts left unset/defaulting to "primary"): only one node will ever
+// actually call connectBot(), whichever detects no other healthy active node.
+let standbyTookOver = false;
+async function startStandbyMonitor() {
+    console.log(`[FAILOVER] Running as STANDBY node (${nodeFailover.NODE_NAME}, configured role: ${nodeFailover.NODE_ROLE}). Watching for another active node...`);
     setInterval(async () => {
         try {
-            const primaryAgeMs = await nodeFailover.getPrimaryAgeMs();
+            const other = await nodeFailover.getOtherActiveNode(nodeFailover.NODE_NAME);
 
-            if (!secondaryTookOver && primaryAgeMs > nodeFailover.FAILOVER_THRESHOLD_MS) {
-                console.warn(`[FAILOVER] Primary node has not reported in ${Math.round(primaryAgeMs / 1000)}s. Taking over as the active node.`);
-                secondaryTookOver = true;
+            if (!standbyTookOver && !other) {
+                console.warn('[FAILOVER] No other active node detected. Taking over as the active node.');
+                standbyTookOver = true;
                 await connectBot();
-            } else if (secondaryTookOver && primaryAgeMs <= nodeFailover.FAILOVER_THRESHOLD_MS) {
-                console.log('[FAILOVER] Primary node is back online. Stepping this secondary node back down.');
+            } else if (standbyTookOver && other) {
+                console.log(`[FAILOVER] Another node (${other.nodeName}) is back online. Stepping this node back down.`);
                 nodeFailover.stopHeartbeatLoop();
-                await nodeFailover.markInactive('secondary');
+                await nodeFailover.markInactive(nodeFailover.NODE_ROLE);
                 process.exit(0);
             }
         } catch (error) {
             console.error('[FAILOVER] Monitor loop error:', error.message);
         }
     }, nodeFailover.MONITOR_INTERVAL_MS);
+}
+
+// Before connecting, check whether another host is already online and
+// healthy. If so, stand down instead of connecting, so two hosts never reply
+// to the same command at once. This check runs regardless of configured role.
+async function startWithFailoverCheck() {
+    try {
+        const other = await nodeFailover.getOtherActiveNode(nodeFailover.NODE_NAME);
+        if (other) {
+            console.warn(`[FAILOVER] Detected another active node "${other.nodeName}" (role: ${other.role}, last heartbeat ${Math.round(other.ageMs / 1000)}s ago). Standing down to avoid duplicate replies.`);
+            startStandbyMonitor();
+            return;
+        }
+    } catch (error) {
+        console.error('[FAILOVER] Startup check failed, proceeding to connect:', error.message);
+    }
+    await connectBot();
 }
 
 async function gracefulShutdown() {
@@ -307,10 +326,10 @@ process.on('warning', (warning) => {
     console.warn('Warning:', warning.name, warning.message);
 });
 
-// Connect the bot: primary (panel.visionhost.com) connects immediately,
-// secondary (wispbyte.com) stays on standby until the primary goes quiet.
-if (nodeFailover.NODE_ROLE === 'secondary') {
-    startAsSecondaryStandby();
-} else {
-    connectBot();
+// Connect the bot, but only after confirming no other host is already
+// online. Whichever host detects a healthy heartbeat from the other stands
+// down and monitors instead of connecting, so two hosts never both reply to
+// the same command — even if NODE_ROLE is misconfigured on one/both hosts.
+{
+    startWithFailoverCheck();
 }
