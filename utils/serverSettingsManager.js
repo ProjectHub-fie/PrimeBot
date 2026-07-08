@@ -481,6 +481,41 @@ class ServerSettingsManager {
     }
 
     /**
+     * Update multiple welcome settings for a guild at once
+     * @param {string} guildId - Discord Guild ID
+     * @param {Object} updates - Partial welcome settings using friendly keys
+     *   (enabled, channelId, message, bannerUrl, color, dmEnabled, dmMessage,
+     *    showMemberCount, showJoinDate, showAccountAge, customTitle, customFooter)
+     * @returns {boolean} Whether the settings were successfully updated
+     */
+    updateWelcomeSettings(guildId, updates = {}) {
+        const guildSettings = this.getGuildSettings(guildId);
+
+        const keyMap = {
+            enabled: 'welcomeEnabled',
+            channelId: 'welcomeChannelId',
+            message: 'welcomeMessage',
+            bannerUrl: 'welcomeBannerUrl',
+            color: 'welcomeColor',
+            dmEnabled: 'welcomeDmEnabled',
+            dmMessage: 'welcomeDmMessage',
+            showMemberCount: 'welcomeShowMemberCount',
+            showJoinDate: 'welcomeShowJoinDate',
+            showAccountAge: 'welcomeShowAccountAge',
+            customTitle: 'welcomeCustomTitle',
+            customFooter: 'welcomeCustomFooter'
+        };
+
+        for (const [key, value] of Object.entries(updates)) {
+            const settingKey = keyMap[key] || key;
+            guildSettings[settingKey] = value;
+        }
+
+        this.serverSettings.set(guildId, guildSettings);
+        return this.saveSettings();
+    }
+
+    /**
      * Toggle a welcome embed feature
      * @param {string} guildId - Discord Guild ID
      * @param {string} feature - Feature to toggle (welcomeShowMemberCount, welcomeShowJoinDate, welcomeShowAccountAge)
