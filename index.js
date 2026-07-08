@@ -210,6 +210,11 @@ client.on('guildDelete', (guild) => {
 // Make client globally available for the website
 global.client = client;
 
+// Two-host failover (panel.visionhost.com = primary, wispbyte.com = secondary).
+// Controlled via NODE_ROLE env var on each host.
+const nodeFailover = require('./utils/nodeFailover');
+let secondaryTookOver = false;
+
 // Function to handle reconnection
 async function connectBot() {
     try {
@@ -224,6 +229,8 @@ async function connectBot() {
         await client.login(resolvedToken);
         console.log('✅ Bot successfully logged in and is now online!');
         debug('Bot successfully logged in');
+        nodeFailover.startHeartbeatLoop(nodeFailover.NODE_ROLE);
+        console.log(`[FAILOVER] Reporting heartbeat as "${nodeFailover.NODE_ROLE}" node (${nodeFailover.NODE_NAME}).`);
     } catch (error) {
         console.error('[ERROR] Failed to login to Discord:', error);
         if (error.code === 'TOKEN_INVALID' || error.message?.includes('token')) {
@@ -234,6 +241,40 @@ async function connectBot() {
         setTimeout(connectBot, 5000);
     }
 }
+
+// Secondary node (wispbyte.com) stays on standby, watching the primary's
+// heartbeat in the shared database. If the primary goes quiet for too long,
+// the secondary logs the bot in itself. If the primary comes back online,
+// the secondary exits so its host can restart it back into standby mode.
+async function startAsSecondaryStandby() {
+    console.log(`[FAILOVER] Running as SECONDARY node (${nodeFailover.NODE_NAME}). Watching primary heartbeat...`);
+    setInterval(async () => {
+        try {
+            const primaryAgeMs = await nodeFailover.getPrimaryAgeMs();
+
+            if (!secondaryTookOver && primaryAgeMs > nodeFailover.FAILOVER_THRESHOLD_MS) {
+                console.warn(`[FAILOVER] Primary node has not reported in ${Math.round(primaryAgeMs / 1000)}s. Taking over as the active node.`);
+                secondaryTookOver = true;
+                await connectBot();
+            } else if (secondaryTookOver && primaryAgeMs <= nodeFailover.FAILOVER_THRESHOLD_MS) {
+                console.log('[FAILOVER] Primary node is back online. Stepping this secondary node back down.');
+                nodeFailover.stopHeartbeatLoop();
+                await nodeFailover.markInactive('secondary');
+                process.exit(0);
+            }
+        } catch (error) {
+            console.error('[FAILOVER] Monitor loop error:', error.message);
+        }
+    }, nodeFailover.MONITOR_INTERVAL_MS);
+}
+
+async function gracefulShutdown() {
+    nodeFailover.stopHeartbeatLoop();
+    await nodeFailover.markInactive(nodeFailover.NODE_ROLE);
+    process.exit(0);
+}
+process.on('SIGTERM', gracefulShutdown);
+process.on('SIGINT', gracefulShutdown);
 
 
 
@@ -266,5 +307,10 @@ process.on('warning', (warning) => {
     console.warn('Warning:', warning.name, warning.message);
 });
 
-// Connect the bot
-connectBot();
+// Connect the bot: primary (panel.visionhost.com) connects immediately,
+// secondary (wispbyte.com) stays on standby until the primary goes quiet.
+if (nodeFailover.NODE_ROLE === 'secondary') {
+    startAsSecondaryStandby();
+} else {
+    connectBot();
+}
