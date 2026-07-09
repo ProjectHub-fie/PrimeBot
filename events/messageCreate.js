@@ -6,8 +6,21 @@ const {
     PermissionsBitField,
     PermissionFlagsBits,
 } = require("discord.js");
+const net = require("net");
 const config = require("../config");
 const nodeFailover = require("../utils/nodeFailover");
+
+// Measures TCP connection time (ms) to a host:port within a 3s timeout.
+// Returns null if unreachable or timed out.
+function tcpPing(host, port = 443) {
+    return new Promise((resolve) => {
+        const start = Date.now();
+        const socket = net.createConnection({ host, port, timeout: 3000 });
+        socket.on("connect", () => { socket.destroy(); resolve(Date.now() - start); });
+        socket.on("timeout", () => { socket.destroy(); resolve(null); });
+        socket.on("error",   () => { socket.destroy(); resolve(null); });
+    });
+}
 const { pool } = require("../server/db");
 
 module.exports = {
@@ -2812,7 +2825,7 @@ module.exports = {
                             return barString;
                         };
                         
-                        // Fetch both host heartbeat statuses for the host ping section
+                        // Fetch both host heartbeat statuses + measure actual TCP ping to each host
                         let primaryHostValue = '⚪ Never reported';
                         let secondaryHostValue = '⚪ Never reported';
                         try {
@@ -2820,15 +2833,21 @@ module.exports = {
                                 nodeFailover.getStatus('primary'),
                                 nodeFailover.getStatus('secondary')
                             ]);
-                            const describeHost = (status) => {
+                            // TCP-ping both hosts in parallel (port 443, 3s timeout)
+                            const [primaryTcp, secondaryTcp] = await Promise.all([
+                                primaryStatus?.node_name   ? tcpPing(primaryStatus.node_name)   : Promise.resolve(null),
+                                secondaryStatus?.node_name ? tcpPing(secondaryStatus.node_name) : Promise.resolve(null)
+                            ]);
+                            const describeHost = (status, tcpMs) => {
                                 if (!status) return '⚪ Never reported';
                                 const ageSec = Math.round(Number(status.age_ms) / 1000);
-                                if (!status.active) return `⚪ Standby/Down`;
-                                if (ageSec > nodeFailover.FAILOVER_THRESHOLD_MS / 1000) return `🔴 Stale (${ageSec}s ago)`;
-                                return `🟢 Active (last seen ${ageSec}s ago)`;
+                                const pingStr = tcpMs !== null ? `${tcpMs}ms` : 'Unreachable';
+                                if (!status.active) return `⚪ Standby/Down\nPing: ${pingStr}`;
+                                if (ageSec > nodeFailover.FAILOVER_THRESHOLD_MS / 1000) return `🔴 Stale (${ageSec}s ago)\nPing: ${pingStr}`;
+                                return `🟢 Active (${ageSec}s ago)\nPing: ${pingStr}`;
                             };
-                            primaryHostValue = describeHost(primaryStatus);
-                            secondaryHostValue = describeHost(secondaryStatus);
+                            primaryHostValue   = describeHost(primaryStatus,   primaryTcp);
+                            secondaryHostValue = describeHost(secondaryStatus, secondaryTcp);
                         } catch (_) {}
 
                         const pingEmbed = new EmbedBuilder()
@@ -3830,15 +3849,20 @@ async function processCommand(message, client, commandName, args, prefix) {
                         nodeFailover.getStatus('primary'),
                         nodeFailover.getStatus('secondary')
                     ]);
-                    const describeHost = (status) => {
+                    const [primaryTcp, secondaryTcp] = await Promise.all([
+                        primaryStatus?.node_name   ? tcpPing(primaryStatus.node_name)   : Promise.resolve(null),
+                        secondaryStatus?.node_name ? tcpPing(secondaryStatus.node_name) : Promise.resolve(null)
+                    ]);
+                    const describeHost = (status, tcpMs) => {
                         if (!status) return '⚪ Never reported';
                         const ageSec = Math.round(Number(status.age_ms) / 1000);
-                        if (!status.active) return '⚪ Standby/Down';
-                        if (ageSec > nodeFailover.FAILOVER_THRESHOLD_MS / 1000) return `🔴 Stale (${ageSec}s ago)`;
-                        return `🟢 Active (last seen ${ageSec}s ago)`;
+                        const pingStr = tcpMs !== null ? `${tcpMs}ms` : 'Unreachable';
+                        if (!status.active) return `⚪ Standby/Down\nPing: ${pingStr}`;
+                        if (ageSec > nodeFailover.FAILOVER_THRESHOLD_MS / 1000) return `🔴 Stale (${ageSec}s ago)\nPing: ${pingStr}`;
+                        return `🟢 Active (${ageSec}s ago)\nPing: ${pingStr}`;
                     };
-                    primaryHostVal = describeHost(primaryStatus);
-                    secondaryHostVal = describeHost(secondaryStatus);
+                    primaryHostVal   = describeHost(primaryStatus,   primaryTcp);
+                    secondaryHostVal = describeHost(secondaryStatus, secondaryTcp);
                 } catch (_) {}
 
                 const pingEmbed = new EmbedBuilder()
