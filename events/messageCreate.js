@@ -83,7 +83,7 @@ module.exports = {
                     .setColor(config.colors.primary)
                     .setTitle("Hello there! 👋")
                     .setDescription(
-                        `I'm **${client.user.username}**, your personal digital assistant (PDA)`,
+                        'Primiaum features in free ',
                     )
                     .addFields(
                         {
