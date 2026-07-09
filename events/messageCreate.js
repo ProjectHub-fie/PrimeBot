@@ -2812,6 +2812,25 @@ module.exports = {
                             return barString;
                         };
                         
+                        // Fetch both host heartbeat statuses for the host ping section
+                        let primaryHostValue = '⚪ Never reported';
+                        let secondaryHostValue = '⚪ Never reported';
+                        try {
+                            const [primaryStatus, secondaryStatus] = await Promise.all([
+                                nodeFailover.getStatus('primary'),
+                                nodeFailover.getStatus('secondary')
+                            ]);
+                            const describeHost = (status) => {
+                                if (!status) return '⚪ Never reported';
+                                const ageSec = Math.round(Number(status.age_ms) / 1000);
+                                if (!status.active) return `⚪ Standby/Down`;
+                                if (ageSec > nodeFailover.FAILOVER_THRESHOLD_MS / 1000) return `🔴 Stale (${ageSec}s ago)`;
+                                return `🟢 Active (last seen ${ageSec}s ago)`;
+                            };
+                            primaryHostValue = describeHost(primaryStatus);
+                            secondaryHostValue = describeHost(secondaryStatus);
+                        } catch (_) {}
+
                         const pingEmbed = new EmbedBuilder()
                             .setColor(color)
                             .setTitle("📡 Ping Results")
@@ -2831,6 +2850,16 @@ module.exports = {
                                     name: '🗄️ Database', 
                                     value: `${dbStatus}\n${dbPing}`,
                                     inline: true 
+                                },
+                                {
+                                    name: '🖥️ Primary Host',
+                                    value: primaryHostValue,
+                                    inline: true
+                                },
+                                {
+                                    name: '🖥️ Secondary Host',
+                                    value: secondaryHostValue,
+                                    inline: true
                                 }
                             )
                             .setFooter({ 
@@ -3554,11 +3583,11 @@ module.exports = {
                             if (!status) return `**${label}:** Never reported`;
                             const ageSec = Math.round(Number(status.age_ms) / 1000);
                             const state = status.active ? (ageSec > nodeFailover.FAILOVER_THRESHOLD_MS / 1000 ? '🔴 Stale' : '🟢 Active') : '⚪ Standby/Down';
-                            return `**${label}:** ${state} — ${status.node_name} (${ageSec}s ago)`;
+                            return `**${label}:** ${state} (${ageSec}s ago)`;
                         };
 
                         shardNodeValue =
-                            `**This Node:** ${nodeFailover.NODE_ROLE} (${nodeFailover.NODE_NAME})\n` +
+                            `**This Node:** ${nodeFailover.NODE_ROLE}\n` +
                             `${describe('Primary', primaryStatus)}\n` +
                             `${describe('Secondary', secondaryStatus)}\n` +
                             `**Failover Threshold:** ${nodeFailover.FAILOVER_THRESHOLD_MS / 1000}s`;
@@ -3793,6 +3822,25 @@ async function processCommand(message, client, commandName, args, prefix) {
                     color = config.colors.warning;
                 }
                 
+                // Fetch both host heartbeat statuses
+                let primaryHostVal = '⚪ Never reported';
+                let secondaryHostVal = '⚪ Never reported';
+                try {
+                    const [primaryStatus, secondaryStatus] = await Promise.all([
+                        nodeFailover.getStatus('primary'),
+                        nodeFailover.getStatus('secondary')
+                    ]);
+                    const describeHost = (status) => {
+                        if (!status) return '⚪ Never reported';
+                        const ageSec = Math.round(Number(status.age_ms) / 1000);
+                        if (!status.active) return '⚪ Standby/Down';
+                        if (ageSec > nodeFailover.FAILOVER_THRESHOLD_MS / 1000) return `🔴 Stale (${ageSec}s ago)`;
+                        return `🟢 Active (last seen ${ageSec}s ago)`;
+                    };
+                    primaryHostVal = describeHost(primaryStatus);
+                    secondaryHostVal = describeHost(secondaryStatus);
+                } catch (_) {}
+
                 const pingEmbed = new EmbedBuilder()
                     .setColor(color)
                     .setTitle("📡 Ping Results")
@@ -3801,7 +3849,9 @@ async function processCommand(message, client, commandName, args, prefix) {
                         { name: '🤖 Bot Latency', value: `${ping}ms`, inline: true },
                         { name: '📶 API Latency', value: `${apiPing}ms`, inline: true },
                         { name: '🌐 Servers', value: `${client.guilds.cache.size}`, inline: true },
-                        { name: '👥 Users', value: `${totalUsers.toLocaleString()}`, inline: true }
+                        { name: '👥 Users', value: `${totalUsers.toLocaleString()}`, inline: true },
+                        { name: '🖥️ Primary Host', value: primaryHostVal, inline: true },
+                        { name: '🖥️ Secondary Host', value: secondaryHostVal, inline: true }
                     )
                     .setFooter({ 
                         text: `Requested by ${message.author.tag}`,
