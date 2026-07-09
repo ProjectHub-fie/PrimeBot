@@ -36,10 +36,10 @@ module.exports = {
             const prefix = config.prefix;
 
             // Check for ping (mention)
-  if (
-                [`<@${client.user.id}>`, `<@!${client.user.id}>`].includes(message.content.trim()) &&
-                client.ws.status === 0
-            ){                       // Calculate bot uptime
+            if (
+                client.user &&
+                [`<@${client.user.id}>`, `<@!${client.user.id}>`].includes(message.content.trim())
+            ) {                       // Calculate bot uptime
                 const uptime = process.uptime();
                 const uptimeString = formatUptime(uptime);
 
@@ -117,11 +117,11 @@ module.exports = {
                         },
                     )
                     .setThumbnail(
-                        client.user.displayAvatarURL({ dynamic: true }),
+                        client.user.displayAvatarURL({ extension: 'gif', forceStatic: false }),
                     )
                     .setFooter({
-                        text: `Requested by ${message.author.tag} • Version: ${config.version}`,
-                        iconURL: message.author.displayAvatarURL({ dynamic: true }),
+                        text: `Requested by ${message.author.username} • Version: ${config.version}`,
+                        iconURL: message.author.displayAvatarURL({ extension: 'gif', forceStatic: false }),
                     })
                     .setTimestamp();
 
