@@ -22,6 +22,7 @@ function tcpPing(host, port = 443) {
     });
 }
 const { pool } = require("../server/db");
+const betaManager = require("../utils/betaManager");
 
 module.exports = {
     name: "messageCreate",
@@ -3757,6 +3758,134 @@ module.exports = {
                     
                     message.reply({ embeds: [syncEmbed] });
                     break;
+
+                case 'beta': {
+                    if (!message.guild) {
+                        return message.reply('This command can only be used in a server.');
+                    }
+
+                    const subCmd = (args[0] || '').toLowerCase();
+                    const guildId = message.guild.id;
+
+                    // --- Not the server owner ---
+                    if (message.author.id !== message.guild.ownerId) {
+                        const ownerOnlyEmbed = new EmbedBuilder()
+                            .setColor(config.colors.error)
+                            .setTitle('🔒 Owner Only')
+                            .setDescription(
+                                'The `$beta` command can only be used by the **server owner**.\n\n' +
+                                'Beta access lets your server try out new features before they are released to everyone.'
+                            )
+                            .setFooter({ text: `PrimeBot Beta Program • Version: ${config.version}` })
+                            .setTimestamp();
+                        return message.reply({ embeds: [ownerOnlyEmbed] });
+                    }
+
+                    // --- Server not on the allowed list ---
+                    if (!betaManager.isAllowed(guildId)) {
+                        const notAllowedEmbed = new EmbedBuilder()
+                            .setColor(config.colors.warning)
+                            .setTitle('🚫 Beta Access Not Available')
+                            .setDescription(
+                                'This server has **not been selected** for the PrimeBot Beta Program.\n\n' +
+                                'Beta access is invite-only and granted by the PrimeBot developers.\n' +
+                                `Join our [Support Server](${config.supportServer}) to learn more or request access.`
+                            )
+                            .setFooter({ text: `PrimeBot Beta Program • Version: ${config.version}` })
+                            .setTimestamp();
+                        return message.reply({ embeds: [notAllowedEmbed] });
+                    }
+
+                    // --- $beta enable ---
+                    if (subCmd === 'enable') {
+                        if (betaManager.isEnabled(guildId)) {
+                            const alreadyOnEmbed = new EmbedBuilder()
+                                .setColor(config.colors.warning)
+                                .setTitle('⚠️ Already Enabled')
+                                .setDescription('Beta features are **already enabled** for this server.')
+                                .setFooter({ text: `PrimeBot Beta Program • Version: ${config.version}` })
+                                .setTimestamp();
+                            return message.reply({ embeds: [alreadyOnEmbed] });
+                        }
+
+                        betaManager.enable(guildId);
+
+                        // Append (beta) to bot nickname in this guild
+                        try {
+                            const me = message.guild.members.me;
+                            const baseName = (me.nickname || client.user.username).replace(/ \(beta\)$/i, '');
+                            await me.setNickname(`${baseName} (beta)`);
+                        } catch {}
+
+                        const enabledEmbed = new EmbedBuilder()
+                            .setColor(config.colors.success)
+                            .setTitle('✅ Beta Enabled')
+                            .setDescription(
+                                '🎉 **Beta features are now enabled** for this server!\n\n' +
+                                'You now have early access to new features that are still being tested.\n' +
+                                'Please report any bugs in our [Support Server](' + config.supportServer + ').\n\n' +
+                                '> ⚠️ Beta features may be unstable or change at any time.'
+                            )
+                            .addFields(
+                                { name: '📋 Beta Features', value: (config.betaFeatures.length > 0 ? config.betaFeatures.map(f => `\`${prefix}${f}\``).join(', ') : '*No beta features configured yet.*'), inline: false },
+                                { name: '❌ To Disable', value: `Run \`${prefix}beta disable\``, inline: false }
+                            )
+                            .setFooter({ text: `PrimeBot Beta Program • Version: ${config.version}` })
+                            .setTimestamp();
+                        return message.reply({ embeds: [enabledEmbed] });
+                    }
+
+                    // --- $beta disable ---
+                    if (subCmd === 'disable') {
+                        if (!betaManager.isEnabled(guildId)) {
+                            const alreadyOffEmbed = new EmbedBuilder()
+                                .setColor(config.colors.warning)
+                                .setTitle('⚠️ Already Disabled')
+                                .setDescription('Beta features are **not currently enabled** for this server.')
+                                .setFooter({ text: `PrimeBot Beta Program • Version: ${config.version}` })
+                                .setTimestamp();
+                            return message.reply({ embeds: [alreadyOffEmbed] });
+                        }
+
+                        betaManager.disable(guildId);
+
+                        // Remove (beta) from bot nickname in this guild
+                        try {
+                            const me = message.guild.members.me;
+                            const cleanName = (me.nickname || client.user.username).replace(/ \(beta\)$/i, '');
+                            await me.setNickname(cleanName === client.user.username ? null : cleanName);
+                        } catch {}
+
+                        const disabledEmbed = new EmbedBuilder()
+                            .setColor(config.colors.primary)
+                            .setTitle('🔕 Beta Disabled')
+                            .setDescription(
+                                'Beta features have been **turned off** for this server.\n\n' +
+                                'You are now back on the standard release. Beta commands will no longer be accessible.\n\n' +
+                                `Run \`${prefix}beta enable\` at any time to re-enable beta.`
+                            )
+                            .setFooter({ text: `PrimeBot Beta Program • Version: ${config.version}` })
+                            .setTimestamp();
+                        return message.reply({ embeds: [disabledEmbed] });
+                    }
+
+                    // --- No valid subcommand — show status / help ---
+                    const statusEmbed = new EmbedBuilder()
+                        .setColor(betaManager.isEnabled(guildId) ? config.colors.success : config.colors.primary)
+                        .setTitle('🔬 PrimeBot Beta Program')
+                        .setDescription(
+                            'The beta program gives selected servers early access to new features still in testing.\n\n' +
+                            `**Current Status:** ${betaManager.isEnabled(guildId) ? '🟢 Enabled' : '🔴 Disabled'}`
+                        )
+                        .addFields(
+                            { name: `${prefix}beta enable`, value: 'Opt this server in to beta features', inline: true },
+                            { name: `${prefix}beta disable`, value: 'Opt this server out of beta features', inline: true },
+                            { name: '📋 Beta Features', value: (config.betaFeatures.length > 0 ? config.betaFeatures.map(f => `\`${prefix}${f}\``).join(', ') : '*No beta features configured yet.*'), inline: false }
+                        )
+                        .setFooter({ text: `PrimeBot Beta Program • Server Owner Only • Version: ${config.version}` })
+                        .setTimestamp();
+                    return message.reply({ embeds: [statusEmbed] });
+                }
 
                 default:
                     // Command not found - do nothing

@@ -105,6 +105,10 @@ const LivePollManager = require('./utils/livePollManager');
 const ServerSettingsManager = require('./utils/serverSettingsManager');
 client.serverSettingsManager = new ServerSettingsManager(client);
 
+// Initialize beta features manager
+const betaManager = require('./utils/betaManager');
+client.betaManager = betaManager;
+
 // Live poll manager already initialized above
 
 

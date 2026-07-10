@@ -10,6 +10,20 @@ module.exports = {
     // Bot URLs
     supportServer: "https://discord.gg/gd7UNSfX86", // PrimeBot support server
   
+    // Beta program configuration
+    // betaServers: Guild IDs that are allowed to opt-in to beta features.
+    // Add a server's ID here to grant it access to $beta enable/disable.
+    betaServers: [
+        // "123456789012345678",  // Example server ID
+    ],
+
+    // betaFeatures: Command names that are gated behind beta access.
+    // When a user runs one of these commands in a non-beta guild, they
+    // get an explanatory embed instead of the command running.
+    betaFeatures: [
+        // "myNewCommand",  // Example command name (matches commandName in switch)
+    ],
+
     // Developer IDs (users who can access developer commands)
     developerIds: [
         "1310654136290639894", // Bot's client ID
