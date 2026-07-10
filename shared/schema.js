@@ -247,6 +247,13 @@ const countingGames = pgTable('counting_games', {
   updatedAt: timestamp('updated_at').defaultNow(),
 });
 
+// Beta settings table
+const betaSettings = pgTable('beta_settings', {
+  guildId: varchar('guild_id', { length: 50 }).primaryKey(),
+  enabled: boolean('enabled').default(false).notNull(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
 // Exports
 module.exports = {
   livePolls,
@@ -276,5 +283,6 @@ module.exports = {
   ,
   birthdaysGuilds,
   birthdays,
-  countingGames
+  countingGames,
+  betaSettings
 };

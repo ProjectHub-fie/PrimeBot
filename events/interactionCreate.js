@@ -235,7 +235,7 @@ module.exports = {
                 // and this guild hasn't enabled beta.
                 if (betaManager.isBetaFeature(interaction.commandName)) {
                     const guildId = interaction.guildId;
-                    if (!guildId || !betaManager.canAccess(guildId)) {
+                    if (!guildId || !(await betaManager.canAccess(guildId))) {
                         const betaEmbed = new EmbedBuilder()
                             .setColor(config.colors.warning)
                             .setTitle('🔬 Beta Feature')

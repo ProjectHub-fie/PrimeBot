@@ -3798,7 +3798,7 @@ module.exports = {
 
                     // --- $beta enable ---
                     if (subCmd === 'enable') {
-                        if (betaManager.isEnabled(guildId)) {
+                        if (await betaManager.isEnabled(guildId)) {
                             const alreadyOnEmbed = new EmbedBuilder()
                                 .setColor(config.colors.warning)
                                 .setTitle('⚠️ Already Enabled')
@@ -3808,7 +3808,16 @@ module.exports = {
                             return message.reply({ embeds: [alreadyOnEmbed] });
                         }
 
-                        betaManager.enable(guildId);
+                        const enableOk = await betaManager.enable(guildId);
+                        if (!enableOk) {
+                            const dbErrorEmbed = new EmbedBuilder()
+                                .setColor(config.colors.error)
+                                .setTitle('❌ Database Error')
+                                .setDescription('Failed to save beta settings. Please try again in a moment.')
+                                .setFooter({ text: `PrimeBot Beta Program • Version: ${config.version}` })
+                                .setTimestamp();
+                            return message.reply({ embeds: [dbErrorEmbed] });
+                        }
 
                         // Append (beta) to bot nickname in this guild
                         try {
@@ -3837,7 +3846,7 @@ module.exports = {
 
                     // --- $beta disable ---
                     if (subCmd === 'disable') {
-                        if (!betaManager.isEnabled(guildId)) {
+                        if (!(await betaManager.isEnabled(guildId))) {
                             const alreadyOffEmbed = new EmbedBuilder()
                                 .setColor(config.colors.warning)
                                 .setTitle('⚠️ Already Disabled')
@@ -3847,7 +3856,16 @@ module.exports = {
                             return message.reply({ embeds: [alreadyOffEmbed] });
                         }
 
-                        betaManager.disable(guildId);
+                        const disableOk = await betaManager.disable(guildId);
+                        if (!disableOk) {
+                            const dbErrorEmbed = new EmbedBuilder()
+                                .setColor(config.colors.error)
+                                .setTitle('❌ Database Error')
+                                .setDescription('Failed to save beta settings. Please try again in a moment.')
+                                .setFooter({ text: `PrimeBot Beta Program • Version: ${config.version}` })
+                                .setTimestamp();
+                            return message.reply({ embeds: [dbErrorEmbed] });
+                        }
 
                         // Remove (beta) from bot nickname in this guild
                         try {
@@ -3870,12 +3888,13 @@ module.exports = {
                     }
 
                     // --- No valid subcommand — show status / help ---
+                    const betaCurrentlyEnabled = await betaManager.isEnabled(guildId);
                     const statusEmbed = new EmbedBuilder()
-                        .setColor(betaManager.isEnabled(guildId) ? config.colors.success : config.colors.primary)
+                        .setColor(betaCurrentlyEnabled ? config.colors.success : config.colors.primary)
                         .setTitle('🔬 PrimeBot Beta Program')
                         .setDescription(
                             'The beta program gives selected servers early access to new features still in testing.\n\n' +
-                            `**Current Status:** ${betaManager.isEnabled(guildId) ? '🟢 Enabled' : '🔴 Disabled'}`
+                            `**Current Status:** ${betaCurrentlyEnabled ? '🟢 Enabled' : '🔴 Disabled'}`
                         )
                         .addFields(
                             { name: `${prefix}beta enable`, value: 'Opt this server in to beta features', inline: true },

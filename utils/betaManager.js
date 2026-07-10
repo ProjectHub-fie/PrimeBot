@@ -1,85 +1,83 @@
-const fs = require('fs');
-const path = require('path');
 const config = require('../config');
-
-const DATA_PATH = path.join(__dirname, '../data/betaSettings.json');
-
-const dataDir = path.join(__dirname, '../data');
-if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
-
-let betaSettings = {};
-
-function load() {
-    try {
-        if (fs.existsSync(DATA_PATH)) {
-            betaSettings = JSON.parse(fs.readFileSync(DATA_PATH, 'utf8'));
-        } else {
-            save();
-        }
-    } catch {
-        betaSettings = {};
-        save();
-    }
-}
-
-function save() {
-    try {
-        fs.writeFileSync(DATA_PATH, JSON.stringify(betaSettings, null, 2), 'utf8');
-        return true;
-    } catch {
-        return false;
-    }
-}
-
-load();
+const { db } = require('../server/db');
+const { betaSettings } = require('../shared/schema');
+const { eq } = require('drizzle-orm');
 
 /**
- * Is this guild on the developer-approved beta access list?
+ * Is this guild on the developer-approved beta access list? (sync — config only)
  */
 function isAllowed(guildId) {
     return Array.isArray(config.betaServers) && config.betaServers.includes(guildId);
 }
 
 /**
- * Has this guild's owner opted in to beta?
+ * Has this guild's owner opted in to beta? (async — DB)
  */
-function isEnabled(guildId) {
-    return !!(betaSettings[guildId] && betaSettings[guildId].enabled);
-}
-
-/**
- * Enable beta for a guild.  Returns false if not on allowed list.
- */
-function enable(guildId) {
-    if (!isAllowed(guildId)) return false;
-    betaSettings[guildId] = { enabled: true };
-    save();
-    return true;
-}
-
-/**
- * Disable beta for a guild.
- */
-function disable(guildId) {
-    if (betaSettings[guildId]) {
-        betaSettings[guildId].enabled = false;
-        save();
+async function isEnabled(guildId) {
+    try {
+        const rows = await db
+            .select()
+            .from(betaSettings)
+            .where(eq(betaSettings.guildId, guildId))
+            .limit(1);
+        return rows.length > 0 && rows[0].enabled === true;
+    } catch (err) {
+        console.error('[BETA] isEnabled DB error:', err.message);
+        return false;
     }
-    return true;
 }
 
 /**
- * Is a specific command name currently gated as a beta feature?
+ * Enable beta for a guild. Returns false if not on allowed list. (async — DB)
+ */
+async function enable(guildId) {
+    if (!isAllowed(guildId)) return false;
+    try {
+        await db
+            .insert(betaSettings)
+            .values({ guildId, enabled: true, updatedAt: new Date() })
+            .onConflictDoUpdate({
+                target: betaSettings.guildId,
+                set: { enabled: true, updatedAt: new Date() },
+            });
+        return true;
+    } catch (err) {
+        console.error('[BETA] enable DB error:', err.message);
+        return false;
+    }
+}
+
+/**
+ * Disable beta for a guild. (async — DB)
+ */
+async function disable(guildId) {
+    try {
+        await db
+            .insert(betaSettings)
+            .values({ guildId, enabled: false, updatedAt: new Date() })
+            .onConflictDoUpdate({
+                target: betaSettings.guildId,
+                set: { enabled: false, updatedAt: new Date() },
+            });
+        return true;
+    } catch (err) {
+        console.error('[BETA] disable DB error:', err.message);
+        return false;
+    }
+}
+
+/**
+ * Is a specific command name currently gated as a beta feature? (sync — config only)
  */
 function isBetaFeature(commandName) {
     return Array.isArray(config.betaFeatures) && config.betaFeatures.includes(commandName);
 }
 
 /**
- * Can this guild access beta features right now?
+ * Can this guild access beta features right now? (async — DB)
  */
-function canAccess(guildId) {
-    return isAllowed(guildId) && isEnabled(guildId);
+async function canAccess(guildId) {
+    return isAllowed(guildId) && await isEnabled(guildId);
 }
 
 module.exports = { isAllowed, isEnabled, enable, disable, isBetaFeature, canAccess };
