@@ -2,6 +2,7 @@ const { safeReply, safeExecute } = require('../utils/stabilityUtils');
 const interactionDebugger = require('../utils/interactionDebugger');
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const config = require('../config');
+const betaManager = require('../utils/betaManager');
 
 /**
  * Helper function to show main help menu for button interactions
@@ -228,6 +229,29 @@ module.exports = {
                         content: `Error: No command matching \`${interaction.commandName}\` was found.`,
                         ephemeral: true
                     });
+                }
+
+                // Beta gate — block access if the slash command is a beta feature
+                // and this guild hasn't enabled beta.
+                if (betaManager.isBetaFeature(interaction.commandName)) {
+                    const guildId = interaction.guildId;
+                    if (!guildId || !betaManager.canAccess(guildId)) {
+                        const betaEmbed = new EmbedBuilder()
+                            .setColor(config.colors.warning)
+                            .setTitle('🔬 Beta Feature')
+                            .setDescription(
+                                `**\`/${interaction.commandName}\` is currently in beta** and is only available to selected servers.\n\n` +
+                                `Join our [Support Server](${config.supportServer}) to learn more or request early access.`
+                            )
+                            .addFields({
+                                name: 'Already selected?',
+                                value: 'Your server owner can run `$beta enable` to activate beta features.',
+                                inline: false
+                            })
+                            .setFooter({ text: `PrimeBot Beta Program • Version: ${config.version}` })
+                            .setTimestamp();
+                        return safeReply(interaction, { embeds: [betaEmbed], ephemeral: true });
+                    }
                 }
 
                 try {
