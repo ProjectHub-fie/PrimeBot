@@ -24,6 +24,31 @@ function tcpPing(host, port = 443) {
 const { pool } = require("../server/db");
 const betaManager = require("../utils/betaManager");
 
+/**
+ * Try to reply in the channel; if the bot lacks permission, fall back to a DM.
+ * This ensures beta/betaserver commands always produce visible output on any host.
+ */
+async function safeBetaReply(message, payload) {
+    try {
+        const sent = await message.reply(payload);
+        console.log('[BETA] Reply sent successfully in channel.');
+        return sent;
+    } catch (replyErr) {
+        console.warn(`[BETA] Channel reply failed (${replyErr.code ?? replyErr.message}). Trying DM fallback.`);
+        try {
+            const dmNote = `*(Bot couldn't reply in <#${message.channel?.id}> — sending here instead)*\n`;
+            const dmPayload = typeof payload === 'string'
+                ? dmNote + payload
+                : { content: dmNote, ...(payload.embeds ? { embeds: payload.embeds } : {}), ...(payload.components ? { components: payload.components } : {}) };
+            const sent = await message.author.send(dmPayload);
+            console.log('[BETA] DM fallback sent successfully.');
+            return sent;
+        } catch (dmErr) {
+            console.error(`[BETA] DM fallback also failed (${dmErr.code ?? dmErr.message}). User will not see a reply.`);
+        }
+    }
+}
+
 module.exports = {
     name: "messageCreate",
     async execute(message, client) {
@@ -3761,8 +3786,9 @@ module.exports = {
 
                 case 'beta': {
                     try {
+                        console.log(`[BETA] Handling $beta from ${message.author.tag} in guild=${message.guild?.id} channel=${message.channel?.id}`);
                         if (!message.guild) {
-                            return await message.reply('This command can only be used in a server.');
+                            return await safeBetaReply(message, 'This command can only be used in a server.');
                         }
 
                         const subCmd = (args[0] || '').toLowerCase();
@@ -3770,6 +3796,7 @@ module.exports = {
 
                         // --- Not the server owner ---
                         if (message.author.id !== message.guild.ownerId) {
+                            console.log(`[BETA] Rejected: ${message.author.id} is not guild owner ${message.guild.ownerId}`);
                             const ownerOnlyEmbed = new EmbedBuilder()
                                 .setColor(config.colors.error)
                                 .setTitle('🔒 Owner Only')
@@ -3779,11 +3806,14 @@ module.exports = {
                                 )
                                 .setFooter({ text: `PrimeBot Beta Program • Version: ${config.version}` })
                                 .setTimestamp();
-                            return await message.reply({ embeds: [ownerOnlyEmbed] });
+                            return await safeBetaReply(message, { embeds: [ownerOnlyEmbed] });
                         }
 
                         // --- Server not on the allowed list ---
-                        if (!(await betaManager.isAllowed(guildId))) {
+                        console.log(`[BETA] Checking isAllowed for guild ${guildId}...`);
+                        const allowed = await betaManager.isAllowed(guildId);
+                        console.log(`[BETA] isAllowed result: ${allowed}`);
+                        if (!allowed) {
                             const notAllowedEmbed = new EmbedBuilder()
                                 .setColor(config.colors.warning)
                                 .setTitle('🚫 Beta Access Not Available')
@@ -3794,7 +3824,7 @@ module.exports = {
                                 )
                                 .setFooter({ text: `PrimeBot Beta Program • Version: ${config.version}` })
                                 .setTimestamp();
-                            return await message.reply({ embeds: [notAllowedEmbed] });
+                            return await safeBetaReply(message, { embeds: [notAllowedEmbed] });
                         }
 
                         // --- $beta enable ---
@@ -3806,7 +3836,7 @@ module.exports = {
                                     .setDescription('Beta features are **already enabled** for this server.')
                                     .setFooter({ text: `PrimeBot Beta Program • Version: ${config.version}` })
                                     .setTimestamp();
-                                return await message.reply({ embeds: [alreadyOnEmbed] });
+                                return await safeBetaReply(message, { embeds: [alreadyOnEmbed] });
                             }
 
                             const enableOk = await betaManager.enable(guildId);
@@ -3817,7 +3847,7 @@ module.exports = {
                                     .setDescription('Failed to save beta settings. Please try again in a moment.')
                                     .setFooter({ text: `PrimeBot Beta Program • Version: ${config.version}` })
                                     .setTimestamp();
-                                return await message.reply({ embeds: [dbErrorEmbed] });
+                                return await safeBetaReply(message, { embeds: [dbErrorEmbed] });
                             }
 
                             // Append (beta) to bot nickname in this guild
@@ -3842,7 +3872,7 @@ module.exports = {
                                 )
                                 .setFooter({ text: `PrimeBot Beta Program • Version: ${config.version}` })
                                 .setTimestamp();
-                            return await message.reply({ embeds: [enabledEmbed] });
+                            return await safeBetaReply(message, { embeds: [enabledEmbed] });
                         }
 
                         // --- $beta disable ---
@@ -3854,7 +3884,7 @@ module.exports = {
                                     .setDescription('Beta features are **not currently enabled** for this server.')
                                     .setFooter({ text: `PrimeBot Beta Program • Version: ${config.version}` })
                                     .setTimestamp();
-                                return await message.reply({ embeds: [alreadyOffEmbed] });
+                                return await safeBetaReply(message, { embeds: [alreadyOffEmbed] });
                             }
 
                             const disableOk = await betaManager.disable(guildId);
@@ -3865,7 +3895,7 @@ module.exports = {
                                     .setDescription('Failed to save beta settings. Please try again in a moment.')
                                     .setFooter({ text: `PrimeBot Beta Program • Version: ${config.version}` })
                                     .setTimestamp();
-                                return await message.reply({ embeds: [dbErrorEmbed] });
+                                return await safeBetaReply(message, { embeds: [dbErrorEmbed] });
                             }
 
                             // Remove (beta) from bot nickname in this guild
@@ -3885,7 +3915,7 @@ module.exports = {
                                 )
                                 .setFooter({ text: `PrimeBot Beta Program • Version: ${config.version}` })
                                 .setTimestamp();
-                            return await message.reply({ embeds: [disabledEmbed] });
+                            return await safeBetaReply(message, { embeds: [disabledEmbed] });
                         }
 
                         // --- No valid subcommand — show status / help ---
@@ -3904,26 +3934,31 @@ module.exports = {
                             )
                             .setFooter({ text: `PrimeBot Beta Program • Server Owner Only • Version: ${config.version}` })
                             .setTimestamp();
-                        return await message.reply({ embeds: [statusEmbed] });
+                        return await safeBetaReply(message, { embeds: [statusEmbed] });
                     } catch (betaErr) {
                         console.error('[BETA] Command error:', betaErr);
-                        message.reply('❌ An error occurred running the beta command. Check the logs for details.').catch(() => {});
+                        safeBetaReply(message, '❌ An error occurred running the beta command. Check the bot logs for details.').catch(() => {});
                     }
                     break;
                 }
 
                 case 'betaserver': {
                     try {
+                        console.log(`[BETASERVER] Handling $betaserver from ${message.author.tag} (${message.author.id})`);
                         // Bot owner only — silently ignore for everyone else
-                        if (!config.developerIds.includes(message.author.id)) return;
+                        if (!config.developerIds.includes(message.author.id)) {
+                            console.log(`[BETASERVER] Ignored: ${message.author.id} not in developerIds`);
+                            return;
+                        }
 
                         const subCmd = (args[0] || '').toLowerCase();
                         const targetId = (args[1] || '').trim();
+                        console.log(`[BETASERVER] subCmd=${subCmd} targetId=${targetId}`);
 
                         // ── $betaserver add <server_id> ──────────────────────────
                         if (subCmd === 'add') {
                             if (!targetId || !/^\d{17,20}$/.test(targetId)) {
-                                return await message.reply({
+                                return await safeBetaReply(message, {
                                     embeds: [
                                         new EmbedBuilder()
                                             .setColor(config.colors.error)
@@ -3939,7 +3974,7 @@ module.exports = {
 
                             const ok = await betaManager.allowServer(targetId);
                             if (!ok) {
-                                return await message.reply({
+                                return await safeBetaReply(message, {
                                     embeds: [
                                         new EmbedBuilder()
                                             .setColor(config.colors.error)
@@ -3950,7 +3985,7 @@ module.exports = {
                                 });
                             }
 
-                            return await message.reply({
+                            return await safeBetaReply(message, {
                                 embeds: [
                                     new EmbedBuilder()
                                         .setColor(config.colors.success)
@@ -3966,7 +4001,7 @@ module.exports = {
                         // ── $betaserver remove <server_id> ───────────────────────
                         if (subCmd === 'remove') {
                             if (!targetId || !/^\d{17,20}$/.test(targetId)) {
-                                return await message.reply({
+                                return await safeBetaReply(message, {
                                     embeds: [
                                         new EmbedBuilder()
                                             .setColor(config.colors.error)
@@ -3982,7 +4017,7 @@ module.exports = {
 
                             const ok = await betaManager.denyServer(targetId);
                             if (!ok) {
-                                return await message.reply({
+                                return await safeBetaReply(message, {
                                     embeds: [
                                         new EmbedBuilder()
                                             .setColor(config.colors.error)
@@ -3993,7 +4028,7 @@ module.exports = {
                                 });
                             }
 
-                            return await message.reply({
+                            return await safeBetaReply(message, {
                                 embeds: [
                                     new EmbedBuilder()
                                         .setColor(config.colors.primary)
@@ -4012,7 +4047,7 @@ module.exports = {
                             const allIds = [...new Set([...rows.map(r => r.guildId), ...configSeeds])];
 
                             if (allIds.length === 0) {
-                                return await message.reply({
+                                return await safeBetaReply(message, {
                                     embeds: [
                                         new EmbedBuilder()
                                             .setColor(config.colors.primary)
@@ -4049,11 +4084,11 @@ module.exports = {
                                 });
                             });
 
-                            return await message.reply({ embeds: [listEmbed] });
+                            return await safeBetaReply(message, { embeds: [listEmbed] });
                         }
 
                         // ── No valid subcommand — show help ──────────────────────
-                        return await message.reply({
+                        return await safeBetaReply(message, {
                             embeds: [
                                 new EmbedBuilder()
                                     .setColor(config.colors.primary)
@@ -4069,7 +4104,7 @@ module.exports = {
                         });
                     } catch (betaServerErr) {
                         console.error('[BETASERVER] Command error:', betaServerErr);
-                        message.reply('❌ An error occurred running the betaserver command. Check the logs for details.').catch(() => {});
+                        safeBetaReply(message, '❌ An error occurred running the betaserver command. Check the bot logs for details.').catch(() => {});
                     }
                     break;
                 }
