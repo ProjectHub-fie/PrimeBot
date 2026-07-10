@@ -3760,306 +3760,318 @@ module.exports = {
                     break;
 
                 case 'beta': {
-                    if (!message.guild) {
-                        return message.reply('This command can only be used in a server.');
-                    }
-
-                    const subCmd = (args[0] || '').toLowerCase();
-                    const guildId = message.guild.id;
-
-                    // --- Not the server owner ---
-                    if (message.author.id !== message.guild.ownerId) {
-                        const ownerOnlyEmbed = new EmbedBuilder()
-                            .setColor(config.colors.error)
-                            .setTitle('🔒 Owner Only')
-                            .setDescription(
-                                'The `$beta` command can only be used by the **server owner**.\n\n' +
-                                'Beta access lets your server try out new features before they are released to everyone.'
-                            )
-                            .setFooter({ text: `PrimeBot Beta Program • Version: ${config.version}` })
-                            .setTimestamp();
-                        return message.reply({ embeds: [ownerOnlyEmbed] });
-                    }
-
-                    // --- Server not on the allowed list ---
-                    if (!(await betaManager.isAllowed(guildId))) {
-                        const notAllowedEmbed = new EmbedBuilder()
-                            .setColor(config.colors.warning)
-                            .setTitle('🚫 Beta Access Not Available')
-                            .setDescription(
-                                'This server has **not been selected** for the PrimeBot Beta Program.\n\n' +
-                                'Beta access is invite-only and granted by the PrimeBot developers.\n' +
-                                `Join our [Support Server](${config.supportServer}) to learn more or request access.`
-                            )
-                            .setFooter({ text: `PrimeBot Beta Program • Version: ${config.version}` })
-                            .setTimestamp();
-                        return message.reply({ embeds: [notAllowedEmbed] });
-                    }
-
-                    // --- $beta enable ---
-                    if (subCmd === 'enable') {
-                        if (await betaManager.isEnabled(guildId)) {
-                            const alreadyOnEmbed = new EmbedBuilder()
-                                .setColor(config.colors.warning)
-                                .setTitle('⚠️ Already Enabled')
-                                .setDescription('Beta features are **already enabled** for this server.')
-                                .setFooter({ text: `PrimeBot Beta Program • Version: ${config.version}` })
-                                .setTimestamp();
-                            return message.reply({ embeds: [alreadyOnEmbed] });
+                    try {
+                        if (!message.guild) {
+                            return await message.reply('This command can only be used in a server.');
                         }
 
-                        const enableOk = await betaManager.enable(guildId);
-                        if (!enableOk) {
-                            const dbErrorEmbed = new EmbedBuilder()
+                        const subCmd = (args[0] || '').toLowerCase();
+                        const guildId = message.guild.id;
+
+                        // --- Not the server owner ---
+                        if (message.author.id !== message.guild.ownerId) {
+                            const ownerOnlyEmbed = new EmbedBuilder()
                                 .setColor(config.colors.error)
-                                .setTitle('❌ Database Error')
-                                .setDescription('Failed to save beta settings. Please try again in a moment.')
+                                .setTitle('🔒 Owner Only')
+                                .setDescription(
+                                    'The `$beta` command can only be used by the **server owner**.\n\n' +
+                                    'Beta access lets your server try out new features before they are released to everyone.'
+                                )
                                 .setFooter({ text: `PrimeBot Beta Program • Version: ${config.version}` })
                                 .setTimestamp();
-                            return message.reply({ embeds: [dbErrorEmbed] });
+                            return await message.reply({ embeds: [ownerOnlyEmbed] });
                         }
 
-                        // Append (beta) to bot nickname in this guild
-                        try {
-                            const me = message.guild.members.me;
-                            const baseName = (me.nickname || client.user.username).replace(/ \(beta\)$/i, '');
-                            await me.setNickname(`${baseName} (beta)`);
-                        } catch {}
+                        // --- Server not on the allowed list ---
+                        if (!(await betaManager.isAllowed(guildId))) {
+                            const notAllowedEmbed = new EmbedBuilder()
+                                .setColor(config.colors.warning)
+                                .setTitle('🚫 Beta Access Not Available')
+                                .setDescription(
+                                    'This server has **not been selected** for the PrimeBot Beta Program.\n\n' +
+                                    'Beta access is invite-only and granted by the PrimeBot developers.\n' +
+                                    `Join our [Support Server](${config.supportServer}) to learn more or request access.`
+                                )
+                                .setFooter({ text: `PrimeBot Beta Program • Version: ${config.version}` })
+                                .setTimestamp();
+                            return await message.reply({ embeds: [notAllowedEmbed] });
+                        }
 
-                        const enabledEmbed = new EmbedBuilder()
-                            .setColor(config.colors.success)
-                            .setTitle('✅ Beta Enabled')
+                        // --- $beta enable ---
+                        if (subCmd === 'enable') {
+                            if (await betaManager.isEnabled(guildId)) {
+                                const alreadyOnEmbed = new EmbedBuilder()
+                                    .setColor(config.colors.warning)
+                                    .setTitle('⚠️ Already Enabled')
+                                    .setDescription('Beta features are **already enabled** for this server.')
+                                    .setFooter({ text: `PrimeBot Beta Program • Version: ${config.version}` })
+                                    .setTimestamp();
+                                return await message.reply({ embeds: [alreadyOnEmbed] });
+                            }
+
+                            const enableOk = await betaManager.enable(guildId);
+                            if (!enableOk) {
+                                const dbErrorEmbed = new EmbedBuilder()
+                                    .setColor(config.colors.error)
+                                    .setTitle('❌ Database Error')
+                                    .setDescription('Failed to save beta settings. Please try again in a moment.')
+                                    .setFooter({ text: `PrimeBot Beta Program • Version: ${config.version}` })
+                                    .setTimestamp();
+                                return await message.reply({ embeds: [dbErrorEmbed] });
+                            }
+
+                            // Append (beta) to bot nickname in this guild
+                            try {
+                                const me = message.guild.members.me;
+                                const baseName = (me.nickname || client.user.username).replace(/ \(beta\)$/i, '');
+                                await me.setNickname(`${baseName} (beta)`);
+                            } catch {}
+
+                            const enabledEmbed = new EmbedBuilder()
+                                .setColor(config.colors.success)
+                                .setTitle('✅ Beta Enabled')
+                                .setDescription(
+                                    '🎉 **Beta features are now enabled** for this server!\n\n' +
+                                    'You now have early access to new features that are still being tested.\n' +
+                                    'Please report any bugs in our [Support Server](' + config.supportServer + ').\n\n' +
+                                    '> ⚠️ Beta features may be unstable or change at any time.'
+                                )
+                                .addFields(
+                                    { name: '📋 Beta Features', value: (config.betaFeatures.length > 0 ? config.betaFeatures.map(f => `\`${prefix}${f}\``).join(', ') : '*No beta features configured yet.*'), inline: false },
+                                    { name: '❌ To Disable', value: `Run \`${prefix}beta disable\``, inline: false }
+                                )
+                                .setFooter({ text: `PrimeBot Beta Program • Version: ${config.version}` })
+                                .setTimestamp();
+                            return await message.reply({ embeds: [enabledEmbed] });
+                        }
+
+                        // --- $beta disable ---
+                        if (subCmd === 'disable') {
+                            if (!(await betaManager.isEnabled(guildId))) {
+                                const alreadyOffEmbed = new EmbedBuilder()
+                                    .setColor(config.colors.warning)
+                                    .setTitle('⚠️ Already Disabled')
+                                    .setDescription('Beta features are **not currently enabled** for this server.')
+                                    .setFooter({ text: `PrimeBot Beta Program • Version: ${config.version}` })
+                                    .setTimestamp();
+                                return await message.reply({ embeds: [alreadyOffEmbed] });
+                            }
+
+                            const disableOk = await betaManager.disable(guildId);
+                            if (!disableOk) {
+                                const dbErrorEmbed = new EmbedBuilder()
+                                    .setColor(config.colors.error)
+                                    .setTitle('❌ Database Error')
+                                    .setDescription('Failed to save beta settings. Please try again in a moment.')
+                                    .setFooter({ text: `PrimeBot Beta Program • Version: ${config.version}` })
+                                    .setTimestamp();
+                                return await message.reply({ embeds: [dbErrorEmbed] });
+                            }
+
+                            // Remove (beta) from bot nickname in this guild
+                            try {
+                                const me = message.guild.members.me;
+                                const cleanName = (me.nickname || client.user.username).replace(/ \(beta\)$/i, '');
+                                await me.setNickname(cleanName === client.user.username ? null : cleanName);
+                            } catch {}
+
+                            const disabledEmbed = new EmbedBuilder()
+                                .setColor(config.colors.primary)
+                                .setTitle('🔕 Beta Disabled')
+                                .setDescription(
+                                    'Beta features have been **turned off** for this server.\n\n' +
+                                    'You are now back on the standard release. Beta commands will no longer be accessible.\n\n' +
+                                    `Run \`${prefix}beta enable\` at any time to re-enable beta.`
+                                )
+                                .setFooter({ text: `PrimeBot Beta Program • Version: ${config.version}` })
+                                .setTimestamp();
+                            return await message.reply({ embeds: [disabledEmbed] });
+                        }
+
+                        // --- No valid subcommand — show status / help ---
+                        const betaCurrentlyEnabled = await betaManager.isEnabled(guildId);
+                        const statusEmbed = new EmbedBuilder()
+                            .setColor(betaCurrentlyEnabled ? config.colors.success : config.colors.primary)
+                            .setTitle('🔬 PrimeBot Beta Program')
                             .setDescription(
-                                '🎉 **Beta features are now enabled** for this server!\n\n' +
-                                'You now have early access to new features that are still being tested.\n' +
-                                'Please report any bugs in our [Support Server](' + config.supportServer + ').\n\n' +
-                                '> ⚠️ Beta features may be unstable or change at any time.'
+                                'The beta program gives selected servers early access to new features still in testing.\n\n' +
+                                `**Current Status:** ${betaCurrentlyEnabled ? '🟢 Enabled' : '🔴 Disabled'}`
                             )
                             .addFields(
-                                { name: '📋 Beta Features', value: (config.betaFeatures.length > 0 ? config.betaFeatures.map(f => `\`${prefix}${f}\``).join(', ') : '*No beta features configured yet.*'), inline: false },
-                                { name: '❌ To Disable', value: `Run \`${prefix}beta disable\``, inline: false }
+                                { name: `${prefix}beta enable`, value: 'Opt this server in to beta features', inline: true },
+                                { name: `${prefix}beta disable`, value: 'Opt this server out of beta features', inline: true },
+                                { name: '📋 Beta Features', value: (config.betaFeatures.length > 0 ? config.betaFeatures.map(f => `\`${prefix}${f}\``).join(', ') : '*No beta features configured yet.*'), inline: false }
                             )
-                            .setFooter({ text: `PrimeBot Beta Program • Version: ${config.version}` })
+                            .setFooter({ text: `PrimeBot Beta Program • Server Owner Only • Version: ${config.version}` })
                             .setTimestamp();
-                        return message.reply({ embeds: [enabledEmbed] });
+                        return await message.reply({ embeds: [statusEmbed] });
+                    } catch (betaErr) {
+                        console.error('[BETA] Command error:', betaErr);
+                        message.reply('❌ An error occurred running the beta command. Check the logs for details.').catch(() => {});
                     }
-
-                    // --- $beta disable ---
-                    if (subCmd === 'disable') {
-                        if (!(await betaManager.isEnabled(guildId))) {
-                            const alreadyOffEmbed = new EmbedBuilder()
-                                .setColor(config.colors.warning)
-                                .setTitle('⚠️ Already Disabled')
-                                .setDescription('Beta features are **not currently enabled** for this server.')
-                                .setFooter({ text: `PrimeBot Beta Program • Version: ${config.version}` })
-                                .setTimestamp();
-                            return message.reply({ embeds: [alreadyOffEmbed] });
-                        }
-
-                        const disableOk = await betaManager.disable(guildId);
-                        if (!disableOk) {
-                            const dbErrorEmbed = new EmbedBuilder()
-                                .setColor(config.colors.error)
-                                .setTitle('❌ Database Error')
-                                .setDescription('Failed to save beta settings. Please try again in a moment.')
-                                .setFooter({ text: `PrimeBot Beta Program • Version: ${config.version}` })
-                                .setTimestamp();
-                            return message.reply({ embeds: [dbErrorEmbed] });
-                        }
-
-                        // Remove (beta) from bot nickname in this guild
-                        try {
-                            const me = message.guild.members.me;
-                            const cleanName = (me.nickname || client.user.username).replace(/ \(beta\)$/i, '');
-                            await me.setNickname(cleanName === client.user.username ? null : cleanName);
-                        } catch {}
-
-                        const disabledEmbed = new EmbedBuilder()
-                            .setColor(config.colors.primary)
-                            .setTitle('🔕 Beta Disabled')
-                            .setDescription(
-                                'Beta features have been **turned off** for this server.\n\n' +
-                                'You are now back on the standard release. Beta commands will no longer be accessible.\n\n' +
-                                `Run \`${prefix}beta enable\` at any time to re-enable beta.`
-                            )
-                            .setFooter({ text: `PrimeBot Beta Program • Version: ${config.version}` })
-                            .setTimestamp();
-                        return message.reply({ embeds: [disabledEmbed] });
-                    }
-
-                    // --- No valid subcommand — show status / help ---
-                    const betaCurrentlyEnabled = await betaManager.isEnabled(guildId);
-                    const statusEmbed = new EmbedBuilder()
-                        .setColor(betaCurrentlyEnabled ? config.colors.success : config.colors.primary)
-                        .setTitle('🔬 PrimeBot Beta Program')
-                        .setDescription(
-                            'The beta program gives selected servers early access to new features still in testing.\n\n' +
-                            `**Current Status:** ${betaCurrentlyEnabled ? '🟢 Enabled' : '🔴 Disabled'}`
-                        )
-                        .addFields(
-                            { name: `${prefix}beta enable`, value: 'Opt this server in to beta features', inline: true },
-                            { name: `${prefix}beta disable`, value: 'Opt this server out of beta features', inline: true },
-                            { name: '📋 Beta Features', value: (config.betaFeatures.length > 0 ? config.betaFeatures.map(f => `\`${prefix}${f}\``).join(', ') : '*No beta features configured yet.*'), inline: false }
-                        )
-                        .setFooter({ text: `PrimeBot Beta Program • Server Owner Only • Version: ${config.version}` })
-                        .setTimestamp();
-                    return message.reply({ embeds: [statusEmbed] });
+                    break;
                 }
 
                 case 'betaserver': {
-                    // Bot owner only — silently ignore for everyone else
-                    if (!config.developerIds.includes(message.author.id)) return;
+                    try {
+                        // Bot owner only — silently ignore for everyone else
+                        if (!config.developerIds.includes(message.author.id)) return;
 
-                    const subCmd = (args[0] || '').toLowerCase();
-                    const targetId = (args[1] || '').trim();
+                        const subCmd = (args[0] || '').toLowerCase();
+                        const targetId = (args[1] || '').trim();
 
-                    // ── $betaserver add <server_id> ──────────────────────────
-                    if (subCmd === 'add') {
-                        if (!targetId || !/^\d{17,20}$/.test(targetId)) {
-                            return message.reply({
+                        // ── $betaserver add <server_id> ──────────────────────────
+                        if (subCmd === 'add') {
+                            if (!targetId || !/^\d{17,20}$/.test(targetId)) {
+                                return await message.reply({
+                                    embeds: [
+                                        new EmbedBuilder()
+                                            .setColor(config.colors.error)
+                                            .setTitle('❌ Invalid Usage')
+                                            .setDescription(`Usage: \`${prefix}betaserver add <server_id>\`\nThe server ID must be a 17–20 digit number.`)
+                                            .setTimestamp()
+                                    ]
+                                });
+                            }
+
+                            const guild = message.client.guilds.cache.get(targetId);
+                            const displayName = guild?.name || `Server \`${targetId}\``;
+
+                            const ok = await betaManager.allowServer(targetId);
+                            if (!ok) {
+                                return await message.reply({
+                                    embeds: [
+                                        new EmbedBuilder()
+                                            .setColor(config.colors.error)
+                                            .setTitle('❌ Database Error')
+                                            .setDescription('Failed to add server to the beta allowed list. Please try again.')
+                                            .setTimestamp()
+                                    ]
+                                });
+                            }
+
+                            return await message.reply({
                                 embeds: [
                                     new EmbedBuilder()
-                                        .setColor(config.colors.error)
-                                        .setTitle('❌ Invalid Usage')
-                                        .setDescription(`Usage: \`${prefix}betaserver add <server_id>\`\nThe server ID must be a 17–20 digit number.`)
+                                        .setColor(config.colors.success)
+                                        .setTitle('✅ Server Added to Beta')
+                                        .setDescription(`**${displayName}** (\`${targetId}\`) can now opt in to beta features.`)
+                                        .addFields({ name: 'Next step', value: `The server owner must run \`${prefix}beta enable\` in their server to activate beta features.`, inline: false })
+                                        .setFooter({ text: `Added by ${message.author.tag}` })
                                         .setTimestamp()
                                 ]
                             });
                         }
 
-                        const guild = message.client.guilds.cache.get(targetId);
-                        const displayName = guild?.name || `Server \`${targetId}\``;
+                        // ── $betaserver remove <server_id> ───────────────────────
+                        if (subCmd === 'remove') {
+                            if (!targetId || !/^\d{17,20}$/.test(targetId)) {
+                                return await message.reply({
+                                    embeds: [
+                                        new EmbedBuilder()
+                                            .setColor(config.colors.error)
+                                            .setTitle('❌ Invalid Usage')
+                                            .setDescription(`Usage: \`${prefix}betaserver remove <server_id>\`\nThe server ID must be a 17–20 digit number.`)
+                                            .setTimestamp()
+                                    ]
+                                });
+                            }
 
-                        const ok = await betaManager.allowServer(targetId);
-                        if (!ok) {
-                            return message.reply({
-                                embeds: [
-                                    new EmbedBuilder()
-                                        .setColor(config.colors.error)
-                                        .setTitle('❌ Database Error')
-                                        .setDescription('Failed to add server to the beta allowed list. Please try again.')
-                                        .setTimestamp()
-                                ]
-                            });
-                        }
+                            const guild = message.client.guilds.cache.get(targetId);
+                            const displayName = guild?.name || `Server \`${targetId}\``;
 
-                        return message.reply({
-                            embeds: [
-                                new EmbedBuilder()
-                                    .setColor(config.colors.success)
-                                    .setTitle('✅ Server Added to Beta')
-                                    .setDescription(`**${displayName}** (\`${targetId}\`) can now opt in to beta features.`)
-                                    .addFields({ name: 'Next step', value: `The server owner must run \`${prefix}beta enable\` in their server to activate beta features.`, inline: false })
-                                    .setFooter({ text: `Added by ${message.author.tag}` })
-                                    .setTimestamp()
-                            ]
-                        });
-                    }
+                            const ok = await betaManager.denyServer(targetId);
+                            if (!ok) {
+                                return await message.reply({
+                                    embeds: [
+                                        new EmbedBuilder()
+                                            .setColor(config.colors.error)
+                                            .setTitle('❌ Database Error')
+                                            .setDescription('Failed to remove server from the beta allowed list. Please try again.')
+                                            .setTimestamp()
+                                    ]
+                                });
+                            }
 
-                    // ── $betaserver remove <server_id> ───────────────────────
-                    if (subCmd === 'remove') {
-                        if (!targetId || !/^\d{17,20}$/.test(targetId)) {
-                            return message.reply({
-                                embeds: [
-                                    new EmbedBuilder()
-                                        .setColor(config.colors.error)
-                                        .setTitle('❌ Invalid Usage')
-                                        .setDescription(`Usage: \`${prefix}betaserver remove <server_id>\`\nThe server ID must be a 17–20 digit number.`)
-                                        .setTimestamp()
-                                ]
-                            });
-                        }
-
-                        const guild = message.client.guilds.cache.get(targetId);
-                        const displayName = guild?.name || `Server \`${targetId}\``;
-
-                        const ok = await betaManager.denyServer(targetId);
-                        if (!ok) {
-                            return message.reply({
-                                embeds: [
-                                    new EmbedBuilder()
-                                        .setColor(config.colors.error)
-                                        .setTitle('❌ Database Error')
-                                        .setDescription('Failed to remove server from the beta allowed list. Please try again.')
-                                        .setTimestamp()
-                                ]
-                            });
-                        }
-
-                        return message.reply({
-                            embeds: [
-                                new EmbedBuilder()
-                                    .setColor(config.colors.primary)
-                                    .setTitle('🚫 Server Removed from Beta')
-                                    .setDescription(`**${displayName}** (\`${targetId}\`) has been removed from the beta allowed list.\nBeta features are also disabled for that server.`)
-                                    .setFooter({ text: `Removed by ${message.author.tag}` })
-                                    .setTimestamp()
-                            ]
-                        });
-                    }
-
-                    // ── $betaserver list ─────────────────────────────────────
-                    if (subCmd === 'list') {
-                        const rows = await betaManager.listAllowedServers();
-                        const configSeeds = Array.isArray(config.betaServers) ? config.betaServers : [];
-                        const allIds = [...new Set([...rows.map(r => r.guildId), ...configSeeds])];
-
-                        if (allIds.length === 0) {
-                            return message.reply({
+                            return await message.reply({
                                 embeds: [
                                     new EmbedBuilder()
                                         .setColor(config.colors.primary)
-                                        .setTitle('🔬 Beta Allowed Servers')
-                                        .setDescription('No servers are currently on the beta allowed list.')
+                                        .setTitle('🚫 Server Removed from Beta')
+                                        .setDescription(`**${displayName}** (\`${targetId}\`) has been removed from the beta allowed list.\nBeta features are also disabled for that server.`)
+                                        .setFooter({ text: `Removed by ${message.author.tag}` })
                                         .setTimestamp()
                                 ]
                             });
                         }
 
-                        const dbIds = new Set(rows.map(r => r.guildId));
-                        const lines = allIds.map(id => {
-                            const g       = message.client.guilds.cache.get(id);
-                            const name    = g ? `**${g.name}**` : '*Unknown Server*';
-                            const row     = rows.find(r => r.guildId === id);
-                            const enabled = row?.enabled ? '🟢 beta on' : '🔴 beta off';
-                            const source  = configSeeds.includes(id) && !dbIds.has(id) ? ' *(config)*' : '';
-                            return `• ${name} \`${id}\` — ${enabled}${source}`;
-                        });
+                        // ── $betaserver list ─────────────────────────────────────
+                        if (subCmd === 'list') {
+                            const rows = await betaManager.listAllowedServers();
+                            const configSeeds = Array.isArray(config.betaServers) ? config.betaServers : [];
+                            const allIds = [...new Set([...rows.map(r => r.guildId), ...configSeeds])];
 
-                        const chunks = [];
-                        for (let i = 0; i < lines.length; i += 10) chunks.push(lines.slice(i, i + 10));
+                            if (allIds.length === 0) {
+                                return await message.reply({
+                                    embeds: [
+                                        new EmbedBuilder()
+                                            .setColor(config.colors.primary)
+                                            .setTitle('🔬 Beta Allowed Servers')
+                                            .setDescription('No servers are currently on the beta allowed list.')
+                                            .setTimestamp()
+                                    ]
+                                });
+                            }
 
-                        const listEmbed = new EmbedBuilder()
-                            .setColor(config.colors.primary)
-                            .setTitle(`🔬 Beta Allowed Servers (${allIds.length})`)
-                            .setTimestamp();
-
-                        chunks.forEach((chunk, i) => {
-                            listEmbed.addFields({
-                                name: chunks.length > 1 ? `Servers (${i + 1}/${chunks.length})` : 'Servers',
-                                value: chunk.join('\n'),
-                                inline: false
+                            const dbIds = new Set(rows.map(r => r.guildId));
+                            const lines = allIds.map(id => {
+                                const g       = message.client.guilds.cache.get(id);
+                                const name    = g ? `**${g.name}**` : '*Unknown Server*';
+                                const row     = rows.find(r => r.guildId === id);
+                                const enabled = row?.enabled ? '🟢 beta on' : '🔴 beta off';
+                                const source  = configSeeds.includes(id) && !dbIds.has(id) ? ' *(config)*' : '';
+                                return `• ${name} \`${id}\` — ${enabled}${source}`;
                             });
-                        });
 
-                        return message.reply({ embeds: [listEmbed] });
-                    }
+                            const chunks = [];
+                            for (let i = 0; i < lines.length; i += 10) chunks.push(lines.slice(i, i + 10));
 
-                    // ── No valid subcommand — show help ──────────────────────
-                    return message.reply({
-                        embeds: [
-                            new EmbedBuilder()
+                            const listEmbed = new EmbedBuilder()
                                 .setColor(config.colors.primary)
-                                .setTitle('🔬 Beta Server Management')
-                                .addFields(
-                                    { name: `${prefix}betaserver add <server_id>`,    value: 'Add a server to the beta allowed list',      inline: false },
-                                    { name: `${prefix}betaserver remove <server_id>`, value: 'Remove a server from the beta allowed list',  inline: false },
-                                    { name: `${prefix}betaserver list`,               value: 'List all servers on the beta allowed list',   inline: false }
-                                )
-                                .setFooter({ text: 'Bot owner only' })
-                                .setTimestamp()
-                        ]
-                    });
+                                .setTitle(`🔬 Beta Allowed Servers (${allIds.length})`)
+                                .setTimestamp();
+
+                            chunks.forEach((chunk, i) => {
+                                listEmbed.addFields({
+                                    name: chunks.length > 1 ? `Servers (${i + 1}/${chunks.length})` : 'Servers',
+                                    value: chunk.join('\n'),
+                                    inline: false
+                                });
+                            });
+
+                            return await message.reply({ embeds: [listEmbed] });
+                        }
+
+                        // ── No valid subcommand — show help ──────────────────────
+                        return await message.reply({
+                            embeds: [
+                                new EmbedBuilder()
+                                    .setColor(config.colors.primary)
+                                    .setTitle('🔬 Beta Server Management')
+                                    .addFields(
+                                        { name: `${prefix}betaserver add <server_id>`,    value: 'Add a server to the beta allowed list',      inline: false },
+                                        { name: `${prefix}betaserver remove <server_id>`, value: 'Remove a server from the beta allowed list',  inline: false },
+                                        { name: `${prefix}betaserver list`,               value: 'List all servers on the beta allowed list',   inline: false }
+                                    )
+                                    .setFooter({ text: 'Bot owner only' })
+                                    .setTimestamp()
+                            ]
+                        });
+                    } catch (betaServerErr) {
+                        console.error('[BETASERVER] Command error:', betaServerErr);
+                        message.reply('❌ An error occurred running the betaserver command. Check the logs for details.').catch(() => {});
+                    }
+                    break;
                 }
 
                 default:
