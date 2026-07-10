@@ -251,6 +251,7 @@ const countingGames = pgTable('counting_games', {
 const betaSettings = pgTable('beta_settings', {
   guildId: varchar('guild_id', { length: 50 }).primaryKey(),
   enabled: boolean('enabled').default(false).notNull(),
+  allowed: boolean('allowed').default(false).notNull(),
   updatedAt: timestamp('updated_at').defaultNow(),
 });
 

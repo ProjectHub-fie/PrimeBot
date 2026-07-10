@@ -4,10 +4,23 @@ const { betaSettings } = require('../shared/schema');
 const { eq } = require('drizzle-orm');
 
 /**
- * Is this guild on the developer-approved beta access list? (sync — config only)
+ * Is this guild on the developer-approved beta access list? (async — DB)
+ * Falls back to config.betaServers as a seed list.
  */
-function isAllowed(guildId) {
-    return Array.isArray(config.betaServers) && config.betaServers.includes(guildId);
+async function isAllowed(guildId) {
+    // Always allow servers listed in config as a hard-coded fallback
+    if (Array.isArray(config.betaServers) && config.betaServers.includes(guildId)) return true;
+    try {
+        const rows = await db
+            .select()
+            .from(betaSettings)
+            .where(eq(betaSettings.guildId, guildId))
+            .limit(1);
+        return rows.length > 0 && rows[0].allowed === true;
+    } catch (err) {
+        console.error('[BETA] isAllowed DB error:', err.message);
+        return false;
+    }
 }
 
 /**
@@ -28,14 +41,68 @@ async function isEnabled(guildId) {
 }
 
 /**
- * Enable beta for a guild. Returns false if not on allowed list. (async — DB)
+ * Add a guild to the beta allowed list. (async — DB, bot owner only)
  */
-async function enable(guildId) {
-    if (!isAllowed(guildId)) return false;
+async function allowServer(guildId) {
     try {
         await db
             .insert(betaSettings)
-            .values({ guildId, enabled: true, updatedAt: new Date() })
+            .values({ guildId, allowed: true, enabled: false, updatedAt: new Date() })
+            .onConflictDoUpdate({
+                target: betaSettings.guildId,
+                set: { allowed: true, updatedAt: new Date() },
+            });
+        return true;
+    } catch (err) {
+        console.error('[BETA] allowServer DB error:', err.message);
+        return false;
+    }
+}
+
+/**
+ * Remove a guild from the beta allowed list. (async — DB, bot owner only)
+ */
+async function denyServer(guildId) {
+    try {
+        await db
+            .insert(betaSettings)
+            .values({ guildId, allowed: false, enabled: false, updatedAt: new Date() })
+            .onConflictDoUpdate({
+                target: betaSettings.guildId,
+                set: { allowed: false, enabled: false, updatedAt: new Date() },
+            });
+        return true;
+    } catch (err) {
+        console.error('[BETA] denyServer DB error:', err.message);
+        return false;
+    }
+}
+
+/**
+ * Return all guilds currently on the allowed list. (async — DB)
+ */
+async function listAllowedServers() {
+    try {
+        const rows = await db
+            .select()
+            .from(betaSettings)
+            .where(eq(betaSettings.allowed, true));
+        return rows;
+    } catch (err) {
+        console.error('[BETA] listAllowedServers DB error:', err.message);
+        return [];
+    }
+}
+
+/**
+ * Enable beta for a guild. Returns false if not on allowed list. (async — DB)
+ */
+async function enable(guildId) {
+    if (!(await isAllowed(guildId))) return false;
+    try {
+        await db
+            .insert(betaSettings)
+            .values({ guildId, enabled: true, allowed: true, updatedAt: new Date() })
             .onConflictDoUpdate({
                 target: betaSettings.guildId,
                 set: { enabled: true, updatedAt: new Date() },
@@ -77,7 +144,7 @@ function isBetaFeature(commandName) {
  * Can this guild access beta features right now? (async — DB)
  */
 async function canAccess(guildId) {
-    return isAllowed(guildId) && await isEnabled(guildId);
+    return (await isAllowed(guildId)) && (await isEnabled(guildId));
 }
 
-module.exports = { isAllowed, isEnabled, enable, disable, isBetaFeature, canAccess };
+module.exports = { isAllowed, isEnabled, enable, disable, isBetaFeature, canAccess, allowServer, denyServer, listAllowedServers };

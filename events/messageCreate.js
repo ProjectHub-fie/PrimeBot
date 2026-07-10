@@ -3782,7 +3782,7 @@ module.exports = {
                     }
 
                     // --- Server not on the allowed list ---
-                    if (!betaManager.isAllowed(guildId)) {
+                    if (!(await betaManager.isAllowed(guildId))) {
                         const notAllowedEmbed = new EmbedBuilder()
                             .setColor(config.colors.warning)
                             .setTitle('🚫 Beta Access Not Available')
@@ -3904,6 +3904,162 @@ module.exports = {
                         .setFooter({ text: `PrimeBot Beta Program • Server Owner Only • Version: ${config.version}` })
                         .setTimestamp();
                     return message.reply({ embeds: [statusEmbed] });
+                }
+
+                case 'betaserver': {
+                    // Bot owner only — silently ignore for everyone else
+                    if (!config.developerIds.includes(message.author.id)) return;
+
+                    const subCmd = (args[0] || '').toLowerCase();
+                    const targetId = (args[1] || '').trim();
+
+                    // ── $betaserver add <server_id> ──────────────────────────
+                    if (subCmd === 'add') {
+                        if (!targetId || !/^\d{17,20}$/.test(targetId)) {
+                            return message.reply({
+                                embeds: [
+                                    new EmbedBuilder()
+                                        .setColor(config.colors.error)
+                                        .setTitle('❌ Invalid Usage')
+                                        .setDescription(`Usage: \`${prefix}betaserver add <server_id>\`\nThe server ID must be a 17–20 digit number.`)
+                                        .setTimestamp()
+                                ]
+                            });
+                        }
+
+                        const guild = message.client.guilds.cache.get(targetId);
+                        const displayName = guild?.name || `Server \`${targetId}\``;
+
+                        const ok = await betaManager.allowServer(targetId);
+                        if (!ok) {
+                            return message.reply({
+                                embeds: [
+                                    new EmbedBuilder()
+                                        .setColor(config.colors.error)
+                                        .setTitle('❌ Database Error')
+                                        .setDescription('Failed to add server to the beta allowed list. Please try again.')
+                                        .setTimestamp()
+                                ]
+                            });
+                        }
+
+                        return message.reply({
+                            embeds: [
+                                new EmbedBuilder()
+                                    .setColor(config.colors.success)
+                                    .setTitle('✅ Server Added to Beta')
+                                    .setDescription(`**${displayName}** (\`${targetId}\`) can now opt in to beta features.`)
+                                    .addFields({ name: 'Next step', value: `The server owner must run \`${prefix}beta enable\` in their server to activate beta features.`, inline: false })
+                                    .setFooter({ text: `Added by ${message.author.tag}` })
+                                    .setTimestamp()
+                            ]
+                        });
+                    }
+
+                    // ── $betaserver remove <server_id> ───────────────────────
+                    if (subCmd === 'remove') {
+                        if (!targetId || !/^\d{17,20}$/.test(targetId)) {
+                            return message.reply({
+                                embeds: [
+                                    new EmbedBuilder()
+                                        .setColor(config.colors.error)
+                                        .setTitle('❌ Invalid Usage')
+                                        .setDescription(`Usage: \`${prefix}betaserver remove <server_id>\`\nThe server ID must be a 17–20 digit number.`)
+                                        .setTimestamp()
+                                ]
+                            });
+                        }
+
+                        const guild = message.client.guilds.cache.get(targetId);
+                        const displayName = guild?.name || `Server \`${targetId}\``;
+
+                        const ok = await betaManager.denyServer(targetId);
+                        if (!ok) {
+                            return message.reply({
+                                embeds: [
+                                    new EmbedBuilder()
+                                        .setColor(config.colors.error)
+                                        .setTitle('❌ Database Error')
+                                        .setDescription('Failed to remove server from the beta allowed list. Please try again.')
+                                        .setTimestamp()
+                                ]
+                            });
+                        }
+
+                        return message.reply({
+                            embeds: [
+                                new EmbedBuilder()
+                                    .setColor(config.colors.primary)
+                                    .setTitle('🚫 Server Removed from Beta')
+                                    .setDescription(`**${displayName}** (\`${targetId}\`) has been removed from the beta allowed list.\nBeta features are also disabled for that server.`)
+                                    .setFooter({ text: `Removed by ${message.author.tag}` })
+                                    .setTimestamp()
+                            ]
+                        });
+                    }
+
+                    // ── $betaserver list ─────────────────────────────────────
+                    if (subCmd === 'list') {
+                        const rows = await betaManager.listAllowedServers();
+                        const configSeeds = Array.isArray(config.betaServers) ? config.betaServers : [];
+                        const allIds = [...new Set([...rows.map(r => r.guildId), ...configSeeds])];
+
+                        if (allIds.length === 0) {
+                            return message.reply({
+                                embeds: [
+                                    new EmbedBuilder()
+                                        .setColor(config.colors.primary)
+                                        .setTitle('🔬 Beta Allowed Servers')
+                                        .setDescription('No servers are currently on the beta allowed list.')
+                                        .setTimestamp()
+                                ]
+                            });
+                        }
+
+                        const dbIds = new Set(rows.map(r => r.guildId));
+                        const lines = allIds.map(id => {
+                            const g       = message.client.guilds.cache.get(id);
+                            const name    = g ? `**${g.name}**` : '*Unknown Server*';
+                            const row     = rows.find(r => r.guildId === id);
+                            const enabled = row?.enabled ? '🟢 beta on' : '🔴 beta off';
+                            const source  = configSeeds.includes(id) && !dbIds.has(id) ? ' *(config)*' : '';
+                            return `• ${name} \`${id}\` — ${enabled}${source}`;
+                        });
+
+                        const chunks = [];
+                        for (let i = 0; i < lines.length; i += 10) chunks.push(lines.slice(i, i + 10));
+
+                        const listEmbed = new EmbedBuilder()
+                            .setColor(config.colors.primary)
+                            .setTitle(`🔬 Beta Allowed Servers (${allIds.length})`)
+                            .setTimestamp();
+
+                        chunks.forEach((chunk, i) => {
+                            listEmbed.addFields({
+                                name: chunks.length > 1 ? `Servers (${i + 1}/${chunks.length})` : 'Servers',
+                                value: chunk.join('\n'),
+                                inline: false
+                            });
+                        });
+
+                        return message.reply({ embeds: [listEmbed] });
+                    }
+
+                    // ── No valid subcommand — show help ──────────────────────
+                    return message.reply({
+                        embeds: [
+                            new EmbedBuilder()
+                                .setColor(config.colors.primary)
+                                .setTitle('🔬 Beta Server Management')
+                                .addFields(
+                                    { name: `${prefix}betaserver add <server_id>`,    value: 'Add a server to the beta allowed list',      inline: false },
+                                    { name: `${prefix}betaserver remove <server_id>`, value: 'Remove a server from the beta allowed list',  inline: false },
+                                    { name: `${prefix}betaserver list`,               value: 'List all servers on the beta allowed list',   inline: false }
+                                )
+                                .setFooter({ text: 'Bot owner only' })
+                                .setTimestamp()
+                        ]
+                    });
                 }
 
                 default:
