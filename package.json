@@ -5,6 +5,7 @@
   "scripts": {
     "start": "node start-bot.cjs",
     "dev": "npx tsx start-bot.cjs",
+    "check-beta": "node scripts/check_beta.js",
     "db:push": "drizzle-kit push"
   },
   "dependencies": {

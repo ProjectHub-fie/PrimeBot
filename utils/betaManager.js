@@ -16,9 +16,13 @@ async function isAllowed(guildId) {
             .from(betaSettings)
             .where(eq(betaSettings.guildId, guildId))
             .limit(1);
-        return rows.length > 0 && rows[0].allowed === true;
+        const allowed = rows.length > 0 && rows[0].allowed === true;
+        return allowed;
     } catch (err) {
         console.error('[BETA] isAllowed DB error:', err.message);
+        // On DB error, fall back to config seed list (already checked above) and return false
+        // but expose the error for diagnostics via lastError
+        module.exports._lastError = err;
         return false;
     }
 }
@@ -33,9 +37,11 @@ async function isEnabled(guildId) {
             .from(betaSettings)
             .where(eq(betaSettings.guildId, guildId))
             .limit(1);
-        return rows.length > 0 && rows[0].enabled === true;
+        const enabled = rows.length > 0 && rows[0].enabled === true;
+        return enabled;
     } catch (err) {
         console.error('[BETA] isEnabled DB error:', err.message);
+        module.exports._lastError = err;
         return false;
     }
 }
@@ -144,7 +150,26 @@ function isBetaFeature(commandName) {
  * Can this guild access beta features right now? (async — DB)
  */
 async function canAccess(guildId) {
-    return (await isAllowed(guildId)) && (await isEnabled(guildId));
+    try {
+        const allowed = await isAllowed(guildId);
+        const enabled = await isEnabled(guildId);
+        return allowed && enabled;
+    } catch (err) {
+        console.error('[BETA] canAccess error:', err?.message || err);
+        module.exports._lastError = err;
+        return false;
+    }
 }
 
-module.exports = { isAllowed, isEnabled, enable, disable, isBetaFeature, canAccess, allowServer, denyServer, listAllowedServers };
+// Diagnostic: test DB connectivity and beta tables
+async function checkDbHealth() {
+    try {
+        // Try a lightweight query against betaSettings
+        const rows = await db.select().from(betaSettings).limit(1);
+        return { ok: true };
+    } catch (err) {
+        return { ok: false, error: err.message || String(err) };
+    }
+}
+
+module.exports = { isAllowed, isEnabled, enable, disable, isBetaFeature, canAccess, allowServer, denyServer, listAllowedServers, checkDbHealth, _lastError: null };
