@@ -215,8 +215,10 @@ client.on('guildDelete', (guild) => {
 global.client = client;
 
 // Two-host failover (panel.visionhost.com = primary, wispbyte.com = secondary).
-// Controlled via NODE_ROLE env var on each host.
+// Controlled via NODE_ROLE env var on each host. By default this is now disabled
+// so regular hosts can connect normally; enable it explicitly with BOT_FAILOVER_ENABLED=true.
 const nodeFailover = require('./utils/nodeFailover');
+const failoverEnabled = process.env.BOT_FAILOVER_ENABLED === 'true';
 
 // Function to handle reconnection
 async function connectBot() {
@@ -232,8 +234,13 @@ async function connectBot() {
         await client.login(resolvedToken);
         console.log('✅ Bot successfully logged in and is now online!');
         debug('Bot successfully logged in');
-        nodeFailover.startHeartbeatLoop(nodeFailover.NODE_ROLE);
-        console.log(`[FAILOVER] Reporting heartbeat as "${nodeFailover.NODE_ROLE}" node (${nodeFailover.NODE_NAME}).`);
+
+        if (failoverEnabled) {
+            nodeFailover.startHeartbeatLoop(nodeFailover.NODE_ROLE);
+            console.log(`[FAILOVER] Reporting heartbeat as "${nodeFailover.NODE_ROLE}" node (${nodeFailover.NODE_NAME}).`);
+        } else {
+            console.log('[FAILOVER] Failover disabled; skipping heartbeat loop so this host can stay online normally.');
+        }
     } catch (error) {
         console.error('[ERROR] Failed to login to Discord:', error);
         if (error.code === 'TOKEN_INVALID' || error.message?.includes('token')) {
@@ -253,6 +260,11 @@ async function connectBot() {
 // actually call connectBot(), whichever detects no other healthy active node.
 let standbyTookOver = false;
 async function startStandbyMonitor() {
+    if (!failoverEnabled) {
+        console.log('[FAILOVER] Standby monitor disabled because failover is off.');
+        return;
+    }
+
     console.log(`[FAILOVER] Running as STANDBY node (${nodeFailover.NODE_NAME}, configured role: ${nodeFailover.NODE_ROLE}). Watching for another active node...`);
     setInterval(async () => {
         try {
@@ -284,6 +296,12 @@ async function startStandbyMonitor() {
 //   - "secondary" defers to any already-active node and only connects if
 //     nothing else is currently healthy (unchanged failover behavior).
 async function startWithFailoverCheck() {
+    if (!failoverEnabled) {
+        console.log('[FAILOVER] Failover guard disabled; connecting directly from this host.');
+        await connectBot();
+        return;
+    }
+
     try {
         const other = await nodeFailover.getOtherActiveNode(nodeFailover.NODE_NAME);
         if (other) {
