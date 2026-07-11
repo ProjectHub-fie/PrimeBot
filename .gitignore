@@ -9,3 +9,14 @@ vite.config.ts.*
 
 # Local Netlify folder
 .netlify
+
+# Runtime data files — each host manages its own copy
+data/*.json
+data/*.json.bak
+data/*.json.backup
+
+# Backup files
+*.backup
+
+# Replit-specific uploads
+attached_assets/
