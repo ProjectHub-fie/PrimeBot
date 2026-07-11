@@ -3,6 +3,7 @@ const interactionDebugger = require('../utils/interactionDebugger');
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const config = require('../config');
 const betaManager = require('../utils/betaManager');
+const { isBetaFeature } = require('../utils/betaFeatureMatcher');
 
 /**
  * Helper function to show main help menu for button interactions
@@ -231,9 +232,11 @@ module.exports = {
                     });
                 }
 
-                // Beta gate — block access if the slash command is a beta feature
-                // and this guild hasn't enabled beta.
-                if (betaManager.isBetaFeature(interaction.commandName)) {
+                // Beta gate — block access if the slash command or any of its
+                // subcommand parts is a beta feature and this guild hasn't enabled beta.
+                const subcommand = interaction.options?.getSubcommand(false);
+                const subcommandGroup = interaction.options?.getSubcommandGroup(false);
+                if (isBetaFeature(interaction.commandName, subcommand, subcommandGroup, config.betaFeatures)) {
                     const guildId = interaction.guildId;
                     if (!guildId || !(await betaManager.canAccess(guildId))) {
                         const betaEmbed = new EmbedBuilder()

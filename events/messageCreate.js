@@ -23,6 +23,7 @@ function tcpPing(host, port = 443) {
 }
 const { pool } = require("../server/db");
 const betaManager = require("../utils/betaManager");
+const { isBetaFeature } = require("../utils/betaFeatureMatcher");
 
 /**
  * Try to reply in the channel; if the bot lacks permission, fall back to a DM.
@@ -2464,7 +2465,7 @@ module.exports = {
                     
                 case "badges":
                     // Beta gate
-                    if (betaManager.isBetaFeature('badges') && !(await betaManager.canAccess(message.guild?.id))) {
+                    if (isBetaFeature('badges', null, null, config.betaFeatures) && !(await betaManager.canAccess(message.guild?.id))) {
                         return message.reply({
                             embeds: [new EmbedBuilder()
                                 .setColor(config.colors.primary)
