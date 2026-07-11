@@ -11,7 +11,11 @@ function normalizeNodeRole(rawRole) {
 }
 
 const NODE_ROLE = normalizeNodeRole(process.env.NODE_ROLE);
-const NODE_NAME = process.env.NODE_NAME || process.env.HOSTNAME || (NODE_ROLE === 'secondary' ? 'wispbyte.com' : 'panel.visionhost.com');
+// Use NODE_NAME if explicitly set; otherwise use a stable role-based name.
+// We deliberately skip process.env.HOSTNAME because hosting panels assign
+// random container hostnames that change between restarts, which causes the
+// DB to treat the same physical host as a brand-new node every time it starts.
+const NODE_NAME = process.env.NODE_NAME || (NODE_ROLE === 'secondary' ? 'wispbyte.com' : 'panel.visionhost.com');
 
 const HEARTBEAT_INTERVAL_MS = 15000;
 const FAILOVER_THRESHOLD_MS = 45000;
@@ -176,17 +180,32 @@ async function acquireLease(role, nodeName) {
         }
 
         const ageMs = Number(row.age_ms || 0);
+
+        // Primary role always wins — steal the lease unconditionally from any
+        // other holder (secondary or a stale primary). This makes "set NODE_ROLE=primary
+        // and restart" the reliable way to promote a host without manual DB edits.
+        if (role === 'primary') {
+            await db.execute(sql`
+                UPDATE bot_failover_lock
+                SET owner_node_name = ${nodeName}, owner_role = ${role}, acquired_at = NOW(), last_seen = NOW()
+                WHERE id = 1
+            `);
+            console.warn(`[FAILOVER] Primary forced takeover from ${row.owner_node_name} (role=${row.owner_role}, age=${Math.round(ageMs / 1000)}s)`);
+            return { acquired: true, ownerNodeName: nodeName, ownerRole: role, stolen: true };
+        }
+
+        // Secondary role only takes over when the current lease has gone stale.
         if (ageMs > FAILOVER_THRESHOLD_MS) {
             await db.execute(sql`
                 UPDATE bot_failover_lock
                 SET owner_node_name = ${nodeName}, owner_role = ${role}, acquired_at = NOW(), last_seen = NOW()
                 WHERE id = 1
             `);
-            console.warn(`[FAILOVER] Lease expired for ${row.owner_node_name}; taking over with role=${role} node=${nodeName}`);
+            console.warn(`[FAILOVER] Lease expired for ${row.owner_node_name}; secondary taking over as node=${nodeName}`);
             return { acquired: true, ownerNodeName: nodeName, ownerRole: role, stolen: true };
         }
 
-        console.warn(`[FAILOVER] Lease is held by ${row.owner_node_name} (role=${row.owner_role}) age=${Math.round(ageMs / 1000)}s; refusing takeover for role=${role} node=${nodeName}`);
+        console.warn(`[FAILOVER] Lease is held by ${row.owner_node_name} (role=${row.owner_role}) age=${Math.round(ageMs / 1000)}s; standing by`);
         return { acquired: false, ownerNodeName: row.owner_node_name, ownerRole: row.owner_role, ageMs };
     } catch (err) {
         console.error('[FAILOVER] Lease acquisition failed:', err.message);
