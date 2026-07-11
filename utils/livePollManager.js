@@ -383,10 +383,8 @@ class LivePollManager {
                     .where(eq(livePolls.pollId, pollId));
             }
 
-            // Update cache
-            if (this.pollCaches.has(pollId)) {
-                this.pollCaches.get(pollId).isActive = false;
-            }
+            // Remove ended poll from cache entirely (prevent unbounded cache growth)
+            this.pollCaches.delete(pollId);
 
             // Create winning celebration message
             let celebrationMessage = 'Poll ended successfully';

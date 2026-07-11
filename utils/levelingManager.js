@@ -14,12 +14,20 @@ const config = require('../config');
 class LevelingManager {
     constructor(client) {
         this.client = client;
-        this.cooldowns = new Map(); // userId -> timestamp
+        this.cooldowns = new Map(); // userId -> expiry timestamp
         this.db = null;
         this.schema = null;
         this.dbReady = false;
         this.migrationComplete = false;
-        
+
+        // Purge expired cooldown entries every 5 minutes to prevent unbounded Map growth
+        this.cooldownCleanupInterval = setInterval(() => {
+            const now = Date.now();
+            for (const [key, expiry] of this.cooldowns) {
+                if (now >= expiry) this.cooldowns.delete(key);
+            }
+        }, 5 * 60 * 1000);
+
         // Initialize database connection
         this.initializeDatabase();
     }
