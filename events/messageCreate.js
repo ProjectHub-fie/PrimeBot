@@ -2463,6 +2463,17 @@ module.exports = {
                     break;
                     
                 case "badges":
+                    // Beta gate
+                    if (betaManager.isBetaFeature('badges') && !(await betaManager.canAccess(message.guild?.id))) {
+                        return message.reply({
+                            embeds: [new EmbedBuilder()
+                                .setColor(config.colors.primary)
+                                .setTitle('🔬 Beta Feature')
+                                .setDescription('The `badges` command is currently in beta and only available to servers enrolled in the beta program.\n\nAsk your server owner to run `$beta enable` if your server has been approved.')
+                                .setFooter({ text: `Version: ${config.version}` })
+                                .setTimestamp()]
+                        });
+                    }
                     // Check if leveling is enabled for this server
                     const badgesServerSettings = client.serverSettingsManager.getGuildSettings(message.guild.id);
                     if (!badgesServerSettings.leveling?.enabled) {

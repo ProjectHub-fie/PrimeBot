@@ -21,7 +21,8 @@ module.exports = {
     // When a user runs one of these commands in a non-beta guild, they
     // get an explanatory embed instead of the command running.
     betaFeatures: [
-        // "myNewCommand",  // Example command name (matches commandName in switch)
+        "badges",
+        "badgelist",
     ],
 
     // Developer IDs (users who can access developer commands)
