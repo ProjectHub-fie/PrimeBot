@@ -2,14 +2,11 @@ const { Pool } = require('pg');
 const { drizzle } = require('drizzle-orm/node-postgres');
 const schema = require("../shared/schema.js");
 
-// Parse PostgreSQL connection string - prioritize DATABASE_URL for Replit PostgreSQL
+// Parse PostgreSQL connection string - uses DATABASE_URL env var (set per-host in .env or secrets)
 function parseConnectionString() {
-  // Use hardcoded DATABASE_URL
-  const hardcodedDatabaseUrl = 'postgresql://neondb_owner:npg_fQMmC0N3dbXk@ep-tiny-fire-adfvcy9p-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require';
-  
-  if (hardcodedDatabaseUrl || process.env.DATABASE_URL) {
+  if (process.env.DATABASE_URL) {
     try {
-      const databaseUrl = hardcodedDatabaseUrl || process.env.DATABASE_URL;
+      const databaseUrl = process.env.DATABASE_URL;
       console.log('✅ Using PostgreSQL DATABASE_URL');
       return {
         connectionString: databaseUrl,
@@ -22,8 +19,7 @@ function parseConnectionString() {
       console.warn('Failed to parse DATABASE_URL, falling back to individual env vars:', error.message);
     }
   } else {
-    console.warn('⚠️ DATABASE_URL not found. Please create a PostgreSQL database in Replit.');
-    console.log('💡 To fix: Open a new tab, type "Database", and click "Create a database"');
+    console.warn('⚠️ DATABASE_URL not found. Set DATABASE_URL in your environment or .env file.');
   }
 
   const dbHost = process.env.DB_HOST || '';
