@@ -2463,6 +2463,7 @@ module.exports = {
                     message.reply({ embeds: [setLevelEmbed] });
                     break;
                     
+                case "badge":
                 case "badges":
                     // Beta gate
                     if (isBetaFeature('badges', null, null, config.betaFeatures) && !(await betaManager.canAccess(message.guild?.id))) {
@@ -2674,6 +2675,17 @@ module.exports = {
                 case "viewbadges":
                 case "listbadges":
                 case "badgelist":
+                    // Beta gate
+                    if (isBetaFeature('badgelist', null, null, config.betaFeatures) && !(await betaManager.canAccess(message.guild?.id))) {
+                        return message.reply({
+                            embeds: [new EmbedBuilder()
+                                .setColor(config.colors.primary)
+                                .setTitle('🔬 Beta Feature')
+                                .setDescription('The `badgelist` command is currently in beta and only available to servers enrolled in the beta program.\n\nAsk your server owner to run `$beta enable` if your server has been approved.')
+                                .setFooter({ text: `Version: ${config.version}` })
+                                .setTimestamp()]
+                        });
+                    }
                     // Check if leveling is enabled for this server
                     const viewBadgesServerSettings = client.serverSettingsManager.getGuildSettings(message.guild.id);
                     if (!viewBadgesServerSettings.leveling?.enabled) {
@@ -3957,10 +3969,17 @@ module.exports = {
                 case 'betaserver': {
                     try {
                         console.log(`[BETASERVER] Handling $betaserver from ${message.author.tag} (${message.author.id})`);
-                        // Bot owner only — silently ignore for everyone else
+                        // Bot owner only
                         if (!config.developerIds.includes(message.author.id)) {
-                            console.log(`[BETASERVER] Ignored: ${message.author.id} not in developerIds`);
-                            return;
+                            console.log(`[BETASERVER] Rejected: ${message.author.id} not in developerIds`);
+                            return message.reply({
+                                embeds: [new EmbedBuilder()
+                                    .setColor(config.colors.error)
+                                    .setTitle('❌ Access Denied')
+                                    .setDescription('This command is restricted to bot developers only.')
+                                    .setFooter({ text: `Version: ${config.version}` })
+                                    .setTimestamp()]
+                            });
                         }
 
                         const subCmd = (args[0] || '').toLowerCase();
