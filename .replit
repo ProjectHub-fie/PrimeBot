@@ -7,9 +7,9 @@ channel = "stable-25_05"
 packages = ["mysql80", "firebase-tools", "nix-output-monitor"]
 
 [deployment]
-deploymentTarget = "autoscale"
+deploymentTarget = "vm"
 build = ["npm", "run", "build"]
-run = ["npm", "start"]
+run = ["npx", "tsx", "start-bot.cjs"]
 
 [[ports]]
 localPort = 3000
