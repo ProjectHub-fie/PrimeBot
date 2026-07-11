@@ -243,7 +243,7 @@ async function connectBot() {
                 return;
             }
             nodeFailover.startHeartbeatLoop(nodeFailover.NODE_ROLE);
-            console.log(`[FAILOVER] Reporting heartbeat as "${nodeFailover.NODE_ROLE}" node (${nodeFailover.NODE_NAME}).`);
+            console.log(`[FAILOVER] Host ready: role=${nodeFailover.NODE_ROLE} node=${nodeFailover.NODE_NAME} leaseOwner=${lease.ownerNodeName}`);
         } else {
             console.log('[FAILOVER] Failover disabled; skipping heartbeat loop so this host can stay online normally.');
         }

@@ -3,8 +3,15 @@ const { sql } = require('drizzle-orm');
 
 // Two-host failover configuration.
 // Set NODE_ROLE=primary on panel.visionhost.com and NODE_ROLE=secondary on wispbyte.com.
-const NODE_ROLE = (process.env.NODE_ROLE || 'primary').toLowerCase();
-const NODE_NAME = process.env.NODE_NAME || (NODE_ROLE === 'secondary' ? 'wispbyte.com' : 'panel.visionhost.com');
+function normalizeNodeRole(rawRole) {
+    const value = String(rawRole || 'primary').trim().toLowerCase();
+    if (value === 'secondary' || value === 'secoundary') return 'secondary';
+    if (value === 'primary') return 'primary';
+    return 'primary';
+}
+
+const NODE_ROLE = normalizeNodeRole(process.env.NODE_ROLE);
+const NODE_NAME = process.env.NODE_NAME || process.env.HOSTNAME || (NODE_ROLE === 'secondary' ? 'wispbyte.com' : 'panel.visionhost.com');
 
 const HEARTBEAT_INTERVAL_MS = 15000;
 const FAILOVER_THRESHOLD_MS = 45000;
@@ -103,9 +110,16 @@ async function getOtherActiveNode(selfNodeName) {
 
 function startHeartbeatLoop(role) {
     stopHeartbeatLoop();
-    writeHeartbeat(role, true).catch(err => console.error(`[FAILOVER] Heartbeat write failed for ${role}:`, err.message));
+    console.log(`[FAILOVER] Starting heartbeat loop for role=${role} node=${NODE_NAME}`);
+    writeHeartbeat(role, true)
+        .then(() => refreshLease(NODE_NAME, role))
+        .then(() => console.log(`[FAILOVER] Initial heartbeat written for role=${role} node=${NODE_NAME}`))
+        .catch(err => console.error(`[FAILOVER] Heartbeat write failed for ${role}:`, err.message));
     heartbeatTimer = setInterval(() => {
-        writeHeartbeat(role, true).catch(err => console.error(`[FAILOVER] Heartbeat write failed for ${role}:`, err.message));
+        writeHeartbeat(role, true)
+            .then(() => refreshLease(NODE_NAME, role))
+            .then(() => console.log(`[FAILOVER] Heartbeat refreshed for role=${role} node=${NODE_NAME}`))
+            .catch(err => console.error(`[FAILOVER] Heartbeat write failed for ${role}:`, err.message));
     }, HEARTBEAT_INTERVAL_MS);
 }
 
@@ -128,6 +142,7 @@ async function acquireLease(role, nodeName) {
     await ensureLeaseTable();
 
     try {
+        console.log(`[FAILOVER] Attempting to acquire lease for role=${role} node=${nodeName}`);
         const insertResult = await db.execute(sql`
             INSERT INTO bot_failover_lock (id, owner_node_name, owner_role, acquired_at, last_seen)
             VALUES (1, ${nodeName}, ${role}, NOW(), NOW())
@@ -135,12 +150,13 @@ async function acquireLease(role, nodeName) {
         `);
         const inserted = Number(insertResult?.rowCount || 0) > 0;
         if (inserted) {
+            console.log(`[FAILOVER] Lease acquired successfully for role=${role} node=${nodeName}`);
             return { acquired: true, ownerNodeName: nodeName, ownerRole: role, stolen: false };
         }
 
         const existing = await db.execute(sql`
             SELECT owner_node_name, owner_role,
-                   EXTRACT(EPOCH FROM (NOW() - acquired_at)) * 1000 AS age_ms
+                   EXTRACT(EPOCH FROM (NOW() - last_seen)) * 1000 AS age_ms
             FROM bot_failover_lock
             WHERE id = 1
         `);
@@ -155,6 +171,7 @@ async function acquireLease(role, nodeName) {
                 SET last_seen = NOW()
                 WHERE id = 1 AND owner_node_name = ${nodeName}
             `);
+            console.log(`[FAILOVER] Reusing existing lease for role=${role} node=${nodeName}`);
             return { acquired: true, ownerNodeName: nodeName, ownerRole: role, stolen: false };
         }
 
@@ -165,13 +182,30 @@ async function acquireLease(role, nodeName) {
                 SET owner_node_name = ${nodeName}, owner_role = ${role}, acquired_at = NOW(), last_seen = NOW()
                 WHERE id = 1
             `);
+            console.warn(`[FAILOVER] Lease expired for ${row.owner_node_name}; taking over with role=${role} node=${nodeName}`);
             return { acquired: true, ownerNodeName: nodeName, ownerRole: role, stolen: true };
         }
 
+        console.warn(`[FAILOVER] Lease is held by ${row.owner_node_name} (role=${row.owner_role}) age=${Math.round(ageMs / 1000)}s; refusing takeover for role=${role} node=${nodeName}`);
         return { acquired: false, ownerNodeName: row.owner_node_name, ownerRole: row.owner_role, ageMs };
     } catch (err) {
         console.error('[FAILOVER] Lease acquisition failed:', err.message);
         return { acquired: false, ownerNodeName: null, ownerRole: role, ageMs: Infinity };
+    }
+}
+
+async function refreshLease(nodeName, role) {
+    try {
+        await ensureLeaseTable();
+        const result = await db.execute(sql`
+            UPDATE bot_failover_lock
+            SET last_seen = NOW(), owner_role = ${role}
+            WHERE id = 1 AND owner_node_name = ${nodeName}
+        `);
+        return Number(result?.rowCount || 0) > 0;
+    } catch (err) {
+        console.error('[FAILOVER] Lease heartbeat refresh failed:', err.message);
+        return false;
     }
 }
 
@@ -202,5 +236,6 @@ module.exports = {
     stopHeartbeatLoop,
     markInactive,
     acquireLease,
+    refreshLease,
     releaseLease,
 };
