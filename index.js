@@ -218,7 +218,7 @@ global.client = client;
 // Controlled via NODE_ROLE env var on each host. By default this is now disabled
 // so regular hosts can connect normally; enable it explicitly with BOT_FAILOVER_ENABLED=true.
 const nodeFailover = require('./utils/nodeFailover');
-const failoverEnabled = process.env.BOT_FAILOVER_ENABLED === 'true';
+const failoverEnabled = process.env.BOT_FAILOVER_ENABLED !== 'false';
 
 // Function to handle reconnection
 async function connectBot() {
@@ -236,6 +236,12 @@ async function connectBot() {
         debug('Bot successfully logged in');
 
         if (failoverEnabled) {
+            const lease = await nodeFailover.acquireLease(nodeFailover.NODE_ROLE, nodeFailover.NODE_NAME);
+            if (!lease.acquired) {
+                console.warn(`[FAILOVER] Could not acquire active-node lease; another host is still active (${lease.ownerNodeName}).`);
+                nodeFailover.stopHeartbeatLoop();
+                return;
+            }
             nodeFailover.startHeartbeatLoop(nodeFailover.NODE_ROLE);
             console.log(`[FAILOVER] Reporting heartbeat as "${nodeFailover.NODE_ROLE}" node (${nodeFailover.NODE_NAME}).`);
         } else {
@@ -303,15 +309,14 @@ async function startWithFailoverCheck() {
     }
 
     try {
-        const other = await nodeFailover.getOtherActiveNode(nodeFailover.NODE_NAME);
-        if (other) {
-            if (nodeFailover.NODE_ROLE === 'primary') {
-                console.warn(`[FAILOVER] Detected another active node "${other.nodeName}" (role: ${other.role}, last heartbeat ${Math.round(other.ageMs / 1000)}s ago), but this node is the designated PRIMARY. Taking over — the other node will step down shortly.`);
-            } else {
-                console.warn(`[FAILOVER] Detected another active node "${other.nodeName}" (role: ${other.role}, last heartbeat ${Math.round(other.ageMs / 1000)}s ago). Standing down to avoid duplicate replies.`);
-                startStandbyMonitor();
-                return;
-            }
+        const lease = await nodeFailover.acquireLease(nodeFailover.NODE_ROLE, nodeFailover.NODE_NAME);
+        if (!lease.acquired) {
+            console.warn(`[FAILOVER] Another host already holds the active-node lease (${lease.ownerNodeName}). Standing by.`);
+            startStandbyMonitor();
+            return;
+        }
+        if (lease.stolen) {
+            console.warn(`[FAILOVER] Reclaimed the active-node lease from ${lease.ownerNodeName}.`);
         }
     } catch (error) {
         console.error('[FAILOVER] Startup check failed, proceeding to connect:', error.message);
@@ -321,6 +326,7 @@ async function startWithFailoverCheck() {
 
 async function gracefulShutdown() {
     nodeFailover.stopHeartbeatLoop();
+    await nodeFailover.releaseLease(nodeFailover.NODE_NAME);
     await nodeFailover.markInactive(nodeFailover.NODE_ROLE);
     process.exit(0);
 }

@@ -12,6 +12,7 @@ const MONITOR_INTERVAL_MS = 10000;
 
 let heartbeatTimer = null;
 let tableReady = false;
+let leaseTableReady = false;
 
 async function ensureTable() {
     if (tableReady) return;
@@ -24,6 +25,20 @@ async function ensureTable() {
         )
     `);
     tableReady = true;
+}
+
+async function ensureLeaseTable() {
+    if (leaseTableReady) return;
+    await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS bot_failover_lock (
+            id INTEGER PRIMARY KEY DEFAULT 1,
+            owner_node_name VARCHAR(255) NOT NULL,
+            owner_role VARCHAR(20) NOT NULL,
+            acquired_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            last_seen TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+    `);
+    leaseTableReady = true;
 }
 
 async function writeHeartbeat(role, active) {
@@ -109,6 +124,69 @@ async function markInactive(role) {
     }
 }
 
+async function acquireLease(role, nodeName) {
+    await ensureLeaseTable();
+
+    try {
+        const insertResult = await db.execute(sql`
+            INSERT INTO bot_failover_lock (id, owner_node_name, owner_role, acquired_at, last_seen)
+            VALUES (1, ${nodeName}, ${role}, NOW(), NOW())
+            ON CONFLICT (id) DO NOTHING
+        `);
+        const inserted = Number(insertResult?.rowCount || 0) > 0;
+        if (inserted) {
+            return { acquired: true, ownerNodeName: nodeName, ownerRole: role, stolen: false };
+        }
+
+        const existing = await db.execute(sql`
+            SELECT owner_node_name, owner_role,
+                   EXTRACT(EPOCH FROM (NOW() - acquired_at)) * 1000 AS age_ms
+            FROM bot_failover_lock
+            WHERE id = 1
+        `);
+        const row = (existing.rows || existing)[0];
+        if (!row) {
+            return { acquired: true, ownerNodeName: nodeName, ownerRole: role, stolen: false };
+        }
+
+        if (row.owner_node_name === nodeName) {
+            await db.execute(sql`
+                UPDATE bot_failover_lock
+                SET last_seen = NOW()
+                WHERE id = 1 AND owner_node_name = ${nodeName}
+            `);
+            return { acquired: true, ownerNodeName: nodeName, ownerRole: role, stolen: false };
+        }
+
+        const ageMs = Number(row.age_ms || 0);
+        if (ageMs > FAILOVER_THRESHOLD_MS) {
+            await db.execute(sql`
+                UPDATE bot_failover_lock
+                SET owner_node_name = ${nodeName}, owner_role = ${role}, acquired_at = NOW(), last_seen = NOW()
+                WHERE id = 1
+            `);
+            return { acquired: true, ownerNodeName: nodeName, ownerRole: role, stolen: true };
+        }
+
+        return { acquired: false, ownerNodeName: row.owner_node_name, ownerRole: row.owner_role, ageMs };
+    } catch (err) {
+        console.error('[FAILOVER] Lease acquisition failed:', err.message);
+        return { acquired: false, ownerNodeName: null, ownerRole: role, ageMs: Infinity };
+    }
+}
+
+async function releaseLease(nodeName) {
+    try {
+        await ensureLeaseTable();
+        await db.execute(sql`
+            DELETE FROM bot_failover_lock
+            WHERE id = 1 AND owner_node_name = ${nodeName}
+        `);
+    } catch (err) {
+        console.error('[FAILOVER] Lease release failed:', err.message);
+    }
+}
+
 module.exports = {
     NODE_ROLE,
     NODE_NAME,
@@ -123,4 +201,6 @@ module.exports = {
     startHeartbeatLoop,
     stopHeartbeatLoop,
     markInactive,
+    acquireLease,
+    releaseLease,
 };
