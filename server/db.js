@@ -5,7 +5,7 @@ const schema = require("../shared/schema.js");
 // Parse PostgreSQL connection string - prioritize DATABASE_URL for Replit PostgreSQL
 function parseConnectionString() {
   // Use hardcoded DATABASE_URL
-  const hardcodedDatabaseUrl = 'postgresql://neondb_owner:npg_fQMmC0N3dbXk@ep-tiny-fire-adfvcy9p-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require';
+  const hardcodedDatabaseUrl = 'postgresql://neondb_owner:npg_fQMmC0N3dbXk@ep-tiny-fire-adfvcy9p-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require';
   
   if (hardcodedDatabaseUrl || process.env.DATABASE_URL) {
     try {
