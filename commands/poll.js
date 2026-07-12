@@ -6,9 +6,7 @@ module.exports = {
     data: new SlashCommandBuilder()
         .setName('poll')
         .setDescription('Create a timed poll with options')
-                .setDefaultMemberPermissions('0')
-        
-        .addStringOption(option => 
+                .addStringOption(option => 
             option.setName('duration')
                 .setDescription('Duration of the poll (e.g., 1h, 1d)')
                 .setRequired(true))
@@ -98,8 +96,7 @@ module.exports = {
                     { name: '🔢 Options', value: options.map((opt, i) => `${interaction.client.pollManager.getOptionEmoji(i)} **${opt}**`).join('\n') },
                     { name: '📝 Poll ID', value: `\`${pollMessage.id}\` *(Save this ID if you need to end the poll early with \`/endpoll\`)*` }
                 )
-                .setFooter({ text: 'Created by ${interaction.user.tag} • Version 2.5.0', iconURL: interaction.user.displayAvatarURL({ dynamic: true  }) 
-                })
+                .setFooter({ text: `Created by ${interaction.user.tag} • Version ${config.version}`, iconURL: interaction.user.displayAvatarURL({ dynamic: true }) })
                 .setTimestamp();
             
             await interaction.reply({

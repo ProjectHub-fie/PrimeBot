@@ -46,15 +46,7 @@ async function initializeDatabase() {
     }
 }
 
-// Initialize fallback functions
-if (!dbInitialized) {
-    db = { 
-        insert: () => Promise.resolve([{ pollId: 'test-poll', passCode: 'TEST123' }]),
-        select: () => Promise.resolve([]),
-        update: () => Promise.resolve(),
-        execute: () => Promise.resolve({ rows: [] })
-    };
-}
+// db stays undefined until initializeDatabase() resolves — callers always check this.dbReady first
 
 class LivePollManager {
     constructor(client = null) {
@@ -188,7 +180,6 @@ class LivePollManager {
                 this.pollCaches.get(pollId).channelId = channelId;
             }
 
-            console.log(`[LIVE POLLS] Updated message info for poll ${pollId}: message ${messageId}, channel ${channelId}`);
         } catch (error) {
             console.error('Error updating poll message info:', error);
         }
@@ -584,7 +575,10 @@ class LivePollManager {
     // Get user's polls
     async getUserPolls(userId, limit = 10) {
         try {
-            const polls = await db.select()
+            if (!this.dbReady) return [];
+            const dbInstance = this.drizzleDb || db || global.livePollDb;
+            if (!dbInstance) return [];
+            const polls = await dbInstance.select()
                 .from(livePolls)
                 .where(eq(livePolls.creatorId, userId))
                 .orderBy(desc(livePolls.createdAt))
@@ -592,7 +586,7 @@ class LivePollManager {
 
             return polls;
         } catch (error) {
-            console.error('Error getting user polls:', error);
+            console.error('[LIVE POLLS] Error getting user polls:', error);
             return [];
         }
     }

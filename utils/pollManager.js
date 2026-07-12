@@ -134,7 +134,7 @@ class PollManager {
         const endedPolls = [];
 
         for (const [messageId, poll] of this.polls.entries()) {
-            if (!poll.ended && poll.endTime <= now) {
+            if (!poll.ended && poll.endTime !== null && poll.endTime <= now) {
                 endedPolls.push(messageId);
             }
         }

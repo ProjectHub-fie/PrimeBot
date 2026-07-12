@@ -44,7 +44,6 @@ const TicTacToeManager = require('./utils/ticTacToeManager');
 client.ticTacToeManager = new TicTacToeManager(client);
 
 const PollManager = require('./utils/pollManager');
-client.pollManager = new PollManager(client);
 
 // Initialize birthday manager
 try {
