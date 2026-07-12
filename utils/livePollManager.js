@@ -624,9 +624,8 @@ class LivePollManager {
                 timeoutPromise
             ]);
 
-            console.log(`[LIVE POLLS] Checking for expired polls. Found ${expiredPolls.length} expired polls.`);
-
             if (expiredPolls.length > 0) {
+                console.log(`[LIVE POLLS] Found ${expiredPolls.length} expired poll(s), closing.`);
                 // Update all expired polls to inactive
                 for (const poll of expiredPolls) {
                     await dbInstance.update(livePolls)

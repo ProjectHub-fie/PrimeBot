@@ -122,7 +122,6 @@ function startHeartbeatLoop(role) {
     heartbeatTimer = setInterval(() => {
         writeHeartbeat(role, true)
             .then(() => refreshLease(NODE_NAME, role))
-            .then(() => console.log(`[FAILOVER] Heartbeat refreshed for role=${role} node=${NODE_NAME}`))
             .catch(err => console.error(`[FAILOVER] Heartbeat write failed for ${role}:`, err.message));
     }, HEARTBEAT_INTERVAL_MS);
 }

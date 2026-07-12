@@ -127,8 +127,6 @@ class GiveawayManager {
         }
 
         try {
-            console.log(`[GIVEAWAY] Saving ${this.giveaways.size} giveaways to database...`);
-            
             let validCount = 0;
             let invalidCount = 0;
             
@@ -146,7 +144,9 @@ class GiveawayManager {
                 validCount++;
             }
             
-            console.log(`[GIVEAWAY] Successfully saved ${validCount} giveaways to database (${invalidCount} invalid entries removed).`);
+            if (invalidCount > 0) {
+                console.log(`[GIVEAWAY] Saved ${validCount} giveaways (${invalidCount} invalid entries removed).`);
+            }
         } catch (error) {
             console.error('[GIVEAWAY] Error saving giveaways to database:', error);
         }
@@ -200,7 +200,7 @@ class GiveawayManager {
                 this.checkGiveaways();
             }, config.giveaway.checkInterval);
             
-            console.log('Giveaway checking system started.');
+            console.log('[GIVEAWAY] Checking system started.');
         }, 10000); // Wait 10 seconds after startup before starting checks
     }
 
@@ -210,7 +210,6 @@ class GiveawayManager {
     async checkGiveaways() {
         const now = Date.now();
         const activeCount = Array.from(this.giveaways.values()).filter(g => !g.ended).length;
-        console.log(`[GIVEAWAY] Checking for ended giveaways. Total: ${this.giveaways.size}, Active: ${activeCount}`);
         
         // Clean up old ended giveaways that are older than 24 hours
         const oneDayAgo = now - (24 * 60 * 60 * 1000);
