@@ -1,0 +1,15 @@
+{
+  "1399063306756558919": {
+    "messageId": "1399063306756558919",
+    "channelId": "1399015181362663624",
+    "question": "What's your favorite color?",
+    "options": [
+      "Red",
+      "Blue",
+      "Green"
+    ],
+    "endTime": 1753633145446,
+    "createdBy": "1310654136290639894",
+    "ended": true
+  }
+}
