@@ -255,6 +255,50 @@ const betaSettings = pgTable('beta_settings', {
   updatedAt: timestamp('updated_at').defaultNow(),
 });
 
+// Server settings table (replaces serverSettings.json)
+const serverSettings = pgTable('server_settings', {
+  guildId: varchar('guild_id', { length: 50 }).primaryKey(),
+  receiveBroadcasts: boolean('receive_broadcasts').default(true).notNull(),
+  broadcastChannelId: varchar('broadcast_channel_id', { length: 50 }),
+  welcomeEnabled: boolean('welcome_enabled').default(false).notNull(),
+  welcomeChannelId: varchar('welcome_channel_id', { length: 50 }),
+  welcomeMessage: text('welcome_message'),
+  welcomeBannerUrl: text('welcome_banner_url'),
+  welcomeColor: varchar('welcome_color', { length: 20 }),
+  welcomeDmEnabled: boolean('welcome_dm_enabled').default(false).notNull(),
+  welcomeDmMessage: text('welcome_dm_message'),
+  welcomeShowMemberCount: boolean('welcome_show_member_count').default(true).notNull(),
+  welcomeShowJoinDate: boolean('welcome_show_join_date').default(true).notNull(),
+  welcomeShowAccountAge: boolean('welcome_show_account_age').default(true).notNull(),
+  welcomeCustomTitle: varchar('welcome_custom_title', { length: 255 }),
+  welcomeCustomFooter: varchar('welcome_custom_footer', { length: 255 }),
+  levelingEnabled: boolean('leveling_enabled').default(true).notNull(),
+  levelingChannelId: varchar('leveling_channel_id', { length: 50 }),
+  xpMultiplier: integer('xp_multiplier').default(1),
+  xpCooldown: integer('xp_cooldown').default(60000).notNull(),
+  autoReactionsEnabled: boolean('auto_reactions_enabled').default(false).notNull(),
+  autoReactions: text('auto_reactions').default('[]').notNull(),
+  noPrefixUsers: text('no_prefix_users').default('{}').notNull(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+// Tickets table (replaces tickets.json)
+const tickets = pgTable('tickets', {
+  channelId: varchar('channel_id', { length: 50 }).primaryKey(),
+  userId: varchar('user_id', { length: 50 }).notNull(),
+  guildId: varchar('guild_id', { length: 50 }).notNull(),
+  category: varchar('category', { length: 50 }).default('general').notNull(),
+  createdAt: integer('created_at').notNull(),
+  closed: boolean('closed').default(false).notNull(),
+  isThread: boolean('is_thread').default(false).notNull(),
+  parentChannelId: varchar('parent_channel_id', { length: 50 }),
+  controlMessageId: varchar('control_message_id', { length: 50 }),
+  closedAt: integer('closed_at'),
+  closedBy: varchar('closed_by', { length: 50 }),
+  reopenedAt: integer('reopened_at'),
+  reopenedBy: varchar('reopened_by', { length: 50 }),
+});
+
 // Exports
 module.exports = {
   livePolls,
@@ -285,5 +329,7 @@ module.exports = {
   birthdaysGuilds,
   birthdays,
   countingGames,
-  betaSettings
+  betaSettings,
+  serverSettings,
+  tickets,
 };

@@ -1,517 +1,443 @@
 const { EmbedBuilder } = require('discord.js');
-const fs = require('fs');
-const path = require('path');
 const config = require('../config');
+const { pool } = require('../server/db');
+
+const CREATE_TABLE_SQL = `
+    CREATE TABLE IF NOT EXISTS server_settings (
+        guild_id              VARCHAR(50) PRIMARY KEY,
+        receive_broadcasts    BOOLEAN NOT NULL DEFAULT true,
+        broadcast_channel_id  VARCHAR(50),
+        welcome_enabled       BOOLEAN NOT NULL DEFAULT false,
+        welcome_channel_id    VARCHAR(50),
+        welcome_message       TEXT DEFAULT 'Welcome to the server, {member}! Enjoy your stay!',
+        welcome_banner_url    TEXT,
+        welcome_color         VARCHAR(20) DEFAULT '#5865F2',
+        welcome_dm_enabled    BOOLEAN NOT NULL DEFAULT false,
+        welcome_dm_message    TEXT DEFAULT 'Hey {username}! Welcome to **{server}**!',
+        welcome_show_member_count  BOOLEAN NOT NULL DEFAULT true,
+        welcome_show_join_date     BOOLEAN NOT NULL DEFAULT true,
+        welcome_show_account_age   BOOLEAN NOT NULL DEFAULT true,
+        welcome_custom_title  VARCHAR(255),
+        welcome_custom_footer VARCHAR(255),
+        leveling_enabled      BOOLEAN NOT NULL DEFAULT true,
+        leveling_channel_id   VARCHAR(50),
+        xp_multiplier         REAL NOT NULL DEFAULT 1.0,
+        xp_cooldown           INTEGER NOT NULL DEFAULT 60000,
+        auto_reactions_enabled BOOLEAN NOT NULL DEFAULT false,
+        auto_reactions         JSONB NOT NULL DEFAULT '[]',
+        no_prefix_users        JSONB NOT NULL DEFAULT '{}',
+        updated_at             TIMESTAMP DEFAULT NOW()
+    )
+`;
 
 /**
- * Manages server-specific settings and preferences
+ * Manages server-specific settings and preferences — backed by PostgreSQL.
+ * The in-memory Map acts as a read-through cache; writes go straight to DB
+ * (fire-and-forget so callers stay synchronous).
  */
 class ServerSettingsManager {
     constructor(client) {
         this.client = client;
-        this.serverSettings = new Map(); // Store server settings
-        this.dataPath = path.join(__dirname, '../data/serverSettings.json');
-        
-        // Ensure data directory exists
-        const dataDir = path.join(__dirname, '../data');
-        if (!fs.existsSync(dataDir)) {
-            fs.mkdirSync(dataDir, { recursive: true });
-        }
-        
-        this.loadSettings();
+        this.serverSettings = new Map();
+        this._tableReady = false;
+
+        this._init().catch(err =>
+            console.error('[SERVER SETTINGS] Initialisation failed:', err.message)
+        );
     }
-    
-    /**
-     * Load saved settings from the data file
-     */
-    loadSettings() {
+
+    // ─── Internal helpers ────────────────────────────────────────────────────
+
+    async _ensureTable() {
+        if (this._tableReady) return;
+        await pool.query(CREATE_TABLE_SQL);
+        this._tableReady = true;
+    }
+
+    async _init() {
+        await this._ensureTable();
+        await this._migrateFromJson();
+        await this.loadSettings();
+    }
+
+    /** One-time import of existing serverSettings.json data. */
+    async _migrateFromJson() {
+        const fs = require('fs');
+        const path = require('path');
+        const jsonPath = path.join(__dirname, '../data/serverSettings.json');
+        const donePath = jsonPath + '.migrated';
+        if (!fs.existsSync(jsonPath) || fs.existsSync(donePath)) return;
+
         try {
-            if (fs.existsSync(this.dataPath)) {
-                const data = JSON.parse(fs.readFileSync(this.dataPath, 'utf8'));
-                
-                for (const [guildId, guildSettings] of Object.entries(data)) {
-                    this.serverSettings.set(guildId, guildSettings);
+            const data = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+            let count = 0;
+            for (const [guildId, s] of Object.entries(data)) {
+                try {
+                    const lev = s.leveling || {};
+                    const ar = s.autoReactions || {};
+                    await pool.query(`
+                        INSERT INTO server_settings (
+                            guild_id, receive_broadcasts, broadcast_channel_id,
+                            welcome_enabled, welcome_channel_id, welcome_message,
+                            welcome_banner_url, welcome_color,
+                            welcome_dm_enabled, welcome_dm_message,
+                            welcome_show_member_count, welcome_show_join_date, welcome_show_account_age,
+                            welcome_custom_title, welcome_custom_footer,
+                            leveling_enabled, leveling_channel_id, xp_multiplier, xp_cooldown,
+                            auto_reactions_enabled, auto_reactions, no_prefix_users
+                        ) VALUES (
+                            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
+                            $16,$17,$18,$19,$20,$21,$22
+                        ) ON CONFLICT (guild_id) DO NOTHING
+                    `, [
+                        guildId,
+                        s.receiveBroadcasts !== false,
+                        s.broadcastChannelId || null,
+                        s.welcomeEnabled || false,
+                        s.welcomeChannelId || null,
+                        s.welcomeMessage || 'Welcome to the server, {member}! Enjoy your stay!',
+                        s.welcomeBannerUrl || null,
+                        s.welcomeColor || '#5865F2',
+                        s.welcomeDmEnabled || false,
+                        s.welcomeDmMessage || 'Hey {username}! Welcome to **{server}**!',
+                        s.welcomeShowMemberCount !== false,
+                        s.welcomeShowJoinDate !== false,
+                        s.welcomeShowAccountAge !== false,
+                        s.welcomeCustomTitle || null,
+                        s.welcomeCustomFooter || null,
+                        lev.enabled !== false,
+                        lev.levelUpChannelId || null,
+                        lev.xpMultiplier || 1.0,
+                        lev.xpCooldown || 60000,
+                        ar.enabled || false,
+                        JSON.stringify(ar.reactions || []),
+                        JSON.stringify(s.noPrefixUsers || {}),
+                    ]);
+                    count++;
+                } catch (e) {
+                    console.error(`[SERVER SETTINGS] Migration: failed on guild ${guildId}:`, e.message);
                 }
-                
-                console.log(`Loaded settings for ${this.serverSettings.size} servers.`);
-            } else {
-                console.log('No server settings file found. Creating a new one.');
-                this.saveSettings();
             }
-        } catch (error) {
-            console.error('Error loading server settings:', error);
-            // Create a new settings file in case of corruption
-            this.serverSettings = new Map();
-            this.saveSettings();
+            fs.renameSync(jsonPath, donePath);
+            console.log(`[SERVER SETTINGS] Migrated ${count} guilds from JSON → DB.`);
+        } catch (err) {
+            console.error('[SERVER SETTINGS] JSON migration failed:', err.message);
         }
     }
-    
-    /**
-     * Save settings to the data file
-     */
-    saveSettings() {
+
+    _rowToSettings(row) {
+        return {
+            receiveBroadcasts: row.receive_broadcasts,
+            broadcastChannelId: row.broadcast_channel_id || null,
+            welcomeEnabled: row.welcome_enabled,
+            welcomeChannelId: row.welcome_channel_id || null,
+            welcomeMessage: row.welcome_message || 'Welcome to the server, {member}! Enjoy your stay!',
+            welcomeBannerUrl: row.welcome_banner_url || null,
+            welcomeColor: row.welcome_color || config.colors.primary,
+            welcomeDmEnabled: row.welcome_dm_enabled,
+            welcomeDmMessage: row.welcome_dm_message || 'Hey {username}! Welcome to **{server}**!',
+            welcomeShowMemberCount: row.welcome_show_member_count,
+            welcomeShowJoinDate: row.welcome_show_join_date,
+            welcomeShowAccountAge: row.welcome_show_account_age,
+            welcomeCustomTitle: row.welcome_custom_title || null,
+            welcomeCustomFooter: row.welcome_custom_footer || null,
+            leveling: {
+                enabled: row.leveling_enabled,
+                levelUpChannelId: row.leveling_channel_id || null,
+                xpMultiplier: parseFloat(row.xp_multiplier) || 1.0,
+                xpCooldown: row.xp_cooldown || 60000,
+            },
+            autoReactions: {
+                enabled: row.auto_reactions_enabled,
+                reactions: row.auto_reactions || [],
+            },
+            noPrefixUsers: row.no_prefix_users || {},
+        };
+    }
+
+    _defaultSettings() {
+        return {
+            receiveBroadcasts: true,
+            broadcastChannelId: null,
+            welcomeEnabled: false,
+            welcomeChannelId: null,
+            welcomeMessage: 'Welcome to the server, {member}! Enjoy your stay!',
+            welcomeBannerUrl: config.welcome?.bannerUrl || null,
+            welcomeColor: config.colors.primary,
+            welcomeDmEnabled: config.welcome?.sendDM || false,
+            welcomeDmMessage: config.welcome?.dmMessage || 'Hey {username}! Welcome to **{server}**!',
+            welcomeShowMemberCount: true,
+            welcomeShowJoinDate: true,
+            welcomeShowAccountAge: true,
+            welcomeCustomTitle: null,
+            welcomeCustomFooter: null,
+            leveling: {
+                enabled: true,
+                levelUpChannelId: null,
+                xpMultiplier: 1.0,
+                xpCooldown: 60000,
+            },
+            autoReactions: {
+                enabled: false,
+                reactions: [],
+            },
+            noPrefixUsers: {},
+        };
+    }
+
+    /** Upsert one guild's settings to DB — fire-and-forget. */
+    _saveGuildSettings(guildId) {
+        this._saveGuildSettingsAsync(guildId).catch(err =>
+            console.error(`[SERVER SETTINGS] DB save failed for guild ${guildId}:`, err.message)
+        );
+    }
+
+    async _saveGuildSettingsAsync(guildId) {
+        const s = this.getGuildSettings(guildId);
+        await this._ensureTable();
+        await pool.query(`
+            INSERT INTO server_settings (
+                guild_id, receive_broadcasts, broadcast_channel_id,
+                welcome_enabled, welcome_channel_id, welcome_message,
+                welcome_banner_url, welcome_color,
+                welcome_dm_enabled, welcome_dm_message,
+                welcome_show_member_count, welcome_show_join_date, welcome_show_account_age,
+                welcome_custom_title, welcome_custom_footer,
+                leveling_enabled, leveling_channel_id, xp_multiplier, xp_cooldown,
+                auto_reactions_enabled, auto_reactions, no_prefix_users, updated_at
+            ) VALUES (
+                $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
+                $16,$17,$18,$19,$20,$21,$22, NOW()
+            )
+            ON CONFLICT (guild_id) DO UPDATE SET
+                receive_broadcasts    = EXCLUDED.receive_broadcasts,
+                broadcast_channel_id  = EXCLUDED.broadcast_channel_id,
+                welcome_enabled       = EXCLUDED.welcome_enabled,
+                welcome_channel_id    = EXCLUDED.welcome_channel_id,
+                welcome_message       = EXCLUDED.welcome_message,
+                welcome_banner_url    = EXCLUDED.welcome_banner_url,
+                welcome_color         = EXCLUDED.welcome_color,
+                welcome_dm_enabled    = EXCLUDED.welcome_dm_enabled,
+                welcome_dm_message    = EXCLUDED.welcome_dm_message,
+                welcome_show_member_count  = EXCLUDED.welcome_show_member_count,
+                welcome_show_join_date     = EXCLUDED.welcome_show_join_date,
+                welcome_show_account_age   = EXCLUDED.welcome_show_account_age,
+                welcome_custom_title  = EXCLUDED.welcome_custom_title,
+                welcome_custom_footer = EXCLUDED.welcome_custom_footer,
+                leveling_enabled      = EXCLUDED.leveling_enabled,
+                leveling_channel_id   = EXCLUDED.leveling_channel_id,
+                xp_multiplier         = EXCLUDED.xp_multiplier,
+                xp_cooldown           = EXCLUDED.xp_cooldown,
+                auto_reactions_enabled = EXCLUDED.auto_reactions_enabled,
+                auto_reactions         = EXCLUDED.auto_reactions,
+                no_prefix_users        = EXCLUDED.no_prefix_users,
+                updated_at             = NOW()
+        `, [
+            guildId,
+            s.receiveBroadcasts,
+            s.broadcastChannelId,
+            s.welcomeEnabled,
+            s.welcomeChannelId,
+            s.welcomeMessage,
+            s.welcomeBannerUrl,
+            s.welcomeColor,
+            s.welcomeDmEnabled,
+            s.welcomeDmMessage,
+            s.welcomeShowMemberCount,
+            s.welcomeShowJoinDate,
+            s.welcomeShowAccountAge,
+            s.welcomeCustomTitle,
+            s.welcomeCustomFooter,
+            s.leveling.enabled,
+            s.leveling.levelUpChannelId,
+            s.leveling.xpMultiplier,
+            s.leveling.xpCooldown,
+            s.autoReactions.enabled,
+            JSON.stringify(s.autoReactions.reactions),
+            JSON.stringify(s.noPrefixUsers),
+        ]);
+    }
+
+    // ─── Public API (identical surface to the original) ──────────────────────
+
+    async loadSettings() {
         try {
-            // Convert Map to a plain object for JSON serialization
-            const dataToSave = {};
-            for (const [guildId, settings] of this.serverSettings.entries()) {
-                dataToSave[guildId] = settings;
+            await this._ensureTable();
+            const res = await pool.query('SELECT * FROM server_settings');
+            for (const row of res.rows) {
+                this.serverSettings.set(row.guild_id, this._rowToSettings(row));
             }
-            
-            fs.writeFileSync(this.dataPath, JSON.stringify(dataToSave, null, 2), 'utf8');
-            return true;
+            console.log(`[SERVER SETTINGS] Loaded settings for ${this.serverSettings.size} servers.`);
         } catch (error) {
-            console.error('Error saving server settings:', error);
-            return false;
+            console.error('[SERVER SETTINGS] Error loading settings:', error);
         }
     }
-    
-    /**
-     * Get settings for a specific guild
-     * @param {string} guildId - Discord Guild ID
-     * @returns {Object} Guild settings
-     */
+
     getGuildSettings(guildId) {
         if (!this.serverSettings.has(guildId)) {
-            // Initialize with default settings
-            const defaultSettings = {
-                receiveBroadcasts: true, // By default, servers receive broadcasts
-                broadcastChannelId: null, // Custom channel for developer broadcasts (null = auto-select)
-                
-                // Welcome system settings
-                welcomeEnabled: false,
-                welcomeChannelId: null,
-                welcomeMessage: 'Welcome to the server, {member}! Enjoy your stay!',
-                welcomeBannerUrl: config.welcome.bannerUrl || null,
-                welcomeColor: config.colors.primary,
-                
-                // Direct message settings
-                welcomeDmEnabled: config.welcome.sendDM,
-                welcomeDmMessage: config.welcome.dmMessage || 'Hey {username}! Welcome to **{server}**!',
-                
-                // Welcome embed customization
-                welcomeShowMemberCount: true,
-                welcomeShowJoinDate: true,
-                welcomeShowAccountAge: true,
-                welcomeCustomTitle: null,
-                welcomeCustomFooter: null,
-                
-                // Leveling system settings
-                leveling: {
-                    enabled: true,
-                    levelUpChannelId: null,
-                    xpMultiplier: 1.0,
-                    xpCooldown: 60000 // Default 1 minute cooldown
-                },
-                
-                // Auto-reaction settings
-                autoReactions: {
-                    enabled: false,
-                    reactions: [] // Array of { trigger: 'word', emoji: '👍', caseSensitive: false }
-                },
-                
-                // No-prefix mode settings
-                noPrefixUsers: {}, // Map of user IDs to expiration timestamps
-                
-                // Add other default settings as needed
-            };
-            
-            this.serverSettings.set(guildId, defaultSettings);
-            this.saveSettings();
+            this.serverSettings.set(guildId, this._defaultSettings());
         }
-        
         return this.serverSettings.get(guildId);
     }
-    
-    /**
-     * Update a specific setting for a guild
-     * @param {string} guildId - Discord Guild ID
-     * @param {string} setting - The setting name to update
-     * @param {*} value - The new value
-     * @returns {boolean} Whether the setting was successfully updated
-     */
+
     updateGuildSetting(guildId, setting, value) {
         const guildSettings = this.getGuildSettings(guildId);
-        
-        if (guildSettings) {
-            guildSettings[setting] = value;
-            this.serverSettings.set(guildId, guildSettings);
-            return this.saveSettings();
-        }
-        
-        return false;
-    }
-    
-    /**
-     * Toggle broadcast reception for a guild
-     * @param {string} guildId - Discord Guild ID
-     * @returns {boolean} The new state (true = receiving, false = opted out)
-     */
-    toggleBroadcastReception(guildId) {
-        const guildSettings = this.getGuildSettings(guildId);
-        
-        // Toggle the current value
-        const newValue = !guildSettings.receiveBroadcasts;
-        guildSettings.receiveBroadcasts = newValue;
-        
-        // Save the updated settings
+        guildSettings[setting] = value;
         this.serverSettings.set(guildId, guildSettings);
-        this.saveSettings();
-        
+        this._saveGuildSettings(guildId);
+        return true;
+    }
+
+    // ── Broadcast ─────────────────────────────────────────────────────────────
+
+    toggleBroadcastReception(guildId) {
+        const s = this.getGuildSettings(guildId);
+        const newValue = !s.receiveBroadcasts;
+        s.receiveBroadcasts = newValue;
+        this.serverSettings.set(guildId, s);
+        this._saveGuildSettings(guildId);
         return newValue;
     }
-    
-    /**
-     * Set (or clear) the custom broadcast channel for a guild
-     * @param {string} guildId - Discord Guild ID
-     * @param {string|null} channelId - Channel ID to send broadcasts to, or null to auto-select
-     * @returns {boolean} Whether the channel was successfully set
-     */
+
     setBroadcastChannel(guildId, channelId) {
         return this.updateGuildSetting(guildId, 'broadcastChannelId', channelId);
     }
 
-    /**
-     * Get the custom broadcast channel for a guild
-     * @param {string} guildId - Discord Guild ID
-     * @returns {string|null} Channel ID, or null if not set
-     */
     getBroadcastChannel(guildId) {
-        const guildSettings = this.getGuildSettings(guildId);
-        return guildSettings.broadcastChannelId || null;
+        return this.getGuildSettings(guildId).broadcastChannelId || null;
     }
 
-    /**
-     * Enable no-prefix mode for a user
-     * @param {string} guildId - Discord Guild ID
-     * @param {string} userId - User ID to enable no-prefix mode for
-     * @param {number} minutes - Duration in minutes (default: 10)
-     * @returns {Object} Result with success status and message
-     */
-    enableNoPrefixMode(guildId, userId, minutes = 10) {
-        if (!userId) return { success: false, message: "Invalid user" };
-        if (minutes <= 0 || minutes > 60) return { success: false, message: "Duration must be between 1 and 60 minutes" };
-        
-        try {
-            const guildSettings = this.getGuildSettings(guildId);
-            
-            // Ensure noPrefixUsers object exists
-            if (!guildSettings.noPrefixUsers) {
-                guildSettings.noPrefixUsers = {};
-            }
-            
-            // Calculate expiration timestamp (current time + minutes)
-            const expirationTime = Date.now() + (minutes * 60 * 1000);
-            
-            // Set the expiration time for this user
-            guildSettings.noPrefixUsers[userId] = expirationTime;
-            
-            // Save the updated settings
-            this.serverSettings.set(guildId, guildSettings);
-            this.saveSettings();
-            
-            console.log(`[NO-PREFIX] Enabled no-prefix mode for user ${userId} in guild ${guildId} for ${minutes} minutes (expires at ${new Date(expirationTime)})`);
-            
-            return { 
-                success: true, 
-                message: `No-prefix mode enabled for ${minutes} minute${minutes !== 1 ? 's' : ''}`,
-                expiresAt: expirationTime
-            };
-        } catch (error) {
-            console.error(`[SERVER SETTINGS] Error enabling no-prefix mode for user ${userId} in guild ${guildId}:`, error);
-            return { 
-                success: false, 
-                message: "An error occurred while enabling no-prefix mode." 
-            };
-        }
-    }
-    
-    /**
-     * Disable no-prefix mode for a user
-     * @param {string} guildId - Discord Guild ID
-     * @param {string} userId - User ID to disable no-prefix mode for
-     * @returns {boolean} Whether no-prefix mode was successfully disabled
-     */
-    disableNoPrefixMode(guildId, userId) {
-        if (!userId) return false;
-        
-        const guildSettings = this.getGuildSettings(guildId);
-        
-        // Ensure noPrefixUsers object exists
-        if (!guildSettings.noPrefixUsers) {
-            guildSettings.noPrefixUsers = {};
-            return false;
-        }
-        
-        // Check if user has no-prefix mode enabled
-        if (!guildSettings.noPrefixUsers[userId]) {
-            return false;
-        }
-        
-        // Remove the user from no-prefix mode
-        delete guildSettings.noPrefixUsers[userId];
-        
-        // Save the updated settings
-        this.serverSettings.set(guildId, guildSettings);
-        this.saveSettings();
-        
-        return true;
-    }
-    
-    /**
-     * Check if a user has no-prefix mode enabled
-     * @param {string} guildId - Discord Guild ID
-     * @param {string} userId - User ID to check
-     * @returns {boolean} Whether the user has no-prefix mode enabled
-     */
-    hasNoPrefixMode(guildId, userId) {
-        try {
-            if (!guildId || !userId) {
-                console.log(`[SERVER SETTINGS] Invalid parameters for hasNoPrefixMode: guildId=${guildId}, userId=${userId}`);
-                return false;
-            }
-            
-            const settings = this.getGuildSettings(guildId);
-            
-            // If noPrefixUsers doesn't exist or user doesn't have no-prefix mode enabled
-            if (!settings.noPrefixUsers || !settings.noPrefixUsers[userId]) {
-                return false;
-            }
-            
-            // Check if no-prefix mode hasn't expired
-            const now = Date.now();
-            const expiresAt = settings.noPrefixUsers[userId];
-            
-            if (now > expiresAt) {
-                // No-prefix mode has expired, clean it up
-                console.log(`[NO-PREFIX] No-prefix mode expired for user ${userId} in guild ${guildId}`);
-                delete settings.noPrefixUsers[userId];
-                this.saveSettings();
-                return false;
-            }
-            
-            // User has active no-prefix mode (only log during command processing)
-            return true;
-        } catch (error) {
-            console.error(`[SERVER SETTINGS] Error checking no-prefix mode for user ${userId} in guild ${guildId}:`, error);
-            return false;
-        }
-    }
-    
-    /**
-     * Get no-prefix mode expiration time for a user
-     * @param {string} guildId - Discord Guild ID
-     * @param {string} userId - User ID to check
-     * @returns {number|null} Expiration timestamp or null if not enabled
-     */
-    getNoPrefixExpiration(guildId, userId) {
-        if (!userId) return null;
-        
-        const guildSettings = this.getGuildSettings(guildId);
-        
-        // Ensure noPrefixUsers object exists
-        if (!guildSettings.noPrefixUsers) {
-            return null;
-        }
-        
-        // Get expiration time
-        const expirationTime = guildSettings.noPrefixUsers[userId];
-        if (!expirationTime) {
-            return null;
-        }
-        
-        // Check if expired
-        const now = Date.now();
-        if (now > expirationTime) {
-            // No-prefix mode has expired, clean it up
-            delete guildSettings.noPrefixUsers[userId];
-            this.serverSettings.set(guildId, guildSettings);
-            this.saveSettings();
-            return null;
-        }
-        
-        return expirationTime;
-    }
-    
-    /**
-     * Check if a guild has opted out of broadcasts
-     * @param {string} guildId - Discord Guild ID
-     * @returns {boolean} Whether the guild receives broadcasts
-     */
     receivesBroadcasts(guildId) {
-        const guildSettings = this.getGuildSettings(guildId);
-        return guildSettings.receiveBroadcasts;
+        return this.getGuildSettings(guildId).receiveBroadcasts;
     }
-    
-    /**
-     * Get a list of servers that have opted out of broadcasts
-     * @returns {Array<string>} Array of guild IDs that have opted out
-     */
+
     getOptedOutServers() {
-        const optedOut = [];
-        
-        for (const [guildId, settings] of this.serverSettings.entries()) {
-            if (!settings.receiveBroadcasts) {
-                optedOut.push(guildId);
-            }
+        const out = [];
+        for (const [id, s] of this.serverSettings.entries()) {
+            if (!s.receiveBroadcasts) out.push(id);
         }
-        
-        return optedOut;
+        return out;
     }
-    
-    /**
-     * Get count of servers that receive broadcasts
-     * @returns {number} Count of servers accepting broadcasts
-     */
+
     getBroadcastReceptionCount() {
         let count = 0;
-        
-        for (const settings of this.serverSettings.values()) {
-            if (settings.receiveBroadcasts) {
-                count++;
-            }
+        for (const s of this.serverSettings.values()) {
+            if (s.receiveBroadcasts) count++;
         }
-        
-        // Add count for servers that haven't set preferences (they receive by default)
-        const serversWithSettings = this.serverSettings.size;
-        const totalServers = this.client.guilds.cache.size;
-        const serversWithoutSettings = totalServers - serversWithSettings;
-        
-        return count + serversWithoutSettings;
+        const serversWithoutSettings = this.client.guilds.cache.size - this.serverSettings.size;
+        return count + Math.max(0, serversWithoutSettings);
     }
 
-    /**
-     * Check if welcome messages are enabled for a guild
-     * @param {string} guildId - Discord Guild ID
-     * @returns {boolean} Whether welcome messages are enabled
-     */
-    isWelcomeEnabled(guildId) {
-        const guildSettings = this.getGuildSettings(guildId);
-        return guildSettings.welcomeEnabled;
+    // ── No-prefix mode ────────────────────────────────────────────────────────
+
+    enableNoPrefixMode(guildId, userId, minutes = 10) {
+        if (!userId) return { success: false, message: 'Invalid user' };
+        if (minutes <= 0 || minutes > 60) return { success: false, message: 'Duration must be between 1 and 60 minutes' };
+
+        try {
+            const s = this.getGuildSettings(guildId);
+            if (!s.noPrefixUsers) s.noPrefixUsers = {};
+            const expirationTime = Date.now() + minutes * 60 * 1000;
+            s.noPrefixUsers[userId] = expirationTime;
+            this.serverSettings.set(guildId, s);
+            this._saveGuildSettings(guildId);
+            return { success: true, message: `No-prefix mode enabled for ${minutes} minute${minutes !== 1 ? 's' : ''}`, expiresAt: expirationTime };
+        } catch (err) {
+            console.error(`[SERVER SETTINGS] Error enabling no-prefix mode:`, err);
+            return { success: false, message: 'An error occurred.' };
+        }
     }
 
-    /**
-     * Toggle welcome messages for a guild
-     * @param {string} guildId - Discord Guild ID
-     * @returns {boolean} The new state (true = enabled, false = disabled)
-     */
+    disableNoPrefixMode(guildId, userId) {
+        if (!userId) return false;
+        const s = this.getGuildSettings(guildId);
+        if (!s.noPrefixUsers || !s.noPrefixUsers[userId]) return false;
+        delete s.noPrefixUsers[userId];
+        this.serverSettings.set(guildId, s);
+        this._saveGuildSettings(guildId);
+        return true;
+    }
+
+    hasNoPrefixMode(guildId, userId) {
+        try {
+            if (!guildId || !userId) return false;
+            const s = this.getGuildSettings(guildId);
+            if (!s.noPrefixUsers || !s.noPrefixUsers[userId]) return false;
+            if (Date.now() > s.noPrefixUsers[userId]) {
+                delete s.noPrefixUsers[userId];
+                this._saveGuildSettings(guildId);
+                return false;
+            }
+            return true;
+        } catch (err) {
+            console.error(`[SERVER SETTINGS] Error checking no-prefix mode:`, err);
+            return false;
+        }
+    }
+
+    getNoPrefixExpiration(guildId, userId) {
+        if (!userId) return null;
+        const s = this.getGuildSettings(guildId);
+        if (!s.noPrefixUsers) return null;
+        const exp = s.noPrefixUsers[userId];
+        if (!exp) return null;
+        if (Date.now() > exp) {
+            delete s.noPrefixUsers[userId];
+            this.serverSettings.set(guildId, s);
+            this._saveGuildSettings(guildId);
+            return null;
+        }
+        return exp;
+    }
+
+    // ── Welcome ───────────────────────────────────────────────────────────────
+
+    isWelcomeEnabled(guildId) { return this.getGuildSettings(guildId).welcomeEnabled; }
+
     toggleWelcome(guildId) {
-        const guildSettings = this.getGuildSettings(guildId);
-        
-        // Toggle the current value
-        const newValue = !guildSettings.welcomeEnabled;
-        guildSettings.welcomeEnabled = newValue;
-        
-        // Save the updated settings
-        this.serverSettings.set(guildId, guildSettings);
-        this.saveSettings();
-        
+        const s = this.getGuildSettings(guildId);
+        const newValue = !s.welcomeEnabled;
+        s.welcomeEnabled = newValue;
+        this.serverSettings.set(guildId, s);
+        this._saveGuildSettings(guildId);
         return newValue;
     }
 
-    /**
-     * Toggle welcome DMs for a guild
-     * @param {string} guildId - Discord Guild ID
-     * @returns {boolean} The new state (true = enabled, false = disabled)
-     */
     toggleWelcomeDm(guildId) {
-        const guildSettings = this.getGuildSettings(guildId);
-        
-        // Toggle the current value
-        const newValue = !guildSettings.welcomeDmEnabled;
-        guildSettings.welcomeDmEnabled = newValue;
-        
-        // Save the updated settings
-        this.serverSettings.set(guildId, guildSettings);
-        this.saveSettings();
-        
+        const s = this.getGuildSettings(guildId);
+        const newValue = !s.welcomeDmEnabled;
+        s.welcomeDmEnabled = newValue;
+        this.serverSettings.set(guildId, s);
+        this._saveGuildSettings(guildId);
         return newValue;
     }
 
-    /**
-     * Set welcome channel for a guild
-     * @param {string} guildId - Discord Guild ID
-     * @param {string} channelId - Channel ID
-     * @returns {boolean} Whether the channel was successfully set
-     */
-    setWelcomeChannel(guildId, channelId) {
-        return this.updateGuildSetting(guildId, 'welcomeChannelId', channelId);
-    }
+    setWelcomeChannel(guildId, channelId) { return this.updateGuildSetting(guildId, 'welcomeChannelId', channelId); }
+    setWelcomeMessage(guildId, message)   { return this.updateGuildSetting(guildId, 'welcomeMessage', message); }
+    setWelcomeDmMessage(guildId, message) { return this.updateGuildSetting(guildId, 'welcomeDmMessage', message); }
+    setWelcomeBanner(guildId, url)        { return this.updateGuildSetting(guildId, 'welcomeBannerUrl', url); }
+    setWelcomeColor(guildId, color)       { return this.updateGuildSetting(guildId, 'welcomeColor', color); }
 
-    /**
-     * Set welcome message for a guild
-     * @param {string} guildId - Discord Guild ID
-     * @param {string} message - Welcome message
-     * @returns {boolean} Whether the message was successfully set
-     */
-    setWelcomeMessage(guildId, message) {
-        return this.updateGuildSetting(guildId, 'welcomeMessage', message);
-    }
-
-    /**
-     * Set welcome DM message for a guild
-     * @param {string} guildId - Discord Guild ID
-     * @param {string} message - Welcome DM message
-     * @returns {boolean} Whether the message was successfully set
-     */
-    setWelcomeDmMessage(guildId, message) {
-        return this.updateGuildSetting(guildId, 'welcomeDmMessage', message);
-    }
-
-    /**
-     * Set welcome banner URL for a guild
-     * @param {string} guildId - Discord Guild ID
-     * @param {string} url - Banner URL
-     * @returns {boolean} Whether the URL was successfully set
-     */
-    setWelcomeBanner(guildId, url) {
-        return this.updateGuildSetting(guildId, 'welcomeBannerUrl', url);
-    }
-
-    /**
-     * Set welcome color for a guild
-     * @param {string} guildId - Discord Guild ID
-     * @param {string} color - Color in hex format
-     * @returns {boolean} Whether the color was successfully set
-     */
-    setWelcomeColor(guildId, color) {
-        return this.updateGuildSetting(guildId, 'welcomeColor', color);
-    }
-
-    /**
-     * Get welcome settings for a guild
-     * @param {string} guildId - Discord Guild ID
-     * @returns {Object} Welcome settings
-     */
     getWelcomeSettings(guildId) {
-        const settings = this.getGuildSettings(guildId);
-        
+        const s = this.getGuildSettings(guildId);
         return {
-            enabled: settings.welcomeEnabled,
-            channelId: settings.welcomeChannelId,
-            message: settings.welcomeMessage,
-            bannerUrl: settings.welcomeBannerUrl,
-            color: settings.welcomeColor,
-            dmEnabled: settings.welcomeDmEnabled,
-            dmMessage: settings.welcomeDmMessage,
-            showMemberCount: settings.welcomeShowMemberCount,
-            showJoinDate: settings.welcomeShowJoinDate,
-            showAccountAge: settings.welcomeShowAccountAge,
-            customTitle: settings.welcomeCustomTitle,
-            customFooter: settings.welcomeCustomFooter
+            enabled: s.welcomeEnabled,
+            channelId: s.welcomeChannelId,
+            message: s.welcomeMessage,
+            bannerUrl: s.welcomeBannerUrl,
+            color: s.welcomeColor,
+            dmEnabled: s.welcomeDmEnabled,
+            dmMessage: s.welcomeDmMessage,
+            showMemberCount: s.welcomeShowMemberCount,
+            showJoinDate: s.welcomeShowJoinDate,
+            showAccountAge: s.welcomeShowAccountAge,
+            customTitle: s.welcomeCustomTitle,
+            customFooter: s.welcomeCustomFooter,
         };
     }
 
-    /**
-     * Update multiple welcome settings for a guild at once
-     * @param {string} guildId - Discord Guild ID
-     * @param {Object} updates - Partial welcome settings using friendly keys
-     *   (enabled, channelId, message, bannerUrl, color, dmEnabled, dmMessage,
-     *    showMemberCount, showJoinDate, showAccountAge, customTitle, customFooter)
-     * @returns {boolean} Whether the settings were successfully updated
-     */
     updateWelcomeSettings(guildId, updates = {}) {
-        const guildSettings = this.getGuildSettings(guildId);
-
+        const s = this.getGuildSettings(guildId);
         const keyMap = {
             enabled: 'welcomeEnabled',
             channelId: 'welcomeChannelId',
@@ -524,360 +450,142 @@ class ServerSettingsManager {
             showJoinDate: 'welcomeShowJoinDate',
             showAccountAge: 'welcomeShowAccountAge',
             customTitle: 'welcomeCustomTitle',
-            customFooter: 'welcomeCustomFooter'
+            customFooter: 'welcomeCustomFooter',
         };
-
         for (const [key, value] of Object.entries(updates)) {
-            const settingKey = keyMap[key] || key;
-            guildSettings[settingKey] = value;
+            s[keyMap[key] || key] = value;
         }
-
-        this.serverSettings.set(guildId, guildSettings);
-        return this.saveSettings();
+        this.serverSettings.set(guildId, s);
+        this._saveGuildSettings(guildId);
+        return true;
     }
 
-    /**
-     * Toggle a welcome embed feature
-     * @param {string} guildId - Discord Guild ID
-     * @param {string} feature - Feature to toggle (welcomeShowMemberCount, welcomeShowJoinDate, welcomeShowAccountAge)
-     * @returns {boolean} The new state
-     */
     toggleWelcomeFeature(guildId, feature) {
-        const validFeatures = [
-            'welcomeShowMemberCount', 
-            'welcomeShowJoinDate', 
-            'welcomeShowAccountAge'
-        ];
-        
-        if (!validFeatures.includes(feature)) {
-            return false;
-        }
-        
-        const settings = this.getGuildSettings(guildId);
-        const newValue = !settings[feature];
-        
-        return this.updateGuildSetting(guildId, feature, newValue);
-    }
-
-    /**
-     * Check if leveling is enabled for a guild
-     * @param {string} guildId - Discord Guild ID
-     * @returns {boolean} Whether leveling is enabled
-     */
-    isLevelingEnabled(guildId) {
-        const guildSettings = this.getGuildSettings(guildId);
-        return guildSettings.leveling?.enabled || false;
-    }
-
-    /**
-     * Toggle leveling for a guild
-     * @param {string} guildId - Discord Guild ID
-     * @returns {boolean} The new state (true = enabled, false = disabled)
-     */
-    toggleLeveling(guildId) {
-        const guildSettings = this.getGuildSettings(guildId);
-        
-        // Ensure leveling object exists
-        if (!guildSettings.leveling) {
-            guildSettings.leveling = {
-                enabled: false,
-                levelUpChannelId: null,
-                xpMultiplier: 1.0,
-                xpCooldown: 60000 // Default 1 minute cooldown
-            };
-        }
-        
-        // Toggle the current value
-        const newValue = !guildSettings.leveling.enabled;
-        guildSettings.leveling.enabled = newValue;
-        
-        // Save the updated settings
-        this.serverSettings.set(guildId, guildSettings);
-        this.saveSettings();
-        
+        const valid = ['welcomeShowMemberCount', 'welcomeShowJoinDate', 'welcomeShowAccountAge'];
+        if (!valid.includes(feature)) return false;
+        const s = this.getGuildSettings(guildId);
+        const newValue = !s[feature];
+        s[feature] = newValue;
+        this.serverSettings.set(guildId, s);
+        this._saveGuildSettings(guildId);
         return newValue;
     }
 
-    /**
-     * Set leveling channel for a guild
-     * @param {string} guildId - Discord Guild ID
-     * @param {string} channelId - Channel ID for level-up announcements
-     * @returns {boolean} Whether the channel was successfully set
-     */
+    // ── Leveling ──────────────────────────────────────────────────────────────
+
+    isLevelingEnabled(guildId) { return this.getGuildSettings(guildId).leveling?.enabled || false; }
+
+    toggleLeveling(guildId) {
+        const s = this.getGuildSettings(guildId);
+        if (!s.leveling) s.leveling = { enabled: false, levelUpChannelId: null, xpMultiplier: 1.0, xpCooldown: 60000 };
+        s.leveling.enabled = !s.leveling.enabled;
+        this.serverSettings.set(guildId, s);
+        this._saveGuildSettings(guildId);
+        return s.leveling.enabled;
+    }
+
     setLevelingChannel(guildId, channelId) {
-        const guildSettings = this.getGuildSettings(guildId);
-        
-        // Ensure leveling object exists
-        if (!guildSettings.leveling) {
-            guildSettings.leveling = {
-                enabled: true,
-                levelUpChannelId: null,
-                xpMultiplier: 1.0,
-                xpCooldown: 60000
-            };
-        }
-        
-        // Update channel
-        guildSettings.leveling.levelUpChannelId = channelId;
-        
-        // Save the updated settings
-        this.serverSettings.set(guildId, guildSettings);
-        return this.saveSettings();
+        const s = this.getGuildSettings(guildId);
+        if (!s.leveling) s.leveling = { enabled: true, levelUpChannelId: null, xpMultiplier: 1.0, xpCooldown: 60000 };
+        s.leveling.levelUpChannelId = channelId;
+        this.serverSettings.set(guildId, s);
+        this._saveGuildSettings(guildId);
+        return true;
     }
 
-    /**
-     * Set XP multiplier for a guild
-     * @param {string} guildId - Discord Guild ID
-     * @param {number} multiplier - XP multiplier (0.1-5.0)
-     * @returns {boolean} Whether the multiplier was successfully set
-     */
     setXpMultiplier(guildId, multiplier) {
-        // Validate multiplier
-        if (multiplier <= 0 || multiplier > 5) {
-            return false;
-        }
-        
-        const guildSettings = this.getGuildSettings(guildId);
-        
-        // Ensure leveling object exists
-        if (!guildSettings.leveling) {
-            guildSettings.leveling = {
-                enabled: true,
-                levelUpChannelId: null,
-                xpMultiplier: 1.0,
-                xpCooldown: 60000
-            };
-        }
-        
-        // Update multiplier (limit to 2 decimal places)
-        guildSettings.leveling.xpMultiplier = parseFloat(multiplier.toFixed(2));
-        
-        // Save the updated settings
-        this.serverSettings.set(guildId, guildSettings);
-        return this.saveSettings();
+        if (multiplier <= 0 || multiplier > 5) return false;
+        const s = this.getGuildSettings(guildId);
+        if (!s.leveling) s.leveling = { enabled: true, levelUpChannelId: null, xpMultiplier: 1.0, xpCooldown: 60000 };
+        s.leveling.xpMultiplier = parseFloat(multiplier.toFixed(2));
+        this.serverSettings.set(guildId, s);
+        this._saveGuildSettings(guildId);
+        return true;
     }
 
-    /**
-     * Set XP cooldown for a guild
-     * @param {string} guildId - Discord Guild ID
-     * @param {number} cooldownSeconds - Cooldown in seconds (5-300)
-     * @returns {boolean} Whether the cooldown was successfully set
-     */
     setXpCooldown(guildId, cooldownSeconds) {
-        // Validate cooldown (between 5 seconds and 5 minutes)
-        if (cooldownSeconds < 5 || cooldownSeconds > 300) {
-            return false;
-        }
-        
-        const guildSettings = this.getGuildSettings(guildId);
-        
-        // Ensure leveling object exists
-        if (!guildSettings.leveling) {
-            guildSettings.leveling = {
-                enabled: true,
-                levelUpChannelId: null,
-                xpMultiplier: 1.0,
-                xpCooldown: 60000
-            };
-        }
-        
-        // Update cooldown (convert to milliseconds)
-        guildSettings.leveling.xpCooldown = cooldownSeconds * 1000;
-        
-        // Save the updated settings
-        this.serverSettings.set(guildId, guildSettings);
-        return this.saveSettings();
+        if (cooldownSeconds < 5 || cooldownSeconds > 300) return false;
+        const s = this.getGuildSettings(guildId);
+        if (!s.leveling) s.leveling = { enabled: true, levelUpChannelId: null, xpMultiplier: 1.0, xpCooldown: 60000 };
+        s.leveling.xpCooldown = cooldownSeconds * 1000;
+        this.serverSettings.set(guildId, s);
+        this._saveGuildSettings(guildId);
+        return true;
     }
 
-    /**
-     * Get leveling settings for a guild
-     * @param {string} guildId - Discord Guild ID
-     * @returns {Object} Leveling settings
-     */
     getLevelingSettings(guildId) {
-        const settings = this.getGuildSettings(guildId);
-        
-        // Ensure leveling object exists
-        if (!settings.leveling) {
-            settings.leveling = {
-                enabled: true,
-                levelUpChannelId: null,
-                xpMultiplier: 1.0,
-                xpCooldown: 60000 // Default 1 minute cooldown
-            };
-            
-            // Save the default settings
-            this.serverSettings.set(guildId, settings);
-            this.saveSettings();
+        const s = this.getGuildSettings(guildId);
+        if (!s.leveling) {
+            s.leveling = { enabled: true, levelUpChannelId: null, xpMultiplier: 1.0, xpCooldown: 60000 };
+            this.serverSettings.set(guildId, s);
         }
-        
-        return settings.leveling;
+        return s.leveling;
     }
 
-    /**
-     * Add an auto-reaction trigger to a guild
-     * @param {string} guildId - Discord Guild ID
-     * @param {string} trigger - The trigger word or phrase
-     * @param {string} emoji - The emoji to react with
-     * @param {boolean} caseSensitive - Whether the trigger is case-sensitive
-     * @returns {boolean} Whether the trigger was successfully added
-     */
+    // ── Auto-reactions ────────────────────────────────────────────────────────
+
     addAutoReaction(guildId, trigger, emoji, caseSensitive = false) {
         if (!trigger || !emoji) return false;
-        
-        const guildSettings = this.getGuildSettings(guildId);
-        
-        // Ensure autoReactions object exists and is enabled
-        if (!guildSettings.autoReactions) {
-            guildSettings.autoReactions = {
-                enabled: true,
-                reactions: []
-            };
-        }
-        
-        // Check if trigger already exists
-        const existingIndex = guildSettings.autoReactions.reactions.findIndex(
-            r => r.trigger.toLowerCase() === trigger.toLowerCase()
-        );
-        
-        if (existingIndex !== -1) {
-            // Update existing trigger
-            guildSettings.autoReactions.reactions[existingIndex] = {
-                trigger,
-                emoji,
-                caseSensitive
-            };
+        const s = this.getGuildSettings(guildId);
+        if (!s.autoReactions) s.autoReactions = { enabled: true, reactions: [] };
+        const idx = s.autoReactions.reactions.findIndex(r => r.trigger.toLowerCase() === trigger.toLowerCase());
+        if (idx !== -1) {
+            s.autoReactions.reactions[idx] = { trigger, emoji, caseSensitive };
         } else {
-            // Add new trigger
-            guildSettings.autoReactions.reactions.push({
-                trigger,
-                emoji,
-                caseSensitive
-            });
+            s.autoReactions.reactions.push({ trigger, emoji, caseSensitive });
         }
-        
-        // Save the updated settings
-        this.serverSettings.set(guildId, guildSettings);
-        return this.saveSettings();
+        this.serverSettings.set(guildId, s);
+        this._saveGuildSettings(guildId);
+        return true;
     }
 
-    /**
-     * Remove an auto-reaction trigger from a guild
-     * @param {string} guildId - Discord Guild ID
-     * @param {string} trigger - The trigger word or phrase to remove
-     * @returns {boolean} Whether the trigger was successfully removed
-     */
     removeAutoReaction(guildId, trigger) {
         if (!trigger) return false;
-        
-        const guildSettings = this.getGuildSettings(guildId);
-        
-        // Ensure autoReactions object exists
-        if (!guildSettings.autoReactions || !guildSettings.autoReactions.reactions) {
-            return false;
-        }
-        
-        // Find and remove the trigger
-        const initialLength = guildSettings.autoReactions.reactions.length;
-        guildSettings.autoReactions.reactions = guildSettings.autoReactions.reactions.filter(
+        const s = this.getGuildSettings(guildId);
+        if (!s.autoReactions?.reactions) return false;
+        const before = s.autoReactions.reactions.length;
+        s.autoReactions.reactions = s.autoReactions.reactions.filter(
             r => r.trigger.toLowerCase() !== trigger.toLowerCase()
         );
-        
-        // Check if a trigger was removed
-        if (guildSettings.autoReactions.reactions.length === initialLength) {
-            return false;
-        }
-        
-        // Save the updated settings
-        this.serverSettings.set(guildId, guildSettings);
-        return this.saveSettings();
+        if (s.autoReactions.reactions.length === before) return false;
+        this.serverSettings.set(guildId, s);
+        this._saveGuildSettings(guildId);
+        return true;
     }
 
-    /**
-     * Toggle auto-reactions for a guild
-     * @param {string} guildId - Discord Guild ID
-     * @returns {boolean} The new state (true = enabled, false = disabled)
-     */
     toggleAutoReactions(guildId) {
-        const guildSettings = this.getGuildSettings(guildId);
-        
-        // Ensure autoReactions object exists
-        if (!guildSettings.autoReactions) {
-            guildSettings.autoReactions = {
-                enabled: true,
-                reactions: []
-            };
+        const s = this.getGuildSettings(guildId);
+        if (!s.autoReactions) {
+            s.autoReactions = { enabled: true, reactions: [] };
         } else {
-            // Toggle the current value
-            guildSettings.autoReactions.enabled = !guildSettings.autoReactions.enabled;
+            s.autoReactions.enabled = !s.autoReactions.enabled;
         }
-        
-        // Save the updated settings
-        this.serverSettings.set(guildId, guildSettings);
-        this.saveSettings();
-        
-        return guildSettings.autoReactions.enabled;
+        this.serverSettings.set(guildId, s);
+        this._saveGuildSettings(guildId);
+        return s.autoReactions.enabled;
     }
 
-    /**
-     * Get auto-reactions for a guild
-     * @param {string} guildId - Discord Guild ID
-     * @returns {Object} Auto-reaction settings
-     */
     getAutoReactions(guildId) {
-        const settings = this.getGuildSettings(guildId);
-        
-        // Ensure autoReactions object exists
-        if (!settings.autoReactions) {
-            settings.autoReactions = {
-                enabled: false,
-                reactions: []
-            };
-            
-            // Save the default settings
-            this.serverSettings.set(guildId, settings);
-            this.saveSettings();
+        const s = this.getGuildSettings(guildId);
+        if (!s.autoReactions) {
+            s.autoReactions = { enabled: false, reactions: [] };
+            this.serverSettings.set(guildId, s);
         }
-        
-        return settings.autoReactions;
+        return s.autoReactions;
     }
 
-    /**
-     * Get triggered reactions for a message
-     * @param {string} guildId - Discord Guild ID
-     * @param {string} content - Message content
-     * @returns {Array<string>} Array of emojis to react with
-     */
     getTriggeredReactions(guildId, content) {
         if (!content) return [];
-        
-        const settings = this.getGuildSettings(guildId);
-        
-        // If auto-reactions are disabled or not configured
-        if (!settings.autoReactions || !settings.autoReactions.enabled) {
-            return [];
+        const s = this.getGuildSettings(guildId);
+        if (!s.autoReactions?.enabled) return [];
+        const triggered = [];
+        for (const reaction of s.autoReactions.reactions) {
+            let msg = content;
+            let trig = reaction.trigger;
+            if (!reaction.caseSensitive) { msg = msg.toLowerCase(); trig = trig.toLowerCase(); }
+            if (msg.includes(trig)) triggered.push(reaction.emoji);
         }
-        
-        // Check each trigger against the message content
-        const triggeredEmojis = [];
-        
-        for (const reaction of settings.autoReactions.reactions) {
-            let messageContent = content;
-            let trigger = reaction.trigger;
-            
-            // Handle case sensitivity
-            if (!reaction.caseSensitive) {
-                messageContent = messageContent.toLowerCase();
-                trigger = trigger.toLowerCase();
-            }
-            
-            // Check if message contains the trigger
-            if (messageContent.includes(trigger)) {
-                triggeredEmojis.push(reaction.emoji);
-            }
-        }
-        
-        return triggeredEmojis;
+        return triggered;
     }
 }
 

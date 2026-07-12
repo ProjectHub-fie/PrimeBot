@@ -1,6 +1,4 @@
 const { EmbedBuilder } = require('discord.js');
-const fs = require('fs');
-const path = require('path');
 const config = require('../config');
 const { pool } = require('../server/db');
 const ms = require('ms');
@@ -9,539 +7,243 @@ class BirthdayManager {
     constructor(client) {
         this.client = client;
         this.birthdays = new Map();
-        this.dataPath = path.join(__dirname, '../data/birthdays.json');
-        this.isReady = false; // Add a ready state
-        
-        // Track which embed style to use next (cycles through 0-3)
+        this.isReady = false;
         this.currentEmbedIndex = 0;
-        
-        // Ensure data directory exists
-        const dataDir = path.join(__dirname, '../data');
-        if (!fs.existsSync(dataDir)) {
-            fs.mkdirSync(dataDir, { recursive: true });
-        }
-        
-        // Load from DB then start checking to avoid race conditions
+
         this.loadBirthdays().then(() => {
             this.isReady = true;
             this.startCheckingBirthdays();
         }).catch(err => {
-            console.error('Failed to initialize BirthdayManager:', err);
+            console.error('[BIRTHDAYS] Failed to initialize BirthdayManager:', err);
             this.isReady = false;
         });
     }
-    
-    /**
-     * Load saved birthdays from the data file
-     */
+
     async loadBirthdays() {
         try {
-            // Reset the Map
             this.birthdays.clear();
 
             // Load guild configs
-            const guildRes = await pool.query('SELECT guild_id, announcement_channel, role_id FROM birthdays_guilds');
-            for (const row of guildRes.rows) {
+            const guildsRes = await pool.query('SELECT guild_id, announcement_channel, role_id FROM birthdays_guilds');
+            for (const row of guildsRes.rows) {
                 this.birthdays.set(row.guild_id, {
+                    channel: row.announcement_channel || null,
+                    role: row.role_id || null,
                     users: new Map(),
-                    announcementChannel: row.announcement_channel || null,
-                    role: row.role_id || null
                 });
             }
 
-            // Load user birthdays
-            const userRes = await pool.query('SELECT guild_id, user_id, month, day, year, last_celebrated FROM birthdays');
-            for (const row of userRes.rows) {
+            // Load individual birthdays
+            const bdRes = await pool.query('SELECT guild_id, user_id, month, day, year, last_celebrated FROM birthdays');
+            for (const row of bdRes.rows) {
                 if (!this.birthdays.has(row.guild_id)) {
-                    this.birthdays.set(row.guild_id, {
-                        users: new Map(),
-                        announcementChannel: null,
-                        role: null
-                    });
+                    this.birthdays.set(row.guild_id, { channel: null, role: null, users: new Map() });
                 }
-
-                const guildMap = this.birthdays.get(row.guild_id);
-                guildMap.users.set(row.user_id, {
+                this.birthdays.get(row.guild_id).users.set(row.user_id, {
                     month: row.month,
                     day: row.day,
-                    year: row.year,
-                    lastCelebrated: row.last_celebrated
+                    year: row.year || null,
+                    lastCelebrated: row.last_celebrated || null,
                 });
             }
 
-            console.log(`Loaded birthdays for ${this.birthdays.size} guilds (from DB).`);
+            console.log(`[BIRTHDAYS] Loaded birthdays for ${this.birthdays.size} guilds from database.`);
         } catch (error) {
-            console.error('Error loading birthdays from DB:', error);
-            this.birthdays = new Map();
-        }
-    }
-    
-    /**
-     * Wait for the birthday manager to be ready
-     * @returns {Promise<void>}
-     */
-    async waitForReady() {
-        let attempts = 0;
-        while (!this.isReady && attempts < 50) {
-            await new Promise(resolve => setTimeout(resolve, 100));
-            attempts++;
-        }
-        if (!this.isReady) {
-            console.warn('BirthdayManager did not become ready in time');
-        }
-    }
-    
-    /**
-     * Save birthdays to the data file
-     */
-    async saveBirthdays() {
-        try {
-            // For each guild, upsert guild config and replace user rows
-            for (const [guildId, guildData] of this.birthdays.entries()) {
-                // Upsert guild config
-                await pool.query(
-                    `INSERT INTO birthdays_guilds (guild_id, announcement_channel, role_id)
-                     VALUES ($1, $2, $3)
-                     ON CONFLICT (guild_id) DO UPDATE SET announcement_channel = EXCLUDED.announcement_channel, role_id = EXCLUDED.role_id`,
-                    [guildId, guildData.announcementChannel, guildData.role]
-                );
-
-                // Replace users for this guild
-                await pool.query('DELETE FROM birthdays WHERE guild_id = $1', [guildId]);
-
-                for (const [userId, userData] of guildData.users.entries()) {
-                    await pool.query(
-                        `INSERT INTO birthdays (guild_id, user_id, month, day, year, last_celebrated)
-                         VALUES ($1, $2, $3, $4, $5, $6)`,
-                        [guildId, userId, userData.month, userData.day, userData.year || null, userData.lastCelebrated || null]
-                    );
-                }
-            }
-        } catch (error) {
-            console.error('Error saving birthdays to DB:', error);
-        }
-    }
-    
-    /**
-     * Start checking for birthdays at a regular interval
-     */
-    startCheckingBirthdays() {
-        // Check every hour
-        setInterval(() => {
-            this.checkBirthdays();
-        }, 3600000); // 1 hour
-        
-        // Also check immediately on startup
-        this.checkBirthdays();
-        
-        console.log('Birthday checking system started.');
-    }
-    
-    /**
-     * Check for birthdays and send celebration messages
-     */
-    async checkBirthdays() {
-        const today = new Date();
-        const month = today.getMonth() + 1; // JavaScript months are 0-indexed
-        const day = today.getDate();
-        const currentYear = today.getFullYear();
-        const todayString = `${currentYear}-${month}-${day}`; // Format: YYYY-MM-DD
-        
-        console.log(`[BIRTHDAY] Checking for birthdays on ${todayString}`);
-        
-        // Loop through each guild
-        for (const [guildId, guildData] of this.birthdays.entries()) {
-            // Skip if no announcement channel is set
-            if (!guildData.announcementChannel) continue;
-            
-            const guild = await this.client.guilds.fetch(guildId).catch(() => null);
-            if (!guild) continue;
-            
-            const channel = await guild.channels.fetch(guildData.announcementChannel).catch(() => null);
-            if (!channel) continue;
-            
-            // Find users with birthdays today that haven't been celebrated yet
-            const birthdayUsers = [];
-            const updatedUsers = new Map(); // Track users that need to be updated
-            
-            for (const [userId, userData] of guildData.users.entries()) {
-                const birthMonth = userData.month;
-                const birthDay = userData.day;
-                
-                if (birthMonth === month && birthDay === day) {
-                    // Check if we already celebrated this birthday today
-                    if (userData.lastCelebrated === todayString) {
-                        console.log(`[BIRTHDAY] Already celebrated birthday for user ${userId} today`);
-                        continue;
-                    }
-                    
-                    const member = await guild.members.fetch(userId).catch(() => null);
-                    if (member) {
-                        console.log(`[BIRTHDAY] Found birthday for ${member.user.tag}`);
-                        
-                        birthdayUsers.push({
-                            member,
-                            age: userData.year ? currentYear - userData.year : null
-                        });
-                        
-                        // Update the lastCelebrated date for this user
-                        const updatedUserData = {...userData, lastCelebrated: todayString};
-                        updatedUsers.set(userId, updatedUserData);
-                        
-                        // Assign birthday role if configured
-                        if (guildData.role) {
-                            const role = await guild.roles.fetch(guildData.role).catch(() => null);
-                            if (role) {
-                                await member.roles.add(role).catch(err => {
-                                    console.error(`Failed to add birthday role to ${member.user.tag}:`, err);
-                                });
-                                
-                                // Schedule role removal for tomorrow
-                                setTimeout(async () => {
-                                    const memberTomorrow = await guild.members.fetch(userId).catch(() => null);
-                                    if (memberTomorrow) {
-                                        await memberTomorrow.roles.remove(role).catch(err => {
-                                            console.error(`Failed to remove birthday role from ${memberTomorrow.user.tag}:`, err);
-                                        });
-                                    }
-                                }, 86400000); // 24 hours
-                            }
-                        }
-                    }
-                }
-            }
-            
-            // Update user data for those with birthdays
-            for (const [userId, updatedData] of updatedUsers.entries()) {
-                guildData.users.set(userId, updatedData);
-            }
-            
-            // Save changes if we updated any users
-            if (updatedUsers.size > 0) {
-                await this.saveBirthdays();
-            }
-            
-            // Send birthday celebration messages (only once per day per user)
-            if (birthdayUsers.length > 0) {
-                console.log(`[BIRTHDAY] Sending celebration for ${birthdayUsers.length} users`);
-                await this.sendBirthdayCelebration(channel, birthdayUsers);
-            }
-        }
-    }
-    
-    /**
-     * Send a birthday celebration message
-     * @param {TextChannel} channel - The channel to send the message to
-     * @param {Array} users - Array of users with birthdays
-     */
-    async sendBirthdayCelebration(channel, users) {
-        // Define the 4 sequential celebration embed styles
-        const embedStyles = [
-            // Style 1: Playful - Pink with cake
-            {
-                color: '#FF69B4', // Hot Pink
-                title: '🎂 Happy Birthday Celebration! 🎉',
-                image: 'https://i.imgur.com/KxoO5Ih.gif', // Cake gif
-                quote: "May your birthday be filled with joy and surrounded by the people you love!"
-            },
-            // Style 2: Elegant - Blue with balloons
-            {
-                color: '#1E90FF', // Dodger Blue
-                title: '🎈 Birthday Wishes! 🎁',
-                image: 'https://i.imgur.com/VKgLOgY.gif', // Birthday balloons
-                quote: "Another year, another adventure. Happy Birthday!"
-            },
-            // Style 3: Festive - Gold with confetti
-            {
-                color: '#FFD700', // Gold
-                title: '✨ Celebrate Your Special Day! ✨',
-                image: 'https://i.imgur.com/oDnVXdL.gif', // Birthday confetti
-                quote: "Wishing you a day filled with happiness and a year filled with joy!"
-            },
-            // Style 4: Fun - Green with presents
-            {
-                color: '#32CD32', // Lime Green
-                title: '🎁 Birthday Joy! 🥳',
-                image: 'https://i.imgur.com/FrVGrVN.gif', // Birthday present
-                quote: "Happy Birthday! May all your dreams come true!"
-            }
-        ];
-        
-        // Get the current style to use
-        const currentStyle = embedStyles[this.currentEmbedIndex];
-        
-        // Log which style we're using
-        console.log(`[BIRTHDAY] Using embed style #${this.currentEmbedIndex + 1}`);
-        
-        // Create the celebration embed
-        const embed = new EmbedBuilder()
-            .setColor(currentStyle.color)
-            .setTitle(currentStyle.title)
-            .setDescription(currentStyle.quote)
-            .setTimestamp();
-        
-        // Add users to the embed
-        for (const user of users) {
-            const ageText = user.age ? `Turning ${user.age} today!` : '';
-            embed.addFields({
-                name: `Happy Birthday, ${user.member.displayName}! 🎈`,
-                value: `${user.member} ${ageText}\nEveryone, wish them a happy birthday!`
-            });
-        }
-        
-        // Add the celebration image
-        embed.setImage(currentStyle.image);
-        
-        // Send the celebration
-        await channel.send({ 
-            content: users.map(user => `Happy Birthday ${user.member}! 🎉`).join('\n'),
-            embeds: [embed] 
-        });
-        
-        console.log(`[BIRTHDAY] Sent celebration message with style #${this.currentEmbedIndex + 1}`);
-        
-        // Update the embed index for next time (cycle through 0-3)
-        this.currentEmbedIndex = (this.currentEmbedIndex + 1) % 4;
-        console.log(`[BIRTHDAY] Next celebration will use style #${this.currentEmbedIndex + 1}`);
-    }
-    
-    /**
-     * Set a user's birthday
-     * @param {Object} options - Birthday options
-     * @returns {Promise<boolean>} Whether the birthday was set successfully
-     */
-    async setBirthday({ guildId, userId, month, day, year = null }) {
-        try {
-            // Validate month and day
-            if (month < 1 || month > 12) {
-                throw new Error('Invalid month. Month must be between 1 and 12.');
-            }
-            
-            // Check days based on month
-            const daysInMonth = this.getDaysInMonth(month, year || new Date().getFullYear());
-            if (day < 1 || day > daysInMonth) {
-                throw new Error(`Invalid day. Day must be between 1 and ${daysInMonth} for the selected month.`);
-            }
-            
-            // Validate year if provided
-            if (year) {
-                const currentYear = new Date().getFullYear();
-                if (year < 1900 || year > currentYear) {
-                    throw new Error(`Invalid year. Year must be between 1900 and ${currentYear}.`);
-                }
-            }
-            
-            // Initialize guild data if not exists
-            if (!this.birthdays.has(guildId)) {
-                this.birthdays.set(guildId, {
-                    users: new Map(),
-                    announcementChannel: null,
-                    role: null
-                });
-            }
-            
-            const guildData = this.birthdays.get(guildId);
-            
-            // Set user's birthday
-            guildData.users.set(userId, {
-                month,
-                day,
-                year,
-                lastCelebrated: null // Will be set when celebrated
-            });
-            
-            await this.saveBirthdays();
-            return true;
-        } catch (error) {
-            console.error('Error setting birthday:', error);
+            console.error('[BIRTHDAYS] Error loading birthdays:', error);
             throw error;
         }
     }
-    
-    /**
-     * Get days in a month
-     * @param {number} month - Month (1-12)
-     * @param {number} year - Year
-     * @returns {number} Number of days in the month
-     */
-    getDaysInMonth(month, year) {
-        return new Date(year, month, 0).getDate();
+
+    startCheckingBirthdays() {
+        setInterval(() => this.checkBirthdays(), 60 * 60 * 1000); // every hour
+        this.checkBirthdays();
+        console.log('[BIRTHDAYS] Birthday checking started.');
     }
-    
-    /**
-     * Get a user's birthday
-     * @param {string} guildId - Guild ID
-     * @param {string} userId - User ID
-     * @returns {Object|null} The birthday data or null if not set
-     */
+
+    async checkBirthdays() {
+        if (!this.isReady) return;
+
+        const now = new Date();
+        const currentMonth = now.getMonth() + 1;
+        const currentDay = now.getDate();
+        const currentYear = now.getFullYear().toString();
+
+        for (const [guildId, guildData] of this.birthdays.entries()) {
+            if (!guildData.channel) continue;
+
+            for (const [userId, birthday] of guildData.users.entries()) {
+                if (birthday.month === currentMonth && birthday.day === currentDay) {
+                    if (birthday.lastCelebrated === currentYear) continue;
+
+                    try {
+                        await this.sendBirthdayCelebration(guildId, userId, guildData);
+                        birthday.lastCelebrated = currentYear;
+
+                        await pool.query(
+                            `UPDATE birthdays SET last_celebrated = $1 WHERE guild_id = $2 AND user_id = $3`,
+                            [currentYear, guildId, userId]
+                        );
+                    } catch (err) {
+                        console.error(`[BIRTHDAYS] Error celebrating birthday for ${userId} in ${guildId}:`, err);
+                    }
+                }
+            }
+        }
+    }
+
+    async sendBirthdayCelebration(guildId, userId, guildData) {
+        const guild = this.client.guilds.cache.get(guildId);
+        if (!guild) return;
+
+        const member = await guild.members.fetch(userId).catch(() => null);
+        if (!member) return;
+
+        const channel = guild.channels.cache.get(guildData.channel);
+        if (!channel) return;
+
+        const embedStyles = [
+            () => new EmbedBuilder()
+                .setColor('#FF69B4')
+                .setTitle('🎂 Happy Birthday!')
+                .setDescription(`Today is **${member.displayName}**'s birthday! 🎉\n\nWishing you a wonderful day filled with joy and happiness! 🎈`)
+                .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
+                .setFooter({ text: `🎁 Make it a special day!` })
+                .setTimestamp(),
+            () => new EmbedBuilder()
+                .setColor('#FFD700')
+                .setTitle('🎉 Birthday Celebration!')
+                .setDescription(`🥳 Everyone wish **${member.displayName}** a Happy Birthday! 🥳\n\n🌟 May all your wishes come true! 🌟`)
+                .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
+                .setImage('https://media.giphy.com/media/artj92V8o75VPL7AeQ/giphy.gif')
+                .setTimestamp(),
+            () => new EmbedBuilder()
+                .setColor('#9B59B6')
+                .setTitle('🎊 It\'s a Special Day!')
+                .setDescription(`🎂 Today we celebrate **${member.displayName}**! 🎂\n\n✨ Wishing you the best birthday ever! ✨`)
+                .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
+                .setFooter({ text: '🎈 Have an amazing day!' })
+                .setTimestamp(),
+            () => new EmbedBuilder()
+                .setColor('#2ECC71')
+                .setTitle('🌟 Birthday Alert!')
+                .setDescription(`📣 Say Happy Birthday to **${member.displayName}**! 🎁\n\n💫 Another year of awesome adventures ahead! 💫`)
+                .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
+                .setTimestamp(),
+        ];
+
+        const embed = embedStyles[this.currentEmbedIndex % embedStyles.length]();
+        this.currentEmbedIndex++;
+
+        await channel.send({ content: `🎂 <@${userId}>`, embeds: [embed] });
+
+        if (guildData.role) {
+            try {
+                await member.roles.add(guildData.role);
+                setTimeout(async () => {
+                    try { await member.roles.remove(guildData.role); } catch (_) {}
+                }, 24 * 60 * 60 * 1000);
+            } catch (_) {}
+        }
+    }
+
+    async setBirthday(guildId, userId, month, day, year = null) {
+        try {
+            if (!this.birthdays.has(guildId)) {
+                this.birthdays.set(guildId, { channel: null, role: null, users: new Map() });
+            }
+
+            this.birthdays.get(guildId).users.set(userId, { month, day, year, lastCelebrated: null });
+
+            await pool.query(`
+                INSERT INTO birthdays (guild_id, user_id, month, day, year, last_celebrated)
+                VALUES ($1, $2, $3, $4, $5, NULL)
+                ON CONFLICT (guild_id, user_id) DO UPDATE SET
+                    month = EXCLUDED.month, day = EXCLUDED.day, year = EXCLUDED.year, last_celebrated = NULL
+            `, [guildId, userId, month, day, year]);
+
+            return true;
+        } catch (error) {
+            console.error('[BIRTHDAYS] Error setting birthday:', error);
+            return false;
+        }
+    }
+
+    async removeBirthday(guildId, userId) {
+        try {
+            if (this.birthdays.has(guildId)) {
+                this.birthdays.get(guildId).users.delete(userId);
+            }
+            await pool.query(`DELETE FROM birthdays WHERE guild_id = $1 AND user_id = $2`, [guildId, userId]);
+            return true;
+        } catch (error) {
+            console.error('[BIRTHDAYS] Error removing birthday:', error);
+            return false;
+        }
+    }
+
+    async setChannel(guildId, channelId) {
+        try {
+            if (!this.birthdays.has(guildId)) {
+                this.birthdays.set(guildId, { channel: channelId, role: null, users: new Map() });
+            } else {
+                this.birthdays.get(guildId).channel = channelId;
+            }
+            await pool.query(`
+                INSERT INTO birthdays_guilds (guild_id, announcement_channel)
+                VALUES ($1, $2)
+                ON CONFLICT (guild_id) DO UPDATE SET announcement_channel = EXCLUDED.announcement_channel
+            `, [guildId, channelId]);
+            return true;
+        } catch (error) {
+            console.error('[BIRTHDAYS] Error setting channel:', error);
+            return false;
+        }
+    }
+
+    async setRole(guildId, roleId) {
+        try {
+            if (!this.birthdays.has(guildId)) {
+                this.birthdays.set(guildId, { channel: null, role: roleId, users: new Map() });
+            } else {
+                this.birthdays.get(guildId).role = roleId;
+            }
+            await pool.query(`
+                INSERT INTO birthdays_guilds (guild_id, role_id)
+                VALUES ($1, $2)
+                ON CONFLICT (guild_id) DO UPDATE SET role_id = EXCLUDED.role_id
+            `, [guildId, roleId]);
+            return true;
+        } catch (error) {
+            console.error('[BIRTHDAYS] Error setting role:', error);
+            return false;
+        }
+    }
+
     getBirthday(guildId, userId) {
-        const guildData = this.birthdays.get(guildId);
-        if (!guildData) return null;
-        
-        return guildData.users.get(userId) || null;
+        return this.birthdays.get(guildId)?.users.get(userId) || null;
     }
-    
-    /**
-     * Remove a user's birthday
-     * @param {string} guildId - Guild ID
-     * @param {string} userId - User ID
-     * @returns {boolean} Whether the birthday was removed successfully
-     */
-    removeBirthday(guildId, userId) {
-        const guildData = this.birthdays.get(guildId);
-        if (!guildData) return false;
-        
-        const deleted = guildData.users.delete(userId);
-        if (deleted) {
-            this.saveBirthdays().catch(err => console.error('Error saving birthdays after remove:', err));
-        }
-        
-        return deleted;
+
+    getGuildBirthdays(guildId) {
+        return this.birthdays.get(guildId) || { channel: null, role: null, users: new Map() };
     }
-    
-    /**
-     * Set the birthday announcement channel for a guild
-     * @param {string} guildId - Guild ID
-     * @param {string} channelId - Channel ID
-     * @returns {boolean} Whether the channel was set successfully
-     */
-    setAnnouncementChannel(guildId, channelId) {
-        // Initialize guild data if not exists
-        if (!this.birthdays.has(guildId)) {
-            this.birthdays.set(guildId, {
-                users: new Map(),
-                announcementChannel: null,
-                role: null
-            });
-        }
-        
-        const guildData = this.birthdays.get(guildId);
-        guildData.announcementChannel = channelId;
-        
-        this.saveBirthdays().catch(err => console.error('Error saving birthdays after setAnnouncementChannel:', err));
-        return true;
-    }
-    
-    /**
-     * Set the birthday role for a guild
-     * @param {string} guildId - Guild ID
-     * @param {string} roleId - Role ID
-     * @returns {boolean} Whether the role was set successfully
-     */
-    setBirthdayRole(guildId, roleId) {
-        // Initialize guild data if not exists
-        if (!this.birthdays.has(guildId)) {
-            this.birthdays.set(guildId, {
-                users: new Map(),
-                announcementChannel: null,
-                role: null
-            });
-        }
-        
-        const guildData = this.birthdays.get(guildId);
-        guildData.role = roleId;
-        
-        this.saveBirthdays().catch(err => console.error('Error saving birthdays after setBirthdayRole:', err));
-        return true;
-    }
-    
-    /**
-     * Get all birthdays in a guild
-     * @param {string} guildId - Guild ID
-     * @returns {Map|null} Map of user birthdays or null if guild not found
-     */
-    getAllBirthdays(guildId) {
-        const guildData = this.birthdays.get(guildId);
-        if (!guildData) return null;
-        
-        return guildData.users;
-    }
-    
-    /**
-     * Get upcoming birthdays in a guild
-     * @param {string} guildId - Guild ID
-     * @param {number} limit - Maximum number of birthdays to return
-     * @returns {Array} Array of upcoming birthdays sorted by date
-     */
-    getUpcomingBirthdays(guildId, limit = 10) {
+
+    getUpcomingBirthdays(guildId, days = 7) {
         const guildData = this.birthdays.get(guildId);
         if (!guildData) return [];
-        
-        const today = new Date();
-        const currentMonth = today.getMonth() + 1; // JavaScript months are 0-indexed
-        const currentDay = today.getDate();
-        
-        // Convert birthdays to array for sorting
-        const birthdays = [];
-        
-        for (const [userId, userData] of guildData.users.entries()) {
-            // Calculate days until next birthday
-            let nextBirthdayDays;
-            
-            // Birthday this year
-            const birthdayThisYear = new Date(today.getFullYear(), userData.month - 1, userData.day);
-            
-            // Birthday next year
-            const birthdayNextYear = new Date(today.getFullYear() + 1, userData.month - 1, userData.day);
-            
-            // If birthday has already passed this year, use next year
-            if (birthdayThisYear < today) {
-                nextBirthdayDays = Math.ceil((birthdayNextYear - today) / (1000 * 60 * 60 * 24));
-            } else {
-                nextBirthdayDays = Math.ceil((birthdayThisYear - today) / (1000 * 60 * 60 * 24));
+
+        const now = new Date();
+        const upcoming = [];
+
+        for (const [userId, birthday] of guildData.users.entries()) {
+            const nextBirthday = new Date(now.getFullYear(), birthday.month - 1, birthday.day);
+            if (nextBirthday < now) nextBirthday.setFullYear(now.getFullYear() + 1);
+            const daysUntil = Math.ceil((nextBirthday - now) / (1000 * 60 * 60 * 24));
+            if (daysUntil <= days) {
+                upcoming.push({ userId, ...birthday, daysUntil, nextBirthday });
             }
-            
-            birthdays.push({
-                userId,
-                month: userData.month,
-                day: userData.day,
-                year: userData.year,
-                daysUntil: nextBirthdayDays
-            });
         }
-        
-        // Sort by days until next birthday
-        birthdays.sort((a, b) => a.daysUntil - b.daysUntil);
-        
-        // Return the upcoming birthdays, limited to the specified amount
-        return birthdays.slice(0, limit);
-    }
-    
-    /**
-     * Format a date string from month and day
-     * @param {number} month - Month (1-12)
-     * @param {number} day - Day
-     * @returns {string} Formatted date string
-     */
-    formatDate(month, day) {
-        const months = [
-            'January', 'February', 'March', 'April', 'May', 'June',
-            'July', 'August', 'September', 'October', 'November', 'December'
-        ];
-        
-        return `${months[month - 1]} ${day}`;
-    }
-    
-    /**
-     * Get the birthday configuration for a guild
-     * @param {string} guildId - Guild ID
-     * @returns {Object} Guild birthday configuration
-     */
-    getGuildConfig(guildId) {
-        const guildData = this.birthdays.get(guildId);
-        if (!guildData) {
-            return {
-                announcementChannel: null,
-                role: null,
-                userCount: 0
-            };
-        }
-        
-        return {
-            announcementChannel: guildData.announcementChannel,
-            role: guildData.role,
-            userCount: guildData.users.size
-        };
+
+        return upcoming.sort((a, b) => a.daysUntil - b.daysUntil);
     }
 }
 
