@@ -3823,18 +3823,15 @@ module.exports = {
                             console.log(`[BETA] Rejected: ${message.author.id} is not guild owner ${message.guild.ownerId}`);
                             const ownerOnlyEmbed = new EmbedBuilder()
                                 .setColor(config.colors.error)
-                                .setTitle(' You cannot you these command')
+                                .setTitle('🔒 Owner Only')
                                 .setDescription(
-                                    '🔒These command is restricted.\n\n' +
-                                    '	ℹ️You need these permission to use this command.\n\n'+
-                                    '		`Owner`\n\n\n'+
+                                    'The `$beta` command can only be used by the **server owner**.\n\n' +
                                     'Beta access lets your server try out new features before they are released to everyone.'
                                 )
                                 .setFooter({ text: `PrimeBot Beta Program • Version: ${config.version}` })
                                 .setTimestamp();
                             return await safeBetaReply(message, { embeds: [ownerOnlyEmbed] });
                         }
-
                         // --- Server not on the allowed list ---
                         console.log(`[BETA] Checking isAllowed for guild ${guildId}...`);
                         const allowed = await betaManager.isAllowed(guildId);
