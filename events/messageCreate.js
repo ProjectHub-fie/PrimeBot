@@ -3825,9 +3825,9 @@ module.exports = {
                                 .setColor(config.colors.error)
                                 .setTitle(' You cannot you these command')
                                 .setDescription(
-                                    '🔒These command is restricted.\n' +
-                                    '	ℹ️You need these permission to use this command.\n'+
-                                    '		`Owner`\n\n'+
+                                    '🔒These command is restricted.\n\n' +
+                                    '	ℹ️You need these permission to use this command.\n\n'+
+                                    '		`Owner`\n\n\n'+
                                     'Beta access lets your server try out new features before they are released to everyone.'
                                 )
                                 .setFooter({ text: `PrimeBot Beta Program • Version: ${config.version}` })
