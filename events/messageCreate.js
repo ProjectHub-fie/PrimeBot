@@ -3640,7 +3640,7 @@ module.exports = {
                         })
                         .setTimestamp();
 
-                    // Shard/failover node info (panel.visionhost.com <-> wispbyte.com)
+                    // Shard/failover node info (sn1 <-> sn2)
                     let shardNodeValue;
                     try {
                         const [primaryStatus, secondaryStatus] = await Promise.all([
