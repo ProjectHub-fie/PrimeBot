@@ -75,65 +75,12 @@ client.schema = schema;
 const betaManager = require('./utils/betaManager');
 client.betaManager = betaManager;
 
-if (!IS_SECONDARY) {
-    // ── Primary-only managers (each runs intervals / holds in-memory state) ──
-
-    const GiveawayManager = require('./utils/giveawayManager');
-    client.giveawayManager = new GiveawayManager(client);
-
-    const TicketManager = require('./utils/ticketManager');
-    client.ticketManager = new TicketManager(client);
-
-    const TicTacToeManager = require('./utils/ticTacToeManager');
-    client.ticTacToeManager = new TicTacToeManager(client);
-
-    const PollManager = require('./utils/pollManager');
-    const LivePollManager = require('./utils/livePollManager');
-
-    // Initialize birthday manager
-    try {
-        const BirthdayManager = require('./utils/birthdayManager');
-        client.birthdayManager = new BirthdayManager(client);
-        console.log('Successfully loaded BirthdayManager');
-    } catch (error) {
-        console.error('Failed to load BirthdayManager:', error.message);
-        client.birthdayManager = {
-            getBirthday: () => null,
-            setBirthday: () => false,
-            removeBirthday: () => false,
-            getAllBirthdays: () => new Map(),
-            getUpcomingBirthdays: () => [],
-            setAnnouncementChannel: () => false,
-            setBirthdayRole: () => false,
-            getGuildConfig: () => ({ announcementChannel: null, birthdayRole: null })
-        };
-    }
-
-    const EmojiManager = require('./utils/emojiManager');
-    client.emojiManager = new EmojiManager();
-
-    const CountingManager = require('./utils/countingManager');
-    client.countingManager = new CountingManager(client);
-
-    const TruthDareManager = require('./utils/truthDareManager');
-    client.truthDareManager = new TruthDareManager(client);
-
-    const LevelingManager = require('./utils/levelingManager');
-
-    // Re-init giveaway + poll now that db is available
-    client.giveawayManager = new GiveawayManager(client);
-    client.pollManager = new PollManager(client);
-    client.livePollManager = new LivePollManager(client);
-
-    // Wait for DB to be ready before leveling
-    setTimeout(() => {
-        client.levelingManager = new LevelingManager(client);
-    }, 2000);
-
-    const ServerSettingsManager = require('./utils/serverSettingsManager');
-    client.serverSettingsManager = new ServerSettingsManager(client);
-} else {
-    // ── Secondary stubs — prevent crashes if event handlers reference these ──
+// ── Lightweight stubs for standby period ─────────────────────────────────
+// These prevent crashes if event handlers fire before real managers are up.
+// They are replaced with real instances inside initializeManagers() the
+// moment this node actually connects to Discord (primary at boot, secondary
+// on takeover).
+{
     const noop = () => {};
     const noopAsync = async () => {};
     client.giveawayManager  = { giveaways: new Map(), startGiveaway: noopAsync, endGiveaway: noopAsync };
@@ -141,12 +88,62 @@ if (!IS_SECONDARY) {
     client.ticTacToeManager = { games: new Map() };
     client.pollManager      = { polls: new Map() };
     client.livePollManager  = { polls: new Map() };
-    client.birthdayManager  = { getBirthday: noop, setBirthday: noop, getGuildConfig: () => ({}) };
+    client.birthdayManager  = { getBirthday: noop, setBirthday: noop, removeBirthday: noop,
+                                 getAllBirthdays: () => new Map(), getUpcomingBirthdays: () => [],
+                                 setAnnouncementChannel: noop, setBirthdayRole: noop,
+                                 getGuildConfig: () => ({ announcementChannel: null, birthdayRole: null }) };
     client.emojiManager     = { getEmoji: noop, getAllEmojis: () => [] };
     client.countingManager  = { isCountingChannel: () => false, processCountingMessage: noopAsync };
     client.truthDareManager = { startGame: noopAsync };
     client.levelingManager  = null;
     client.serverSettingsManager = { getGuildSettings: () => ({}), updateGuildSetting: noop };
+}
+
+// ── Real manager boot — runs exactly once when this node connects ─────────
+// Called by connectBot() so it works for both:
+//   • primary  : connects immediately on startup
+//   • secondary: connects later on takeover (primary went down)
+let managersInitialized = false;
+async function initializeManagers() {
+    if (managersInitialized) return;
+    managersInitialized = true;
+    console.log('[MANAGERS] Initializing all managers...');
+
+    const GiveawayManager   = require('./utils/giveawayManager');
+    const TicketManager     = require('./utils/ticketManager');
+    const TicTacToeManager  = require('./utils/ticTacToeManager');
+    const PollManager       = require('./utils/pollManager');
+    const LivePollManager   = require('./utils/livePollManager');
+    const EmojiManager      = require('./utils/emojiManager');
+    const CountingManager   = require('./utils/countingManager');
+    const TruthDareManager  = require('./utils/truthDareManager');
+    const LevelingManager   = require('./utils/levelingManager');
+    const ServerSettingsManager = require('./utils/serverSettingsManager');
+
+    client.giveawayManager  = new GiveawayManager(client);
+    client.ticketManager    = new TicketManager(client);
+    client.ticTacToeManager = new TicTacToeManager(client);
+    client.pollManager      = new PollManager(client);
+    client.livePollManager  = new LivePollManager(client);
+    client.emojiManager     = new EmojiManager();
+    client.countingManager  = new CountingManager(client);
+    client.truthDareManager = new TruthDareManager(client);
+    client.serverSettingsManager = new ServerSettingsManager(client);
+
+    try {
+        const BirthdayManager = require('./utils/birthdayManager');
+        client.birthdayManager = new BirthdayManager(client);
+        console.log('[MANAGERS] BirthdayManager loaded.');
+    } catch (err) {
+        console.error('[MANAGERS] Failed to load BirthdayManager:', err.message);
+    }
+
+    // LevelingManager needs the DB fully ready — brief delay is intentional
+    setTimeout(() => {
+        client.levelingManager = new LevelingManager(client);
+    }, 2000);
+
+    console.log('[MANAGERS] All managers initialized.');
 }
 
 // Live poll manager already initialized above
@@ -270,6 +267,7 @@ async function connectBot() {
         }
 
         process.env.DISCORD_TOKEN = resolvedToken;
+        await initializeManagers();
         console.log('Attempting to connect to Discord...');
         await client.login(resolvedToken);
         console.log('✅ Bot successfully logged in and is now online!');
