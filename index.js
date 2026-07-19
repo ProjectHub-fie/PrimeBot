@@ -15,7 +15,7 @@ if (IS_SECONDARY) {
     console.log('[BOOT] Running as SECONDARY node — skipping heavy managers to save memory.');
 }
 
-// Run GC aggressively if --expose-gc was passed (added by start-bot.cjs).
+// Run GC aggressively if --expose-gc was passed (added by start-bot.js).
 if (typeof global.gc === 'function') {
     setInterval(() => {
         try { global.gc(); } catch (_) {}
@@ -30,22 +30,19 @@ if (!token) {
 process.env.DISCORD_TOKEN = token;
 
 // Create a new client instance
-// On secondary we use minimal intents — the bot never connects in normal
-// operation, so this client exists only as a stub that may take over if the
-// primary goes down.  On primary we keep full intents but cap the caches so
-// we don't accumulate unbounded memory.
+// Always use full intents on both nodes so that if a standby node takes over
+// it has all the permissions it needs to handle messages and reactions.
+// Cache limits are applied on both nodes to keep memory bounded.
 const client = new Client({
-    intents: IS_SECONDARY
-        ? [GatewayIntentBits.Guilds]
-        : [
-            GatewayIntentBits.Guilds,
-            GatewayIntentBits.GuildMembers,
-            GatewayIntentBits.GuildMessages,
-            GatewayIntentBits.GuildMessageReactions,
-            GatewayIntentBits.DirectMessages,
-            GatewayIntentBits.DirectMessageReactions,
-            GatewayIntentBits.MessageContent,
-        ],
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMembers,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.GuildMessageReactions,
+        GatewayIntentBits.DirectMessages,
+        GatewayIntentBits.DirectMessageReactions,
+        GatewayIntentBits.MessageContent,
+    ],
     makeCache: Options.cacheWithLimits({
         ...Options.DefaultMakeCacheSettings,
         MessageManager:      { maxSize: 50  }, // keep only 50 messages per channel

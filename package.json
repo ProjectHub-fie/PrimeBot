@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "license": "MIT",
   "scripts": {
-    "start": "node start-bot.cjs",
-    "dev": "npx tsx start-bot.cjs",
+    "start": "node start-bot.js",
+    "dev": "node start-bot.js",
     "check-beta": "node scripts/check_beta.js",
     "db:push": "drizzle-kit push"
   },
