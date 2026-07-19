@@ -1,10 +1,26 @@
 const debug = require('debug')('bot:main');
 
-const { Client, GatewayIntentBits, Collection, ActivityType } = require('discord.js');
+const { Client, GatewayIntentBits, Collection, ActivityType, Options } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 const { resolveDiscordToken } = require('./utils/tokenResolver');
 require('dotenv').config();
+
+// Detect secondary/standby role BEFORE initialising any managers so we can
+// skip the heavy ones that are never needed on a standby-only node.
+const IS_SECONDARY = process.env.BOT_FAILOVER_ENABLED !== 'false' &&
+                     (process.env.NODE_ROLE === 'secondary');
+
+if (IS_SECONDARY) {
+    console.log('[BOOT] Running as SECONDARY node — skipping heavy managers to save memory.');
+}
+
+// Run GC aggressively if --expose-gc was passed (added by start-bot.cjs).
+if (typeof global.gc === 'function') {
+    setInterval(() => {
+        try { global.gc(); } catch (_) {}
+    }, IS_SECONDARY ? 30_000 : 120_000);
+}
 
 const token = resolveDiscordToken();
 if (!token) {
@@ -14,16 +30,32 @@ if (!token) {
 process.env.DISCORD_TOKEN = token;
 
 // Create a new client instance
+// On secondary we use minimal intents — the bot never connects in normal
+// operation, so this client exists only as a stub that may take over if the
+// primary goes down.  On primary we keep full intents but cap the caches so
+// we don't accumulate unbounded memory.
 const client = new Client({
-    intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMembers,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.GuildMessageReactions,
-        GatewayIntentBits.DirectMessages,
-        GatewayIntentBits.DirectMessageReactions,
-        GatewayIntentBits.MessageContent
-    ]
+    intents: IS_SECONDARY
+        ? [GatewayIntentBits.Guilds]
+        : [
+            GatewayIntentBits.Guilds,
+            GatewayIntentBits.GuildMembers,
+            GatewayIntentBits.GuildMessages,
+            GatewayIntentBits.GuildMessageReactions,
+            GatewayIntentBits.DirectMessages,
+            GatewayIntentBits.DirectMessageReactions,
+            GatewayIntentBits.MessageContent,
+        ],
+    makeCache: Options.cacheWithLimits({
+        ...Options.DefaultMakeCacheSettings,
+        MessageManager:      { maxSize: 50  }, // keep only 50 messages per channel
+        GuildMemberManager:  { maxSize: 200 }, // keep 200 members per guild
+        UserManager:         { maxSize: 200 },
+        ReactionManager:     { maxSize: 0   }, // reactions fetched on-demand
+        GuildInviteManager:  { maxSize: 0   },
+        StageInstanceManager:{ maxSize: 0   },
+        VoiceStateManager:   { maxSize: 0   },
+    }),
 });
 // Connection enhancer disabled as it may interfere with prefix commands
 // const enhanceConnection = require('./connection-enhancer');
@@ -33,80 +65,89 @@ const client = new Client({
 // Initialize collections for commands
 client.commands = new Collection();
 
-// Initialize managers first (before events)
-const GiveawayManager = require('./utils/giveawayManager');
-client.giveawayManager = new GiveawayManager(client);
-
-const TicketManager = require('./utils/ticketManager');
-client.ticketManager = new TicketManager(client);
-
-const TicTacToeManager = require('./utils/ticTacToeManager');
-client.ticTacToeManager = new TicTacToeManager(client);
-
-const PollManager = require('./utils/pollManager');
-
-// Initialize birthday manager
-try {
-    const BirthdayManager = require('./utils/birthdayManager');
-    client.birthdayManager = new BirthdayManager(client);
-    console.log('Successfully loaded BirthdayManager');
-} catch (error) {
-    console.error('Failed to load BirthdayManager:', error.message);
-    // Create a temporary birthday manager to prevent crashes
-    client.birthdayManager = {
-        getBirthday: () => null,
-        setBirthday: () => false,
-        removeBirthday: () => false,
-        getAllBirthdays: () => new Map(),
-        getUpcomingBirthdays: () => [],
-        setAnnouncementChannel: () => false,
-        setBirthdayRole: () => false,
-        getGuildConfig: () => ({ announcementChannel: null, birthdayRole: null })
-    };
-}
-
-// Initialize emoji manager
-const EmojiManager = require('./utils/emojiManager');
-client.emojiManager = new EmojiManager();
-
-// Initialize counting game manager
-const CountingManager = require('./utils/countingManager');
-client.countingManager = new CountingManager(client);
-
-// Initialize truth or dare game manager
-const TruthDareManager = require('./utils/truthDareManager');
-client.truthDareManager = new TruthDareManager(client);
-
-// Initialize database connection FIRST (before LevelingManager)
+// Initialize database connection (needed by both primary and secondary)
 const { db } = require('./server/db');
 const schema = require('./shared/schema');
 client.db = db;
 client.schema = schema;
 
-// Initialize leveling and badges manager (after database is available)
-const LevelingManager = require('./utils/levelingManager');
+// Initialize beta features manager (lightweight — DB only, no intervals)
+const betaManager = require('./utils/betaManager');
+client.betaManager = betaManager;
 
-// Initialize Live Poll Manager
-const LivePollManager = require('./utils/livePollManager');
+if (!IS_SECONDARY) {
+    // ── Primary-only managers (each runs intervals / holds in-memory state) ──
 
-// Initialize managers (with database)
+    const GiveawayManager = require('./utils/giveawayManager');
+    client.giveawayManager = new GiveawayManager(client);
+
+    const TicketManager = require('./utils/ticketManager');
+    client.ticketManager = new TicketManager(client);
+
+    const TicTacToeManager = require('./utils/ticTacToeManager');
+    client.ticTacToeManager = new TicTacToeManager(client);
+
+    const PollManager = require('./utils/pollManager');
+    const LivePollManager = require('./utils/livePollManager');
+
+    // Initialize birthday manager
+    try {
+        const BirthdayManager = require('./utils/birthdayManager');
+        client.birthdayManager = new BirthdayManager(client);
+        console.log('Successfully loaded BirthdayManager');
+    } catch (error) {
+        console.error('Failed to load BirthdayManager:', error.message);
+        client.birthdayManager = {
+            getBirthday: () => null,
+            setBirthday: () => false,
+            removeBirthday: () => false,
+            getAllBirthdays: () => new Map(),
+            getUpcomingBirthdays: () => [],
+            setAnnouncementChannel: () => false,
+            setBirthdayRole: () => false,
+            getGuildConfig: () => ({ announcementChannel: null, birthdayRole: null })
+        };
+    }
+
+    const EmojiManager = require('./utils/emojiManager');
+    client.emojiManager = new EmojiManager();
+
+    const CountingManager = require('./utils/countingManager');
+    client.countingManager = new CountingManager(client);
+
+    const TruthDareManager = require('./utils/truthDareManager');
+    client.truthDareManager = new TruthDareManager(client);
+
+    const LevelingManager = require('./utils/levelingManager');
+
+    // Re-init giveaway + poll now that db is available
     client.giveawayManager = new GiveawayManager(client);
     client.pollManager = new PollManager(client);
     client.livePollManager = new LivePollManager(client);
 
-    // Wait a bit to ensure database is fully ready before initializing leveling
+    // Wait for DB to be ready before leveling
     setTimeout(() => {
         client.levelingManager = new LevelingManager(client);
     }, 2000);
 
-
-// Initialize server settings manager for broadcast opt-outs
-const ServerSettingsManager = require('./utils/serverSettingsManager');
-client.serverSettingsManager = new ServerSettingsManager(client);
-
-// Initialize beta features manager
-const betaManager = require('./utils/betaManager');
-client.betaManager = betaManager;
+    const ServerSettingsManager = require('./utils/serverSettingsManager');
+    client.serverSettingsManager = new ServerSettingsManager(client);
+} else {
+    // ── Secondary stubs — prevent crashes if event handlers reference these ──
+    const noop = () => {};
+    const noopAsync = async () => {};
+    client.giveawayManager  = { giveaways: new Map(), startGiveaway: noopAsync, endGiveaway: noopAsync };
+    client.ticketManager    = { tickets: new Map() };
+    client.ticTacToeManager = { games: new Map() };
+    client.pollManager      = { polls: new Map() };
+    client.livePollManager  = { polls: new Map() };
+    client.birthdayManager  = { getBirthday: noop, setBirthday: noop, getGuildConfig: () => ({}) };
+    client.emojiManager     = { getEmoji: noop, getAllEmojis: () => [] };
+    client.countingManager  = { isCountingChannel: () => false, processCountingMessage: noopAsync };
+    client.truthDareManager = { startGame: noopAsync };
+    client.levelingManager  = null;
+    client.serverSettingsManager = { getGuildSettings: () => ({}), updateGuildSetting: noop };
+}
 
 // Live poll manager already initialized above
 
@@ -334,15 +375,8 @@ process.on('SIGINT', gracefulShutdown);
 
 
 
-process.on('unhandledRejection', error => {
-    console.error('Unhandled promise rejection:', error);
-});
-
-
-// Enhanced error handling for process events
 process.on('unhandledRejection', (reason, promise) => {
     console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-    // Don't crash on unhandled rejections
 });
 
 process.on('uncaughtException', (error) => {
