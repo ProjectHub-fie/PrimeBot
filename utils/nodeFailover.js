@@ -2,12 +2,12 @@ const { db } = require('../server/db');
 const { sql } = require('drizzle-orm');
 
 // Two-host failover configuration.
-// Set NODE_ROLE=primary on panel.visionhost.com and NODE_ROLE=secondary on wispbyte.com.
+// Set NODE_ROLE=sn1 on panel.visionhost.com and NODE_ROLE=sn2 on wispbyte.com.
 function normalizeNodeRole(rawRole) {
-    const value = String(rawRole || 'primary').trim().toLowerCase();
-    if (value === 'secondary' || value === 'secoundary') return 'secondary';
-    if (value === 'primary') return 'primary';
-    return 'primary';
+    const value = String(rawRole || 'sn1').trim().toLowerCase();
+    if (value === 'sn2' || value === 'secondary' || value === 'secoundary') return 'sn2';
+    if (value === 'sn1' || value === 'primary') return 'sn1';
+    return 'sn1';
 }
 
 const NODE_ROLE = normalizeNodeRole(process.env.NODE_ROLE);
@@ -15,7 +15,7 @@ const NODE_ROLE = normalizeNodeRole(process.env.NODE_ROLE);
 // We deliberately skip process.env.HOSTNAME because hosting panels assign
 // random container hostnames that change between restarts, which causes the
 // DB to treat the same physical host as a brand-new node every time it starts.
-const NODE_NAME = process.env.NODE_NAME || (NODE_ROLE === 'secondary' ? 'wispbyte.com' : 'panel.visionhost.com');
+const NODE_NAME = process.env.NODE_NAME || (NODE_ROLE === 'sn2' ? 'wispbyte.com' : 'panel.visionhost.com');
 
 const HEARTBEAT_INTERVAL_MS = 15000;
 const FAILOVER_THRESHOLD_MS = 45000;
@@ -83,7 +83,7 @@ async function getStatus(role) {
 }
 
 async function getPrimaryAgeMs() {
-    const row = await getStatus('primary');
+    const row = await getStatus('sn1');
     if (!row || !row.active) return Infinity;
     return Number(row.age_ms);
 }
@@ -91,7 +91,7 @@ async function getPrimaryAgeMs() {
 // Looks for any OTHER node (different node_name) that is currently marked active
 // with a fresh heartbeat. Used at startup/monitoring time so a node never logs
 // into Discord while another instance is already online, even if NODE_ROLE was
-// misconfigured (e.g. both hosts left unset/defaulting to "primary").
+// misconfigured (e.g. both hosts left unset/defaulting to "sn1").
 // Heartbeat age is computed by the database itself (see getStatus) so
 // clock drift between the two hosts can't cause a false "stale"/"fresh" read.
 async function getOtherActiveNode(selfNodeName) {
@@ -180,27 +180,27 @@ async function acquireLease(role, nodeName) {
 
         const ageMs = Number(row.age_ms || 0);
 
-        // Primary role always wins — steal the lease unconditionally from any
-        // other holder (secondary or a stale primary). This makes "set NODE_ROLE=primary
+        // sn1 always wins — steal the lease unconditionally from any
+        // other holder (sn2 or a stale sn1). This makes "set NODE_ROLE=sn1
         // and restart" the reliable way to promote a host without manual DB edits.
-        if (role === 'primary') {
+        if (role === 'sn1') {
             await db.execute(sql`
                 UPDATE bot_failover_lock
                 SET owner_node_name = ${nodeName}, owner_role = ${role}, acquired_at = NOW(), last_seen = NOW()
                 WHERE id = 1
             `);
-            console.warn(`[FAILOVER] Primary forced takeover from ${row.owner_node_name} (role=${row.owner_role}, age=${Math.round(ageMs / 1000)}s)`);
+            console.warn(`[FAILOVER] sn1 forced takeover from ${row.owner_node_name} (role=${row.owner_role}, age=${Math.round(ageMs / 1000)}s)`);
             return { acquired: true, ownerNodeName: nodeName, ownerRole: role, stolen: true };
         }
 
-        // Secondary role only takes over when the current lease has gone stale.
+        // sn2 only takes over when the current lease has gone stale.
         if (ageMs > FAILOVER_THRESHOLD_MS) {
             await db.execute(sql`
                 UPDATE bot_failover_lock
                 SET owner_node_name = ${nodeName}, owner_role = ${role}, acquired_at = NOW(), last_seen = NOW()
                 WHERE id = 1
             `);
-            console.warn(`[FAILOVER] Lease expired for ${row.owner_node_name}; secondary taking over as node=${nodeName}`);
+            console.warn(`[FAILOVER] Lease expired for ${row.owner_node_name}; sn2 taking over as node=${nodeName}`);
             return { acquired: true, ownerNodeName: nodeName, ownerRole: role, stolen: true };
         }
 

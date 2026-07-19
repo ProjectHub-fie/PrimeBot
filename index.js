@@ -9,7 +9,7 @@ require('dotenv').config();
 // Detect secondary/standby role BEFORE initialising any managers so we can
 // skip the heavy ones that are never needed on a standby-only node.
 const IS_SECONDARY = process.env.BOT_FAILOVER_ENABLED !== 'false' &&
-                     (process.env.NODE_ROLE === 'secondary');
+                     (process.env.NODE_ROLE === 'sn2' || process.env.NODE_ROLE === 'secondary');
 
 if (IS_SECONDARY) {
     console.log('[BOOT] Running as SECONDARY node — skipping heavy managers to save memory.');

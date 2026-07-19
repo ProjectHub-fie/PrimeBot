@@ -2878,8 +2878,8 @@ module.exports = {
                         let secondaryHostValue = '⚪ Never reported';
                         try {
                             const [primaryStatus, secondaryStatus] = await Promise.all([
-                                nodeFailover.getStatus('primary'),
-                                nodeFailover.getStatus('secondary')
+                                nodeFailover.getStatus('sn1'),
+                                nodeFailover.getStatus('sn2')
                             ]);
                             // TCP-ping both hosts in parallel (port 443, 3s timeout)
                             const [primaryTcp, secondaryTcp] = await Promise.all([
@@ -3642,8 +3642,8 @@ module.exports = {
                     let shardNodeValue;
                     try {
                         const [primaryStatus, secondaryStatus] = await Promise.all([
-                            nodeFailover.getStatus('primary'),
-                            nodeFailover.getStatus('secondary')
+                            nodeFailover.getStatus('sn1'),
+                            nodeFailover.getStatus('sn2')
                         ]);
 
                         const describe = (label, status) => {
@@ -4225,8 +4225,8 @@ async function processCommand(message, client, commandName, args, prefix) {
                 let secondaryHostVal = '⚪ Never reported';
                 try {
                     const [primaryStatus, secondaryStatus] = await Promise.all([
-                        nodeFailover.getStatus('primary'),
-                        nodeFailover.getStatus('secondary')
+                        nodeFailover.getStatus('sn1'),
+                        nodeFailover.getStatus('sn2')
                     ]);
                     const [primaryTcp, secondaryTcp] = await Promise.all([
                         primaryStatus?.node_name   ? tcpPing(primaryStatus.node_name)   : Promise.resolve(null),
