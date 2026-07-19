@@ -5,7 +5,7 @@ module.exports = {
     data: new SlashCommandBuilder()
         .setName('counting')
         .setDescription('Manage counting games')
-		.setDefaultMemberPermissions('0')
+                .setDefaultMemberPermissions('0')
         
         .addSubcommand(subcommand =>
             subcommand
@@ -141,7 +141,7 @@ module.exports = {
                     }
                     
                     // End the game
-                    const success = countingManager.endCountingGame(interaction.channel.id);
+                    const success = await countingManager.endCountingGame(interaction.channel.id);
                     
                     if (success) {
                         await interaction.reply('The counting game has been ended.');

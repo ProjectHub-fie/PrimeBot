@@ -77,14 +77,12 @@ class CountingManager {
         const number = parseInt(content, 10);
 
         if (isNaN(number) || number.toString() !== content) {
-            // Not a number — ignore silently
             return;
         }
 
         const expectedNumber = game.currentNumber + 1;
 
         if (number !== expectedNumber) {
-            // Wrong number
             game.failCount++;
             await message.react('❌');
             const embed = new EmbedBuilder()
@@ -105,7 +103,6 @@ class CountingManager {
         }
 
         if (game.lastUserId === message.author.id) {
-            // Same user twice in a row
             game.failCount++;
             await message.react('❌');
             const embed = new EmbedBuilder()
@@ -121,7 +118,6 @@ class CountingManager {
             return;
         }
 
-        // Correct number
         game.currentNumber = number;
         game.lastUserId = message.author.id;
         if (!game.participants[message.author.id]) game.participants[message.author.id] = 0;
@@ -132,7 +128,6 @@ class CountingManager {
         this.counting.set(channelId, game);
         await this.saveCounting(channelId);
 
-        // Check if goal reached
         if (number >= game.goalNumber) {
             await this.handleGameWin(message, game, channelId);
         }
@@ -160,7 +155,6 @@ class CountingManager {
 
         await message.channel.send({ embeds: [embed] });
 
-        // Scale up
         game.goalNumber *= 2;
         game.currentNumber = 0;
         game.startNumber = 1;
@@ -170,7 +164,21 @@ class CountingManager {
         await this.saveCounting(channelId);
     }
 
-    async startCountingGame(channelId, startNumber = 1, goalNumber = 100) {
+    /**
+     * Start a counting game.
+     * Accepts either positional args (channelId, startNumber, goalNumber)
+     * or a single options object { channelId, startNumber, goalNumber }.
+     */
+    async startCountingGame(channelIdOrOpts, startNumber = 1, goalNumber = 100) {
+        let channelId;
+        if (channelIdOrOpts && typeof channelIdOrOpts === 'object') {
+            channelId   = channelIdOrOpts.channelId;
+            startNumber = channelIdOrOpts.startNumber ?? startNumber;
+            goalNumber  = channelIdOrOpts.goalNumber  ?? goalNumber;
+        } else {
+            channelId = channelIdOrOpts;
+        }
+
         const game = {
             currentNumber: startNumber - 1,
             goalNumber,
@@ -185,19 +193,67 @@ class CountingManager {
         return game;
     }
 
+    /**
+     * End a counting game.
+     * Returns true if a game existed and was ended, false if there was nothing to end.
+     */
     async endCountingGame(channelId) {
+        if (!this.counting.has(channelId)) return false;
         this.counting.delete(channelId);
         await pool.query('DELETE FROM counting_games WHERE channel_id = $1', [channelId]).catch(err =>
             console.error(`[COUNTING] Error deleting game for ${channelId}:`, err.message)
         );
+        return true;
     }
 
+    /** Get the active game for a channel (null if none). */
     getCountingGame(channelId) {
         return this.counting.get(channelId) || null;
     }
 
+    /** Alias used by both prefix and slash commands. */
+    getCountingStatus(channelId) {
+        return this.getCountingGame(channelId);
+    }
+
     isCountingChannel(channelId) {
         return this.counting.has(channelId);
+    }
+
+    /** Build a status embed for a game object. */
+    createCountingEmbed(game) {
+        const progress = game.goalNumber > 0
+            ? Math.floor((game.currentNumber / game.goalNumber) * 100)
+            : 0;
+        return new EmbedBuilder()
+            .setColor(config.colors.primary)
+            .setTitle('🔢 Counting Game')
+            .addFields(
+                { name: 'Current Number', value: `${game.currentNumber}`,          inline: true },
+                { name: 'Next Number',    value: `${game.currentNumber + 1}`,      inline: true },
+                { name: 'Goal',           value: `${game.goalNumber}`,             inline: true },
+                { name: 'Progress',       value: `${progress}%`,                   inline: true },
+                { name: 'Highest Reached',value: `${game.highestNumber}`,          inline: true },
+                { name: 'Fail Count',     value: `${game.failCount}`,              inline: true }
+            )
+            .setFooter({ text: `Version: ${config.version}` })
+            .setTimestamp();
+    }
+
+    /** Build the help embed. */
+    createHelpEmbed() {
+        return new EmbedBuilder()
+            .setColor(config.colors.primary)
+            .setTitle('🔢 Counting Game — Help')
+            .setDescription('Count up together as a server! Each member must count the next number in sequence.')
+            .addFields(
+                { name: '`$cstart [start] [goal]`',  value: 'Start a game (default: 1 → 100)', inline: false },
+                { name: '`$cstatus`',                value: 'Show current game progress',       inline: false },
+                { name: '`$cend`',                   value: 'End the current game (Admin)',     inline: false },
+                { name: '`$chelp`',                  value: 'Show this help message',           inline: false },
+                { name: '📋 Rules',                  value: '• Type only the next number\n• You cannot count twice in a row\n• Wrong number resets the count', inline: false }
+            )
+            .setFooter({ text: `Version: ${config.version}` });
     }
 }
 

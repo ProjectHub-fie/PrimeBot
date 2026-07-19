@@ -2077,13 +2077,11 @@ module.exports = {
 
                     // Start the counting game
                     try {
-                        await client.countingManager.startCountingGame({
-                            channelId: message.channel.id,
-                            startNumber: startNumber,
-                            goalNumber: goalNumber
-                        });
-                        
-                        // Send confirmation is handled within startCountingGame
+                        const game = await client.countingManager.startCountingGame(
+                            message.channel.id, startNumber, goalNumber
+                        );
+                        const startEmbed = client.countingManager.createCountingEmbed(game);
+                        await message.reply({ embeds: [startEmbed] });
                     } catch (error) {
                         console.error("Error starting counting game:", error);
                         return message.reply(error.message || "There was an error starting the counting game! Please try again later.");
