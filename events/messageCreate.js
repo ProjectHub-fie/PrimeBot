@@ -56,6 +56,10 @@ module.exports = {
         try {
             // Ignore messages from bots
             if (message.author.bot) return;
+
+            // Only the active node should respond. If this node is in standby
+            // (sn2 waiting for sn1 to go down), silently drop all messages.
+            if (!global.botActive) return;
             
             // Prevent infinite recursion from no-prefix command processing
             if (message._processedAsNoPrefix) return;
@@ -2873,29 +2877,24 @@ module.exports = {
                             return barString;
                         };
                         
-                        // Fetch both host heartbeat statuses + measure actual TCP ping to each host
-                        let primaryHostValue = '⚪ Never reported';
-                        let secondaryHostValue = '⚪ Never reported';
+                        // Fetch both host heartbeat statuses from DB
+                        let sn1HostValue = '⚪ Never reported';
+                        let sn2HostValue = '⚪ Never reported';
                         try {
-                            const [primaryStatus, secondaryStatus] = await Promise.all([
+                            const [sn1Status, sn2Status] = await Promise.all([
                                 nodeFailover.getStatus('sn1'),
                                 nodeFailover.getStatus('sn2')
                             ]);
-                            // TCP-ping both hosts in parallel (port 443, 3s timeout)
-                            const [primaryTcp, secondaryTcp] = await Promise.all([
-                                primaryStatus?.node_name   ? tcpPing(primaryStatus.node_name)   : Promise.resolve(null),
-                                secondaryStatus?.node_name ? tcpPing(secondaryStatus.node_name) : Promise.resolve(null)
-                            ]);
-                            const describeHost = (status, tcpMs) => {
+                            const describeHost = (status) => {
                                 if (!status) return '⚪ Never reported';
                                 const ageSec = Math.round(Number(status.age_ms) / 1000);
-                                const pingStr = tcpMs !== null ? `${tcpMs}ms` : 'Unreachable';
-                                if (!status.active) return `⚪ Standby/Down\nPing: ${pingStr}`;
-                                if (ageSec > nodeFailover.FAILOVER_THRESHOLD_MS / 1000) return `🔴 Stale (${ageSec}s ago)\nPing: ${pingStr}`;
-                                return `🟢 Active (${ageSec}s ago)\nPing: ${pingStr}`;
+                                const nodeLine = `Node: ${status.node_name}`;
+                                if (!status.active) return `⚪ Standby/Down\n${nodeLine}`;
+                                if (ageSec > nodeFailover.FAILOVER_THRESHOLD_MS / 1000) return `🔴 Stale (${ageSec}s ago)\n${nodeLine}`;
+                                return `🟢 Active (${ageSec}s ago)\n${nodeLine}`;
                             };
-                            primaryHostValue   = describeHost(primaryStatus,   primaryTcp);
-                            secondaryHostValue = describeHost(secondaryStatus, secondaryTcp);
+                            sn1HostValue = describeHost(sn1Status);
+                            sn2HostValue = describeHost(sn2Status);
                         } catch (_) {}
 
                         const pingEmbed = new EmbedBuilder()
@@ -2919,13 +2918,13 @@ module.exports = {
                                     inline: true 
                                 },
                                 {
-                                    name: '🖥️ Primary Host',
-                                    value: primaryHostValue,
+                                    name: '🖥️ sn1',
+                                    value: sn1HostValue,
                                     inline: true
                                 },
                                 {
-                                    name: '🖥️ Secondary Host',
-                                    value: secondaryHostValue,
+                                    name: '🖥️ sn2',
+                                    value: sn2HostValue,
                                     inline: true
                                 }
                             )
@@ -4220,28 +4219,24 @@ async function processCommand(message, client, commandName, args, prefix) {
                     color = config.colors.warning;
                 }
                 
-                // Fetch both host heartbeat statuses
-                let primaryHostVal = '⚪ Never reported';
-                let secondaryHostVal = '⚪ Never reported';
+                // Fetch both host heartbeat statuses from DB
+                let sn1HostVal = '⚪ Never reported';
+                let sn2HostVal = '⚪ Never reported';
                 try {
-                    const [primaryStatus, secondaryStatus] = await Promise.all([
+                    const [sn1Status, sn2Status] = await Promise.all([
                         nodeFailover.getStatus('sn1'),
                         nodeFailover.getStatus('sn2')
                     ]);
-                    const [primaryTcp, secondaryTcp] = await Promise.all([
-                        primaryStatus?.node_name   ? tcpPing(primaryStatus.node_name)   : Promise.resolve(null),
-                        secondaryStatus?.node_name ? tcpPing(secondaryStatus.node_name) : Promise.resolve(null)
-                    ]);
-                    const describeHost = (status, tcpMs) => {
+                    const describeHost = (status) => {
                         if (!status) return '⚪ Never reported';
                         const ageSec = Math.round(Number(status.age_ms) / 1000);
-                        const pingStr = tcpMs !== null ? `${tcpMs}ms` : 'Unreachable';
-                        if (!status.active) return `⚪ Standby/Down\nPing: ${pingStr}`;
-                        if (ageSec > nodeFailover.FAILOVER_THRESHOLD_MS / 1000) return `🔴 Stale (${ageSec}s ago)\nPing: ${pingStr}`;
-                        return `🟢 Active (${ageSec}s ago)\nPing: ${pingStr}`;
+                        const nodeLine = `Node: ${status.node_name}`;
+                        if (!status.active) return `⚪ Standby/Down\n${nodeLine}`;
+                        if (ageSec > nodeFailover.FAILOVER_THRESHOLD_MS / 1000) return `🔴 Stale (${ageSec}s ago)\n${nodeLine}`;
+                        return `🟢 Active (${ageSec}s ago)\n${nodeLine}`;
                     };
-                    primaryHostVal   = describeHost(primaryStatus,   primaryTcp);
-                    secondaryHostVal = describeHost(secondaryStatus, secondaryTcp);
+                    sn1HostVal = describeHost(sn1Status);
+                    sn2HostVal = describeHost(sn2Status);
                 } catch (_) {}
 
                 const pingEmbed = new EmbedBuilder()
@@ -4253,8 +4248,8 @@ async function processCommand(message, client, commandName, args, prefix) {
                         { name: '📶 API Latency', value: `${apiPing}ms`, inline: true },
                         { name: '🌐 Servers', value: `${client.guilds.cache.size}`, inline: true },
                         { name: '👥 Users', value: `${totalUsers.toLocaleString()}`, inline: true },
-                        { name: '🖥️ Primary Host', value: primaryHostVal, inline: true },
-                        { name: '🖥️ Secondary Host', value: secondaryHostVal, inline: true }
+                        { name: '🖥️ sn1', value: sn1HostVal, inline: true },
+                        { name: '🖥️ sn2', value: sn2HostVal, inline: true }
                     )
                     .setFooter({ 
                         text: `Requested by ${message.author.tag}`,

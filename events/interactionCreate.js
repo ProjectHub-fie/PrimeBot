@@ -209,6 +209,9 @@ module.exports = {
 
     async execute(interaction, client) {
         try {
+            // Only the active node should handle interactions.
+            if (!global.botActive) return;
+
             // Initialize interaction debugger on first run
             if (!interactionDebugger.client) {
                 interactionDebugger.init(client);

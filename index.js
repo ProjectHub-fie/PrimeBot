@@ -282,6 +282,7 @@ async function connectBot() {
         } else {
             console.log('[FAILOVER] Failover disabled; skipping heartbeat loop so this host can stay online normally.');
         }
+        global.botActive = true;
     } catch (error) {
         console.error('[ERROR] Failed to login to Discord:', error);
         if (error.code === 'TOKEN_INVALID' || error.message?.includes('token')) {
@@ -317,6 +318,7 @@ async function startStandbyMonitor() {
                 await connectBot();
             } else if (standbyTookOver && other) {
                 console.log(`[FAILOVER] Another node (${other.nodeName}) is back online. Stepping this node back down.`);
+                global.botActive = false;
                 nodeFailover.stopHeartbeatLoop();
                 await nodeFailover.markInactive(nodeFailover.NODE_ROLE);
                 process.exit(0);
