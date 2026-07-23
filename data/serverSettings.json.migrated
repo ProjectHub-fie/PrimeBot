@@ -363,5 +363,32 @@
       "reactions": []
     },
     "noPrefixUsers": {}
+  },
+  "1502467613966729301": {
+    "receiveBroadcasts": true,
+    "broadcastChannelId": null,
+    "welcomeEnabled": false,
+    "welcomeChannelId": null,
+    "welcomeMessage": "Welcome to the server, {member}! Enjoy your stay!",
+    "welcomeBannerUrl": "https://i.imgur.com/hxGEQJh.png",
+    "welcomeColor": "#5865F2",
+    "welcomeDmEnabled": true,
+    "welcomeDmMessage": "Hey {username}! Welcome to **{server}**!\n\nWe're excited to have you join our community. If you have any questions, feel free to ask in the help channel.\n\nHere are a few things to check out:\n• Read the rules in the rules channel\n• Introduce yourself in the introductions channel\n• Get roles in the roles channel",
+    "welcomeShowMemberCount": true,
+    "welcomeShowJoinDate": true,
+    "welcomeShowAccountAge": true,
+    "welcomeCustomTitle": null,
+    "welcomeCustomFooter": null,
+    "leveling": {
+      "enabled": true,
+      "levelUpChannelId": null,
+      "xpMultiplier": 1,
+      "xpCooldown": 60000
+    },
+    "autoReactions": {
+      "enabled": false,
+      "reactions": []
+    },
+    "noPrefixUsers": {}
   }
 }
