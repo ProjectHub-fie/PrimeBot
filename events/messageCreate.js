@@ -3657,7 +3657,7 @@ module.exports = {
                         const describe = (label, status) => {
                             if (!status) return `**${label}:** Never reported`;
                             const ageSec = Math.round(Number(status.age_ms) / 1000);
-                            const state = status.active ? (ageSec > nodeFailover.FAILOVER_THRESHOLD_MS / 1000 ? '🔴 Stale' : '🟢 Active') : '⚪ Standby/Down';
+                            const state = status.active ? (ageSec > nodeFailover.FAILOVER_THRESHOLD_MS / 1000 ? '🔴 Stale' : '🟢 Active') : '🟠 Standby';
                             return `**${label}:** ${state} (${ageSec}s ago)`;
                         };
 
@@ -4243,7 +4243,7 @@ async function processCommand(message, client, commandName, args, prefix) {
                         if (!status) return '⚪ Never reported';
                         const ageSec = Math.round(Number(status.age_ms) / 1000);
                         const nodeLine = `Node: ${status.node_name}`;
-                        if (!status.active) return `⚪ Standby/Down\n${nodeLine}`;
+                        if (!status.active) return `🟠 Standby\n${nodeLine}`;
                         if (ageSec > nodeFailover.FAILOVER_THRESHOLD_MS / 1000) return `🔴 Stale (${ageSec}s ago)\n${nodeLine}`;
                         return `🟢 Active (${ageSec}s ago)\n${nodeLine}`;
                     };
