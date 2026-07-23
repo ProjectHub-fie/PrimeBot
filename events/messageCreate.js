@@ -2678,7 +2678,7 @@ module.exports = {
                 case "listbadges":
                 case "badgelist":
                     // Beta gate
-                    if (isBetaFeature('badgelist', null, null, config.betaFeatures) && !(await betaManager.canAccess(message.guild?.id))) {
+                    if (betaManager.isBetaFeature('badgelist') && !(await betaManager.canAccess(message.guild?.id))) {
                         return message.reply({
                             embeds: [new EmbedBuilder()
                                 .setColor(config.colors.primary)
