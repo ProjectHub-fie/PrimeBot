@@ -2877,13 +2877,15 @@ module.exports = {
                             return barString;
                         };
                         
-                        // Fetch both host heartbeat statuses from DB
+                        // Fetch all host heartbeat statuses from DB
                         let sn1HostValue = '⚪ Never reported';
                         let sn2HostValue = '⚪ Never reported';
+                        let sn3HostValue = '⚪ Never reported';
                         try {
-                            const [sn1Status, sn2Status] = await Promise.all([
+                            const [sn1Status, sn2Status, sn3Status] = await Promise.all([
                                 nodeFailover.getStatus('sn1'),
-                                nodeFailover.getStatus('sn2')
+                                nodeFailover.getStatus('sn2'),
+                                nodeFailover.getStatus('sn3')
                             ]);
                             const describeHost = (status) => {
                                 if (!status) return '⚪ Never reported';
@@ -2895,6 +2897,7 @@ module.exports = {
                             };
                             sn1HostValue = describeHost(sn1Status);
                             sn2HostValue = describeHost(sn2Status);
+                            sn3HostValue = describeHost(sn3Status);
                         } catch (_) {}
 
                         const pingEmbed = new EmbedBuilder()
@@ -2925,6 +2928,11 @@ module.exports = {
                                 {
                                     name: '🖥️ sn2',
                                     value: sn2HostValue,
+                                    inline: true
+                                },
+                                {
+                                    name: '🖥️ sn3',
+                                    value: sn3HostValue,
                                     inline: true
                                 }
                             )
@@ -3637,12 +3645,13 @@ module.exports = {
                         })
                         .setTimestamp();
 
-                    // Shard/failover node info (sn1 <-> sn2)
+                    // Shard/failover node info (sn1 <-> sn2 <-> sn3)
                     let shardNodeValue;
                     try {
-                        const [primaryStatus, secondaryStatus] = await Promise.all([
+                        const [primaryStatus, secondaryStatus, tertiaryStatus] = await Promise.all([
                             nodeFailover.getStatus('sn1'),
-                            nodeFailover.getStatus('sn2')
+                            nodeFailover.getStatus('sn2'),
+                            nodeFailover.getStatus('sn3')
                         ]);
 
                         const describe = (label, status) => {
@@ -3654,8 +3663,9 @@ module.exports = {
 
                         shardNodeValue =
                             `**This Node:** ${nodeFailover.NODE_ROLE}\n` +
-                            `${describe('Primary', primaryStatus)}\n` +
-                            `${describe('Secondary', secondaryStatus)}\n` +
+                            `${describe('Primary (sn1)', primaryStatus)}\n` +
+                            `${describe('Secondary (sn2)', secondaryStatus)}\n` +
+                            `${describe('Tertiary (sn3)', tertiaryStatus)}\n` +
                             `**Failover Threshold:** ${nodeFailover.FAILOVER_THRESHOLD_MS / 1000}s`;
                     } catch (err) {
                         shardNodeValue = `⚠️ Could not read node status: ${err.message}`;
@@ -4219,13 +4229,15 @@ async function processCommand(message, client, commandName, args, prefix) {
                     color = config.colors.warning;
                 }
                 
-                // Fetch both host heartbeat statuses from DB
+                // Fetch all host heartbeat statuses from DB
                 let sn1HostVal = '⚪ Never reported';
                 let sn2HostVal = '⚪ Never reported';
+                let sn3HostVal = '⚪ Never reported';
                 try {
-                    const [sn1Status, sn2Status] = await Promise.all([
+                    const [sn1Status, sn2Status, sn3Status] = await Promise.all([
                         nodeFailover.getStatus('sn1'),
-                        nodeFailover.getStatus('sn2')
+                        nodeFailover.getStatus('sn2'),
+                        nodeFailover.getStatus('sn3')
                     ]);
                     const describeHost = (status) => {
                         if (!status) return '⚪ Never reported';
@@ -4237,6 +4249,7 @@ async function processCommand(message, client, commandName, args, prefix) {
                     };
                     sn1HostVal = describeHost(sn1Status);
                     sn2HostVal = describeHost(sn2Status);
+                    sn3HostVal = describeHost(sn3Status);
                 } catch (_) {}
 
                 const pingEmbed = new EmbedBuilder()
@@ -4249,7 +4262,8 @@ async function processCommand(message, client, commandName, args, prefix) {
                         { name: '🌐 Servers', value: `${client.guilds.cache.size}`, inline: true },
                         { name: '👥 Users', value: `${totalUsers.toLocaleString()}`, inline: true },
                         { name: '🖥️ sn1', value: sn1HostVal, inline: true },
-                        { name: '🖥️ sn2', value: sn2HostVal, inline: true }
+                        { name: '🖥️ sn2', value: sn2HostVal, inline: true },
+                        { name: '🖥️ sn3', value: sn3HostVal, inline: true }
                     )
                     .setFooter({ 
                         text: `Requested by ${message.author.tag}`,

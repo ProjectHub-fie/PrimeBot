@@ -1,21 +1,32 @@
 const { db } = require('../server/db');
 const { sql } = require('drizzle-orm');
 
-// Two-host failover configuration.
-// Set NODE_ROLE=sn1 on panel.visionhost.com and NODE_ROLE=sn2 on wispbyte.com.
+// Three-host failover configuration.
+// Set NODE_ROLE=sn1 on panel.visionhost.com, NODE_ROLE=sn2 on wispbyte.com,
+// and NODE_ROLE=sn3 on the third host (e.g. Replit).
+// Priority: sn1 > sn2 > sn3
 function normalizeNodeRole(rawRole) {
     const value = String(rawRole || 'sn1').trim().toLowerCase();
-    if (value === 'sn2' || value === 'secondary' || value === 'secoundary') return 'sn2';
-    if (value === 'sn1' || value === 'primary') return 'sn1';
+    if (value === 'sn2' || value === 'secondary'  || value === 'secoundary') return 'sn2';
+    if (value === 'sn3' || value === 'tertiary')                              return 'sn3';
+    if (value === 'sn1' || value === 'primary')                               return 'sn1';
     return 'sn1';
 }
+
+// Role priority: lower number = higher priority (wins the lease).
+// sn1 always wins; sn2 beats sn3; sn3 is last resort.
+const ROLE_PRIORITY = { sn1: 1, sn2: 2, sn3: 3 };
 
 const NODE_ROLE = normalizeNodeRole(process.env.NODE_ROLE);
 // Use NODE_NAME if explicitly set; otherwise use a stable role-based name.
 // We deliberately skip process.env.HOSTNAME because hosting panels assign
 // random container hostnames that change between restarts, which causes the
 // DB to treat the same physical host as a brand-new node every time it starts.
-const NODE_NAME = process.env.NODE_NAME || (NODE_ROLE === 'sn2' ? 'wispbyte.com' : 'panel.visionhost.com');
+const NODE_NAME = process.env.NODE_NAME || (
+    NODE_ROLE === 'sn2' ? 'wispbyte.com'       :
+    NODE_ROLE === 'sn3' ? 'sn3-node'           :
+                          'panel.visionhost.com'
+);
 
 const HEARTBEAT_INTERVAL_MS = 15000;
 const FAILOVER_THRESHOLD_MS = 45000;
@@ -89,12 +100,9 @@ async function getPrimaryAgeMs() {
 }
 
 // Looks for any OTHER node (different node_name) that is currently marked active
-// with a fresh heartbeat. Used at startup/monitoring time so a node never logs
-// into Discord while another instance is already online, even if NODE_ROLE was
-// misconfigured (e.g. both hosts left unset/defaulting to "sn1").
-// Heartbeat age is computed by the database itself (see getStatus) so
-// clock drift between the two hosts can't cause a false "stale"/"fresh" read.
-async function getOtherActiveNode(selfNodeName) {
+// with a fresh heartbeat AND has a higher priority than selfRole (lower number).
+// selfRole is optional; when omitted any other active node is returned.
+async function getOtherActiveNode(selfNodeName, selfRole) {
     await ensureTable();
     const result = await db.execute(sql`
         SELECT role, node_name, last_heartbeat, active,
@@ -103,11 +111,15 @@ async function getOtherActiveNode(selfNodeName) {
         WHERE active = true AND node_name != ${selfNodeName}
     `);
     const rows = result.rows || result;
+    const selfPriority = ROLE_PRIORITY[selfRole] ?? 99;
     for (const row of rows) {
         const ageMs = Number(row.age_ms);
-        if (ageMs <= FAILOVER_THRESHOLD_MS) {
-            return { role: row.role, nodeName: row.node_name, ageMs };
-        }
+        if (ageMs > FAILOVER_THRESHOLD_MS) continue;
+        const otherPriority = ROLE_PRIORITY[row.role] ?? 99;
+        // Only return nodes that have HIGHER priority (lower number) than us,
+        // so sn2 never steps down because sn3 became active.
+        if (selfRole && otherPriority >= selfPriority) continue;
+        return { role: row.role, nodeName: row.node_name, ageMs };
     }
     return null;
 }
@@ -179,28 +191,30 @@ async function acquireLease(role, nodeName) {
         }
 
         const ageMs = Number(row.age_ms || 0);
+        const myPriority    = ROLE_PRIORITY[role]            ?? 99;
+        const holderPriority = ROLE_PRIORITY[row.owner_role] ?? 99;
 
-        // sn1 always wins — steal the lease unconditionally from any
-        // other holder (sn2 or a stale sn1). This makes "set NODE_ROLE=sn1
-        // and restart" the reliable way to promote a host without manual DB edits.
-        if (role === 'sn1') {
+        // Higher-priority node always steals the lease unconditionally.
+        // sn1 > sn2 > sn3.  This makes "set NODE_ROLE=sn1 and restart" the
+        // reliable way to promote a host without manual DB edits.
+        if (myPriority < holderPriority) {
             await db.execute(sql`
                 UPDATE bot_failover_lock
                 SET owner_node_name = ${nodeName}, owner_role = ${role}, acquired_at = NOW(), last_seen = NOW()
                 WHERE id = 1
             `);
-            console.warn(`[FAILOVER] sn1 forced takeover from ${row.owner_node_name} (role=${row.owner_role}, age=${Math.round(ageMs / 1000)}s)`);
+            console.warn(`[FAILOVER] ${role} forced takeover from ${row.owner_node_name} (role=${row.owner_role}, age=${Math.round(ageMs / 1000)}s)`);
             return { acquired: true, ownerNodeName: nodeName, ownerRole: role, stolen: true };
         }
 
-        // sn2 only takes over when the current lease has gone stale.
+        // Lower-priority node (or equal) only takes over when the lease is stale.
         if (ageMs > FAILOVER_THRESHOLD_MS) {
             await db.execute(sql`
                 UPDATE bot_failover_lock
                 SET owner_node_name = ${nodeName}, owner_role = ${role}, acquired_at = NOW(), last_seen = NOW()
                 WHERE id = 1
             `);
-            console.warn(`[FAILOVER] Lease expired for ${row.owner_node_name}; sn2 taking over as node=${nodeName}`);
+            console.warn(`[FAILOVER] Lease expired for ${row.owner_node_name}; ${role} taking over as node=${nodeName}`);
             return { acquired: true, ownerNodeName: nodeName, ownerRole: role, stolen: true };
         }
 
@@ -242,6 +256,7 @@ async function releaseLease(nodeName) {
 module.exports = {
     NODE_ROLE,
     NODE_NAME,
+    ROLE_PRIORITY,
     HEARTBEAT_INTERVAL_MS,
     FAILOVER_THRESHOLD_MS,
     MONITOR_INTERVAL_MS,

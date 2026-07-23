@@ -1,0 +1,14 @@
+-- Migration 0006: Document sn3 (tertiary node) support
+-- No schema changes are required — the bot_node_status and bot_failover_lock
+-- tables already use VARCHAR role columns that accept any string value.
+-- This migration simply records that a third shardnode (sn3 / tertiary) is
+-- now supported by the failover system.  Set NODE_ROLE=sn3 on the host you
+-- want to act as the tertiary fallback.
+--
+-- Priority order: sn1 (highest) > sn2 > sn3 (lowest)
+-- sn1 always steals the lease unconditionally.
+-- sn2 steals from sn3 unconditionally; only yields to sn1.
+-- sn3 only takes the lease when both sn1 and sn2 are stale/offline.
+--
+-- No SQL statements needed; schema already supports sn3.
+SELECT 1;

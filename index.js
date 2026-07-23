@@ -9,7 +9,7 @@ require('dotenv').config();
 // Detect secondary/standby role BEFORE initialising any managers so we can
 // skip the heavy ones that are never needed on a standby-only node.
 const IS_SECONDARY = process.env.BOT_FAILOVER_ENABLED !== 'false' &&
-                     (process.env.NODE_ROLE === 'sn2' || process.env.NODE_ROLE === 'secondary');
+                     (['sn2', 'sn3', 'secondary', 'tertiary'].includes(process.env.NODE_ROLE));
 
 if (IS_SECONDARY) {
     console.log('[BOOT] Running as SECONDARY node — skipping heavy managers to save memory.');
@@ -336,7 +336,7 @@ async function startStandbyMonitor() {
     console.log(`[FAILOVER] Running as STANDBY node (${nodeFailover.NODE_NAME}, configured role: ${nodeFailover.NODE_ROLE}). Watching for another active node...`);
     setInterval(async () => {
         try {
-            const other = await nodeFailover.getOtherActiveNode(nodeFailover.NODE_NAME);
+            const other = await nodeFailover.getOtherActiveNode(nodeFailover.NODE_NAME, nodeFailover.NODE_ROLE);
 
             if (!standbyTookOver && !other) {
                 console.warn('[FAILOVER] No other active node detected. Taking over as the active node.');
@@ -422,7 +422,7 @@ process.on('uncaughtException', (error) => {
             nodeFailover.refreshLease(nodeFailover.NODE_NAME, nodeFailover.NODE_ROLE)
                 .then(stillHaveLease => {
                     if (!stillHaveLease) {
-                        console.warn('[FAILOVER] TOKEN_INVALID but lease is gone — session was stolen by sn1. Exiting cleanly.');
+                        console.warn('[FAILOVER] TOKEN_INVALID but lease is gone — session was stolen by a higher-priority node. Exiting cleanly.');
                         global.botActive = false;
                         nodeFailover.stopHeartbeatLoop();
                         try { client.destroy(); } catch (_) {}
