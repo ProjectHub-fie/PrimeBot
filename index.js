@@ -248,6 +248,32 @@ client.on('guildDelete', (guild) => {
 // Make client globally available for the website
 global.client = client;
 
+// ── Shard-disconnect guard ────────────────────────────────────────────────
+// When sn1 comes back and calls client.login() it kicks sn2's WebSocket
+// (same token → Discord closes sn2 with code 4000).  discord.js treats 4000
+// as recoverable and auto-reconnects, which starts a battle: each login kicks
+// the other, until Discord sends sn2 a 4004 (auth-failed) that triggers the
+// TOKEN_INVALID crash handler below.  We short-circuit that by checking the
+// DB lease the moment sn2's shard disconnects; if we no longer hold the lease
+// sn1 has taken over and we exit cleanly instead of entering the reconnect loop.
+client.on('shardDisconnect', async (closeEvent, shardId) => {
+    if (!failoverEnabled || !global.botActive) return;
+    try {
+        const stillHaveLease = await nodeFailover.refreshLease(nodeFailover.NODE_NAME, nodeFailover.NODE_ROLE);
+        if (!stillHaveLease) {
+            console.warn(`[FAILOVER] Shard ${shardId} disconnected (code ${closeEvent?.code}) and lease is gone — sn1 has taken over. Stepping down cleanly.`);
+            global.botActive = false;
+            nodeFailover.stopHeartbeatLoop();
+            await nodeFailover.markInactive(nodeFailover.NODE_ROLE).catch(() => {});
+            await nodeFailover.releaseLease(nodeFailover.NODE_NAME).catch(() => {});
+            try { client.destroy(); } catch (_) {}
+            setTimeout(() => process.exit(0), 500);
+        }
+    } catch (err) {
+        console.error('[FAILOVER] shardDisconnect lease-check failed:', err.message);
+    }
+});
+
 // Two-host failover (panel.visionhost.com = primary, wispbyte.com = secondary).
 // Controlled via NODE_ROLE env var on each host. By default this is now disabled
 // so regular hosts can connect normally; enable it explicitly with BOT_FAILOVER_ENABLED=true.
@@ -318,9 +344,12 @@ async function startStandbyMonitor() {
                 await connectBot();
             } else if (standbyTookOver && other) {
                 console.log(`[FAILOVER] Another node (${other.nodeName}) is back online. Stepping this node back down.`);
+                standbyTookOver = false; // prevent re-entry if exit is delayed
                 global.botActive = false;
                 nodeFailover.stopHeartbeatLoop();
-                await nodeFailover.markInactive(nodeFailover.NODE_ROLE);
+                await nodeFailover.markInactive(nodeFailover.NODE_ROLE).catch(() => {});
+                await nodeFailover.releaseLease(nodeFailover.NODE_NAME).catch(() => {});
+                try { client.destroy(); } catch (_) {} // close Discord WS before exit
                 process.exit(0);
             }
         } catch (error) {
@@ -384,6 +413,31 @@ process.on('uncaughtException', (error) => {
     } else if (error.message && error.message.includes('getaddrinfo')) {
         console.log('DNS resolution error occurred, but the bot will continue running');
     } else if (error.code === 'TOKEN_INVALID') {
+        // Before crashing, check whether sn1 stole our lease.  When sn1 logs
+        // in with the same token Discord eventually sends sn2 a 4004 close
+        // which discord.js surfaces as TOKEN_INVALID — but the token itself is
+        // fine; it is just our session that was displaced.  In that case we
+        // exit cleanly (code 0) instead of marking the whole process as crashed.
+        if (failoverEnabled) {
+            nodeFailover.refreshLease(nodeFailover.NODE_NAME, nodeFailover.NODE_ROLE)
+                .then(stillHaveLease => {
+                    if (!stillHaveLease) {
+                        console.warn('[FAILOVER] TOKEN_INVALID but lease is gone — session was stolen by sn1. Exiting cleanly.');
+                        global.botActive = false;
+                        nodeFailover.stopHeartbeatLoop();
+                        try { client.destroy(); } catch (_) {}
+                        process.exit(0);
+                    } else {
+                        console.error('Invalid token. The bot must restart with a valid token');
+                        process.exit(1);
+                    }
+                })
+                .catch(() => {
+                    console.error('Invalid token. The bot must restart with a valid token');
+                    process.exit(1);
+                });
+            return; // wait for the async lease check above
+        }
         console.error('Invalid token. The bot must restart with a valid token');
         process.exit(1);
     }
