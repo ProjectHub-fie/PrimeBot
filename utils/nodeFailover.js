@@ -23,9 +23,9 @@ const NODE_ROLE = normalizeNodeRole(process.env.NODE_ROLE);
 // random container hostnames that change between restarts, which causes the
 // DB to treat the same physical host as a brand-new node every time it starts.
 const NODE_NAME = process.env.NODE_NAME || (
-    NODE_ROLE === 'sn2' ?  'NU3049'      :
-    NODE_ROLE === 'sn3' ?   'NUKN09 '         :
-'NR0008'
+    NODE_ROLE === 'sn2' ? 'NU3049' :
+    NODE_ROLE === 'sn3' ? 'NUKN09' :
+                          'NR0008'
 );
 
 const HEARTBEAT_INTERVAL_MS = 15000;
