@@ -194,7 +194,7 @@ async function acquireLease(role, nodeName) {
         const myPriority    = ROLE_PRIORITY[role]            ?? 99;
         const holderPriority = ROLE_PRIORITY[row.owner_role] ?? 99;
 
-        // Higher-priority node always steals the lease unconditionally.
+        // Higher-priority node always reclaims the lease unconditionally.
         // sn1 > sn2 > sn3.  This makes "set NODE_ROLE=sn1 and restart" the
         // reliable way to promote a host without manual DB edits.
         if (myPriority < holderPriority) {
@@ -203,8 +203,15 @@ async function acquireLease(role, nodeName) {
                 SET owner_node_name = ${nodeName}, owner_role = ${role}, acquired_at = NOW(), last_seen = NOW()
                 WHERE id = 1
             `);
-            console.warn(`[FAILOVER] ${role} forced takeover from ${row.owner_node_name} (role=${row.owner_role}, age=${Math.round(ageMs / 1000)}s)`);
-            return { acquired: true, ownerNodeName: nodeName, ownerRole: role, stolen: true };
+            // Distinguish a normal "I was offline, lower-priority covered, now I'm back"
+            // reclaim from a genuine dual-active conflict where the other node is still fresh.
+            const wasCovering = ageMs < FAILOVER_THRESHOLD_MS;
+            if (wasCovering) {
+                console.log(`[FAILOVER] ${role} returning — reclaiming lease from ${row.owner_node_name} (role=${row.owner_role}) which was covering while offline (lease age=${Math.round(ageMs / 1000)}s). It will step down shortly.`);
+            } else {
+                console.warn(`[FAILOVER] ${role} reclaiming stale lease from ${row.owner_node_name} (role=${row.owner_role}, lease age=${Math.round(ageMs / 1000)}s)`);
+            }
+            return { acquired: true, ownerNodeName: nodeName, ownerRole: role, stolen: true, wasCovering };
         }
 
         // Lower-priority node (or equal) only takes over when the lease is stale.

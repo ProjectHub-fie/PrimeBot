@@ -382,7 +382,11 @@ async function startWithFailoverCheck() {
             return;
         }
         if (lease.stolen) {
-            console.warn(`[FAILOVER] Reclaimed the active-node lease from ${lease.ownerNodeName}.`);
+            if (lease.wasCovering) {
+                console.log(`[FAILOVER] ${nodeFailover.NODE_ROLE} is back online. ${lease.ownerNodeName} was covering and will step down shortly.`);
+            } else {
+                console.warn(`[FAILOVER] Reclaimed stale lease from ${lease.ownerNodeName}.`);
+            }
         }
     } catch (error) {
         console.error('[FAILOVER] Startup check failed, proceeding to connect:', error.message);
