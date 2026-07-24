@@ -248,6 +248,24 @@ async function refreshLease(nodeName, role) {
     }
 }
 
+async function getLease() {
+    try {
+        await ensureLeaseTable();
+        const result = await db.execute(sql`
+            SELECT owner_node_name, owner_role,
+                   EXTRACT(EPOCH FROM (NOW() - last_seen)) * 1000 AS age_ms
+            FROM bot_failover_lock
+            WHERE id = 1
+        `);
+        const row = (result.rows || result)[0];
+        if (!row) return null;
+        return { ownerNodeName: row.owner_node_name, ownerRole: row.owner_role, ageMs: Number(row.age_ms) };
+    } catch (err) {
+        console.error('[FAILOVER] getLease failed:', err.message);
+        return null;
+    }
+}
+
 async function releaseLease(nodeName) {
     try {
         await ensureLeaseTable();
@@ -272,6 +290,7 @@ module.exports = {
     getStatus,
     getPrimaryAgeMs,
     getOtherActiveNode,
+    getLease,
     startHeartbeatLoop,
     stopHeartbeatLoop,
     markInactive,

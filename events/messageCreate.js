@@ -2877,27 +2877,33 @@ module.exports = {
                             return barString;
                         };
                         
-                        // Fetch all host heartbeat statuses from DB
+                        // Fetch all host heartbeat statuses + active lease from DB
                         let sn1HostValue = '⚪ Never reported';
                         let sn2HostValue = '⚪ Never reported';
                         let sn3HostValue = '⚪ Never reported';
                         try {
-                            const [sn1Status, sn2Status, sn3Status] = await Promise.all([
+                            const [sn1Status, sn2Status, sn3Status, lease] = await Promise.all([
                                 nodeFailover.getStatus('sn1'),
                                 nodeFailover.getStatus('sn2'),
-                                nodeFailover.getStatus('sn3')
+                                nodeFailover.getStatus('sn3'),
+                                nodeFailover.getLease()
                             ]);
-                            const describeHost = (status) => {
+                            // Use the lease as the single source of truth for who is actively serving.
+                            // A node with active=true but no lease is stepping down / was covering.
+                            const describeHost = (role, status) => {
                                 if (!status) return '⚪ Never reported';
                                 const ageSec = Math.round(Number(status.age_ms) / 1000);
                                 const nodeLine = `Node: ${status.node_name}`;
-                                if (!status.active) return `🟠 Standby\n${nodeLine}`;
-                                if (ageSec > nodeFailover.FAILOVER_THRESHOLD_MS / 1000) return `🔴 Stale (${ageSec}s ago)\n${nodeLine}`;
-                                return `🟢 Active (${ageSec}s ago)\n${nodeLine}`;
+                                const isLeaseHolder = lease && lease.ownerRole === role;
+                                if (isLeaseHolder) {
+                                    if (ageSec > nodeFailover.FAILOVER_THRESHOLD_MS / 1000) return `🔴 Stale (${ageSec}s ago)\n${nodeLine}`;
+                                    return `🟢 Active (${ageSec}s ago)\n${nodeLine}`;
+                                }
+                                return `🟠 Standby\n${nodeLine}`;
                             };
-                            sn1HostValue = describeHost(sn1Status);
-                            sn2HostValue = describeHost(sn2Status);
-                            sn3HostValue = describeHost(sn3Status);
+                            sn1HostValue = describeHost('sn1', sn1Status);
+                            sn2HostValue = describeHost('sn2', sn2Status);
+                            sn3HostValue = describeHost('sn3', sn3Status);
                         } catch (_) {}
 
                         const pingEmbed = new EmbedBuilder()
@@ -3648,24 +3654,35 @@ module.exports = {
                     // Shard/failover node info (sn1 <-> sn2 <-> sn3)
                     let shardNodeValue;
                     try {
-                        const [primaryStatus, secondaryStatus, tertiaryStatus] = await Promise.all([
+                        const [primaryStatus, secondaryStatus, tertiaryStatus, lease] = await Promise.all([
                             nodeFailover.getStatus('sn1'),
                             nodeFailover.getStatus('sn2'),
-                            nodeFailover.getStatus('sn3')
+                            nodeFailover.getStatus('sn3'),
+                            nodeFailover.getLease()
                         ]);
 
-                        const describe = (label, status) => {
-                            if (!status) return `**${label}:** Never reported`;
+                        // Use the lease as the single source of truth for who is actively serving.
+                        const describe = (role, label, status) => {
+                            if (!status) return `**${label}:** ⚪ Never reported`;
                             const ageSec = Math.round(Number(status.age_ms) / 1000);
-                            const state = status.active ? (ageSec > nodeFailover.FAILOVER_THRESHOLD_MS / 1000 ? '🔴 Stale' : '🟢 Active') : '🟠 Standby';
-                            return `**${label}:** ${state} (${ageSec}s ago)`;
+                            const isLeaseHolder = lease && lease.ownerRole === role;
+                            if (isLeaseHolder) {
+                                const state = ageSec > nodeFailover.FAILOVER_THRESHOLD_MS / 1000 ? '🔴 Stale' : '🟢 Active';
+                                return `**${label}:** ${state} (${ageSec}s ago)`;
+                            }
+                            return `**${label}:** 🟠 Standby`;
                         };
+
+                        const leaseInfo = lease
+                            ? `${lease.ownerRole} — ${lease.ownerNodeName}`
+                            : '⚠️ No lease holder';
 
                         shardNodeValue =
                             `**This Node:** ${nodeFailover.NODE_ROLE}\n` +
-                            `${describe('Primary (sn1)', primaryStatus)}\n` +
-                            `${describe('Secondary (sn2)', secondaryStatus)}\n` +
-                            `${describe('Tertiary (sn3)', tertiaryStatus)}\n` +
+                            `**Lease Holder:** ${leaseInfo}\n` +
+                            `${describe('sn1', 'Primary (sn1)', primaryStatus)}\n` +
+                            `${describe('sn2', 'Secondary (sn2)', secondaryStatus)}\n` +
+                            `${describe('sn3', 'Tertiary (sn3)', tertiaryStatus)}\n` +
                             `**Failover Threshold:** ${nodeFailover.FAILOVER_THRESHOLD_MS / 1000}s`;
                     } catch (err) {
                         shardNodeValue = `⚠️ Could not read node status: ${err.message}`;
@@ -4229,27 +4246,33 @@ async function processCommand(message, client, commandName, args, prefix) {
                     color = config.colors.warning;
                 }
                 
-                // Fetch all host heartbeat statuses from DB
+                // Fetch all host heartbeat statuses + active lease from DB
                 let sn1HostVal = '⚪ Never reported';
                 let sn2HostVal = '⚪ Never reported';
                 let sn3HostVal = '⚪ Never reported';
                 try {
-                    const [sn1Status, sn2Status, sn3Status] = await Promise.all([
+                    const [sn1Status, sn2Status, sn3Status, lease] = await Promise.all([
                         nodeFailover.getStatus('sn1'),
                         nodeFailover.getStatus('sn2'),
-                        nodeFailover.getStatus('sn3')
+                        nodeFailover.getStatus('sn3'),
+                        nodeFailover.getLease()
                     ]);
-                    const describeHost = (status) => {
+                    // Use the lease as the single source of truth for who is actively serving.
+                    // A node with active=true but no lease is stepping down / was covering.
+                    const describeHost = (role, status) => {
                         if (!status) return '⚪ Never reported';
                         const ageSec = Math.round(Number(status.age_ms) / 1000);
                         const nodeLine = `Node: ${status.node_name}`;
-                        if (!status.active) return `🟠 Standby\n${nodeLine}`;
-                        if (ageSec > nodeFailover.FAILOVER_THRESHOLD_MS / 1000) return `🔴 Stale (${ageSec}s ago)\n${nodeLine}`;
-                        return `🟢 Active (${ageSec}s ago)\n${nodeLine}`;
+                        const isLeaseHolder = lease && lease.ownerRole === role;
+                        if (isLeaseHolder) {
+                            if (ageSec > nodeFailover.FAILOVER_THRESHOLD_MS / 1000) return `🔴 Stale (${ageSec}s ago)\n${nodeLine}`;
+                            return `🟢 Active (${ageSec}s ago)\n${nodeLine}`;
+                        }
+                        return `🟠 Standby\n${nodeLine}`;
                     };
-                    sn1HostVal = describeHost(sn1Status);
-                    sn2HostVal = describeHost(sn2Status);
-                    sn3HostVal = describeHost(sn3Status);
+                    sn1HostVal = describeHost('sn1', sn1Status);
+                    sn2HostVal = describeHost('sn2', sn2Status);
+                    sn3HostVal = describeHost('sn3', sn3Status);
                 } catch (_) {}
 
                 const pingEmbed = new EmbedBuilder()
