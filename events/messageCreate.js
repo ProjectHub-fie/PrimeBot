@@ -2817,8 +2817,8 @@ module.exports = {
                     try {
                         const loadingEmbed = new EmbedBuilder()
                             .setColor(config.colors.primary)
-                            .setTitle("📡 Ping Check")
-                            .setDescription("Measuring latency and database connectivity...");
+                            .setTitle('📡 Measuring latency…')
+                            .setDescription('> Pinging Discord gateway and database…');
                             
                         const sentMessage = await message.channel.send({ embeds: [loadingEmbed] });
                         const ping = sentMessage.createdTimestamp - message.createdTimestamp;
@@ -2829,58 +2829,36 @@ module.exports = {
                         let dbStatus = '⛔ Offline';
                         try {
                             const dbStartTime = Date.now();
-                            // Simple database ping using raw query
                             if (client.livePollManager && client.livePollManager.drizzleDb) {
-                                // Use raw SQL ping instead of schema-dependent query
                                 await client.livePollManager.drizzleDb.execute('SELECT 1 as ping');
                                 dbPing = `${Date.now() - dbStartTime}ms`;
-                                dbStatus = '✅ Connected';
+                                dbStatus = '✅ Online';
                             } else if (client.db) {
-                                // Fallback to client.db with raw query
                                 await client.db.execute('SELECT 1 as ping');
                                 dbPing = `${Date.now() - dbStartTime}ms`;
-                                dbStatus = '✅ Connected';
+                                dbStatus = '✅ Online';
                             } else {
-                                dbStatus = '⚠️ Not Initialized';
-                                dbPing = 'N/A';
+                                dbStatus = '⚠️ Not init';
                             }
                         } catch (dbError) {
-                            console.error('Database ping failed:', dbError.message);
                             dbStatus = '⛔ Error';
                             dbPing = 'Failed';
                         }
                         
-                        // Determine color based on ping
-                        let color = config.colors.success; // Good ping (< 200ms)
-                        if (ping > 500) {
-                            color = config.colors.error; // Poor ping (> 500ms)
-                        } else if (ping > 200) {
-                            color = config.colors.warning; // Medium ping (> 200ms)
-                        }
-                        
-                        // Create a visual ping bar
-                        const createPingBar = (latency) => {
-                            if (typeof latency !== 'number') return '░░░░░░░░░░';
-                            
-                            const maxBars = 10;
-                            const bars = Math.min(Math.ceil(latency / 100), maxBars);
-                            
-                            let barString = '';
-                            for (let i = 0; i < maxBars; i++) {
-                                if (i < bars) {
-                                    barString += '█'; // Full block for filled part
-                                } else {
-                                    barString += '░'; // Light block for empty part
-                                }
-                            }
-                            
-                            return barString;
+                        // Colour by overall health
+                        let color = config.colors.success;
+                        if (ping > 500) color = config.colors.error;
+                        else if (ping > 200) color = config.colors.warning;
+
+                        // Visual latency bar (10 segments, 1 per 60ms)
+                        const makeBar = (ms) => {
+                            if (typeof ms !== 'number') return '`░░░░░░░░░░`';
+                            const fill = Math.min(Math.ceil(ms / 60), 10);
+                            return '`' + '█'.repeat(fill) + '░'.repeat(10 - fill) + '`';
                         };
-                        
-                        // Fetch all host heartbeat statuses + active lease from DB
-                        let sn1HostValue = '⚪ Never reported';
-                        let sn2HostValue = '⚪ Never reported';
-                        let sn3HostValue = '⚪ Never reported';
+
+                        // Fetch all node statuses + lease in parallel
+                        let nodesValue = '⚪ Unavailable';
                         try {
                             const [sn1Status, sn2Status, sn3Status, lease] = await Promise.all([
                                 nodeFailover.getStatus('sn1'),
@@ -2888,58 +2866,51 @@ module.exports = {
                                 nodeFailover.getStatus('sn3'),
                                 nodeFailover.getLease()
                             ]);
-                            // Use the lease as the single source of truth for who is actively serving.
-                            // A node with active=true but no lease is stepping down / was covering.
-                            const describeHost = (role, status) => {
-                                if (!status) return '⚪ Never reported';
+                            const nodeRow = (role, status) => {
+                                if (!status) return `⚪ **${role}** — never reported`;
                                 const ageSec = Math.round(Number(status.age_ms) / 1000);
-                                const nodeLine = `Node: ${status.node_name}`;
-                                const isLeaseHolder = lease && lease.ownerRole === role;
-                                if (isLeaseHolder) {
-                                    if (ageSec > nodeFailover.FAILOVER_THRESHOLD_MS / 1000) return `🔴 Stale (${ageSec}s ago)\n${nodeLine}`;
-                                    return `🟢 Active (${ageSec}s ago)\n${nodeLine}`;
+                                const isHolder = lease && lease.ownerRole === role;
+                                if (isHolder) {
+                                    const icon = ageSec > nodeFailover.FAILOVER_THRESHOLD_MS / 1000 ? '🔴' : '🟢';
+                                    return `${icon} **${role}** \`${status.node_name}\` — Active, ${ageSec}s ago 🔑`;
                                 }
-                                return `🟠 Standby\n${nodeLine}`;
+                                return `🟠 **${role}** \`${status.node_name}\` — Standby`;
                             };
-                            sn1HostValue = describeHost('sn1', sn1Status);
-                            sn2HostValue = describeHost('sn2', sn2Status);
-                            sn3HostValue = describeHost('sn3', sn3Status);
+                            nodesValue = [
+                                nodeRow('sn1', sn1Status),
+                                nodeRow('sn2', sn2Status),
+                                nodeRow('sn3', sn3Status),
+                            ].join('\n');
                         } catch (_) {}
+
+                        const overallStatus = ping <= 200
+                            ? '🟢 All systems operational'
+                            : ping <= 500 ? '🟡 Moderate latency' : '🔴 High latency detected';
 
                         const pingEmbed = new EmbedBuilder()
                             .setColor(color)
-                            .setTitle("📡 Ping Results")
-                            .setDescription(`${ping <= 200 ? '✅' : ping <= 500 ? '⚠️' : '⛔'} Bot Status: ${ping <= 200 ? 'Excellent' : ping <= 500 ? 'Good' : 'Slow'}`)
+                            .setTitle('📡  Connection Status')
+                            .setDescription(`${overallStatus}\n\u200b`)
                             .addFields(
-                                { 
-                                    name: '🤖 Bot Latency', 
-                                    value: `${ping}ms\n${createPingBar(ping)}`,
-                                    inline: true 
-                                },
-                                { 
-                                    name: '📶 API Latency', 
-                                    value: `${apiPing}ms\n${createPingBar(apiPing)}`,
-                                    inline: true 
-                                },
-                                { 
-                                    name: '🗄️ Database', 
-                                    value: `${dbStatus}\n${dbPing}`,
-                                    inline: true 
-                                },
                                 {
-                                    name: '🖥️ sn1',
-                                    value: sn1HostValue,
+                                    name: '⚡ Bot Latency',
+                                    value: `**${ping}ms**\n${makeBar(ping)}`,
                                     inline: true
                                 },
                                 {
-                                    name: '🖥️ sn2',
-                                    value: sn2HostValue,
+                                    name: '🔌 Gateway',
+                                    value: `**${apiPing}ms**\n${makeBar(apiPing)}`,
                                     inline: true
                                 },
                                 {
-                                    name: '🖥️ sn3',
-                                    value: sn3HostValue,
+                                    name: '🗄️ Database',
+                                    value: `${dbStatus}\n**${dbPing}**`,
                                     inline: true
+                                },
+                                {
+                                    name: '🖥️ Failover Nodes',
+                                    value: nodesValue,
+                                    inline: false
                                 }
                             )
                             .setFooter({ 
@@ -3592,128 +3563,83 @@ module.exports = {
                 case "statistics":
                     const uptime = process.uptime();
                     const uptimeString = formatUptime(uptime);
-                    
-                    // Get memory usage
                     const memoryUsage = process.memoryUsage();
-                    const memoryUsed = (memoryUsage.heapUsed / 1024 / 1024).toFixed(2);
-                    const memoryTotal = (memoryUsage.heapTotal / 1024 / 1024).toFixed(2);
-                    
-                    // Calculate total users across all guilds
-                    const totalUsers = client.guilds.cache.reduce((acc, guild) => acc + guild.memberCount, 0);
-                    
-                    // Calculate total channels across all guilds
+                    const heapUsedMB  = (memoryUsage.heapUsed  / 1024 / 1024).toFixed(1);
+                    const heapTotalMB = (memoryUsage.heapTotal / 1024 / 1024).toFixed(1);
+                    const rssMB       = (memoryUsage.rss       / 1024 / 1024).toFixed(1);
+                    const extMB       = (memoryUsage.external  / 1024 / 1024).toFixed(1);
+                    const totalUsers  = client.guilds.cache.reduce((a, g) => a + g.memberCount, 0);
                     const totalChannels = client.channels.cache.size;
-                    
-                    const prefixStatsEmbed = new EmbedBuilder()
-                        .setColor(config.colors.primary)
-                        .setTitle('📊 Bot Statistics & Information')
-                        .setDescription(`I'm **${client.user.username}**, your personal digital assistant (PDA)\nComprehensive statistics and performance metrics for the bot.`)
-                        .setThumbnail(client.user.displayAvatarURL({ dynamic: true }))
-                        .addFields(
-                            {
-                                name: '🤖 Bot Information',
-                                value: `**Name:** ${client.user.username}\n**ID:** ${client.user.id}\n**Version:** ${config.version}\n**Ping:** ${client.ws.ping}ms`,
-                                inline: true
-                            },
-                            {
-                                name: '⏱️ Runtime Statistics',
-                                value: `**Uptime:** ${uptimeString}\n**Memory Usage:** ${memoryUsed}MB / ${memoryTotal}MB\n**Node.js:** ${process.version}\n**Prefix:** \`${config.prefix}\``,
-                                inline: true
-                            },
-                            {
-                                name: '🌐 Network Statistics',
-                                value: `**Servers:** ${client.guilds.cache.size.toLocaleString()}\n**Users:** ${totalUsers.toLocaleString()}\n**Channels:** ${totalChannels.toLocaleString()}\n**Commands:** ${client.commands.size}`,
-                                inline: true
-                            },
-                            {
-                                name: '📈 Memory Breakdown',
-                                value: `**RSS:** ${(memoryUsage.rss / 1024 / 1024).toFixed(1)}MB\n**Heap:** ${memoryUsed}/${memoryTotal}MB\n**External:** ${(memoryUsage.external / 1024 / 1024).toFixed(1)}MB\n**WS Ping:** ${client.ws.ping}ms`,
-                                inline: true
-                            },
-                            {
-                                name: '🔧 System Information',
-                                value: `**Platform:** ${process.platform}\n**Architecture:** ${process.arch}\n**PID:** ${process.pid}\n**Node.js:** ${process.version}`,
-                                inline: true
-                            },
-                            {
-                                name: '📊 Category Breakdown',
-                                value: `**General:** 6 commands\n**Leveling:** 9 commands\n**Games:** 4 commands\n**Moderation:** 5 commands\n**Community:** 5 commands\n**Admin:** 6 commands`,
-                                inline: true
-                            },
-                            {
-                                name: '🔗 Useful Links',
-                                value: `Use \`${config.prefix}help\` to see all available commands!\nType \`/help\` for interactive command categories.`,
-                                inline: false
-                            }
-                        )
-                        .setFooter({ 
-                            text: `Version: ${config.version} • Last Restart: ${new Date(Date.now() - uptime * 1000).toLocaleString()}` 
-                        })
-                        .setTimestamp();
 
-                    // Shard/failover node info (sn1 <-> sn2 <-> sn3)
-                    let shardNodeValue;
+                    // Node / lease block
+                    let nodesBlock = '⚪ Unavailable';
                     try {
-                        const [primaryStatus, secondaryStatus, tertiaryStatus, lease] = await Promise.all([
+                        const [sn1s, sn2s, sn3s, lease] = await Promise.all([
                             nodeFailover.getStatus('sn1'),
                             nodeFailover.getStatus('sn2'),
                             nodeFailover.getStatus('sn3'),
                             nodeFailover.getLease()
                         ]);
-
-                        // Use the lease as the single source of truth for who is actively serving.
-                        const describe = (role, label, status) => {
-                            if (!status) return `**${label}:** ⚪ Never reported`;
+                        const nodeRow = (role, status) => {
+                            if (!status) return `⚪ **${role}** — never reported`;
                             const ageSec = Math.round(Number(status.age_ms) / 1000);
-                            const isLeaseHolder = lease && lease.ownerRole === role;
-                            if (isLeaseHolder) {
-                                const state = ageSec > nodeFailover.FAILOVER_THRESHOLD_MS / 1000 ? '🔴 Stale' : '🟢 Active';
-                                return `**${label}:** ${state} (${ageSec}s ago)`;
+                            const isHolder = lease && lease.ownerRole === role;
+                            if (isHolder) {
+                                const icon = ageSec > nodeFailover.FAILOVER_THRESHOLD_MS / 1000 ? '🔴' : '🟢';
+                                return `${icon} **${role}** \`${status.node_name}\` — Active, ${ageSec}s ago 🔑`;
                             }
-                            return `**${label}:** 🟠 Standby`;
+                            return `🟠 **${role}** \`${status.node_name}\` — Standby`;
                         };
+                        const leaseLabel = lease ? `${lease.ownerRole} · \`${lease.ownerNodeName}\`` : '⚠️ none';
+                        nodesBlock =
+                            `**Lease:** ${leaseLabel}\n` +
+                            nodeRow('sn1', sn1s) + '\n' +
+                            nodeRow('sn2', sn2s) + '\n' +
+                            nodeRow('sn3', sn3s);
+                    } catch (_) {}
 
-                        const leaseInfo = lease
-                            ? `${lease.ownerRole} — ${lease.ownerNodeName}`
-                            : '⚠️ No lease holder';
+                    // DB pool line
+                    const poolLine = pool
+                        ? `${pool.totalCount} conns · ${pool.idleCount} idle · ${pool.waitingCount} waiting`
+                        : 'unavailable';
 
-                        shardNodeValue =
-                            `**This Node:** ${nodeFailover.NODE_ROLE}\n` +
-                            `**Lease Holder:** ${leaseInfo}\n` +
-                            `${describe('sn1', 'Primary (sn1)', primaryStatus)}\n` +
-                            `${describe('sn2', 'Secondary (sn2)', secondaryStatus)}\n` +
-                            `${describe('sn3', 'Tertiary (sn3)', tertiaryStatus)}\n` +
-                            `**Failover Threshold:** ${nodeFailover.FAILOVER_THRESHOLD_MS / 1000}s`;
-                    } catch (err) {
-                        shardNodeValue = `⚠️ Could not read node status: ${err.message}`;
-                    }
-                    prefixStatsEmbed.addFields({
-                        name: '🔀 Shard Node (Failover)',
-                        value: shardNodeValue,
-                        inline: false
-                    });
-
-                    // Debug information
-                    let debugValue;
-                    try {
-                        const poolInfo = pool
-                            ? `**DB Pool:** ${pool.totalCount} total / ${pool.idleCount} idle / ${pool.waitingCount} waiting`
-                            : '**DB Pool:** unavailable';
-                        debugValue =
-                            `**RSS Memory:** ${(memoryUsage.rss / 1024 / 1024).toFixed(2)}MB\n` +
-                            `**External Memory:** ${(memoryUsage.external / 1024 / 1024).toFixed(2)}MB\n` +
-                            `**Env:** ${process.env.NODE_ENV || 'development'}\n` +
-                            `${poolInfo}\n` +
-                            `**WS Status Code:** ${client.ws.status}\n` +
-                            `**Commands Loaded:** ${client.commands.size}`;
-                    } catch (err) {
-                        debugValue = `⚠️ Could not gather debug info: ${err.message}`;
-                    }
-                    prefixStatsEmbed.addFields({
-                        name: '🐞 Debug Information',
-                        value: debugValue,
-                        inline: false
-                    });
+                    const prefixStatsEmbed = new EmbedBuilder()
+                        .setColor(config.colors.primary)
+                        .setTitle(`📊  ${client.user.username} — Live Statistics`)
+                        .setDescription(
+                            `**${client.guilds.cache.size.toLocaleString()}** servers · ` +
+                            `**${totalUsers.toLocaleString()}** users · ` +
+                            `**${totalChannels.toLocaleString()}** channels · ` +
+                            `up **${uptimeString}**\n\u200b`
+                        )
+                        .setThumbnail(client.user.displayAvatarURL({ dynamic: true }))
+                        .addFields(
+                            {
+                                name: '🤖 Bot',
+                                value: `**Version:** ${config.version}\n**Prefix:** \`${config.prefix}\`\n**Commands:** ${client.commands.size}\n**WS Ping:** ${client.ws.ping}ms`,
+                                inline: true
+                            },
+                            {
+                                name: '💾 Memory',
+                                value: `**RSS:** ${rssMB}MB\n**Heap:** ${heapUsedMB}/${heapTotalMB}MB\n**External:** ${extMB}MB\n**DB Pool:** ${poolLine}`,
+                                inline: true
+                            },
+                            {
+                                name: '🔧 System',
+                                value: `**Node.js:** ${process.version}\n**Platform:** ${process.platform} ${process.arch}\n**PID:** ${process.pid}\n**Env:** ${process.env.NODE_ENV || 'development'}`,
+                                inline: true
+                            },
+                            {
+                                name: '🖥️ Failover Nodes',
+                                value: nodesBlock,
+                                inline: false
+                            }
+                        )
+                        .setFooter({
+                            text: `v${config.version} · Last restart ${new Date(Date.now() - uptime * 1000).toLocaleString()}`,
+                            iconURL: client.user.displayAvatarURL()
+                        })
+                        .setTimestamp();
 
                     message.reply({ embeds: [prefixStatsEmbed] });
                     break;
@@ -4228,28 +4154,27 @@ async function processCommand(message, client, commandName, args, prefix) {
             try {
                 const loadingEmbed = new EmbedBuilder()
                     .setColor(config.colors.primary)
-                    .setTitle("📡 Ping Check")
-                    .setDescription("Measuring latency and database connectivity...");
+                    .setTitle('📡 Measuring latency…')
+                    .setDescription('> Pinging Discord gateway and database…');
                     
                 const sentMessage = await message.channel.send({ embeds: [loadingEmbed] });
                 const ping = sentMessage.createdTimestamp - message.createdTimestamp;
                 const apiPing = Math.round(client.ws.ping);
-                
-                // Calculate total users across all guilds
-                const totalUsers = client.guilds.cache.reduce((acc, guild) => acc + guild.memberCount, 0);
-                
-                // Determine color based on ping
+
+                // Colour by overall health
                 let color = config.colors.success;
-                if (ping > 500) {
-                    color = config.colors.error;
-                } else if (ping > 200) {
-                    color = config.colors.warning;
-                }
-                
-                // Fetch all host heartbeat statuses + active lease from DB
-                let sn1HostVal = '⚪ Never reported';
-                let sn2HostVal = '⚪ Never reported';
-                let sn3HostVal = '⚪ Never reported';
+                if (ping > 500) color = config.colors.error;
+                else if (ping > 200) color = config.colors.warning;
+
+                // Visual latency bar (10 segments, 1 per 60ms)
+                const makeBar = (ms) => {
+                    if (typeof ms !== 'number') return '`░░░░░░░░░░`';
+                    const fill = Math.min(Math.ceil(ms / 60), 10);
+                    return '`' + '█'.repeat(fill) + '░'.repeat(10 - fill) + '`';
+                };
+
+                // Fetch all node statuses + lease in parallel
+                let nodesValue = '⚪ Unavailable';
                 try {
                     const [sn1Status, sn2Status, sn3Status, lease] = await Promise.all([
                         nodeFailover.getStatus('sn1'),
@@ -4257,36 +4182,36 @@ async function processCommand(message, client, commandName, args, prefix) {
                         nodeFailover.getStatus('sn3'),
                         nodeFailover.getLease()
                     ]);
-                    // Use the lease as the single source of truth for who is actively serving.
-                    // A node with active=true but no lease is stepping down / was covering.
-                    const describeHost = (role, status) => {
-                        if (!status) return '⚪ Never reported';
+                    const nodeRow = (role, status) => {
+                        if (!status) return `⚪ **${role}** — never reported`;
                         const ageSec = Math.round(Number(status.age_ms) / 1000);
-                        const nodeLine = `Node: ${status.node_name}`;
-                        const isLeaseHolder = lease && lease.ownerRole === role;
-                        if (isLeaseHolder) {
-                            if (ageSec > nodeFailover.FAILOVER_THRESHOLD_MS / 1000) return `🔴 Stale (${ageSec}s ago)\n${nodeLine}`;
-                            return `🟢 Active (${ageSec}s ago)\n${nodeLine}`;
+                        const isHolder = lease && lease.ownerRole === role;
+                        if (isHolder) {
+                            const icon = ageSec > nodeFailover.FAILOVER_THRESHOLD_MS / 1000 ? '🔴' : '🟢';
+                            return `${icon} **${role}** \`${status.node_name}\` — Active, ${ageSec}s ago 🔑`;
                         }
-                        return `🟠 Standby\n${nodeLine}`;
+                        return `🟠 **${role}** \`${status.node_name}\` — Standby`;
                     };
-                    sn1HostVal = describeHost('sn1', sn1Status);
-                    sn2HostVal = describeHost('sn2', sn2Status);
-                    sn3HostVal = describeHost('sn3', sn3Status);
+                    nodesValue = [
+                        nodeRow('sn1', sn1Status),
+                        nodeRow('sn2', sn2Status),
+                        nodeRow('sn3', sn3Status),
+                    ].join('\n');
                 } catch (_) {}
+
+                const overallStatus = ping <= 200
+                    ? '🟢 All systems operational'
+                    : ping <= 500 ? '🟡 Moderate latency' : '🔴 High latency detected';
 
                 const pingEmbed = new EmbedBuilder()
                     .setColor(color)
-                    .setTitle("📡 Ping Results")
-                    .setDescription(`${ping <= 200 ? '✅' : ping <= 500 ? '⚠️' : '⛔'} Bot Status: ${ping <= 200 ? 'Excellent' : ping <= 500 ? 'Good' : 'Slow'}`)
+                    .setTitle('📡  Connection Status')
+                    .setDescription(`${overallStatus}\n\u200b`)
                     .addFields(
-                        { name: '🤖 Bot Latency', value: `${ping}ms`, inline: true },
-                        { name: '📶 API Latency', value: `${apiPing}ms`, inline: true },
-                        { name: '🌐 Servers', value: `${client.guilds.cache.size}`, inline: true },
-                        { name: '👥 Users', value: `${totalUsers.toLocaleString()}`, inline: true },
-                        { name: '🖥️ sn1', value: sn1HostVal, inline: true },
-                        { name: '🖥️ sn2', value: sn2HostVal, inline: true },
-                        { name: '🖥️ sn3', value: sn3HostVal, inline: true }
+                        { name: '⚡ Bot Latency', value: `**${ping}ms**\n${makeBar(ping)}`, inline: true },
+                        { name: '🔌 Gateway',     value: `**${apiPing}ms**\n${makeBar(apiPing)}`, inline: true },
+                        { name: '🌐 Servers',     value: `**${client.guilds.cache.size.toLocaleString()}**\n👥 ${client.guilds.cache.reduce((a, g) => a + g.memberCount, 0).toLocaleString()} users`, inline: true },
+                        { name: '🖥️ Failover Nodes', value: nodesValue, inline: false }
                     )
                     .setFooter({ 
                         text: `Requested by ${message.author.tag}`,
