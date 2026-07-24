@@ -2891,7 +2891,7 @@ module.exports = {
                                 if (!status) return '⚪ Never reported';
                                 const ageSec = Math.round(Number(status.age_ms) / 1000);
                                 const nodeLine = `Node: ${status.node_name}`;
-                                if (!status.active) return `⚪ Standby/Down\n${nodeLine}`;
+                                if (!status.active) return `🟠 Standby\n${nodeLine}`;
                                 if (ageSec > nodeFailover.FAILOVER_THRESHOLD_MS / 1000) return `🔴 Stale (${ageSec}s ago)\n${nodeLine}`;
                                 return `🟢 Active (${ageSec}s ago)\n${nodeLine}`;
                             };
@@ -3616,17 +3616,17 @@ module.exports = {
                             },
                             {
                                 name: '🌐 Network Statistics',
-                                value: `**Servers:** ${client.guilds.cache.size.toLocaleString()}\n**Users:** ${totalUsers.toLocaleString()}\n**Channels:** ${totalChannels.toLocaleString()}\n**Commands:** 26`,
+                                value: `**Servers:** ${client.guilds.cache.size.toLocaleString()}\n**Users:** ${totalUsers.toLocaleString()}\n**Channels:** ${totalChannels.toLocaleString()}\n**Commands:** ${client.commands.size}`,
                                 inline: true
                             },
                             {
-                                name: '📈 Performance Metrics',
-                                value: `**CPU Usage:** ${(process.cpuUsage().user / 1000000).toFixed(2)}%\n**Event Loop Lag:** <1ms\n**Cache Hit Rate:** 99.2%\n**Error Rate:** <0.1%`,
+                                name: '📈 Memory Breakdown',
+                                value: `**RSS:** ${(memoryUsage.rss / 1024 / 1024).toFixed(1)}MB\n**Heap:** ${memoryUsed}/${memoryTotal}MB\n**External:** ${(memoryUsage.external / 1024 / 1024).toFixed(1)}MB\n**WS Ping:** ${client.ws.ping}ms`,
                                 inline: true
                             },
                             {
                                 name: '🔧 System Information',
-                                value: `**Platform:** ${process.platform}\n**Architecture:** ${process.arch}\n**PID:** ${process.pid}\n**Discord.js:** v14.14.1`,
+                                value: `**Platform:** ${process.platform}\n**Architecture:** ${process.arch}\n**PID:** ${process.pid}\n**Node.js:** ${process.version}`,
                                 inline: true
                             },
                             {
