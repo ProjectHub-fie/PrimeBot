@@ -2,7 +2,7 @@
  * Database-based Leveling and Achievement Badge Manager for Discord bot
  * 
  * This module manages user levels, XP, and achievement badges
- * using MySQL database storage instead of JSON files.
+ * using PostgreSQL database storage instead of JSON files.
  */
 
 const { EmbedBuilder } = require('discord.js');
