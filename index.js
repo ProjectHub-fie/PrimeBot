@@ -249,46 +249,101 @@ client.on('guildDelete', (guild) => {
 global.client = client;
 
 // ── Shard-disconnect guard ────────────────────────────────────────────────
-// When sn1 comes back and calls client.login() it kicks sn2's WebSocket
-// (same token → Discord closes sn2 with code 4000).  discord.js treats 4000
-// as recoverable and auto-reconnects, which starts a battle: each login kicks
-// the other, until Discord sends sn2 a 4004 (auth-failed) that triggers the
-// TOKEN_INVALID crash handler below.  We short-circuit that by checking the
-// DB lease the moment sn2's shard disconnects; if we no longer hold the lease
-// sn1 has taken over and we exit cleanly instead of entering the reconnect loop.
+// When a higher-priority node (e.g. sn1) calls client.login() it kicks the
+// lower-priority node's WebSocket (same token → Discord closes with code 4000).
+// discord.js treats 4000 as recoverable and auto-reconnects, which would start
+// a battle. We short-circuit that: the moment a shard disconnects we check the
+// DB lease; if we no longer hold it we call stepDown() before discord.js can
+// reconnect us and create double-interaction.
 client.on('shardDisconnect', async (closeEvent, shardId) => {
     if (!failoverEnabled || !global.botActive) return;
+    // Pause further interaction handling immediately while we verify the lease.
+    // Setting botActive=false stops the TOKEN_INVALID handler from treating
+    // a later 4004 as a real token error; we restore it if the lease is still ours.
+    global.botActive = false;
     try {
         const stillHaveLease = await nodeFailover.refreshLease(nodeFailover.NODE_NAME, nodeFailover.NODE_ROLE);
         if (!stillHaveLease) {
-            console.warn(`[FAILOVER] Shard ${shardId} disconnected (code ${closeEvent?.code}) and lease is gone — sn1 has taken over. Stepping down cleanly.`);
-            global.botActive = false;
-            nodeFailover.stopHeartbeatLoop();
-            await nodeFailover.markInactive(nodeFailover.NODE_ROLE).catch(() => {});
-            await nodeFailover.releaseLease(nodeFailover.NODE_NAME).catch(() => {});
-            try { client.destroy(); } catch (_) {}
-            setTimeout(() => process.exit(0), 500);
+            console.warn(`[FAILOVER] Shard ${shardId} disconnected (code ${closeEvent?.code}) and lease is gone — higher-priority node has taken over. Stepping down.`);
+            await stepDown(`shard ${shardId} disconnect + lease gone`);
+        } else {
+            // False alarm (transient network drop) — restore active flag so
+            // discord.js can reconnect normally.
+            global.botActive = true;
         }
     } catch (err) {
         console.error('[FAILOVER] shardDisconnect lease-check failed:', err.message);
+        global.botActive = true; // restore on DB error to avoid silent shutdown
     }
 });
 
-// Two-host failover (panel.visionhost.com = primary, wispbyte.com = secondary).
+// Three-host failover (sn1 = primary, sn2 = secondary, sn3 = tertiary).
 // Controlled via NODE_ROLE env var on each host. By default this is now disabled
 // so regular hosts can connect normally; enable it explicitly with BOT_FAILOVER_ENABLED=true.
 const nodeFailover = require('./utils/nodeFailover');
 const failoverEnabled = process.env.BOT_FAILOVER_ENABLED !== 'false';
 
-// Function to handle reconnection
-async function connectBot() {
+// Webhook logger — sends shard-node events to Discord channel.
+// Reads FAILOVER_WEBHOOK_URL from env; silently no-ops when not set.
+const wh = require('./utils/webhookLogger');
+
+// ── Consolidated step-down ─────────────────────────────────────────────────
+// Called from any path that determines this node should yield to another.
+// Guards against double-invocation with `steppingDown`.
+let steppingDown = false;
+async function stepDown(reason) {
+    if (steppingDown) return;
+    steppingDown = true;
+    console.warn(`[FAILOVER] Stepping down (${reason}). Releasing lease and disconnecting.`);
+    wh.send({
+        title: 'Shard Node Offline',
+        description: 'This node is stepping down and releasing the active lease.',
+        type: 'offline',
+        reason,
+    });
+    global.botActive = false;
+    nodeFailover.stopHeartbeatLoop();
+    await nodeFailover.markInactive(nodeFailover.NODE_ROLE).catch(() => {});
+    await nodeFailover.releaseLease(nodeFailover.NODE_NAME).catch(() => {});
+    try { client.destroy(); } catch (_) {}
+    setTimeout(() => process.exit(0), 500);
+}
+
+// ── Connect bot ────────────────────────────────────────────────────────────
+// leaseAlreadyAcquired: true when startWithFailoverCheck already confirmed the
+// lease before calling us, so we skip the pre-login check (but still confirm
+// after login to catch any race between our acquire and our login).
+let connectingBot = false;
+async function connectBot(leaseAlreadyAcquired = false) {
+    if (connectingBot) {
+        console.warn('[FAILOVER] connectBot already in progress — skipping duplicate call.');
+        return;
+    }
+    connectingBot = true;
+
     try {
+        // ── Step 1: acquire the lease BEFORE logging in ────────────────────
+        // This is the key guard against dual-active: we only call client.login()
+        // once we hold the DB lease. A node that cannot get the lease never
+        // touches Discord, so there is no window where two nodes both handle events.
+        if (failoverEnabled && !leaseAlreadyAcquired) {
+            const lease = await nodeFailover.acquireLease(nodeFailover.NODE_ROLE, nodeFailover.NODE_NAME);
+            if (!lease.acquired) {
+                console.warn(`[FAILOVER] Could not acquire lease before connecting — ${lease.ownerNodeName} is still active. Returning to standby.`);
+                connectingBot = false;
+                standbyTookOver = false; // allow the monitor to retry next tick
+                return;
+            }
+            if (lease.stolen) {
+                console.log(`[FAILOVER] Acquired lease from ${lease.ownerNodeName} (role=${nodeFailover.NODE_ROLE}); connecting now.`);
+            }
+        }
+
         const resolvedToken = resolveDiscordToken();
         if (!resolvedToken) {
             console.error('❌ No Discord token found. Cannot connect to Discord.');
             process.exit(1);
         }
-
         process.env.DISCORD_TOKEN = resolvedToken;
         await initializeManagers();
         console.log('Attempting to connect to Discord...');
@@ -297,80 +352,120 @@ async function connectBot() {
         debug('Bot successfully logged in');
 
         if (failoverEnabled) {
-            const lease = await nodeFailover.acquireLease(nodeFailover.NODE_ROLE, nodeFailover.NODE_NAME);
-            if (!lease.acquired) {
-                console.warn(`[FAILOVER] Could not acquire active-node lease; another host is still active (${lease.ownerNodeName}).`);
-                nodeFailover.stopHeartbeatLoop();
+            // ── Step 2: confirm we still hold the lease after login ────────
+            // Another higher-priority node might have stolen it during the login
+            // round-trip (e.g. sn1 arrived while sn2/sn3 was mid-login).
+            const confirmed = await nodeFailover.refreshLease(nodeFailover.NODE_NAME, nodeFailover.NODE_ROLE);
+            if (!confirmed) {
+                console.warn('[FAILOVER] Lost lease during login — a higher-priority node took over. Stepping down immediately.');
+                connectingBot = false;
+                await stepDown('lease lost during login');
                 return;
             }
-            nodeFailover.startHeartbeatLoop(nodeFailover.NODE_ROLE);
-            console.log(`[FAILOVER] Host ready: role=${nodeFailover.NODE_ROLE} node=${nodeFailover.NODE_NAME} leaseOwner=${lease.ownerNodeName}`);
+            // ── Step 3: start heartbeat; step down the moment lease is stolen
+            nodeFailover.startHeartbeatLoop(
+                nodeFailover.NODE_ROLE,
+                () => stepDown('lease stolen — detected via heartbeat refresh')
+            );
+            console.log(`[FAILOVER] Host ready: role=${nodeFailover.NODE_ROLE} node=${nodeFailover.NODE_NAME}`);
+            wh.send({
+                title: 'Shard Node Online',
+                description: 'This node has acquired the active lease and is now handling Discord events.',
+                type: 'online',
+            });
         } else {
             console.log('[FAILOVER] Failover disabled; skipping heartbeat loop so this host can stay online normally.');
         }
+
         global.botActive = true;
+        steppingDown = false; // clear any stale flag from a previous cycle
     } catch (error) {
+        connectingBot = false;
         console.error('[ERROR] Failed to login to Discord:', error);
         if (error.code === 'TOKEN_INVALID' || error.message?.includes('token')) {
             console.error('❌ Invalid Discord token. Please check your DISCORD_TOKEN/BOT_TOKEN/TOKEN/CLIENT_TOKEN in secrets.');
             process.exit(1);
         }
         console.log('Attempting to reconnect in 5 seconds...');
-        setTimeout(connectBot, 5000);
+        setTimeout(() => connectBot(false), 5000);
+        return;
     }
+    connectingBot = false;
 }
 
 // Generalized standby loop. Used whenever this node detects that ANOTHER node
 // (identified by a different node_name) is already active with a fresh
-// heartbeat — regardless of which role each host is configured with. This
-// guards against duplicate replies if NODE_ROLE is ever misconfigured (e.g.
-// both hosts left unset/defaulting to "primary"): only one node will ever
-// actually call connectBot(), whichever detects no other healthy active node.
+// heartbeat. When no higher-priority node is alive this node takes over by
+// acquiring the lease BEFORE logging into Discord (prevents dual-active).
+// Once this node is active it polls more frequently so it can step back down
+// quickly when a higher-priority node returns.
 let standbyTookOver = false;
-async function startStandbyMonitor() {
+// Interval handle kept so we can swap between slow (pre-takeover) and fast
+// (post-takeover) check cadences.
+let standbyMonitorTimer = null;
+function startStandbyMonitor() {
     if (!failoverEnabled) {
         console.log('[FAILOVER] Standby monitor disabled because failover is off.');
         return;
     }
 
     console.log(`[FAILOVER] Running as STANDBY node (${nodeFailover.NODE_NAME}, configured role: ${nodeFailover.NODE_ROLE}). Watching for another active node...`);
-    setInterval(async () => {
+    wh.send({
+        title: 'Shard Node Standby',
+        description: 'This node started in standby mode. It will take over if no higher-priority node is active.',
+        type: 'standby',
+    });
+
+    async function monitorTick() {
         try {
             const other = await nodeFailover.getOtherActiveNode(nodeFailover.NODE_NAME, nodeFailover.NODE_ROLE);
 
             if (!standbyTookOver && !other) {
-                console.warn('[FAILOVER] No other active node detected. Taking over as the active node.');
+                // No higher-priority node is alive — take over.
+                // connectBot() will attempt to acquire the lease before logging
+                // in; if it succeeds it sets standbyTookOver back to true via
+                // the global.botActive path, so we set it here to block
+                // duplicate calls while connectBot() is in-flight.
                 standbyTookOver = true;
-                await connectBot();
+                console.warn('[FAILOVER] No other active node detected. Acquiring lease and taking over.');
+                await connectBot(false); // acquires lease before login
+
             } else if (standbyTookOver && other) {
-                console.log(`[FAILOVER] Another node (${other.nodeName}) is back online. Stepping this node back down.`);
-                standbyTookOver = false; // prevent re-entry if exit is delayed
-                global.botActive = false;
-                nodeFailover.stopHeartbeatLoop();
-                await nodeFailover.markInactive(nodeFailover.NODE_ROLE).catch(() => {});
-                await nodeFailover.releaseLease(nodeFailover.NODE_NAME).catch(() => {});
-                try { client.destroy(); } catch (_) {} // close Discord WS before exit
-                process.exit(0);
+                // A higher-priority node is back — step down immediately.
+                console.log(`[FAILOVER] Higher-priority node (${other.nodeName}, role=${other.role}) is back online. Stepping down.`);
+                await stepDown(`higher-priority node ${other.role} (${other.nodeName}) returned`);
             }
         } catch (error) {
             console.error('[FAILOVER] Monitor loop error:', error.message);
         }
-    }, nodeFailover.MONITOR_INTERVAL_MS);
+    }
+
+    // Use a faster cadence once this node has taken over so it can step down
+    // quickly (within ~3 s) when a higher-priority node returns — preventing
+    // the ~10 s double-interaction window that existed with a single interval.
+    const STANDBY_INTERVAL  = nodeFailover.MONITOR_INTERVAL_MS;      // 10 s — pre-takeover
+    const ACTIVE_INTERVAL   = Math.min(3000, nodeFailover.MONITOR_INTERVAL_MS); // 3 s — post-takeover
+
+    function scheduleNext() {
+        const delay = standbyTookOver ? ACTIVE_INTERVAL : STANDBY_INTERVAL;
+        standbyMonitorTimer = setTimeout(async () => {
+            await monitorTick();
+            scheduleNext();
+        }, delay);
+    }
+
+    scheduleNext();
 }
 
-// Before connecting, check whether another host is already online and
-// healthy. Behavior depends on this host's configured role:
-//   - "primary" always wins: it connects/takes over even if a "secondary" is
-//     currently active. The active secondary will notice the primary's
-//     heartbeat on its next standby check (~10s) and step itself down, so
-//     there's only a brief overlap during a deliberate handover, not a
-//     permanent duplicate.
-//   - "secondary" defers to any already-active node and only connects if
-//     nothing else is currently healthy (unchanged failover behavior).
+// Before connecting, check whether another host is already online and healthy.
+// sn1 always steals the lease (highest priority); sn2/sn3 defer to whoever
+// holds a fresh lease and enter the standby monitor instead.
+// leaseAlreadyAcquired=true is passed to connectBot() so it skips a redundant
+// second acquireLease call at the start of connectBot().
 async function startWithFailoverCheck() {
     if (!failoverEnabled) {
         console.log('[FAILOVER] Failover guard disabled; connecting directly from this host.');
-        await connectBot();
+        await connectBot(false);
         return;
     }
 
@@ -384,21 +479,34 @@ async function startWithFailoverCheck() {
         if (lease.stolen) {
             if (lease.wasCovering) {
                 console.log(`[FAILOVER] ${nodeFailover.NODE_ROLE} is back online. ${lease.ownerNodeName} was covering and will step down shortly.`);
+                wh.send({
+                    title: 'Primary Node Returning',
+                    description: 'This node is back online and reclaiming the lease from the covering node.',
+                    type: 'warning',
+                    fromNode: lease.ownerNodeName,
+                    reason: 'Covering node will step down shortly.',
+                });
             } else {
                 console.warn(`[FAILOVER] Reclaimed stale lease from ${lease.ownerNodeName}.`);
+                wh.send({
+                    title: 'Stale Lease Reclaimed',
+                    description: 'Reclaimed an expired lease. The previous holder appears to have gone silent.',
+                    type: 'warning',
+                    fromNode: lease.ownerNodeName,
+                    reason: `Lease was stale (no heartbeat for >${Math.round(nodeFailover.FAILOVER_THRESHOLD_MS / 1000)}s).`,
+                });
             }
         }
     } catch (error) {
         console.error('[FAILOVER] Startup check failed, proceeding to connect:', error.message);
     }
-    await connectBot();
+    // Pass leaseAlreadyAcquired=true so connectBot() doesn't call acquireLease
+    // a second time — the lease is already ours from the check above.
+    await connectBot(true);
 }
 
 async function gracefulShutdown() {
-    nodeFailover.stopHeartbeatLoop();
-    await nodeFailover.releaseLease(nodeFailover.NODE_NAME);
-    await nodeFailover.markInactive(nodeFailover.NODE_ROLE);
-    process.exit(0);
+    await stepDown('SIGTERM/SIGINT received');
 }
 process.on('SIGTERM', gracefulShutdown);
 process.on('SIGINT', gracefulShutdown);
@@ -417,20 +525,17 @@ process.on('uncaughtException', (error) => {
     } else if (error.message && error.message.includes('getaddrinfo')) {
         console.log('DNS resolution error occurred, but the bot will continue running');
     } else if (error.code === 'TOKEN_INVALID') {
-        // Before crashing, check whether sn1 stole our lease.  When sn1 logs
-        // in with the same token Discord eventually sends sn2 a 4004 close
-        // which discord.js surfaces as TOKEN_INVALID — but the token itself is
-        // fine; it is just our session that was displaced.  In that case we
-        // exit cleanly (code 0) instead of marking the whole process as crashed.
-        if (failoverEnabled) {
+        // When a higher-priority node logs in with the same token, Discord
+        // eventually sends this node a 4004 close which discord.js surfaces as
+        // TOKEN_INVALID — but the token itself is fine; only our session was
+        // displaced. If the lease is gone a higher-priority node took over and
+        // we exit cleanly. If we still hold the lease it is a genuine bad token.
+        if (failoverEnabled && !steppingDown) {
             nodeFailover.refreshLease(nodeFailover.NODE_NAME, nodeFailover.NODE_ROLE)
                 .then(stillHaveLease => {
                     if (!stillHaveLease) {
-                        console.warn('[FAILOVER] TOKEN_INVALID but lease is gone — session was stolen by a higher-priority node. Exiting cleanly.');
-                        global.botActive = false;
-                        nodeFailover.stopHeartbeatLoop();
-                        try { client.destroy(); } catch (_) {}
-                        process.exit(0);
+                        console.warn('[FAILOVER] TOKEN_INVALID but lease is gone — session displaced by higher-priority node. Stepping down cleanly.');
+                        stepDown('TOKEN_INVALID + lease gone');
                     } else {
                         console.error('Invalid token. The bot must restart with a valid token');
                         process.exit(1);
@@ -442,8 +547,10 @@ process.on('uncaughtException', (error) => {
                 });
             return; // wait for the async lease check above
         }
-        console.error('Invalid token. The bot must restart with a valid token');
-        process.exit(1);
+        if (!steppingDown) {
+            console.error('Invalid token. The bot must restart with a valid token');
+            process.exit(1);
+        }
     }
     // For other errors, log but don't crash
 });

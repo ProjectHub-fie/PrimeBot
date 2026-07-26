@@ -124,7 +124,7 @@ async function getOtherActiveNode(selfNodeName, selfRole) {
     return null;
 }
 
-function startHeartbeatLoop(role) {
+function startHeartbeatLoop(role, onLeaseStolen) {
     stopHeartbeatLoop();
     console.log(`[FAILOVER] Starting heartbeat loop for role=${role} node=${NODE_NAME}`);
     writeHeartbeat(role, true)
@@ -134,6 +134,12 @@ function startHeartbeatLoop(role) {
     heartbeatTimer = setInterval(() => {
         writeHeartbeat(role, true)
             .then(() => refreshLease(NODE_NAME, role))
+            .then(stillHaveLease => {
+                if (!stillHaveLease && typeof onLeaseStolen === 'function') {
+                    console.warn(`[FAILOVER] Lease no longer held for ${role} (stolen by higher-priority node). Triggering step-down.`);
+                    onLeaseStolen();
+                }
+            })
             .catch(err => console.error(`[FAILOVER] Heartbeat write failed for ${role}:`, err.message));
     }, HEARTBEAT_INTERVAL_MS);
 }
