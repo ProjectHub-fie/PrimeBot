@@ -130,7 +130,7 @@ function send({ title, description = '', type = 'info', reason, fromNode, extraF
             name:     'ShardNode Failover System',
             icon_url: 'https://cdn.discordapp.com/embed/avatars/0.png',
         },
-        title:       `${statusIcon}  ${title}`,
+        title:       title,   // caller provides the full title including any emoji
         description: description || undefined,
         color,
         fields,

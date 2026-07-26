@@ -296,7 +296,7 @@ async function stepDown(reason) {
     steppingDown = true;
     console.warn(`[FAILOVER] Stepping down (${reason}). Releasing lease and disconnecting.`);
     wh.send({
-        title: 'Shard Node Offline',
+        title: '🔴 Shard Node Offline',
         description: 'This node is stepping down and releasing the active lease.',
         type: 'offline',
         reason,
@@ -369,7 +369,7 @@ async function connectBot(leaseAlreadyAcquired = false) {
             );
             console.log(`[FAILOVER] Host ready: role=${nodeFailover.NODE_ROLE} node=${nodeFailover.NODE_NAME}`);
             wh.send({
-                title: 'Shard Node Online',
+                title: '🟢 Shard Node Online',
                 description: 'This node has acquired the active lease and is now handling Discord events.',
                 type: 'online',
             });
@@ -411,7 +411,7 @@ function startStandbyMonitor() {
 
     console.log(`[FAILOVER] Running as STANDBY node (${nodeFailover.NODE_NAME}, configured role: ${nodeFailover.NODE_ROLE}). Watching for another active node...`);
     wh.send({
-        title: 'Shard Node Standby',
+        title: '🟡 Shard Node Standby',
         description: 'This node started in standby mode. It will take over if no higher-priority node is active.',
         type: 'standby',
     });
@@ -480,7 +480,7 @@ async function startWithFailoverCheck() {
             if (lease.wasCovering) {
                 console.log(`[FAILOVER] ${nodeFailover.NODE_ROLE} is back online. ${lease.ownerNodeName} was covering and will step down shortly.`);
                 wh.send({
-                    title: 'Primary Node Returning',
+                    title: '🔁 Primary Node Returning',
                     description: 'This node is back online and reclaiming the lease from the covering node.',
                     type: 'warning',
                     fromNode: lease.ownerNodeName,
@@ -489,7 +489,7 @@ async function startWithFailoverCheck() {
             } else {
                 console.warn(`[FAILOVER] Reclaimed stale lease from ${lease.ownerNodeName}.`);
                 wh.send({
-                    title: 'Stale Lease Reclaimed',
+                    title: '⚠️ Stale Lease Reclaimed',
                     description: 'Reclaimed an expired lease. The previous holder appears to have gone silent.',
                     type: 'warning',
                     fromNode: lease.ownerNodeName,
