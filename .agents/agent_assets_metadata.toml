@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "2fLw7dXrti3AJWPvUPG1G"
+uri = "file://changed_files.zip"
+type = "unspecified"
+title = "Changed Files (this session)"
