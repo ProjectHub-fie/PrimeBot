@@ -284,6 +284,25 @@ async function releaseLease(nodeName) {
     }
 }
 
+// Returns true when the lease is currently held by a DIFFERENT node that has
+// HIGHER priority than selfRole (lower ROLE_PRIORITY number).  Used by the
+// post-takeover standby monitor so it can step down the moment a higher-priority
+// node reclaims the lease — without waiting for that node to write its first
+// heartbeat to bot_node_status (which only happens after login).
+async function isLeaseHeldByHigherPriority(selfRole, selfNodeName) {
+    try {
+        const lease = await getLease();
+        if (!lease) return false;
+        if (lease.ownerNodeName === selfNodeName) return false;
+        const myPriority     = ROLE_PRIORITY[selfRole]       ?? 99;
+        const holderPriority = ROLE_PRIORITY[lease.ownerRole] ?? 99;
+        return holderPriority < myPriority;
+    } catch (err) {
+        console.error('[FAILOVER] isLeaseHeldByHigherPriority check failed:', err.message);
+        return false;
+    }
+}
+
 module.exports = {
     NODE_ROLE,
     NODE_NAME,
@@ -303,4 +322,5 @@ module.exports = {
     acquireLease,
     refreshLease,
     releaseLease,
+    isLeaseHeldByHigherPriority,
 };

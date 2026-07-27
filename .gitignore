@@ -21,3 +21,6 @@ data/*.json.backup
 # Replit-specific uploads
 attached_assets/
 replit.md
+
+# Replit project config (host-specific, not for version control)
+.replit

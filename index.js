@@ -430,10 +430,28 @@ function startStandbyMonitor() {
                 console.warn('[FAILOVER] No other active node detected. Acquiring lease and taking over.');
                 await connectBot(false); // acquires lease before login
 
-            } else if (standbyTookOver && other) {
-                // A higher-priority node is back — step down immediately.
-                console.log(`[FAILOVER] Higher-priority node (${other.nodeName}, role=${other.role}) is back online. Stepping down.`);
-                await stepDown(`higher-priority node ${other.role} (${other.nodeName}) returned`);
+            } else if (standbyTookOver) {
+                // A higher-priority node may be back. Check two independent signals:
+                //
+                // 1. bot_node_status heartbeat (other != null) — the returning node
+                //    has already logged in and started writing heartbeats.
+                // 2. bot_failover_lock lease owner (isLeaseHeldByHigherPriority) —
+                //    the returning node stole the lease but hasn't logged in yet.
+                //
+                // Signal #2 fires FIRST (lease is stolen before client.login()),
+                // so we step down immediately instead of waiting up to 15 s for
+                // the next heartbeat tick to notice via onLeaseStolen().
+                const leaseTaken = await nodeFailover.isLeaseHeldByHigherPriority(
+                    nodeFailover.NODE_ROLE, nodeFailover.NODE_NAME
+                );
+
+                if (other || leaseTaken) {
+                    const reason = other
+                        ? `higher-priority node ${other.role} (${other.nodeName}) returned`
+                        : `higher-priority node reclaimed the lease (not yet heartbeating)`;
+                    console.log(`[FAILOVER] Stepping down — ${reason}.`);
+                    await stepDown(reason);
+                }
             }
         } catch (error) {
             console.error('[FAILOVER] Monitor loop error:', error.message);
