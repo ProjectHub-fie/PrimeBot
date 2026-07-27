@@ -141,8 +141,8 @@ function send({ title, description = '', type = 'info', reason, fromNode, extraF
     };
 
     post(webhookUrl, {
-        username:   'ShardNode Monitor',
-        avatar_url: 'https://cdn.discordapp.com/embed/avatars/0.png',
+        username:   'PrimeBot ShardNode Monitor',
+        avatar_url: 'https://cdn.discordapp.com/attachments/1358057358009303120/1531233626514259969/Your_paragraph_text.gif?ex=6a6877f1&is=6a672671&hm=1ae4feaa7ace0270ba8e210880fa1e0470b7813abc6be2f3979bb52db6490bd6',
         embeds:     [embed],
     });
 }
