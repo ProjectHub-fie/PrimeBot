@@ -62,7 +62,7 @@ module.exports = {
         sendDM: true,
         
         // Additional welcome banner image URL (set to null for no image)
-        bannerUrl: 'https://i.imgur.com/hxGEQJh.png',
+        bannerUrl: 'https://cdn.discordapp.com/attachments/1358057358009303120/1531594311928643714/welcome.gif?ex=6a69c7db&is=6a68765b&hm=c5998ed3df865e605b05aead873aa71fe525f23882fd02a84d822248f0952260',
         
         // Legacy support server ID - kept for backward compatibility
         // Welcome messages are now managed through server-specific settings
