@@ -3086,7 +3086,34 @@ module.exports = {
                         );
                     }
                     break;
-                    
+
+                case "tokentest": {
+                    if (!config.developerIds.includes(message.author.id)) return;
+
+                    const runningEmbed = new EmbedBuilder()
+                        .setColor(config.colors.primary)
+                        .setTitle('🔑 Token Test')
+                        .setDescription('Running `node token-test.js`…');
+
+                    const ttMsg = await message.channel.send({ embeds: [runningEmbed] });
+
+                    const { exec } = require('child_process');
+                    exec('node token-test.js', { timeout: 15000, maxBuffer: 1024 * 256, cwd: process.cwd() }, async (err, stdout, stderr) => {
+                        const output = (stdout + stderr).trim() || '(no output)';
+                        const truncated = output.length > 1900 ? output.slice(0, 1900) + '\n…(truncated)' : output;
+
+                        const resultEmbed = new EmbedBuilder()
+                            .setColor(err ? config.colors.error : config.colors.success)
+                            .setTitle(err ? '❌ Token Test Failed' : '✅ Token Test Passed')
+                            .setDescription(`\`\`\`\n${truncated}\n\`\`\``)
+                            .setFooter({ text: `Exit code: ${err ? err.code ?? 1 : 0}` })
+                            .setTimestamp();
+
+                        await ttMsg.edit({ embeds: [resultEmbed] }).catch(() => {});
+                    });
+                    break;
+                }
+
                 case "np":
                 case "noprefix":
                     // Check if the command is being used in a guild
