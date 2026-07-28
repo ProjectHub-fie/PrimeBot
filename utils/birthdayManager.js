@@ -107,6 +107,7 @@ class BirthdayManager {
                 .setTitle('🎂 Happy Birthday!')
                 .setDescription(`Today is **${member.displayName}**'s birthday! 🎉\n\nWishing you a wonderful day filled with joy and happiness! 🎈`)
                 .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
+                .setImage('https://cdn.discordapp.com/attachments/1358057358009303120/1531595984134738052/images.jpeg?ex=6a69c96a&is=6a6877ea&hm=aa66ac4c4f27dd83e3b97d03bfcbcf0252801fe3b2b9e930cc3d92fdb0ef7e88&')
                 .setFooter({ text: `🎁 Make it a special day!` })
                 .setTimestamp(),
             () => new EmbedBuilder()
@@ -121,6 +122,7 @@ class BirthdayManager {
                 .setTitle('🎊 It\'s a Special Day!')
                 .setDescription(`🎂 Today we celebrate **${member.displayName}**! 🎂\n\n✨ Wishing you the best birthday ever! ✨`)
                 .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
+                .setImage('https://cdn.discordapp.com/attachments/1358057358009303120/1531595983840870460/b8121779858b64bb236641f58a9977b1.jpg?ex=6a69c96a&is=6a6877ea&hm=e95f478d03a8d14072fa8aecd1210676bf2b1f12bb6603a5810d1bb0e6fc32bd&')
                 .setFooter({ text: '🎈 Have an amazing day!' })
                 .setTimestamp(),
             () => new EmbedBuilder()
@@ -128,6 +130,7 @@ class BirthdayManager {
                 .setTitle('🌟 Birthday Alert!')
                 .setDescription(`📣 Say Happy Birthday to **${member.displayName}**! 🎁\n\n💫 Another year of awesome adventures ahead! 💫`)
                 .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
+                .setImage('https://cdn.discordapp.com/attachments/1358057358009303120/1531595983421706350/images_1.jpeg?ex=6a69c96a&is=6a6877ea&hm=043f9154583b7518858052bd76b3972819c262ee215d33976e1920f3b83d1175&')
                 .setTimestamp(),
         ];
 
