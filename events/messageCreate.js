@@ -189,6 +189,25 @@ module.exports = {
             // Check if message starts with emoji prefix (A!)
             const emojiPrefix = "#";
             if (message.content.startsWith(emojiPrefix)) {
+                // Beta gate — emoji commands are restricted to beta-enrolled servers
+                if (isBetaFeature('emoji', null, null, config.betaFeatures) && !(await betaManager.canAccess(message.guild?.id))) {
+                    const betaEmojiEmbed = new EmbedBuilder()
+                        .setColor(config.colors.warning)
+                        .setTitle('🔬 Beta Feature')
+                        .setDescription(
+                            `**Emoji commands (\`${emojiPrefix}\`) are currently in beta** and are only available to selected servers.\n\n` +
+                            `Join our [Support Server](${config.supportServer}) to learn more or request early access.`
+                        )
+                        .addFields({
+                            name: 'Already selected?',
+                            value: 'Your server owner can run `$beta enable` to activate beta features.',
+                            inline: false
+                        })
+                        .setFooter({ text: `PrimeBot Beta Program • Version: ${config.version}` })
+                        .setTimestamp();
+                    return message.reply({ embeds: [betaEmojiEmbed] });
+                }
+
                 // Handle emoji commands
                 const args = message.content.slice(emojiPrefix.length).trim().split(/ #/);
                 const commandName = args.shift().toLowerCase();
@@ -2122,17 +2141,21 @@ module.exports = {
                         return message.reply("You need the Manage Server permission to end a counting game!");
                     }
                     
-                    // End the counting game
-                    const ended = client.countingManager.endCountingGame(message.channel.id);
-                    
-                    if (ended) {
-                        const endEmbed = new EmbedBuilder()
-                            .setColor(config.colors.success)
-                            .setDescription("✅ Counting game ended successfully!");
-                            
-                        return message.reply({ embeds: [endEmbed] });
-                    } else {
-                        return message.reply("There is no active counting game in this channel.");
+                    // End the counting game — must await since endCountingGame is async
+                    // (without await, ended is always a Promise object which is truthy,
+                    //  so the success branch fires even when no game exists).
+                    {
+                        const ended = await client.countingManager.endCountingGame(message.channel.id);
+                        
+                        if (ended) {
+                            const endEmbed = new EmbedBuilder()
+                                .setColor(config.colors.success)
+                                .setDescription("✅ Counting game ended successfully!");
+                                
+                            return message.reply({ embeds: [endEmbed] });
+                        } else {
+                            return message.reply("There is no active counting game in this channel.");
+                        }
                     }
                     
                 case "chelp":

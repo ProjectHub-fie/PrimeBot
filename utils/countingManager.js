@@ -99,7 +99,7 @@ class CountingManager {
             game.lastUserId = null;
             this.counting.set(channelId, game);
             await this.saveCounting(channelId);
-            return;
+            return true; // message was handled — stop further processing (XP, auto-react)
         }
 
         if (game.lastUserId === message.author.id) {
@@ -115,7 +115,7 @@ class CountingManager {
             game.lastUserId = null;
             this.counting.set(channelId, game);
             await this.saveCounting(channelId);
-            return;
+            return true; // message was handled
         }
 
         game.currentNumber = number;
@@ -131,6 +131,8 @@ class CountingManager {
         if (number >= game.goalNumber) {
             await this.handleGameWin(message, game, channelId);
         }
+
+        return true; // message was handled — stop further processing (XP, auto-react)
     }
 
     async handleGameWin(message, game, channelId) {

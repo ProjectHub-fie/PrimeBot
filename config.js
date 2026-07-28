@@ -23,6 +23,7 @@ module.exports = {
     betaFeatures: [
         "badges",
         "badgelist",
+        "emoji",
     ],
 
     // Developer IDs (users who can access developer commands)
