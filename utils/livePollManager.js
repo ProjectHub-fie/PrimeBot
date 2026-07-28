@@ -362,19 +362,56 @@ class LivePollManager {
                 return { success: false, message: 'Only the poll creator can end this poll' };
             }
 
-            // Get final results before ending
-            const results = await this.getPollResults(pollId);
+            // Use the canonical poll ID from the resolved poll object — the caller
+            // may have passed a pass code, so never use the raw `pollId` parameter
+            // for DB operations or cache lookups.
+            const resolvedPollId = poll.pollId;
 
-            // Update poll as inactive
+            // Get final results before ending
+            const results = await this.getPollResults(resolvedPollId);
+
+            // Update poll as inactive in DB
             if (this.dbReady && (db || global.livePollDb || this.drizzleDb)) {
                 const dbInstance = db || global.livePollDb || this.drizzleDb;
                 await dbInstance.update(livePolls)
                     .set({ isActive: false })
-                    .where(eq(livePolls.pollId, pollId));
+                    .where(eq(livePolls.pollId, resolvedPollId));
+            }
+
+            // Update cache before deleting so any in-flight reads see inactive
+            if (this.pollCaches.has(resolvedPollId)) {
+                this.pollCaches.get(resolvedPollId).isActive = false;
             }
 
             // Remove ended poll from cache entirely (prevent unbounded cache growth)
-            this.pollCaches.delete(pollId);
+            this.pollCaches.delete(resolvedPollId);
+
+            // Update the original Discord vote message — remove buttons and show
+            // final results so users can't keep voting after the poll is closed.
+            try {
+                if (poll.messageId && poll.channelId && this.client) {
+                    const channel = await this.client.channels.fetch(poll.channelId);
+                    if (channel) {
+                        const message = await channel.messages.fetch(poll.messageId);
+                        if (message) {
+                            const isWinningAnnouncement = results && results.totalVotes > 0;
+                            const endedPoll = { ...poll, isActive: false };
+                            const finalEmbed = this.createPollEmbed(
+                                endedPoll,
+                                results ? results.options : poll.options,
+                                results ? results.totalVotes : 0,
+                                true,
+                                isWinningAnnouncement
+                            );
+                            await message.edit({ embeds: [finalEmbed], components: [] });
+                            console.log(`[LIVE POLLS] Removed vote buttons from ended poll ${resolvedPollId}`);
+                        }
+                    }
+                }
+            } catch (editErr) {
+                // Non-fatal — log but don't fail the end operation
+                console.error(`[LIVE POLLS] Could not update Discord message for ended poll ${resolvedPollId}:`, editErr.message);
+            }
 
             // Create winning celebration message
             let celebrationMessage = 'Poll ended successfully';
@@ -401,36 +438,41 @@ class LivePollManager {
             const poll = await this.getPoll(pollId);
             if (!poll) return null;
 
+            // Always use the canonical poll ID from the resolved poll object, not
+            // the raw identifier the caller passed in (which may be a pass code).
+            const resolvedPollId = poll.pollId;
+
             // Check if poll has expired and update status if needed
             if (poll.expiresAt && new Date() > new Date(poll.expiresAt) && poll.isActive) {
-                console.log(`[DEBUG] Poll ${pollId} has expired, updating status...`);
+                console.log(`[DEBUG] Poll ${resolvedPollId} has expired, updating status...`);
                 
                 // Update poll status to inactive
                 if (this.dbReady && (db || global.livePollDb || this.drizzleDb)) {
                     const dbInstance = db || global.livePollDb || this.drizzleDb;
                     await dbInstance.update(livePolls)
                         .set({ isActive: false })
-                        .where(eq(livePolls.pollId, pollId));
+                        .where(eq(livePolls.pollId, resolvedPollId));
                 }
 
                 // Update cache
-                if (this.pollCaches.has(pollId)) {
-                    this.pollCaches.get(pollId).isActive = false;
+                if (this.pollCaches.has(resolvedPollId)) {
+                    this.pollCaches.get(resolvedPollId).isActive = false;
                 }
                 
                 // Update the poll object
                 poll.isActive = false;
-                console.log(`[DEBUG] Poll ${pollId} status updated to inactive`);
+                console.log(`[DEBUG] Poll ${resolvedPollId} status updated to inactive`);
             }
 
             let options;
             
             if (this.dbReady && (db || global.livePollDb || this.drizzleDb)) {
-                // Get updated vote counts from database
+                // Get updated vote counts from database — always use resolvedPollId,
+                // never the raw identifier which may be a pass code.
                 const dbInstance = db || global.livePollDb || this.drizzleDb;
                 options = await dbInstance.select()
                     .from(livePollOptions)
-                    .where(eq(livePollOptions.pollId, pollId))
+                    .where(eq(livePollOptions.pollId, resolvedPollId))
                     .orderBy(livePollOptions.optionIndex);
             } else {
                 // Use cached data
