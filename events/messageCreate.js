@@ -1963,114 +1963,250 @@ module.exports = {
                         // Silently ignore - this command is hidden from non-developers
                         return;
                     }
-                    
-                    // Validate arguments
-                    if (args.length < 1) {
-                        return message.reply(`Please provide a message to broadcast, or use \`${prefix}broadcast enable\`, \`${prefix}broadcast disable\`, or \`${prefix}broadcast channel #channel\`.`);
+
+                    // ── BROADCAST FORM WIZARD ──────────────────────────────────────────
+                    // $broadcast with no extra args opens a step-by-step form.
+                    // Any extra args are treated as a legacy inline message (kept for
+                    // backwards compat) but the form is the new recommended path.
+
+                    const collectorFilter = m => m.author.id === message.author.id;
+                    const STEP_TIMEOUT = 60_000; // 60 s per step
+
+                    // Helper: ask one question and wait for a reply
+                    async function askStep(promptEmbed) {
+                        const prompt = await message.channel.send({ embeds: [promptEmbed] });
+                        try {
+                            const collected = await message.channel.awaitMessages({
+                                filter: collectorFilter,
+                                max: 1,
+                                time: STEP_TIMEOUT,
+                                errors: ['time']
+                            });
+                            return { response: collected.first(), prompt };
+                        } catch {
+                            await prompt.edit({ embeds: [
+                                new EmbedBuilder()
+                                    .setColor(config.colors.error)
+                                    .setDescription('⏰ Form timed out. Run `$broadcast` again to restart.')
+                            ]});
+                            return { response: null, prompt };
+                        }
                     }
-                    
-                    // Get the broadcast message
-                    const broadcastMessage = args.join(" ");
-                    
-                    // Debug logging
-                    console.log(`[DEBUG] Broadcast command triggered by ${message.author.tag} with message: ${broadcastMessage}`);
-                    
-                    // Create the broadcast embed
-                    const broadcastEmbed = new EmbedBuilder()
+
+                    // ── STEP 1: Title ──────────────────────────────────────────────────
+                    const titlePrompt = new EmbedBuilder()
                         .setColor(config.colors.primary)
-                        .setTitle("📣 Announcement from Developers")
-                        .setDescription(broadcastMessage)
-                        .addFields(
-                            {
-                                name: "⚙️ Manage This Server's Broadcasts",
-                                value: `Use \`${prefix}broadcast enable\` / \`${prefix}broadcast disable\` to control broadcast. Use \`${prefix}broadcast channel\` to set the channel.`,
-                                inline: false
-                            }
-                        )
+                        .setTitle('📣 Broadcast Form — Step 1 of 4')
+                        .setDescription('**What should the title be?**\nType your title and send it, or type `skip` to use the default.')
+                        .setFooter({ text: 'Type "cancel" at any time to abort.' });
+
+                    const { response: titleRes, prompt: titleMsg } = await askStep(titlePrompt);
+                    if (!titleRes) break;
+                    if (titleRes.content.toLowerCase() === 'cancel') {
+                        await titleMsg.edit({ embeds: [new EmbedBuilder().setColor(config.colors.error).setDescription('❌ Broadcast cancelled.')] });
+                        break;
+                    }
+                    const bcTitle = titleRes.content.toLowerCase() === 'skip'
+                        ? '📣 Announcement from Developers'
+                        : titleRes.content;
+
+                    // ── STEP 2: Message ────────────────────────────────────────────────
+                    const msgPrompt = new EmbedBuilder()
+                        .setColor(config.colors.primary)
+                        .setTitle('📣 Broadcast Form — Step 2 of 4')
+                        .setDescription('**What is the broadcast message?**\nType your full announcement and send it.')
+                        .setFooter({ text: 'Type "cancel" to abort.' });
+
+                    const { response: msgRes } = await askStep(msgPrompt);
+                    if (!msgRes) break;
+                    if (msgRes.content.toLowerCase() === 'cancel') {
+                        await message.channel.send({ embeds: [new EmbedBuilder().setColor(config.colors.error).setDescription('❌ Broadcast cancelled.')] });
+                        break;
+                    }
+                    const bcMessage = msgRes.content;
+
+                    // ── STEP 3: Image URL ──────────────────────────────────────────────
+                    const imgPrompt = new EmbedBuilder()
+                        .setColor(config.colors.primary)
+                        .setTitle('📣 Broadcast Form — Step 3 of 4')
+                        .setDescription('**Image URL?**\nSend a direct image URL (`.jpg`, `.png`, `.gif`) to attach an image, or type `skip` to send without one.')
+                        .setFooter({ text: 'Type "cancel" to abort.' });
+
+                    const { response: imgRes } = await askStep(imgPrompt);
+                    if (!imgRes) break;
+                    if (imgRes.content.toLowerCase() === 'cancel') {
+                        await message.channel.send({ embeds: [new EmbedBuilder().setColor(config.colors.error).setDescription('❌ Broadcast cancelled.')] });
+                        break;
+                    }
+                    const bcImage = imgRes.content.toLowerCase() === 'skip' ? null : imgRes.content;
+
+                    // ── STEP 4: Color ──────────────────────────────────────────────────
+                    const colorPrompt = new EmbedBuilder()
+                        .setColor(config.colors.primary)
+                        .setTitle('📣 Broadcast Form — Step 4 of 4')
+                        .setDescription('**Embed color?**\nReply with one of: `red`, `green`, `blue`, `yellow`, `purple`, `orange`, `default`\nOr type a hex code like `#FF5733`. Type `skip` for the default bot color.')
+                        .setFooter({ text: 'Type "cancel" to abort.' });
+
+                    const { response: colorRes } = await askStep(colorPrompt);
+                    if (!colorRes) break;
+                    if (colorRes.content.toLowerCase() === 'cancel') {
+                        await message.channel.send({ embeds: [new EmbedBuilder().setColor(config.colors.error).setDescription('❌ Broadcast cancelled.')] });
+                        break;
+                    }
+
+                    const colorMap = {
+                        red: '#FF0000', green: '#00FF00', blue: '#0000FF',
+                        yellow: '#FFFF00', purple: '#800080', orange: '#FFA500',
+                        default: config.colors.primary, skip: config.colors.primary
+                    };
+                    const colorInput = colorRes.content.toLowerCase();
+                    const bcColor = colorMap[colorInput] || (colorRes.content.match(/^#[0-9A-Fa-f]{6}$/) ? colorRes.content : config.colors.primary);
+
+                    // ── BUILD PREVIEW EMBED ────────────────────────────────────────────
+                    const totalServersBC = client.guilds.cache.size;
+                    const receptiveServersBC = client.serverSettingsManager.getBroadcastReceptionCount
+                        ? client.serverSettingsManager.getBroadcastReceptionCount()
+                        : totalServersBC;
+                    const optedOutCountBC = totalServersBC - receptiveServersBC;
+
+                    const broadcastEmbed = new EmbedBuilder()
+                        .setColor(bcColor)
+                        .setTitle(bcTitle)
+                        .setDescription(bcMessage)
+                        .addFields({
+                            name: "⚙️ Manage This Server's Broadcasts",
+                            value: `Use \`${prefix}broadcast enable\` / \`${prefix}broadcast disable\` to control broadcast. Use \`${prefix}broadcast channel\` to set the channel.`,
+                            inline: false
+                        })
                         .setTimestamp()
-                        .setFooter({ 
+                        .setFooter({
                             text: `Version: ${config.version}`,
                             iconURL: client.user.displayAvatarURL()
                         });
-                    
-                    // Send confirmation
+
+                    if (bcImage) broadcastEmbed.setImage(bcImage);
+
+                    const previewInfoEmbed = new EmbedBuilder()
+                        .setColor(config.colors.warning)
+                        .setTitle('📋 Broadcast Preview')
+                        .setDescription('Review your broadcast below. Click **Send** to deliver it or **Cancel** to abort.')
+                        .addFields(
+                            { name: '📊 Reach', value: `${receptiveServersBC} servers receiving · ${optedOutCountBC} opted out`, inline: false },
+                            { name: '⏱️ Est. Time', value: `~${Math.ceil(receptiveServersBC * 0.5)}s`, inline: true }
+                        )
+                        .setTimestamp();
+
+                    const sendBtn = new ButtonBuilder()
+                        .setCustomId('bc_send')
+                        .setLabel('Send Broadcast')
+                        .setStyle(ButtonStyle.Success);
+                    const cancelBtn = new ButtonBuilder()
+                        .setCustomId('bc_cancel')
+                        .setLabel('Cancel')
+                        .setStyle(ButtonStyle.Danger);
+                    const bcRow = new ActionRowBuilder().addComponents(sendBtn, cancelBtn);
+
+                    const previewMsg = await message.channel.send({
+                        embeds: [previewInfoEmbed, broadcastEmbed],
+                        components: [bcRow]
+                    });
+
+                    // ── WAIT FOR CONFIRM / CANCEL ──────────────────────────────────────
+                    let confirmed = false;
+                    try {
+                        const btnInteraction = await previewMsg.awaitMessageComponent({
+                            filter: i => i.user.id === message.author.id && ['bc_send', 'bc_cancel'].includes(i.customId),
+                            time: 120_000
+                        });
+                        confirmed = btnInteraction.customId === 'bc_send';
+                        await btnInteraction.deferUpdate();
+                    } catch {
+                        // timed out
+                    }
+
+                    await previewMsg.edit({ components: [] });
+
+                    if (!confirmed) {
+                        await previewMsg.edit({ embeds: [
+                            new EmbedBuilder().setColor(config.colors.error).setDescription('❌ Broadcast cancelled.')
+                        ], components: [] });
+                        break;
+                    }
+
+                    // ── SEND BROADCAST ─────────────────────────────────────────────────
+                    console.log(`[BROADCAST] Form-wizard broadcast by ${message.author.tag}`);
+
                     const confirmationEmbed = new EmbedBuilder()
                         .setColor(config.colors.success)
-                        .setDescription("📣 Broadcasting message to all servers...");
-                    
-                    await message.reply({ embeds: [confirmationEmbed] });
-                    
-                    // Track statistics
+                        .setDescription('📣 Broadcasting message to all servers...');
+
+                    const progressMsg = await message.channel.send({ embeds: [confirmationEmbed] });
+
                     let successCount = 0;
                     let failCount = 0;
                     let skippedOptOut = 0;
-                    let totalGuilds = client.guilds.cache.size;
-                    
-                    // Broadcast to all guilds that haven't opted out
-                    console.log(`[DEBUG] Starting broadcast to ${client.guilds.cache.size} guilds`);
-                    
+                    let processedCount = 0;
+                    const totalGuilds = client.guilds.cache.size;
+
                     for (const guild of client.guilds.cache.values()) {
                         try {
-                            console.log(`[DEBUG] Processing guild: ${guild.name} (${guild.id})`);
+                            processedCount++;
 
-                            // Check if the guild has opted out of broadcasts
                             if (!client.serverSettingsManager.receivesBroadcasts(guild.id)) {
-                                console.log(`[DEBUG] Guild ${guild.name} has opted out of broadcasts, skipping`);
                                 skippedOptOut++;
                                 continue;
                             }
-                            
-                            // Use the guild's configured broadcast channel if set, otherwise
-                            // fall back to the first available text channel
+
                             const customChannelId = client.serverSettingsManager.getBroadcastChannel(guild.id);
                             let channel = customChannelId ? guild.channels.cache.get(customChannelId) : null;
 
                             if (!channel || channel.type !== 0) {
                                 channel = guild.channels.cache
-                                    .filter(ch => ch.type === 0) // 0 is GuildText channel type
+                                    .filter(ch => ch.type === 0)
                                     .sort((a, b) => a.position - b.position)
                                     .first();
                             }
-                            
-                            if (!channel) {
-                                console.log(`[DEBUG] No suitable text channel found in guild: ${guild.name}`);
-                                failCount++;
-                                continue;
-                            }
-                            
-                            console.log(`[DEBUG] Selected channel: ${channel.name} (${channel.id})`);
-                            
-                            // Check bot permissions
-                            const hasPermission = channel.permissionsFor(guild.members.me).has("SendMessages");
-                            console.log(`[DEBUG] Bot has SendMessages permission: ${hasPermission}`);
-                            
-                            if (hasPermission) {
+
+                            if (!channel) { failCount++; continue; }
+
+                            if (channel.permissionsFor(guild.members.me).has('SendMessages')) {
                                 await channel.send({ embeds: [broadcastEmbed] });
-                                console.log(`[DEBUG] Successfully sent broadcast to guild: ${guild.name}`);
                                 successCount++;
                             } else {
-                                console.log(`[DEBUG] Missing permissions to send in channel: ${channel.name}`);
                                 failCount++;
                             }
-                        } catch (error) {
-                            console.error(`Error broadcasting to guild ${guild.name}:`, error);
+
+                            // Update progress every 5 guilds
+                            if (processedCount % 5 === 0 || processedCount === totalGuilds) {
+                                const pct = Math.round((processedCount / totalGuilds) * 100);
+                                const bar = '█'.repeat(Math.round(pct / 5)) + '░'.repeat(20 - Math.round(pct / 5));
+                                await progressMsg.edit({ embeds: [
+                                    new EmbedBuilder()
+                                        .setColor(config.colors.primary)
+                                        .setDescription(`📣 Broadcasting...\n\`[${bar}]\` ${pct}%\n✅ ${successCount} · ❌ ${failCount} · 🔕 ${skippedOptOut}`)
+                                ]}).catch(() => {});
+                            }
+
+                        } catch (err) {
+                            console.error(`[BROADCAST] Error in guild ${guild.name}:`, err);
                             failCount++;
                         }
                     }
-                    
-                    // Send status report
+
                     const reportEmbed = new EmbedBuilder()
                         .setColor(config.colors.success)
-                        .setTitle("📣 Broadcast Complete")
-                        .setDescription(`Message has been sent to servers.`)
+                        .setTitle('📣 Broadcast Complete')
+                        .setDescription(`Delivered to **${successCount}** servers.`)
                         .addFields(
-                            { name: "Success", value: `${successCount} servers`, inline: true },
-                            { name: "Failed", value: `${failCount} servers`, inline: true },
-                            { name: "Opted Out", value: `${skippedOptOut} servers`, inline: true },
-                            { name: "Total", value: `${totalGuilds} servers`, inline: true }
-                        );
-                    
-                    await message.channel.send({ embeds: [reportEmbed] });
+                            { name: '✅ Success', value: `${successCount}`, inline: true },
+                            { name: '❌ Failed', value: `${failCount}`, inline: true },
+                            { name: '🔕 Opted Out', value: `${skippedOptOut}`, inline: true },
+                            { name: '📊 Total', value: `${totalGuilds}`, inline: true }
+                        )
+                        .setTimestamp()
+                        .setFooter({ text: `Broadcast ID: ${Date.now().toString(36)}` });
+
+                    await progressMsg.edit({ embeds: [reportEmbed] });
                     break;
                 }
                 
