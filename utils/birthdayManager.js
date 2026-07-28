@@ -223,12 +223,52 @@ class BirthdayManager {
         return this.birthdays.get(guildId)?.users.get(userId) || null;
     }
 
-    getGuildBirthdays(guildId) {
-        return this.birthdays.get(guildId) || { channel: null, role: null, users: new Map() };
+    async getGuildBirthdays(guildId) {
+        try {
+            // Always read from DB so that rows inserted manually (outside the bot)
+            // are visible immediately without requiring a restart.
+            const [configRes, bdRes] = await Promise.all([
+                pool.query(
+                    'SELECT announcement_channel, role_id FROM birthdays_guilds WHERE guild_id = $1',
+                    [guildId]
+                ),
+                pool.query(
+                    'SELECT user_id, month, day, year, last_celebrated FROM birthdays WHERE guild_id = $1',
+                    [guildId]
+                ),
+            ]);
+
+            const configRow = configRes.rows[0] || null;
+            const users = new Map();
+            for (const row of bdRes.rows) {
+                users.set(row.user_id, {
+                    month: row.month,
+                    day: row.day,
+                    year: row.year || null,
+                    lastCelebrated: row.last_celebrated || null,
+                });
+            }
+
+            // Sync the fresh data back into the in-memory map so the rest of the
+            // manager (checkBirthdays, etc.) also benefits from it.
+            const guildData = {
+                channel: configRow?.announcement_channel || null,
+                role:    configRow?.role_id || null,
+                users,
+            };
+            this.birthdays.set(guildId, guildData);
+
+            return guildData;
+        } catch (error) {
+            console.error('[BIRTHDAYS] Error fetching guild birthdays from DB:', error);
+            // Fall back to the cached map so the list command still works on DB error.
+            return this.birthdays.get(guildId) || { channel: null, role: null, users: new Map() };
+        }
     }
 
-    getUpcomingBirthdays(guildId, days = 7) {
-        const guildData = this.birthdays.get(guildId);
+    async getUpcomingBirthdays(guildId, days = 7) {
+        // Refresh from DB first so manually inserted rows are included immediately.
+        const guildData = await this.getGuildBirthdays(guildId);
         if (!guildData) return [];
 
         const now = new Date();

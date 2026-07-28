@@ -1379,7 +1379,7 @@ module.exports = {
                                 
                             case "list":
                                 // Get upcoming birthdays
-                                const upcomingBirthdays = client.birthdayManager.getUpcomingBirthdays(message.guild.id, 10);
+                                const upcomingBirthdays = await client.birthdayManager.getUpcomingBirthdays(message.guild.id, 10);
                                 
                                 if (upcomingBirthdays.length === 0) {
                                     return message.reply("No upcoming birthdays found! Set your birthday with `" + prefix + "birthday set MM/DD/YYYY`.");

@@ -86,7 +86,8 @@ client.betaManager = betaManager;
     client.pollManager      = { polls: new Map() };
     client.livePollManager  = { polls: new Map() };
     client.birthdayManager  = { getBirthday: noop, setBirthday: noop, removeBirthday: noop,
-                                 getAllBirthdays: () => new Map(), getUpcomingBirthdays: () => [],
+                                 getAllBirthdays: () => new Map(), getUpcomingBirthdays: async () => [],
+                                 getGuildBirthdays: async () => ({ channel: null, role: null, users: new Map() }),
                                  setAnnouncementChannel: noop, setBirthdayRole: noop,
                                  getGuildConfig: () => ({ announcementChannel: null, birthdayRole: null }) };
     client.emojiManager     = { getEmoji: noop, getAllEmojis: () => [] };

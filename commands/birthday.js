@@ -165,8 +165,8 @@ module.exports = {
                     // Wait for birthday manager to be ready
                     await birthdayManager.waitForReady();
                     
-                    // Get upcoming birthdays
-                    const birthdays = birthdayManager.getUpcomingBirthdays(interaction.guild.id, limit);
+                    // Get upcoming birthdays (async — refreshes from DB each call)
+                    const birthdays = await birthdayManager.getUpcomingBirthdays(interaction.guild.id, limit);
                     
                     if (birthdays.length === 0) {
                         return interaction.reply('No birthdays have been set in this server yet.');
