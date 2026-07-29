@@ -1396,39 +1396,41 @@ module.exports = {
                                     return message.reply("You don't have a birthday set!");
                                 }
                                 
-                            case "list":
-                                // Get upcoming birthdays
-                                const upcomingBirthdays = await client.birthdayManager.getUpcomingBirthdays(message.guild.id, 10);
-                                
-                                if (upcomingBirthdays.length === 0) {
-                                    return message.reply("No upcoming birthdays found! Set your birthday with `" + prefix + "birthday set MM/DD/YYYY`.");
+                            case "list": {
+                                // Fetch ALL birthdays from DB — no day-window filter
+                                const allBirthdays = await client.birthdayManager.getAllBirthdays(message.guild.id);
+
+                                if (allBirthdays.length === 0) {
+                                    return message.reply("No birthdays have been set in this server yet! Set yours with `" + prefix + "birthday set MM/DD/YYYY`.");
                                 }
-                                
-                                // Create embed
+
+                                const MONTHS_BD = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
                                 const upcomingEmbed = new EmbedBuilder()
-                                    .setColor("#FFC0CB") // Pink
-                                    .setTitle("🎂 Upcoming Birthdays")
-                                    .setDescription("Here are the upcoming birthdays in this server:")
+                                    .setColor("#FFC0CB")
+                                    .setTitle("🎂 Server Birthdays")
                                     .setThumbnail("https://i.imgur.com/1XXtUx0.gif");
-                                
-                                // Add each birthday to the embed
-                                for (const birthday of upcomingBirthdays) {
+
+                                const lines = [];
+                                for (const birthday of allBirthdays.slice(0, 25)) {
                                     try {
-                                        const member = await message.guild.members.fetch(birthday.userId);
-                                        const formattedDate = client.birthdayManager.formatDate(birthday.month, birthday.day);
-                                        const yearText = birthday.year ? ` (Born: ${birthday.year})` : "";
-                                        const daysText = birthday.daysUntil === 0 ? "Today!" : birthday.daysUntil === 1 ? "Tomorrow!" : `In ${birthday.daysUntil} days`;
-                                        
-                                        upcomingEmbed.addFields({
-                                            name: `${member.displayName}${yearText}`,
-                                            value: `${formattedDate} - ${daysText}`
-                                        });
+                                        const member = await message.guild.members.fetch(birthday.userId).catch(() => null);
+                                        const displayName = member ? member.displayName : `<@${birthday.userId}>`;
+                                        const dateStr = `${MONTHS_BD[birthday.month - 1]} ${birthday.day}${birthday.year ? ` ${birthday.year}` : ''}`;
+                                        const countdown = birthday.daysUntil === 0 ? '🎉 Today!' : birthday.daysUntil === 1 ? 'Tomorrow' : `in ${birthday.daysUntil} days`;
+                                        lines.push(`**${displayName}** — ${dateStr} *(${countdown})*`);
                                     } catch (err) {
                                         console.error(`Error fetching member ${birthday.userId}:`, err);
                                     }
                                 }
-                                
+
+                                upcomingEmbed
+                                    .setDescription(lines.join('\n'))
+                                    .setFooter({ text: `${allBirthdays.length} birthday${allBirthdays.length !== 1 ? 's' : ''} registered` })
+                                    .setTimestamp();
+
                                 return message.reply({ embeds: [upcomingEmbed] });
+                            }
                                 
                             case "check":
                                 // Get the target user

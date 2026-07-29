@@ -160,28 +160,33 @@ module.exports = {
                 }
                 
                 case 'list': {
-                    const limit = interaction.options.getInteger('limit') || 10;
-                    
+                    const limit = interaction.options.getInteger('limit') || 25;
+
                     // Wait for birthday manager to be ready
                     await birthdayManager.waitForReady();
-                    
-                    // Get upcoming birthdays (async — refreshes from DB each call)
-                    const birthdays = await birthdayManager.getUpcomingBirthdays(interaction.guild.id, limit);
-                    
+
+                    // Fetch ALL birthdays from DB (no day-window filter)
+                    const birthdays = (await birthdayManager.getAllBirthdays(interaction.guild.id)).slice(0, limit);
+
                     if (birthdays.length === 0) {
                         return interaction.reply('No birthdays have been set in this server yet.');
                     }
-                    
-                    // Create embed
+
+                    const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
                     const embed = new EmbedBuilder()
                         .setColor(config.colors.primary)
-                        .setTitle('🎂 Upcoming Birthdays')
+                        .setTitle('🎂 Server Birthdays')
                         .setDescription(birthdays.map((b, index) => {
                             const user = interaction.client.users.cache.get(b.userId);
-                            const username = user ? user.username : 'Unknown User';
-                            return `${index + 1}. **${username}** - ${b.formattedDate || `${['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][b.month - 1]} ${b.day}`}${b.daysUntil === 0 ? ' (Today! 🎉)' : ` (in ${b.daysUntil} days)`}`;
-                        }).join('\n'));
-                    
+                            const username = user ? user.username : `<@${b.userId}>`;
+                            const dateStr = `${MONTHS[b.month - 1]} ${b.day}`;
+                            const countdown = b.daysUntil === 0 ? '🎉 Today!' : b.daysUntil === 1 ? 'Tomorrow' : `in ${b.daysUntil} days`;
+                            return `${index + 1}. **${username}** — ${dateStr} *(${countdown})*`;
+                        }).join('\n'))
+                        .setFooter({ text: `${birthdays.length} birthday${birthdays.length !== 1 ? 's' : ''} registered` })
+                        .setTimestamp();
+
                     return interaction.reply({ embeds: [embed] });
                 }
                 

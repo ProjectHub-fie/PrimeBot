@@ -54,7 +54,13 @@ class LivePollManager {
         this.dbReady = false;
         this.db = null;
         this.drizzleDb = null;
-        this.initializeDatabaseConnection();
+        // Store the init promise so callers can await it before first DB use
+        this._initPromise = this.initializeDatabaseConnection();
+    }
+
+    // Await this before any DB operation to avoid race conditions at startup
+    waitForReady() {
+        return this._initPromise;
     }
 
     // Initialize database connection and tables
@@ -72,12 +78,10 @@ class LivePollManager {
                     const dbModule = require('../server/db.js');
                     this.db = dbModule.pool;
                     this.drizzleDb = dbModule.db;
+                    // Keep module-level db in sync for createLivePoll / vote helpers
+                    if (!db) db = dbModule.db;
+                    if (!global.livePollDb) global.livePollDb = dbModule.db;
                     console.log('✅ Live poll database connection established');
-                    
-                    // Store database reference in global db variable for poll operations
-                    if (!global.livePollDb) {
-                        global.livePollDb = dbModule.db;
-                    }
                 } else {
                     console.log('⚠️ Live polls will use fallback mode (memory only)');
                 }
@@ -90,11 +94,10 @@ class LivePollManager {
             this.dbReady = false;
             console.log('⚠️ Live polls will use fallback mode (memory only)');
             
-            // If it's a connection error, retry after delay
             if (error.message.includes('Connection') || error.message.includes('timeout')) {
                 console.log('⏳ Will retry database connection in 60 seconds...');
                 setTimeout(() => {
-                    this.initializeDatabaseConnection();
+                    this._initPromise = this.initializeDatabaseConnection();
                 }, 60000);
             }
         }
@@ -112,6 +115,8 @@ class LivePollManager {
 
     // Create a new live poll
     async createLivePoll({ question, options, creatorId, duration = null, allowMultipleVotes = false }) {
+        // Wait for DB init to finish before deciding storage mode (fixes startup race)
+        await this._initPromise;
         try {
             const pollId = this.generatePollId();
             const passCode = this.generatePassCode();

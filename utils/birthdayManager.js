@@ -288,6 +288,24 @@ class BirthdayManager {
 
         return upcoming.sort((a, b) => a.daysUntil - b.daysUntil);
     }
+
+    // Returns ALL birthdays in the guild sorted by next occurrence — no day-window filter.
+    async getAllBirthdays(guildId) {
+        const guildData = await this.getGuildBirthdays(guildId);
+        if (!guildData) return [];
+
+        const now = new Date();
+        const all = [];
+
+        for (const [userId, birthday] of guildData.users.entries()) {
+            const nextBirthday = new Date(now.getFullYear(), birthday.month - 1, birthday.day);
+            if (nextBirthday < now) nextBirthday.setFullYear(now.getFullYear() + 1);
+            const daysUntil = Math.ceil((nextBirthday - now) / (1000 * 60 * 60 * 24));
+            all.push({ userId, ...birthday, daysUntil, nextBirthday });
+        }
+
+        return all.sort((a, b) => a.daysUntil - b.daysUntil);
+    }
 }
 
 module.exports = BirthdayManager;
