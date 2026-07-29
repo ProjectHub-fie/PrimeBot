@@ -844,6 +844,7 @@ module.exports = {
                     }
                     
                     return;
+                }
 
                 case "giveaway":
                     // Show giveaway command help
@@ -1112,7 +1113,6 @@ module.exports = {
 
                     // Don't return here to allow the confirmation to be sent
                     break;
-                }
 
                 case "poll":
                     try {
