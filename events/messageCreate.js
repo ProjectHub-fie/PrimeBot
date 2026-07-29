@@ -3,6 +3,7 @@ const {
     ButtonBuilder,
     ButtonStyle,
     ActionRowBuilder,
+    StringSelectMenuBuilder,
     PermissionsBitField,
     PermissionFlagsBits,
 } = require("discord.js");
@@ -535,10 +536,8 @@ module.exports = {
                     return message.reply({ embeds: [categoryEmbed] });
 
                 case "help":
-                case "categories":
+                case "categories": {
                     // Interactive category browser with select menu
-                    const { ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
-                    
                     const interactiveCategoryEmbed = new EmbedBuilder()
                         .setColor(config.colors.primary)
                         .setTitle('🗂️ Interactive Category Browser')
@@ -1113,6 +1112,7 @@ module.exports = {
 
                     // Don't return here to allow the confirmation to be sent
                     break;
+                }
 
                 case "poll":
                     try {
