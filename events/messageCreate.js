@@ -164,9 +164,11 @@ module.exports = {
                     });
                 } catch (error) {
                     console.error("Error handling ping:", error);
-                    await message.reply(
-                        "Sorry, I encountered an error while processing your ping. Please try again later.",
-                    );
+                    try {
+                        await message.channel.send(
+                            "Sorry, I encountered an error while processing your ping. Please try again later.",
+                        );
+                    } catch (_) {}
                 }
                 return;
             }
@@ -2925,9 +2927,7 @@ module.exports = {
                     }
                     
                     // Enable welcome system
-                    const welcomeResult = client.serverSettingsManager.updateWelcomeSettings(message.guild.id, {
-                        enabled: true
-                    });
+                    client.welcomeSettingsManager.updateGuildSetting(message.guild.id, 'welcomeEnabled', true);
                     
                     // Create success embed
                     const welcomeEnableEmbed = new EmbedBuilder()
@@ -2959,9 +2959,7 @@ module.exports = {
                     }
                     
                     // Disable welcome system
-                    client.serverSettingsManager.updateWelcomeSettings(message.guild.id, {
-                        enabled: false
-                    });
+                    client.welcomeSettingsManager.updateGuildSetting(message.guild.id, 'welcomeEnabled', false);
                     
                     // Create success embed
                     const welcomeDisableEmbed = new EmbedBuilder()
@@ -3304,9 +3302,7 @@ module.exports = {
                     const welcomeChannel = message.mentions.channels.first();
                     
                     // Update welcome channel
-                    client.serverSettingsManager.updateWelcomeSettings(message.guild.id, {
-                        channelId: welcomeChannel.id
-                    });
+                    client.welcomeSettingsManager.setWelcomeChannel(message.guild.id, welcomeChannel.id);
                     
                     // Create success embed
                     const welcomeChannelEmbed = new EmbedBuilder()
@@ -3930,6 +3926,17 @@ module.exports = {
                 case "sync":
                     if (!message.member.permissions.has("ManageGuild")) {
                         return message.reply("You need the Manage Server permission to use sync commands!");
+                    }
+                    // Beta gate
+                    if (isBetaFeature('sync', null, null, config.betaFeatures) && !(await betaManager.canAccess(message.guild?.id))) {
+                        return message.reply({
+                            embeds: [new EmbedBuilder()
+                                .setColor(config.colors.primary)
+                                .setTitle('🔬 Beta Feature')
+                                .setDescription('The `sync` command is currently in beta and only available to servers enrolled in the beta program.\n\nAsk your server owner to run `$beta enable` if your server has been approved.')
+                                .setFooter({ text: `Version: ${config.version}` })
+                                .setTimestamp()]
+                        });
                     }
                     
                     const syncEmbed = new EmbedBuilder()

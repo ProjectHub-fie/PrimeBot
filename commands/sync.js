@@ -432,7 +432,7 @@ async function handleSyncConfig(interaction, client) {
     serverSettings.sync.badgeSync = badgeSync;
     serverSettings.sync.enabled = true;
     
-    client.serverSettingsManager.saveSettings();
+    client.serverSettingsManager._saveGuildSettings(interaction.guild.id);
     
     const configEmbed = new EmbedBuilder()
         .setColor(config.colors.success)

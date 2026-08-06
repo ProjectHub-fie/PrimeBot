@@ -24,6 +24,7 @@ module.exports = {
         "badges",
         "badgelist",
         "emoji",
+        "sync",
     ],
 
     // Developer IDs (users who can access developer commands)

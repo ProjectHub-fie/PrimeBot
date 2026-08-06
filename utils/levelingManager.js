@@ -34,22 +34,22 @@ class LevelingManager {
 
     async initializeDatabase() {
         try {
-            // Wait for client database to be ready
-            if (this.client.db && this.client.schema) {
-                this.db = this.client.db;
-                this.schema = this.client.schema;
-                this.dbReady = true;
-                console.log('✅ LevelingManager database connection established');
-                
-                // Perform migration from JSON to database
-                await this.migrateFromJSON();
-                
-                console.log('✅ LevelingManager fully initialized and ready');
-            } else {
-                console.log('[LEVELING] Waiting for database to be ready...');
-                // Retry after a short delay if database isn't ready yet
-                setTimeout(() => this.initializeDatabase(), 1000);
+            const { levelingDb, levelingSchema, testLevelingConnection } = require('../server/levelingDb');
+            const connected = await testLevelingConnection();
+            if (!connected) {
+                console.warn('[LEVELING] Leveling DB unavailable, retrying in 5s...');
+                setTimeout(() => this.initializeDatabase(), 5000);
+                return;
             }
+            this.db = levelingDb;
+            this.schema = levelingSchema;
+            this.dbReady = true;
+            console.log('✅ LevelingManager database connection established');
+
+            // Perform migration from JSON to database
+            await this.migrateFromJSON();
+
+            console.log('✅ LevelingManager fully initialized and ready');
         } catch (error) {
             console.error('❌ LevelingManager database initialization failed:', error);
             console.error('[LEVELING] Stack trace:', error.stack);

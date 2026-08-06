@@ -60,7 +60,8 @@ class ServerSettingsManager {
         await this.loadSettings();
     }
 
-    /** One-time import of existing serverSettings.json data. */
+    /** One-time import of existing serverSettings.json data (non-welcome fields only).
+     *  Welcome fields are migrated separately by WelcomeSettingsManager → WELCOME_DATABASE_URL. */
     async _migrateFromJson() {
         const fs = require('fs');
         const path = require('path');
@@ -74,37 +75,18 @@ class ServerSettingsManager {
             for (const [guildId, s] of Object.entries(data)) {
                 try {
                     const lev = s.leveling || {};
-                    const ar = s.autoReactions || {};
+                    const ar  = s.autoReactions || {};
                     await pool.query(`
                         INSERT INTO server_settings (
                             guild_id, receive_broadcasts, broadcast_channel_id,
-                            welcome_enabled, welcome_channel_id, welcome_message,
-                            welcome_banner_url, welcome_color,
-                            welcome_dm_enabled, welcome_dm_message,
-                            welcome_show_member_count, welcome_show_join_date, welcome_show_account_age,
-                            welcome_custom_title, welcome_custom_footer,
                             leveling_enabled, leveling_channel_id, xp_multiplier, xp_cooldown,
                             auto_reactions_enabled, auto_reactions, no_prefix_users
-                        ) VALUES (
-                            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
-                            $16,$17,$18,$19,$20,$21,$22
-                        ) ON CONFLICT (guild_id) DO NOTHING
+                        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+                        ON CONFLICT (guild_id) DO NOTHING
                     `, [
                         guildId,
                         s.receiveBroadcasts !== false,
                         s.broadcastChannelId || null,
-                        s.welcomeEnabled || false,
-                        s.welcomeChannelId || null,
-                        s.welcomeMessage || 'Welcome to the server, {member}! Enjoy your stay!',
-                        s.welcomeBannerUrl || null,
-                        s.welcomeColor || '#5865F2',
-                        s.welcomeDmEnabled || false,
-                        s.welcomeDmMessage || 'Hey {username}! Welcome to **{server}**!',
-                        s.welcomeShowMemberCount !== false,
-                        s.welcomeShowJoinDate !== false,
-                        s.welcomeShowAccountAge !== false,
-                        s.welcomeCustomTitle || null,
-                        s.welcomeCustomFooter || null,
                         lev.enabled !== false,
                         lev.levelUpChannelId || null,
                         lev.xpMultiplier || 1.0,
@@ -129,18 +111,7 @@ class ServerSettingsManager {
         return {
             receiveBroadcasts: row.receive_broadcasts,
             broadcastChannelId: row.broadcast_channel_id || null,
-            welcomeEnabled: row.welcome_enabled,
-            welcomeChannelId: row.welcome_channel_id || null,
-            welcomeMessage: row.welcome_message || 'Welcome to the server, {member}! Enjoy your stay!',
-            welcomeBannerUrl: row.welcome_banner_url || null,
-            welcomeColor: row.welcome_color || config.colors.primary,
-            welcomeDmEnabled: row.welcome_dm_enabled,
-            welcomeDmMessage: row.welcome_dm_message || 'Hey {username}! Welcome to **{server}**!',
-            welcomeShowMemberCount: row.welcome_show_member_count,
-            welcomeShowJoinDate: row.welcome_show_join_date,
-            welcomeShowAccountAge: row.welcome_show_account_age,
-            welcomeCustomTitle: row.welcome_custom_title || null,
-            welcomeCustomFooter: row.welcome_custom_footer || null,
+            // Welcome settings are managed exclusively by WelcomeSettingsManager (WELCOME_DATABASE_URL)
             leveling: {
                 enabled: row.leveling_enabled,
                 levelUpChannelId: row.leveling_channel_id || null,
@@ -159,18 +130,7 @@ class ServerSettingsManager {
         return {
             receiveBroadcasts: true,
             broadcastChannelId: null,
-            welcomeEnabled: false,
-            welcomeChannelId: null,
-            welcomeMessage: 'Welcome to the server, {member}! Enjoy your stay!',
-            welcomeBannerUrl: config.welcome?.bannerUrl || null,
-            welcomeColor: config.colors.primary,
-            welcomeDmEnabled: config.welcome?.sendDM || false,
-            welcomeDmMessage: config.welcome?.dmMessage || 'Hey {username}! Welcome to **{server}**!',
-            welcomeShowMemberCount: true,
-            welcomeShowJoinDate: true,
-            welcomeShowAccountAge: true,
-            welcomeCustomTitle: null,
-            welcomeCustomFooter: null,
+            // Welcome settings are managed exclusively by WelcomeSettingsManager (WELCOME_DATABASE_URL)
             leveling: {
                 enabled: true,
                 levelUpChannelId: null,
@@ -194,36 +154,20 @@ class ServerSettingsManager {
 
     async _saveGuildSettingsAsync(guildId) {
         const s = this.getGuildSettings(guildId);
+        // Ensure leveling sub-object exists (safe default)
+        const lev = s.leveling || { enabled: true, levelUpChannelId: null, xpMultiplier: 1.0, xpCooldown: 60000 };
+        const ar  = s.autoReactions || { enabled: false, reactions: [] };
         await this._ensureTable();
+        // Welcome settings are stored exclusively in WELCOME_DATABASE_URL — not written here.
         await pool.query(`
             INSERT INTO server_settings (
                 guild_id, receive_broadcasts, broadcast_channel_id,
-                welcome_enabled, welcome_channel_id, welcome_message,
-                welcome_banner_url, welcome_color,
-                welcome_dm_enabled, welcome_dm_message,
-                welcome_show_member_count, welcome_show_join_date, welcome_show_account_age,
-                welcome_custom_title, welcome_custom_footer,
                 leveling_enabled, leveling_channel_id, xp_multiplier, xp_cooldown,
                 auto_reactions_enabled, auto_reactions, no_prefix_users, updated_at
-            ) VALUES (
-                $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
-                $16,$17,$18,$19,$20,$21,$22, NOW()
-            )
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, NOW())
             ON CONFLICT (guild_id) DO UPDATE SET
                 receive_broadcasts    = EXCLUDED.receive_broadcasts,
                 broadcast_channel_id  = EXCLUDED.broadcast_channel_id,
-                welcome_enabled       = EXCLUDED.welcome_enabled,
-                welcome_channel_id    = EXCLUDED.welcome_channel_id,
-                welcome_message       = EXCLUDED.welcome_message,
-                welcome_banner_url    = EXCLUDED.welcome_banner_url,
-                welcome_color         = EXCLUDED.welcome_color,
-                welcome_dm_enabled    = EXCLUDED.welcome_dm_enabled,
-                welcome_dm_message    = EXCLUDED.welcome_dm_message,
-                welcome_show_member_count  = EXCLUDED.welcome_show_member_count,
-                welcome_show_join_date     = EXCLUDED.welcome_show_join_date,
-                welcome_show_account_age   = EXCLUDED.welcome_show_account_age,
-                welcome_custom_title  = EXCLUDED.welcome_custom_title,
-                welcome_custom_footer = EXCLUDED.welcome_custom_footer,
                 leveling_enabled      = EXCLUDED.leveling_enabled,
                 leveling_channel_id   = EXCLUDED.leveling_channel_id,
                 xp_multiplier         = EXCLUDED.xp_multiplier,
@@ -236,24 +180,12 @@ class ServerSettingsManager {
             guildId,
             s.receiveBroadcasts,
             s.broadcastChannelId,
-            s.welcomeEnabled,
-            s.welcomeChannelId,
-            s.welcomeMessage,
-            s.welcomeBannerUrl,
-            s.welcomeColor,
-            s.welcomeDmEnabled,
-            s.welcomeDmMessage,
-            s.welcomeShowMemberCount,
-            s.welcomeShowJoinDate,
-            s.welcomeShowAccountAge,
-            s.welcomeCustomTitle,
-            s.welcomeCustomFooter,
-            s.leveling.enabled,
-            s.leveling.levelUpChannelId,
-            s.leveling.xpMultiplier,
-            s.leveling.xpCooldown,
-            s.autoReactions.enabled,
-            JSON.stringify(s.autoReactions.reactions),
+            lev.enabled,
+            lev.levelUpChannelId,
+            lev.xpMultiplier,
+            lev.xpCooldown,
+            ar.enabled,
+            JSON.stringify(ar.reactions),
             JSON.stringify(s.noPrefixUsers),
         ]);
     }
@@ -418,60 +350,38 @@ class ServerSettingsManager {
     setWelcomeBanner(guildId, url)        { return this.updateGuildSetting(guildId, 'welcomeBannerUrl', url); }
     setWelcomeColor(guildId, color)       { return this.updateGuildSetting(guildId, 'welcomeColor', color); }
 
+    // Welcome settings are now exclusively managed by WelcomeSettingsManager (WELCOME_DATABASE_URL).
+    // These stubs remain for backward-compat; they are no-ops and log a warning.
     getWelcomeSettings(guildId) {
-        const s = this.getGuildSettings(guildId);
-        return {
-            enabled: s.welcomeEnabled,
-            channelId: s.welcomeChannelId,
-            message: s.welcomeMessage,
-            bannerUrl: s.welcomeBannerUrl,
-            color: s.welcomeColor,
-            dmEnabled: s.welcomeDmEnabled,
-            dmMessage: s.welcomeDmMessage,
-            showMemberCount: s.welcomeShowMemberCount,
-            showJoinDate: s.welcomeShowJoinDate,
-            showAccountAge: s.welcomeShowAccountAge,
-            customTitle: s.welcomeCustomTitle,
-            customFooter: s.welcomeCustomFooter,
-        };
+        console.warn('[SERVER SETTINGS] getWelcomeSettings() called on ServerSettingsManager — use client.welcomeSettingsManager instead.');
+        return {};
+    }
+    updateWelcomeSettings(guildId, updates = {}) {
+        console.warn('[SERVER SETTINGS] updateWelcomeSettings() called on ServerSettingsManager — use client.welcomeSettingsManager instead.');
+        return false;
+    }
+    toggleWelcomeFeature(guildId, feature) {
+        console.warn('[SERVER SETTINGS] toggleWelcomeFeature() called on ServerSettingsManager — use client.welcomeSettingsManager instead.');
+        return false;
     }
 
-    updateWelcomeSettings(guildId, updates = {}) {
+    // ── Leveling ──────────────────────────────────────────────────────────────
+
+    /**
+     * Patch one or more leveling sub-fields (enabled, levelUpChannelId,
+     * xpMultiplier, xpCooldown) and persist to DB.
+     */
+    updateLevelingSettings(guildId, updates = {}) {
         const s = this.getGuildSettings(guildId);
-        const keyMap = {
-            enabled: 'welcomeEnabled',
-            channelId: 'welcomeChannelId',
-            message: 'welcomeMessage',
-            bannerUrl: 'welcomeBannerUrl',
-            color: 'welcomeColor',
-            dmEnabled: 'welcomeDmEnabled',
-            dmMessage: 'welcomeDmMessage',
-            showMemberCount: 'welcomeShowMemberCount',
-            showJoinDate: 'welcomeShowJoinDate',
-            showAccountAge: 'welcomeShowAccountAge',
-            customTitle: 'welcomeCustomTitle',
-            customFooter: 'welcomeCustomFooter',
-        };
-        for (const [key, value] of Object.entries(updates)) {
-            s[keyMap[key] || key] = value;
-        }
+        if (!s.leveling) s.leveling = { enabled: true, levelUpChannelId: null, xpMultiplier: 1.0, xpCooldown: 60000 };
+        if ('enabled'          in updates) s.leveling.enabled          = updates.enabled;
+        if ('levelUpChannelId' in updates) s.leveling.levelUpChannelId = updates.levelUpChannelId;
+        if ('xpMultiplier'     in updates) s.leveling.xpMultiplier     = updates.xpMultiplier;
+        if ('xpCooldown'       in updates) s.leveling.xpCooldown       = updates.xpCooldown;
         this.serverSettings.set(guildId, s);
         this._saveGuildSettings(guildId);
         return true;
     }
-
-    toggleWelcomeFeature(guildId, feature) {
-        const valid = ['welcomeShowMemberCount', 'welcomeShowJoinDate', 'welcomeShowAccountAge'];
-        if (!valid.includes(feature)) return false;
-        const s = this.getGuildSettings(guildId);
-        const newValue = !s[feature];
-        s[feature] = newValue;
-        this.serverSettings.set(guildId, s);
-        this._saveGuildSettings(guildId);
-        return newValue;
-    }
-
-    // ── Leveling ──────────────────────────────────────────────────────────────
 
     isLevelingEnabled(guildId) { return this.getGuildSettings(guildId).leveling?.enabled || false; }
 

@@ -161,31 +161,9 @@ module.exports = {
             
             console.log(`[LEVELING] Processing subcommand: ${subcommand} for user: ${user.tag}`);
             
-            // Ensure the server settings manager has leveling data initialized
-            if (!client.serverSettingsManager.serverSettings.has(guild.id)) {
-                client.serverSettingsManager.serverSettings.set(guild.id, {
-                    leveling: {
-                        enabled: true,
-                        levelUpChannelId: null,
-                        xpMultiplier: 1.0,
-                        xpCooldown: 60000 // Default 1 minute cooldown
-                    }
-                });
-                client.serverSettingsManager.saveSettings();
-            } else if (!client.serverSettingsManager.serverSettings.get(guild.id).leveling) {
-                const serverSettings = client.serverSettingsManager.serverSettings.get(guild.id);
-                serverSettings.leveling = {
-                    enabled: true,
-                    levelUpChannelId: null,
-                    xpMultiplier: 1.0,
-                    xpCooldown: 60000 // Default 1 minute cooldown
-                };
-                client.serverSettingsManager.saveSettings();
-            }
-            
-            // Get server leveling settings
-            const serverSettings = client.serverSettingsManager.serverSettings.get(guild.id);
-            const levelingSettings = serverSettings.leveling;
+            // Get server leveling settings — getGuildSettings initialises defaults if needed
+            const serverSettings = client.serverSettingsManager.getGuildSettings(guild.id);
+            const levelingSettings = client.serverSettingsManager.getLevelingSettings(guild.id);
             
             // Handle different subcommands
             switch (subcommand) {
@@ -654,9 +632,9 @@ async function handleSettingsCommand(interaction, client) {
     // Get setting to change
     const setting = options.getString('setting');
     
-    // Get current server settings
-    const serverSettings = client.serverSettingsManager.serverSettings.get(guild.id);
-    const levelingSettings = serverSettings.leveling;
+    // Get current server settings — getGuildSettings initialises defaults if needed
+    const serverSettings = client.serverSettingsManager.getGuildSettings(guild.id);
+    const levelingSettings = client.serverSettingsManager.getLevelingSettings(guild.id);
     
     await interaction.deferReply({ ephemeral: true });
     
@@ -665,7 +643,7 @@ async function handleSettingsCommand(interaction, client) {
             case 'enable':
                 // Enable leveling for the server
                 levelingSettings.enabled = true;
-                client.serverSettingsManager.saveSettings();
+                client.serverSettingsManager._saveGuildSettings(guild.id);
                 
                 interaction.editReply({
                     content: '✅ Leveling system has been **enabled** for this server.',
@@ -676,7 +654,7 @@ async function handleSettingsCommand(interaction, client) {
             case 'disable':
                 // Disable leveling for the server
                 levelingSettings.enabled = false;
-                client.serverSettingsManager.saveSettings();
+                client.serverSettingsManager._saveGuildSettings(guild.id);
                 
                 interaction.editReply({
                     content: '✅ Leveling system has been **disabled** for this server.',
@@ -710,7 +688,7 @@ async function handleSettingsCommand(interaction, client) {
                 
                 // Update channel setting
                 levelingSettings.levelUpChannelId = channel.id;
-                client.serverSettingsManager.saveSettings();
+                client.serverSettingsManager._saveGuildSettings(guild.id);
                 
                 interaction.editReply({
                     content: `✅ Level-up announcements will now be sent to ${channel}.`,
@@ -740,7 +718,7 @@ async function handleSettingsCommand(interaction, client) {
                 
                 // Update multiplier setting
                 levelingSettings.xpMultiplier = parseFloat(multiplier.toFixed(2));
-                client.serverSettingsManager.saveSettings();
+                client.serverSettingsManager._saveGuildSettings(guild.id);
                 
                 interaction.editReply({
                     content: `✅ XP multiplier has been set to **${levelingSettings.xpMultiplier}x**.`,
@@ -772,7 +750,7 @@ async function handleSettingsCommand(interaction, client) {
                 
                 // Update cooldown setting (convert to milliseconds)
                 levelingSettings.xpCooldown = Math.floor(cooldown * 1000);
-                client.serverSettingsManager.saveSettings();
+                client.serverSettingsManager._saveGuildSettings(guild.id);
                 
                 interaction.editReply({
                     content: `✅ XP cooldown has been set to **${cooldown} seconds**.`,

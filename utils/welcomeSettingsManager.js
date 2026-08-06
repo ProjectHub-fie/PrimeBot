@@ -1,4 +1,6 @@
 const { welcomePool } = require('../server/welcomeDb');
+const fs   = require('fs');
+const path = require('path');
 
 const CREATE_TABLE_SQL = `
     CREATE TABLE IF NOT EXISTS welcome_settings (
@@ -36,7 +38,69 @@ class WelcomeSettingsManager {
 
     async _init() {
         await this._ensureTable();
+        await this._migrateFromServerSettingsJson();
         await this._loadAll();
+    }
+
+    /**
+     * One-time import of welcome fields from the legacy serverSettings.json
+     * (or its .migrated copy) into the WELCOME_DATABASE_URL database.
+     * Marks completion with a .welcome_migrated sentinel file so it never runs twice.
+     */
+    async _migrateFromServerSettingsJson() {
+        // Try the already-processed file first, then the original
+        const candidates = [
+            path.join(__dirname, '../data/serverSettings.json.migrated'),
+            path.join(__dirname, '../data/serverSettings.json'),
+        ];
+        const donePath = path.join(__dirname, '../data/serverSettings.json.welcome_migrated');
+
+        if (fs.existsSync(donePath)) return; // already done
+
+        const srcPath = candidates.find(p => fs.existsSync(p));
+        if (!srcPath) return; // nothing to migrate
+
+        try {
+            const data = JSON.parse(fs.readFileSync(srcPath, 'utf8'));
+            let count = 0;
+
+            for (const [guildId, s] of Object.entries(data)) {
+                try {
+                    await welcomePool.query(`
+                        INSERT INTO welcome_settings (
+                            guild_id, enabled, channel_id, message, banner_url, color,
+                            dm_enabled, dm_message,
+                            show_member_count, show_join_date, show_account_age,
+                            custom_title, custom_footer, updated_at
+                        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, NOW())
+                        ON CONFLICT (guild_id) DO NOTHING
+                    `, [
+                        guildId,
+                        s.welcomeEnabled              || false,
+                        s.welcomeChannelId             || null,
+                        s.welcomeMessage               || 'Welcome to the server, {member}! Enjoy your stay!',
+                        s.welcomeBannerUrl             || null,
+                        s.welcomeColor                 || '#5865F2',
+                        s.welcomeDmEnabled             || false,
+                        s.welcomeDmMessage             || 'Hey {username}! Welcome to **{server}**!',
+                        s.welcomeShowMemberCount       !== false,
+                        s.welcomeShowJoinDate          !== false,
+                        s.welcomeShowAccountAge        !== false,
+                        s.welcomeCustomTitle           || null,
+                        s.welcomeCustomFooter          || null,
+                    ]);
+                    count++;
+                } catch (e) {
+                    console.error(`[WELCOME SETTINGS] Migration: failed for guild ${guildId}:`, e.message);
+                }
+            }
+
+            // Write sentinel so we never re-run
+            fs.writeFileSync(donePath, new Date().toISOString());
+            console.log(`[WELCOME SETTINGS] Migrated welcome settings for ${count} servers from legacy JSON.`);
+        } catch (err) {
+            console.error('[WELCOME SETTINGS] JSON migration failed:', err.message);
+        }
     }
 
     async _loadAll() {
