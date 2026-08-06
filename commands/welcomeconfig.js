@@ -135,17 +135,16 @@ module.exports = {
         const subcommand = interaction.options.getSubcommand();
         const client = interaction.client;
         
-        // Check if server settings manager is available
-        if (!client.serverSettingsManager) {
+        // Check if welcome settings manager is available
+        if (!client.welcomeSettingsManager) {
             return interaction.reply({
-                content: 'Server settings manager is not available. Please contact the bot owner.',
+                content: 'Welcome settings manager is not available. Please contact the bot owner.',
                 ephemeral: true
             });
         }
         
         const guildId = interaction.guild.id;
-        const serverSettings = client.serverSettingsManager.getGuildSettings(guildId);
-        const welcomeSettings = client.serverSettingsManager.getWelcomeSettings(guildId);
+        const welcomeSettings = client.welcomeSettingsManager.getWelcomeSettings(guildId);
 
         // Handle different subcommands
         switch (subcommand) {
@@ -154,7 +153,7 @@ module.exports = {
                 const enabled = interaction.options.getBoolean('enabled');
                 
                 // Update the setting
-                client.serverSettingsManager.updateGuildSetting(guildId, 'welcomeEnabled', enabled);
+                client.welcomeSettingsManager.updateGuildSetting(guildId, 'welcomeEnabled', enabled);
                 
                 // Send success message
                 const toggleEmbed = new EmbedBuilder()
@@ -178,7 +177,7 @@ module.exports = {
                 }
                 
                 // Update the setting
-                client.serverSettingsManager.setWelcomeChannel(guildId, channel.id);
+                client.welcomeSettingsManager.setWelcomeChannel(guildId, channel.id);
                 
                 // Send success message
                 const channelEmbed = new EmbedBuilder()
@@ -194,7 +193,7 @@ module.exports = {
                 const message = interaction.options.getString('message');
                 
                 // Update the setting
-                client.serverSettingsManager.setWelcomeMessage(guildId, message);
+                client.welcomeSettingsManager.setWelcomeMessage(guildId, message);
                 
                 // Send success message
                 const messageEmbed = new EmbedBuilder()
@@ -218,7 +217,7 @@ module.exports = {
                 }
                 
                 // Update the setting
-                client.serverSettingsManager.setWelcomeBanner(guildId, url);
+                client.welcomeSettingsManager.setWelcomeBanner(guildId, url);
                 
                 // Send success message with preview
                 const bannerEmbed = new EmbedBuilder()
@@ -232,7 +231,7 @@ module.exports = {
                 
             case 'toggledm':
                 // Toggle DM setting
-                const newDmValue = client.serverSettingsManager.toggleWelcomeDm(guildId);
+                const newDmValue = client.welcomeSettingsManager.toggleWelcomeDm(guildId);
                 
                 // Send success message
                 const dmEmbed = new EmbedBuilder()
@@ -248,7 +247,7 @@ module.exports = {
                 const dmMessage = interaction.options.getString('message');
                 
                 // Update the setting
-                client.serverSettingsManager.setWelcomeDmMessage(guildId, dmMessage);
+                client.welcomeSettingsManager.setWelcomeDmMessage(guildId, dmMessage);
                 
                 // Send success message
                 const dmMessageEmbed = new EmbedBuilder()
@@ -272,7 +271,7 @@ module.exports = {
                 }
                 
                 // Update the setting
-                client.serverSettingsManager.setWelcomeColor(guildId, color);
+                client.welcomeSettingsManager.setWelcomeColor(guildId, color);
                 
                 // Send success message
                 const colorEmbed = new EmbedBuilder()
@@ -306,10 +305,14 @@ module.exports = {
                 }
                 
                 // Toggle the feature
-                const featureResult = client.serverSettingsManager.toggleWelcomeFeature(guildId, featureKey);
+                client.welcomeSettingsManager.toggleWelcomeFeature(guildId, featureKey);
                 
                 // Get the new state
-                const featureState = client.serverSettingsManager.getGuildSettings(guildId)[featureKey];
+                const featureState = client.welcomeSettingsManager.getWelcomeSettings(guildId)[{
+                    welcomeShowMemberCount: 'showMemberCount',
+                    welcomeShowJoinDate: 'showJoinDate',
+                    welcomeShowAccountAge: 'showAccountAge',
+                }[featureKey]];
                 
                 // Send success message
                 const featureEmbed = new EmbedBuilder()
@@ -325,7 +328,7 @@ module.exports = {
                 const title = interaction.options.getString('title') || null;
                 
                 // Update the setting
-                client.serverSettingsManager.updateGuildSetting(guildId, 'welcomeCustomTitle', title);
+                client.welcomeSettingsManager.updateGuildSetting(guildId, 'welcomeCustomTitle', title);
                 
                 // Send success message
                 const titleEmbed = new EmbedBuilder()
@@ -341,7 +344,7 @@ module.exports = {
                 const footer = interaction.options.getString('footer') || null;
                 
                 // Update the setting
-                client.serverSettingsManager.updateGuildSetting(guildId, 'welcomeCustomFooter', footer);
+                client.welcomeSettingsManager.updateGuildSetting(guildId, 'welcomeCustomFooter', footer);
                 
                 // Send success message
                 const footerEmbed = new EmbedBuilder()

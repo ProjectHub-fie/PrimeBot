@@ -7,9 +7,9 @@ module.exports = {
     name: 'guildMemberAdd',
     async execute(member, client) {
         try {
-            // Check if server settings manager is available
-            if (!client.serverSettingsManager) {
-                console.warn('[WELCOME] Server settings manager not available, creating welcome functionality for all servers');
+            // Check if welcome settings manager is available
+            if (!client.welcomeSettingsManager) {
+                console.warn('[WELCOME] Welcome settings manager not available, using defaults for all servers');
                 
                 // SERVER WELCOME MESSAGE - Welcome messages are now available in all servers by default
                 await handleServerWelcome(member, null, client);
@@ -22,9 +22,8 @@ module.exports = {
                 return;
             }
             
-            // Get server-specific settings
-            const guildSettings = client.serverSettingsManager.getGuildSettings(member.guild.id);
-            const welcomeSettings = client.serverSettingsManager.getWelcomeSettings(member.guild.id);
+            // Get server-specific welcome settings
+            const welcomeSettings = client.welcomeSettingsManager.getWelcomeSettings(member.guild.id);
             
             console.log(`[WELCOME] Member joined ${member.guild.name} (${member.guild.id}), welcome enabled: ${welcomeSettings.enabled}`);
             

@@ -95,6 +95,7 @@ client.betaManager = betaManager;
     client.truthDareManager = { startGame: noopAsync };
     client.levelingManager  = null;
     client.serverSettingsManager = { getGuildSettings: () => ({}), updateGuildSetting: noop };
+    client.welcomeSettingsManager = { getWelcomeSettings: () => ({ enabled: false }), updateGuildSetting: noop, setWelcomeChannel: noop, setWelcomeMessage: noop, setWelcomeBanner: noop, setWelcomeColor: noop, setWelcomeDmMessage: noop, toggleWelcomeDm: noop, toggleWelcomeFeature: noop };
 }
 
 // ── Real manager boot — runs exactly once when this node connects ─────────
@@ -117,6 +118,7 @@ async function initializeManagers() {
     const TruthDareManager  = require('./utils/truthDareManager');
     const LevelingManager   = require('./utils/levelingManager');
     const ServerSettingsManager = require('./utils/serverSettingsManager');
+    const WelcomeSettingsManager = require('./utils/welcomeSettingsManager');
 
     client.giveawayManager  = new GiveawayManager(client);
     client.ticketManager    = new TicketManager(client);
@@ -127,6 +129,7 @@ async function initializeManagers() {
     client.countingManager  = new CountingManager(client);
     client.truthDareManager = new TruthDareManager(client);
     client.serverSettingsManager = new ServerSettingsManager(client);
+    client.welcomeSettingsManager = new WelcomeSettingsManager();
 
     try {
         const BirthdayManager = require('./utils/birthdayManager');
