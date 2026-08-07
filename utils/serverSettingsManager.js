@@ -66,11 +66,21 @@ class ServerSettingsManager {
         const fs = require('fs');
         const path = require('path');
         const jsonPath = path.join(__dirname, '../data/serverSettings.json');
-        const donePath = jsonPath + '.migrated';
-        if (!fs.existsSync(jsonPath) || fs.existsSync(donePath)) return;
+        const migratedPath = path.join(__dirname, '../data/serverSettings.json.migrated');
+        const donePath = path.join(__dirname, '../data/serverSettings.json.db_migrated');
+
+        if (fs.existsSync(donePath)) return;
+
+        const sourcePath = fs.existsSync(jsonPath)
+            ? jsonPath
+            : fs.existsSync(migratedPath)
+                ? migratedPath
+                : null;
+
+        if (!sourcePath) return;
 
         try {
-            const data = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+            const data = JSON.parse(fs.readFileSync(sourcePath, 'utf8'));
             let count = 0;
             for (const [guildId, s] of Object.entries(data)) {
                 try {
@@ -100,7 +110,11 @@ class ServerSettingsManager {
                     console.error(`[SERVER SETTINGS] Migration: failed on guild ${guildId}:`, e.message);
                 }
             }
-            fs.renameSync(jsonPath, donePath);
+
+            if (sourcePath === jsonPath) {
+                fs.renameSync(jsonPath, migratedPath);
+            }
+            fs.writeFileSync(donePath, new Date().toISOString());
             console.log(`[SERVER SETTINGS] Migrated ${count} guilds from JSON → DB.`);
         } catch (err) {
             console.error('[SERVER SETTINGS] JSON migration failed:', err.message);
