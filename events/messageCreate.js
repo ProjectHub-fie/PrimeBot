@@ -508,6 +508,186 @@ module.exports = {
                 case "noprefix":
                     // Handle no-prefix mode - moved to separate case section for better organization
                     break;
+
+                case "rm":
+                case "rename": {
+                    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+                        return message.reply('You need Administrator permission to rename channels.');
+                    }
+
+                    const rmArgs = [...args];
+                    let rmChannel = message.channel;
+                    let rmIndex = 0;
+                    const rmMention = rmArgs[0]?.match(/^<#(\d+)>$/);
+                    if (rmMention) {
+                        rmChannel = message.guild.channels.cache.get(rmMention[1]);
+                        rmIndex = 1;
+                    }
+
+                    const rmName = rmArgs.slice(rmIndex).join(' ');
+                    if (!rmName) {
+                        return message.reply(`Usage: \`${prefix}rm [#channel] new-name\``);
+                    }
+
+                    if (!rmChannel || !rmChannel.setName) {
+                        return message.reply('That channel could not be found.');
+                    }
+
+                    try {
+                        await rmChannel.setName(rmName);
+                        return message.reply(`Renamed ${rmChannel} to **${rmName}**.`);
+                    } catch (err) {
+                        console.error('[PREFIX RM] Failed:', err);
+                        return message.reply('I could not rename that channel.');
+                    }
+                }
+
+                case "lock": {
+                    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+                        return message.reply('You need Administrator permission to lock channels.');
+                    }
+
+                    const lockArgs = [...args];
+                    let lockChannel = message.channel;
+                    const lockMention = lockArgs[0]?.match(/^<#(\d+)>$/);
+                    if (lockMention) {
+                        lockChannel = message.guild.channels.cache.get(lockMention[1]);
+                    }
+
+                    if (!lockChannel || !lockChannel.permissionOverwrites || !lockChannel.isTextBased?.()) {
+                        return message.reply('That channel cannot be locked.');
+                    }
+
+                    const everyone = lockChannel.guild.roles.everyone;
+                    try {
+                        await lockChannel.permissionOverwrites.edit(everyone, { SendMessages: false, AddReactions: false });
+                        return message.reply(`Locked **${lockChannel.name}**.`);
+                    } catch (err) {
+                        console.error('[PREFIX LOCK] Failed:', err);
+                        return message.reply('I could not lock that channel.');
+                    }
+                }
+
+                case "unlock": {
+                    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+                        return message.reply('You need Administrator permission to unlock channels.');
+                    }
+
+                    const unlockArgs = [...args];
+                    let unlockChannel = message.channel;
+                    const unlockMention = unlockArgs[0]?.match(/^<#(\d+)>$/);
+                    if (unlockMention) {
+                        unlockChannel = message.guild.channels.cache.get(unlockMention[1]);
+                    }
+
+                    if (!unlockChannel || !unlockChannel.permissionOverwrites || !unlockChannel.isTextBased?.()) {
+                        return message.reply('That channel cannot be unlocked.');
+                    }
+
+                    const everyone = unlockChannel.guild.roles.everyone;
+                    try {
+                        await unlockChannel.permissionOverwrites.edit(everyone, { SendMessages: null, AddReactions: null });
+                        return message.reply(`Unlocked **${unlockChannel.name}**.`);
+                    } catch (err) {
+                        console.error('[PREFIX UNLOCK] Failed:', err);
+                        return message.reply('I could not unlock that channel.');
+                    }
+                }
+
+                case "hide": {
+                    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+                        return message.reply('You need Administrator permission to hide channels.');
+                    }
+
+                    const hideArgs = [...args];
+                    let hideChannel = message.channel;
+                    const hideMention = hideArgs[0]?.match(/^<#(\d+)>$/);
+                    if (hideMention) {
+                        hideChannel = message.guild.channels.cache.get(hideMention[1]);
+                    }
+
+                    if (!hideChannel || !hideChannel.permissionOverwrites) {
+                        return message.reply('That channel cannot be hidden.');
+                    }
+
+                    const everyone = hideChannel.guild.roles.everyone;
+                    try {
+                        await hideChannel.permissionOverwrites.edit(everyone, { ViewChannel: false });
+                        return message.reply(`Hidden **${hideChannel.name}** from @everyone.`);
+                    } catch (err) {
+                        console.error('[PREFIX HIDE] Failed:', err);
+                        return message.reply('I could not hide that channel.');
+                    }
+                }
+
+                case "unhide": {
+                    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+                        return message.reply('You need Administrator permission to unhide channels.');
+                    }
+
+                    const unhideArgs = [...args];
+                    let unhideChannel = message.channel;
+                    const unhideMention = unhideArgs[0]?.match(/^<#(\d+)>$/);
+                    if (unhideMention) {
+                        unhideChannel = message.guild.channels.cache.get(unhideMention[1]);
+                    }
+
+                    if (!unhideChannel || !unhideChannel.permissionOverwrites) {
+                        return message.reply('That channel cannot be unhidden.');
+                    }
+
+                    const everyone = unhideChannel.guild.roles.everyone;
+                    try {
+                        await unhideChannel.permissionOverwrites.edit(everyone, { ViewChannel: null });
+                        return message.reply(`Unhidden **${unhideChannel.name}** for @everyone.`);
+                    } catch (err) {
+                        console.error('[PREFIX UNHIDE] Failed:', err);
+                        return message.reply('I could not unhide that channel.');
+                    }
+                }
+
+                case "nuke": {
+                    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+                        return message.reply('You need Administrator permission to nuke channels.');
+                    }
+
+                    const nukeArgs = [...args];
+                    let nukeChannel = message.channel;
+                    const nukeMention = nukeArgs[0]?.match(/^<#(\d+)>$/);
+                    let nameIndex = 0;
+                    if (nukeMention) {
+                        nukeChannel = message.guild.channels.cache.get(nukeMention[1]);
+                        nameIndex = 1;
+                    }
+
+                    const replacementName = nukeArgs.slice(nameIndex).join(' ') || nukeChannel?.name;
+                    if (!nukeChannel || !nukeChannel.parent || !nukeChannel.guild) {
+                        return message.reply('That channel cannot be nuked.');
+                    }
+
+                    try {
+                        const oldName = nukeChannel.name;
+                        const category = nukeChannel.parent;
+                        const position = nukeChannel.position;
+                        const topic = nukeChannel.topic || null;
+                        const nsfw = Boolean(nukeChannel.nsfw);
+
+                        const newChannel = await nukeChannel.clone({
+                            name: replacementName,
+                            topic,
+                            nsfw,
+                            parent: category,
+                            position,
+                        });
+
+                        await nukeChannel.delete(`Nuke requested by ${message.author.tag}`);
+                        await newChannel.setPosition(position);
+                        return message.reply(`Nuked **${oldName}** and recreated it as **${newChannel.name}**.`);
+                    } catch (err) {
+                        console.error('[PREFIX NUKE] Failed:', err);
+                        return message.reply('I could not nuke that channel.');
+                    }
+                }
                     
                 case "commands":
                 
