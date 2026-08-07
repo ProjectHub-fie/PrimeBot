@@ -284,6 +284,79 @@ async function releaseLease(nodeName) {
     }
 }
 
+// Explicit lease transfer. This is the API that was missing from the shardnode
+// failover flow. It moves the single-row bot_failover_lock ownership to a new
+// bearer (targetNodeName / targetRole) instead of only supporting "acquire" and
+// "delete" at the database boundary.
+async function transferLease(targetNodeName, targetRole, fromNodeName = null, { force = false } = {}) {
+    try {
+        await ensureLeaseTable();
+        const current = await getLease();
+        if (!current) {
+            await db.execute(sql`
+                INSERT INTO bot_failover_lock (id, owner_node_name, owner_role, acquired_at, last_seen)
+                VALUES (1, ${targetNodeName}, ${targetRole}, NOW(), NOW())
+                ON CONFLICT (id) DO UPDATE SET
+                    owner_node_name = EXCLUDED.owner_node_name,
+                    owner_role = EXCLUDED.owner_role,
+                    acquired_at = NOW(),
+                    last_seen = NOW()
+            `);
+            return {
+                transferred: true,
+                ownerNodeName: targetNodeName,
+                ownerRole: targetRole,
+                reason: 'created lease row during transfer',
+            };
+        }
+
+        if (fromNodeName && current.ownerNodeName !== fromNodeName && !force) {
+            console.warn(`[FAILOVER] Lease transfer request rejected: current owner is ${current.ownerNodeName} instead of ${fromNodeName}.`);
+            return {
+                transferred: false,
+                ownerNodeName: current.ownerNodeName,
+                ownerRole: current.ownerRole,
+                ageMs: current.ageMs,
+                reason: 'owner mismatch',
+            };
+        }
+
+        const result = await db.execute(sql`
+            UPDATE bot_failover_lock
+            SET owner_node_name = ${targetNodeName}, owner_role = ${targetRole}, acquired_at = NOW(), last_seen = NOW()
+            WHERE id = 1
+        `);
+        const rowCount = Number(result?.rowCount || 0);
+        if (rowCount <= 0) {
+            return {
+                transferred: false,
+                ownerNodeName: current.ownerNodeName,
+                ownerRole: current.ownerRole,
+                ageMs: current.ageMs,
+                reason: 'lease row was not updated',
+            };
+        }
+
+        console.log(`[FAILOVER] Lease transferred from ${current.ownerNodeName} to ${targetNodeName} (${targetRole}).`);
+        return {
+            transferred: true,
+            ownerNodeName: targetNodeName,
+            ownerRole: targetRole,
+            ageMs: 0,
+            reason: 'lease updated',
+        };
+    } catch (err) {
+        console.error('[FAILOVER] Lease transfer failed:', err.message);
+        return {
+            transferred: false,
+            ownerNodeName: null,
+            ownerRole: null,
+            ageMs: Infinity,
+            reason: err.message,
+        };
+    }
+}
+
 // Returns true when the lease is currently held by a DIFFERENT node that has
 // HIGHER priority than selfRole (lower ROLE_PRIORITY number).  Used by the
 // post-takeover standby monitor so it can step down the moment a higher-priority
@@ -322,5 +395,6 @@ module.exports = {
     acquireLease,
     refreshLease,
     releaseLease,
+    transferLease,
     isLeaseHeldByHigherPriority,
 };
