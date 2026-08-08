@@ -1,5 +1,5 @@
 {
-  "include": ["shared/**/*", "server/**/*", "utils/**/*", "events/**/*", "commands/**/*", "index.js", "config.js", "start-bot.cjs"],
+  "include": ["shared/**/*", "server/**/*", "utils/**/*", "events/**/*", "commands/**/*", "index.js", "config.js", "start-bot.js"],
   "exclude": ["node_modules", "build", "dist", "**/*.test.ts", "**/*.test.js"],
   "compilerOptions": {
     "incremental": true,

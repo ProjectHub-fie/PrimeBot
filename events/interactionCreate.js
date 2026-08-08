@@ -137,7 +137,7 @@ async function showCategoryHelpUpdate(interaction, category) {
 
         case 'moderation':
             categoryEmbed = new EmbedBuilder()
-                .setColor(config.colors.secondary)
+                .setColor(config.colors.secondary || config.colors.primary)
                 .setTitle('🛡️ Moderation Tools')
                 .setDescription('Server management and moderation:')
                 .addFields(

@@ -1,6 +1,6 @@
-const { EmbedBuilder } = require('discord.js');
 const config = require('../config');
 const { pool } = require('../server/db');
+const { normalizeGuildPrefix } = require('./prefixHelper');
 
 const CREATE_TABLE_SQL = `
     CREATE TABLE IF NOT EXISTS server_settings (
@@ -26,6 +26,7 @@ const CREATE_TABLE_SQL = `
         auto_reactions_enabled BOOLEAN NOT NULL DEFAULT false,
         auto_reactions         JSONB NOT NULL DEFAULT '[]',
         no_prefix_users        JSONB NOT NULL DEFAULT '{}',
+        prefix                 VARCHAR(10) DEFAULT '${config.prefix}',
         updated_at             TIMESTAMP DEFAULT NOW()
     )
 `;
@@ -51,6 +52,7 @@ class ServerSettingsManager {
     async _ensureTable() {
         if (this._tableReady) return;
         await pool.query(CREATE_TABLE_SQL);
+        await pool.query(`ALTER TABLE server_settings ADD COLUMN IF NOT EXISTS prefix VARCHAR(10) DEFAULT '${config.prefix}'`);
         this._tableReady = true;
     }
 
@@ -123,6 +125,7 @@ class ServerSettingsManager {
 
     _rowToSettings(row) {
         return {
+            prefix: normalizeGuildPrefix(row.prefix, config.prefix),
             receiveBroadcasts: row.receive_broadcasts,
             broadcastChannelId: row.broadcast_channel_id || null,
             // Welcome settings are managed exclusively by WelcomeSettingsManager (WELCOME_DATABASE_URL)
@@ -142,6 +145,7 @@ class ServerSettingsManager {
 
     _defaultSettings() {
         return {
+            prefix: config.prefix,
             receiveBroadcasts: true,
             broadcastChannelId: null,
             // Welcome settings are managed exclusively by WelcomeSettingsManager (WELCOME_DATABASE_URL)
@@ -177,8 +181,8 @@ class ServerSettingsManager {
             INSERT INTO server_settings (
                 guild_id, receive_broadcasts, broadcast_channel_id,
                 leveling_enabled, leveling_channel_id, xp_multiplier, xp_cooldown,
-                auto_reactions_enabled, auto_reactions, no_prefix_users, updated_at
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, NOW())
+                auto_reactions_enabled, auto_reactions, no_prefix_users, prefix, updated_at
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, NOW())
             ON CONFLICT (guild_id) DO UPDATE SET
                 receive_broadcasts    = EXCLUDED.receive_broadcasts,
                 broadcast_channel_id  = EXCLUDED.broadcast_channel_id,
@@ -189,6 +193,7 @@ class ServerSettingsManager {
                 auto_reactions_enabled = EXCLUDED.auto_reactions_enabled,
                 auto_reactions         = EXCLUDED.auto_reactions,
                 no_prefix_users        = EXCLUDED.no_prefix_users,
+                prefix                 = EXCLUDED.prefix,
                 updated_at             = NOW()
         `, [
             guildId,
@@ -201,6 +206,7 @@ class ServerSettingsManager {
             ar.enabled,
             JSON.stringify(ar.reactions),
             JSON.stringify(s.noPrefixUsers),
+            normalizeGuildPrefix(s.prefix, config.prefix),
         ]);
     }
 
@@ -224,6 +230,20 @@ class ServerSettingsManager {
             this.serverSettings.set(guildId, this._defaultSettings());
         }
         return this.serverSettings.get(guildId);
+    }
+
+    getGuildPrefix(guildId) {
+        const s = this.getGuildSettings(guildId);
+        return normalizeGuildPrefix(s.prefix, config.prefix);
+    }
+
+    setGuildPrefix(guildId, prefix) {
+        const normalizedPrefix = normalizeGuildPrefix(prefix, config.prefix);
+        const s = this.getGuildSettings(guildId);
+        s.prefix = normalizedPrefix;
+        this.serverSettings.set(guildId, s);
+        this._saveGuildSettings(guildId);
+        return { success: true, prefix: normalizedPrefix };
     }
 
     updateGuildSetting(guildId, setting, value) {
@@ -514,3 +534,4 @@ class ServerSettingsManager {
 }
 
 module.exports = ServerSettingsManager;
+module.exports.normalizeGuildPrefix = normalizeGuildPrefix;

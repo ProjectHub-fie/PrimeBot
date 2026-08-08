@@ -68,7 +68,9 @@ module.exports = {
             // Prevent infinite recursion from no-prefix command processing
             if (message._processedAsNoPrefix) return;
 
-            const prefix = config.prefix;
+            const prefix = message.guild?.id
+                ? (client.serverSettingsManager?.getGuildPrefix?.(message.guild.id) || config.prefix)
+                : config.prefix;
 
             // Check for ping (mention)
             if (
@@ -512,6 +514,146 @@ module.exports = {
                     // Handle no-prefix mode - moved to separate case section for better organization
                     break;
 
+                case "prefix": {
+                    if (!message.member || !message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+                        return message.reply('You need Administrator permission to change the server prefix.');
+                    }
+
+                    if (args.length === 0) {
+                        return message.reply(`The current prefix for this server is \`${prefix}\`.`);
+                    }
+
+                    const requestedPrefix = args.join(' ').trim();
+                    const result = client.serverSettingsManager?.setGuildPrefix
+                        ? client.serverSettingsManager.setGuildPrefix(message.guild.id, requestedPrefix)
+                        : { success: true, prefix };
+
+                    if (!result?.success) {
+                        return message.reply('I could not update the server prefix.');
+                    }
+
+                    return message.reply(`✅ Prefix updated to \`${result.prefix}\` for this server.`);
+                }
+
+                case "role": {
+                    if (!message.member || !message.member.permissions.has(PermissionFlagsBits.ManageRoles)) {
+                        return message.reply('You need the Manage Roles permission to manage roles.');
+                    }
+
+                    const roleSubcommand = args[0]?.toLowerCase();
+                    const roleArgs = args.slice(1);
+                    const botMember = message.guild.members.me;
+
+                    if (!botMember) {
+                        return message.reply('The bot member details are not available right now.');
+                    }
+
+                    if (!roleSubcommand || !['add', 'remove', 'create', 'list'].includes(roleSubcommand)) {
+                        return message.reply(`Usage: \`${prefix}role add @user @role\` | \`${prefix}role remove @user @role\` | \`${prefix}role create [name] [color] [hoist] [mentionable]\` | \`${prefix}role list\``);
+                    }
+
+                    switch (roleSubcommand) {
+                        case 'add': {
+                            const targetUser = message.mentions.users.first();
+                            const targetRole = message.mentions.roles.first();
+
+                            if (!targetUser || !targetRole) {
+                                return message.reply(`Usage: \`${prefix}role add @user @role\``);
+                            }
+
+                            const member = await message.guild.members.fetch(targetUser.id).catch(() => null);
+                            if (!member) {
+                                return message.reply('That user is not a member of this server.');
+                            }
+
+                            if (targetRole.position >= botMember.roles.highest.position) {
+                                return message.reply('I cannot assign a role that is at or above my highest role.');
+                            }
+
+                            if (member.roles.cache.has(targetRole.id)) {
+                                return message.reply(`${targetUser} already has ${targetRole}.`);
+                            }
+
+                            await member.roles.add(targetRole);
+                            return message.reply(`✅ Added ${targetRole} to ${targetUser}.`);
+                        }
+
+                        case 'remove': {
+                            const targetUser = message.mentions.users.first();
+                            const targetRole = message.mentions.roles.first();
+
+                            if (!targetUser || !targetRole) {
+                                return message.reply(`Usage: \`${prefix}role remove @user @role\``);
+                            }
+
+                            const member = await message.guild.members.fetch(targetUser.id).catch(() => null);
+                            if (!member) {
+                                return message.reply('That user is not a member of this server.');
+                            }
+
+                            if (targetRole.position >= botMember.roles.highest.position) {
+                                return message.reply('I cannot remove a role that is at or above my highest role.');
+                            }
+
+                            if (member.roles.highest.position >= botMember.roles.highest.position) {
+                                return message.reply('I cannot remove roles from a member whose highest role is above my highest role for safety.');
+                            }
+
+                            if (!member.roles.cache.has(targetRole.id)) {
+                                return message.reply(`${targetUser} does not have ${targetRole}.`);
+                            }
+
+                            await member.roles.remove(targetRole);
+                            return message.reply(`✅ Removed ${targetRole} from ${targetUser}.`);
+                        }
+
+                        case 'create': {
+                            const name = roleArgs[0];
+                            if (!name) {
+                                return message.reply(`Usage: \`${prefix}role create [name] [color] [hoist] [mentionable]\``);
+                            }
+
+                            const colorToken = roleArgs[1];
+                            const colorValue = colorToken && /^#?[0-9A-Fa-f]{6}$/.test(colorToken)
+                                ? (colorToken.startsWith('#') ? colorToken : `#${colorToken}`)
+                                : undefined;
+                            const hoist = roleArgs.includes('hoist');
+                            const mentionable = roleArgs.includes('mentionable');
+
+                            const createdRole = await message.guild.roles.create({
+                                name,
+                                color: colorValue,
+                                hoist,
+                                mentionable,
+                                reason: `Created by ${message.author.tag}`,
+                            });
+
+                            return message.reply(`✅ Created the role ${createdRole}.`);
+                        }
+
+                        case 'list': {
+                            const roles = [...message.guild.roles.cache.values()]
+                                .filter(role => role.id !== message.guild.roles.everyone.id)
+                                .sort((a, b) => b.position - a.position)
+                                .slice(0, 25);
+
+                            const description = roles.length > 0
+                                ? roles.map(role => `${role} • ${role.members.size} member${role.members.size === 1 ? '' : 's'}`).join('\n')
+                                : 'No roles found.';
+
+                            const roleListEmbed = new EmbedBuilder()
+                                .setColor(config.colors.primary)
+                                .setTitle('📋 Server Roles')
+                                .setDescription(description)
+                                .setFooter({ text: `Version ${config.version}` })
+                                .setTimestamp();
+
+                            return message.reply({ embeds: [roleListEmbed] });
+                        }
+                    }
+                    break;
+                }
+
                 case "rm":
                 case "rename": {
                     if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
@@ -642,7 +784,7 @@ module.exports = {
                     const everyone = unhideChannel.guild.roles.everyone;
                     try {
                         await unhideChannel.permissionOverwrites.edit(everyone, { ViewChannel: null });
-                        return message.reply(`Unhidden **${unhideChannel.name}** for @everyone.`);
+                        return message.reply(`Unhidden **${unhideChannel.name}** for everyone in this server.`);
                     } catch (err) {
                         console.error('[PREFIX UNHIDE] Failed:', err);
                         return message.reply('I could not unhide that channel.');
@@ -3367,7 +3509,7 @@ module.exports = {
                 }
 
                 case "np":
-                case "noprefix":
+                case "noprefix": {
                     // Developer-only access for the no-prefix administration command
                     if (!config.developerIds.includes(message.author.id)) {
                         return message.reply({
@@ -3382,8 +3524,14 @@ module.exports = {
 
                     // Check if the command is being used in a guild
                     if (!message.guild) {
-                        message.reply("This command can only be used in a server.");
-                        return;
+                        return message.reply({
+                            embeds: [new EmbedBuilder()
+                                .setColor(config.colors.warning)
+                                .setTitle('⚠️ Server Only')
+                                .setDescription('This command can only be used in a server.')
+                                .setFooter({ text: `Version: ${config.version}` })
+                                .setTimestamp()]
+                        });
                     }
                     
                     if (args.length === 0) {
@@ -3401,8 +3549,7 @@ module.exports = {
                             )
                             .setFooter({ text: "Developer command • Main database-backed no-prefix mode", iconURL: client.user.displayAvatarURL() });
                             
-                        message.reply({ embeds: [npHelpEmbed] });
-                        return;
+                        return message.reply({ embeds: [npHelpEmbed] });
                     }
                     
                     const npSubCommand = args[0].toLowerCase();
@@ -3440,11 +3587,10 @@ module.exports = {
                                     .setFooter({ text: "Developer command • Main database", iconURL: client.user.displayAvatarURL() })
                                     .setTimestamp();
                                     
-                                message.reply({ embeds: [enableEmbed] });
+                                return message.reply({ embeds: [enableEmbed] });
                             } else {
-                                message.reply(result.message || "Failed to enable no-prefix mode.");
+                                return message.reply(result.message || "Failed to enable no-prefix mode.");
                             }
-                            break;
                         }
                             
                         case "remove":
@@ -3464,11 +3610,10 @@ module.exports = {
                                     .setFooter({ text: `Prefix: ${prefix}`, iconURL: client.user.displayAvatarURL() })
                                     .setTimestamp();
                                     
-                                message.reply({ embeds: [disableEmbed] });
+                                return message.reply({ embeds: [disableEmbed] });
                             } else {
-                                message.reply("That user does not currently have no-prefix mode enabled.");
+                                return message.reply("That user does not currently have no-prefix mode enabled.");
                             }
-                            break;
                         }
                             
                         case "status":
@@ -3490,11 +3635,10 @@ module.exports = {
                                     .setFooter({ text: "Developer command • Main database", iconURL: client.user.displayAvatarURL() })
                                     .setTimestamp();
                                     
-                                message.reply({ embeds: [statusEmbed] });
+                                return message.reply({ embeds: [statusEmbed] });
                             } else {
-                                message.reply(`${target} does not have no-prefix mode enabled.`);
+                                return message.reply(`${target} does not have no-prefix mode enabled.`);
                             }
-                            break;
                         }
                             
                         case "user": {
@@ -3531,17 +3675,17 @@ module.exports = {
                                     .setFooter({ text: `Enabled by ${message.author.tag}`, iconURL: message.author.displayAvatarURL() })
                                     .setTimestamp();
                                     
-                                message.reply({ embeds: [userEnableEmbed] });
+                                return message.reply({ embeds: [userEnableEmbed] });
                             } else {
-                                message.reply(userResult.message || "Failed to enable no-prefix mode for the user.");
+                                return message.reply(userResult.message || "Failed to enable no-prefix mode for the user.");
                             }
-                            break;
                         }
                             
                         default:
-                            message.reply(`Unknown no-prefix command: ${npSubCommand}. Use \`${prefix}np\` to see available commands.`);
+                            return message.reply(`Unknown no-prefix command: ${npSubCommand}. Use \`${prefix}np\` to see available commands.`);
                     }
-                    break;
+                    return;
+                }
 
                 case "purge": {
                     if (!message.guild) {
