@@ -269,9 +269,10 @@ client.on('shardDisconnect', async (closeEvent, shardId) => {
     // a later 4004 as a real token error; we restore it if the lease is still ours.
     global.botActive = false;
     try {
+        const closeCode = closeEvent && closeEvent.code ? closeEvent.code : 'unknown';
         const stillHaveLease = await nodeFailover.refreshLease(nodeFailover.NODE_NAME, nodeFailover.NODE_ROLE);
         if (!stillHaveLease) {
-            console.warn(`[FAILOVER] Shard ${shardId} disconnected (code ${closeEvent?.code}) and lease is gone — higher-priority node has taken over. Stepping down.`);
+            console.warn(`[FAILOVER] Shard ${shardId} disconnected (code ${closeCode}) and lease is gone — higher-priority node has taken over. Stepping down.`);
             await stepDown(`shard ${shardId} disconnect + lease gone`);
         } else {
             // False alarm (transient network drop) — restore active flag so
@@ -389,7 +390,8 @@ async function connectBot(leaseAlreadyAcquired = false) {
     } catch (error) {
         connectingBot = false;
         console.error('[ERROR] Failed to login to Discord:', error);
-        if (error.code === 'TOKEN_INVALID' || error.message?.includes('token')) {
+        const hasTokenError = error && error.message && error.message.includes('token');
+        if (error.code === 'TOKEN_INVALID' || hasTokenError) {
             console.error('❌ Invalid Discord token. Please check your DISCORD_TOKEN/BOT_TOKEN/TOKEN/CLIENT_TOKEN in secrets.');
             process.exit(1);
         }
