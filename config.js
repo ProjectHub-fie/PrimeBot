@@ -1,6 +1,6 @@
 module.exports = {
     // Bot version information
-    version: '2.5.0',
+    version: '2.10.0',
     buildDate: '2025-05-29',
     
     // Bot configuration

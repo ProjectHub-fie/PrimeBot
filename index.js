@@ -94,6 +94,7 @@ client.betaManager = betaManager;
     client.countingManager  = { isCountingChannel: () => false, processCountingMessage: noopAsync };
     client.truthDareManager = { startGame: noopAsync };
     client.levelingManager  = null;
+    client.snipeManager = { get: noop, store: noop };
     client.serverSettingsManager = { getGuildSettings: () => ({}), updateGuildSetting: noop };
     client.welcomeSettingsManager = { getWelcomeSettings: () => ({ enabled: false }), updateGuildSetting: noop, setWelcomeChannel: noop, setWelcomeMessage: noop, setWelcomeBanner: noop, setWelcomeColor: noop, setWelcomeDmMessage: noop, toggleWelcomeDm: noop, toggleWelcomeFeature: noop };
 }
@@ -119,6 +120,7 @@ async function initializeManagers() {
     const LevelingManager   = require('./utils/levelingManager');
     const ServerSettingsManager = require('./utils/serverSettingsManager');
     const WelcomeSettingsManager = require('./utils/welcomeSettingsManager');
+    const SnipeManager = require('./utils/snipeManager');
 
     client.giveawayManager  = new GiveawayManager(client);
     client.ticketManager    = new TicketManager(client);
@@ -128,6 +130,7 @@ async function initializeManagers() {
     client.emojiManager     = new EmojiManager();
     client.countingManager  = new CountingManager(client);
     client.truthDareManager = new TruthDareManager(client);
+    client.snipeManager = new SnipeManager();
     client.serverSettingsManager = new ServerSettingsManager(client);
     client.welcomeSettingsManager = new WelcomeSettingsManager();
 

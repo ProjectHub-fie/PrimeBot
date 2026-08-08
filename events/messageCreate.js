@@ -58,6 +58,9 @@ module.exports = {
             // Ignore messages from bots
             if (message.author.bot) return;
 
+            // Snapshots are recorded on the live message path; deletion listener is
+            // installed in the same event file through a one-time listener later.
+
             // Only the active node should respond. If this node is in standby
             // (sn2 waiting for sn1 to go down), silently drop all messages.
             if (!global.botActive) return;
@@ -686,6 +689,75 @@ module.exports = {
                     } catch (err) {
                         console.error('[PREFIX NUKE] Failed:', err);
                         return message.reply('I could not nuke that channel.');
+                    }
+                }
+
+                case "snipe": {
+                    if (!message.guild) {
+                        return message.reply('Snipe is only available in a server channel.');
+                    }
+
+                    const huntedChannel = message.mentions.channels.first() || message.channel;
+                    const record = client.snipeManager?.get(message.guild.id, huntedChannel.id);
+                    if (!record) {
+                        return message.reply('I do not have a recently deleted message for that channel.');
+                    }
+
+                    const content = record.content || '*No text content*';
+                    const embed = new EmbedBuilder()
+                        .setColor(0xffd700)
+                        .setTitle('🗑️ Recently Deleted Message')
+                        .setDescription(content)
+                        .addFields(
+                            { name: 'Author', value: record.authorUsername || 'Unknown', inline: true },
+                            { name: 'Channel', value: `<#${huntedChannel.id}>`, inline: true },
+                            { name: 'Created', value: new Date(record.createdTimestamp).toLocaleString(), inline: true }
+                        );
+
+                    if (record.attachments?.length) {
+                        embed.addFields({ name: 'Attachments', value: record.attachments.map(a => a.url).join('\n'), inline: false });
+                    }
+
+                    return message.reply({ embeds: [embed] });
+                }
+
+                case "kick": {
+                    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+                        return message.reply('You need Administrator permission to kick members.');
+                    }
+
+                    const target = message.mentions.members?.first();
+                    const reason = args.slice(1).join(' ') || 'No reason provided';
+                    if (!target) {
+                        return message.reply(`Usage: \`${prefix}kick @member [reason]\``);
+                    }
+
+                    try {
+                        await target.kick(reason);
+                        return message.reply(`Kicked **${target.user.tag}** for: ${reason}`);
+                    } catch (err) {
+                        console.error('[PREFIX KICK] Failed:', err);
+                        return message.reply('I could not kick that member.');
+                    }
+                }
+
+                case "ban": {
+                    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+                        return message.reply('You need Administrator permission to ban members.');
+                    }
+
+                    const target = message.mentions.users.first();
+                    const reason = args.slice(1).join(' ') || 'No reason provided';
+                    if (!target) {
+                        return message.reply(`Usage: \`${prefix}ban @member [reason]\``);
+                    }
+
+                    try {
+                        await message.guild.members.ban(target, { reason, deleteMessageSeconds: 0 });
+                        return message.reply(`Banned **${target.tag}** for: ${reason}`);
+                    } catch (err) {
+                        console.error('[PREFIX BAN] Failed:', err);
+                        return message.reply('I could not ban that member.');
                     }
                 }
                     
@@ -4733,7 +4805,16 @@ async function showPrefixCategoryHelp(message, category, prefix) {
                     { name: `${prefix}move`, value: 'Move members between voice channels', inline: true },
                     { name: `${prefix}end [id]`, value: 'End giveaways and other activities', inline: true },
                     { name: `${prefix}endpoll [id]`, value: 'End a poll early', inline: true },
-                    { name: `${prefix}autoreact`, value: 'Manage auto-reactions to trigger words', inline: true }
+                    { name: `${prefix}autoreact`, value: 'Manage auto-reactions to trigger words', inline: true },
+                    { name: `${prefix}snipe`, value: 'Show the last deleted message in a channel', inline: true },
+                    { name: `${prefix}kick @member [reason]`, value: 'Kick a member from the server', inline: true },
+                    { name: `${prefix}ban @member [reason] [days]`, value: 'Ban a member from the server', inline: true },
+                    { name: `${prefix}rm [name] [#channel]`, value: 'Rename a channel (Admin)', inline: true },
+                    { name: `${prefix}lock [#channel]`, value: 'Lock a channel (Admin)', inline: true },
+                    { name: `${prefix}unlock [#channel]`, value: 'Unlock a channel (Admin)', inline: true },
+                    { name: `${prefix}hide [#channel]`, value: 'Hide a channel from @everyone (Admin)', inline: true },
+                    { name: `${prefix}unhide [#channel]`, value: 'Unhide a channel for @everyone (Admin)', inline: true },
+                    { name: `${prefix}nuke [name] [#channel]`, value: 'Recreate a channel in the same category (Admin)', inline: true }
                 );
             break;
             
@@ -4848,7 +4929,7 @@ async function showDetailedCategoryHelp(message, category, prefix) {
             break;
             
         case 'moderation':
-            commandCount = 5;
+            commandCount = 14;
             categoryEmbed = new EmbedBuilder()
                 .setColor(config.colors.secondary)
                 .setTitle('🛡️ Moderation Tools - Detailed View')
@@ -4858,7 +4939,16 @@ async function showDetailedCategoryHelp(message, category, prefix) {
                     { name: `${prefix}create-ticket [reason]`, value: '**Create ticket with custom name**\nInstantly create a support ticket with specific purpose', inline: false },
                     { name: `${prefix}ticket-history [@user]`, value: '**View ticket history and logs**\nReview past tickets and support interactions', inline: false },
                     { name: `${prefix}move @user #channel`, value: '**Move members between voice channels**\nQuickly relocate users to different voice channels', inline: false },
-                    { name: `${prefix}end [activity]`, value: '**End ongoing activities**\nStop giveaways, polls, or other time-based activities', inline: false }
+                    { name: `${prefix}end [activity]`, value: '**End ongoing activities**\nStop giveaways, polls, or other time-based activities', inline: false },
+                    { name: `${prefix}snipe [#channel]`, value: '**Inspect the last deleted reply in a channel**\nRecover the last removed message snapshot from the channel cache', inline: false },
+                    { name: `${prefix}kick @member [reason]`, value: '**Kick a member**\nRemove a member from the server with a reason', inline: false },
+                    { name: `${prefix}ban @member [reason] [days]`, value: '**Ban a member**\nBan a user and optionally purge recent messages', inline: false },
+                    { name: `${prefix}rm [name] [#channel]`, value: '**Rename a channel (Admin)**\nChange the target channel name', inline: false },
+                    { name: `${prefix}lock [#channel]`, value: '**Lock a channel (Admin)**\nStop @everyone from posting', inline: false },
+                    { name: `${prefix}unlock [#channel]`, value: '**Unlock a channel (Admin)**\nRestore posting for @everyone', inline: false },
+                    { name: `${prefix}hide [#channel]`, value: '**Hide a channel from @everyone (Admin)**\nRestrict visibility to configured roles', inline: false },
+                    { name: `${prefix}unhide [#channel]`, value: '**Unhide a channel for @everyone (Admin)**\nRestore visibility to everyone', inline: false },
+                    { name: `${prefix}nuke [name] [#channel]`, value: '**Nuke a channel and recreate it (Admin)**\nDelete and restore the channel in-place', inline: false }
                 );
             break;
             
@@ -5299,7 +5389,7 @@ async function showDetailedCategoryHelp(message, category, prefix) {
             break;
             
         case 'moderation':
-            commandCount = 5;
+            commandCount = 14;
             categoryEmbed = new EmbedBuilder()
                 .setColor(config.colors.secondary)
                 .setTitle('🛡️ Moderation Tools - Detailed View')
@@ -5309,7 +5399,16 @@ async function showDetailedCategoryHelp(message, category, prefix) {
                     { name: `${prefix}create-ticket [reason]`, value: '**Create ticket with custom name**\nInstantly create a support ticket with specific purpose', inline: false },
                     { name: `${prefix}ticket-history [@user]`, value: '**View ticket history and logs**\nReview past tickets and support interactions', inline: false },
                     { name: `${prefix}move @user #channel`, value: '**Move members between voice channels**\nQuickly relocate users to different voice channels', inline: false },
-                    { name: `${prefix}end [activity]`, value: '**End ongoing activities**\nStop giveaways, polls, or other time-based activities', inline: false }
+                    { name: `${prefix}end [activity]`, value: '**End ongoing activities**\nStop giveaways, polls, or other time-based activities', inline: false },
+                    { name: `${prefix}snipe [#channel]`, value: '**Inspect the last deleted reply in a channel**\nRecover the last removed message snapshot from the channel cache', inline: false },
+                    { name: `${prefix}kick @member [reason]`, value: '**Kick a member**\nRemove a member from the server with a reason', inline: false },
+                    { name: `${prefix}ban @member [reason] [days]`, value: '**Ban a member**\nBan a user and optionally purge recent messages', inline: false },
+                    { name: `${prefix}rm [name] [#channel]`, value: '**Rename a channel (Admin)**\nChange the target channel name', inline: false },
+                    { name: `${prefix}lock [#channel]`, value: '**Lock a channel (Admin)**\nStop @everyone from posting', inline: false },
+                    { name: `${prefix}unlock [#channel]`, value: '**Unlock a channel (Admin)**\nRestore posting for @everyone', inline: false },
+                    { name: `${prefix}hide [#channel]`, value: '**Hide a channel from @everyone (Admin)**\nRestrict visibility to configured roles', inline: false },
+                    { name: `${prefix}unhide [#channel]`, value: '**Unhide a channel for @everyone (Admin)**\nRestore visibility to everyone', inline: false },
+                    { name: `${prefix}nuke [name] [#channel]`, value: '**Nuke a channel and recreate it (Admin)**\nDelete and restore the channel in-place', inline: false }
                 );
             break;
             

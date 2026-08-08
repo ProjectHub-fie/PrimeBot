@@ -5,14 +5,14 @@ module.exports = {
         .setName('nuke')
         .setDescription('Delete and recreate a channel inside the same category')
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-        .addChannelOption(option =>
-            option.setName('channel')
-                .setDescription('Channel to nuke (defaults to the current channel)')
-                .setRequired(false)
-        )
         .addStringOption(option =>
             option.setName('name')
                 .setDescription('Optional replacement name for the recreated channel')
+                .setRequired(false)
+        )
+        .addChannelOption(option =>
+            option.setName('channel')
+                .setDescription('Channel to nuke (defaults to the current channel)')
                 .setRequired(false)
         ),
 
