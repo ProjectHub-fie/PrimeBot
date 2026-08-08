@@ -145,7 +145,8 @@ async function showCategoryHelpUpdate(interaction, category) {
                     { name: '/createticket', value: 'Create ticket with custom name', inline: true },
                     { name: '/tickethistory', value: 'View ticket history and logs', inline: true },
                     { name: '/move', value: 'Move members between voice channels', inline: true },
-                    { name: '/end', value: 'End giveaways and other activities', inline: true }
+                    { name: '/end', value: 'End giveaways and other activities', inline: true },
+                    { name: '/purge', value: 'Delete messages with messages, user, and between subcommands', inline: true }
                 );
             break;
 

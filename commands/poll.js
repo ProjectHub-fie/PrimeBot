@@ -33,6 +33,26 @@ module.exports = {
         .addStringOption(option => 
             option.setName('option5')
                 .setDescription('Fifth poll option (optional)')
+                .setRequired(false))
+        .addStringOption(option => 
+            option.setName('option6')
+                .setDescription('Sixth poll option (optional)')
+                .setRequired(false))
+        .addStringOption(option => 
+            option.setName('option7')
+                .setDescription('Seventh poll option (optional)')
+                .setRequired(false))
+        .addStringOption(option => 
+            option.setName('option8')
+                .setDescription('Eighth poll option (optional)')
+                .setRequired(false))
+        .addStringOption(option => 
+            option.setName('option9')
+                .setDescription('Ninth poll option (optional)')
+                .setRequired(false))
+        .addStringOption(option => 
+            option.setName('option10')
+                .setDescription('Tenth poll option (optional)')
                 .setRequired(false)),
     
     async execute(interaction) {
@@ -43,9 +63,9 @@ module.exports = {
             
             // Collect options from separate fields
             const options = [];
-            for (let i = 1; i <= 5; i++) {
+            for (let i = 1; i <= 10; i++) {
                 const option = interaction.options.getString(`option${i}`);
-                if (option) {
+                if (option && option.trim()) {
                     options.push(option.trim());
                 }
             }
@@ -81,7 +101,7 @@ module.exports = {
                 channelId: interaction.channel.id,
                 question,
                 options,
-                duration,
+                duration: durationStr,
                 userId: interaction.user.id
             });
             

@@ -90,7 +90,7 @@ module.exports = {
                     { name: '⏱️ Duration', value: duration, inline: true },
                     { name: '📣 Channel', value: `<#${channel.id}>`, inline: true },
                 )
-                .setFooter({ text: 'Version 2.5.0', iconURL: this.client?.user?.displayAvatarURL() || client?.user?.displayAvatarURL() }).setTimestamp();
+                .setFooter({ text: `Version ${config.version}`, iconURL: this.client?.user?.displayAvatarURL() || client?.user?.displayAvatarURL() }).setTimestamp();
 
             // Add required role to embed if specified
             if (requiredRole) {

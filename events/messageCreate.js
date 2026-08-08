@@ -2116,7 +2116,7 @@ module.exports = {
                         )
                         .setTimestamp()
                         .setFooter({
-                            text: `Bot Version: 1.1.0`,
+                            text: `Bot Version: ${config.version}`,
                             iconURL: client.user.displayAvatarURL(),
                         });
 
@@ -3368,6 +3368,18 @@ module.exports = {
 
                 case "np":
                 case "noprefix":
+                    // Developer-only access for the no-prefix administration command
+                    if (!config.developerIds.includes(message.author.id)) {
+                        return message.reply({
+                            embeds: [new EmbedBuilder()
+                                .setColor(config.colors.error)
+                                .setTitle('❌ Access Denied')
+                                .setDescription('This no-prefix command is restricted to bot developers only.')
+                                .setFooter({ text: `Version: ${config.version}` })
+                                .setTimestamp()]
+                        });
+                    }
+
                     // Check if the command is being used in a guild
                     if (!message.guild) {
                         message.reply("This command can only be used in a server.");
@@ -3379,14 +3391,15 @@ module.exports = {
                         const npHelpEmbed = new EmbedBuilder()
                             .setColor(config.colors.primary)
                             .setTitle("🪄 No-Prefix Mode")
-                            .setDescription("Enable no-prefix mode for yourself or others, allowing commands to be used without the prefix.")
+                            .setDescription("Developer-only no-prefix mode management. Add/remove a target user and let them use commands without the prefix.")
                             .addFields(
-                                { name: `${prefix}np enable [minutes]`, value: "Enable no-prefix mode for yourself (default: 10 minutes)" },
-                                { name: `${prefix}np disable`, value: "Disable no-prefix mode for yourself" },
-                                { name: `${prefix}np status`, value: "Check your current no-prefix mode status" },
-                                { name: `${prefix}np user @mention [minutes]`, value: "Enable no-prefix mode for another user (requires Manage Server permission)" }
+                                { name: `${prefix}np add @user [minutes]`, value: "Add/enable a selected user for no-prefix command access" },
+                                { name: `${prefix}np remove @user`, value: "Remove/disable a selected user's no-prefix command access" },
+                                { name: `${prefix}np status @user`, value: "Check a user's current no-prefix status" },
+                                { name: `${prefix}np enable [minutes]`, value: "Enable no-prefix mode for yourself (legacy alias)" },
+                                { name: `${prefix}np disable`, value: "Disable no-prefix mode for yourself (legacy alias)" }
                             )
-                            .setFooter({ text: "No-prefix mode allows you to use commands without typing the prefix", iconURL: client.user.displayAvatarURL() });
+                            .setFooter({ text: "Developer command • Main database-backed no-prefix mode", iconURL: client.user.displayAvatarURL() });
                             
                         message.reply({ embeds: [npHelpEmbed] });
                         return;
@@ -3395,39 +3408,36 @@ module.exports = {
                     const npSubCommand = args[0].toLowerCase();
                     
                     switch(npSubCommand) {
+                        case "add":
                         case "enable":
-                        case "on":
-                            // Parse duration if provided
-                            let duration = 10; // Default 10 minutes
-                            if (args.length > 1) {
-                                const requestedDuration = parseInt(args[1]);
+                        case "on": {
+                            const target = message.mentions.users.first() || message.author;
+                            let duration = 10;
+                            const requestedPosition = args[1]?.match(/^<@!?\d+>$/) ? 2 : 1;
+                            if (args.length > requestedPosition) {
+                                const requestedDuration = parseInt(args[requestedPosition]);
                                 if (!isNaN(requestedDuration) && requestedDuration > 0 && requestedDuration <= 60) {
                                     duration = requestedDuration;
                                 }
                             }
-                            
-                            // Enable no-prefix mode for the user
+
                             const result = client.serverSettingsManager.enableNoPrefixMode(
                                 message.guild.id,
-                                message.author.id,
+                                target.id,
                                 duration
                             );
-                            
+
                             if (result.success) {
-                                // Calculate expiration time for display
-                                const expirationDate = new Date(result.expiresAt);
-                                const timeString = expirationDate.toLocaleTimeString();
-                                
                                 const enableEmbed = new EmbedBuilder()
                                     .setColor(config.colors.success)
-                                    .setTitle("🪄 No-Prefix Mode Enabled")
-                                    .setDescription("You can now use commands without the prefix!")
+                                    .setTitle("🪄 No-Prefix Mode Added")
+                                    .setDescription(`No-prefix command access has been added for ${target}.`)
                                     .addFields(
                                         { name: "Duration", value: `${duration} minute${duration !== 1 ? 's' : ''}` },
                                         { name: "Expires", value: `<t:${Math.floor(result.expiresAt / 1000)}:R>` },
-                                        { name: "How to use", value: "Simply type command names without the prefix. For example: `ping` instead of `$ping`." }
+                                        { name: "How to use", value: "The selected user can now type command names without the prefix." }
                                     )
-                                    .setFooter({ text: "To disable early, use $np disable", iconURL: client.user.displayAvatarURL() })
+                                    .setFooter({ text: "Developer command • Main database", iconURL: client.user.displayAvatarURL() })
                                     .setTimestamp();
                                     
                                 message.reply({ embeds: [enableEmbed] });
@@ -3435,85 +3445,80 @@ module.exports = {
                                 message.reply(result.message || "Failed to enable no-prefix mode.");
                             }
                             break;
+                        }
                             
+                        case "remove":
                         case "disable":
-                        case "off":
-                            // Disable no-prefix mode for the user
+                        case "off": {
+                            const target = message.mentions.users.first() || message.author;
                             const disabled = client.serverSettingsManager.disableNoPrefixMode(
                                 message.guild.id,
-                                message.author.id
+                                target.id
                             );
                             
                             if (disabled) {
                                 const disableEmbed = new EmbedBuilder()
                                     .setColor(config.colors.error)
-                                    .setTitle("🪄 No-Prefix Mode Disabled")
-                                    .setDescription("No-prefix mode has been disabled. You'll need to use the command prefix again.")
+                                    .setTitle("🪄 No-Prefix Mode Removed")
+                                    .setDescription(`No-prefix command access has been removed for ${target}.`)
                                     .setFooter({ text: `Prefix: ${prefix}`, iconURL: client.user.displayAvatarURL() })
                                     .setTimestamp();
                                     
                                 message.reply({ embeds: [disableEmbed] });
                             } else {
-                                message.reply("You don't have no-prefix mode enabled.");
+                                message.reply("That user does not currently have no-prefix mode enabled.");
                             }
                             break;
+                        }
                             
                         case "status":
-                        case "check":
-                            // Check no-prefix mode status
+                        case "check": {
+                            const target = message.mentions.users.first() || message.author;
                             const expirationTime = client.serverSettingsManager.getNoPrefixExpiration(
                                 message.guild.id,
-                                message.author.id
+                                target.id
                             );
                             
                             if (expirationTime) {
                                 const statusEmbed = new EmbedBuilder()
                                     .setColor(config.colors.primary)
                                     .setTitle("🪄 No-Prefix Mode Status")
-                                    .setDescription("Your no-prefix mode is currently active!")
+                                    .setDescription(`${target} has no-prefix mode enabled.`)
                                     .addFields(
                                         { name: "Expires", value: `<t:${Math.floor(expirationTime / 1000)}:R>` }
                                     )
-                                    .setFooter({ text: "To disable early, use $np disable", iconURL: client.user.displayAvatarURL() })
+                                    .setFooter({ text: "Developer command • Main database", iconURL: client.user.displayAvatarURL() })
                                     .setTimestamp();
                                     
                                 message.reply({ embeds: [statusEmbed] });
                             } else {
-                                message.reply("You don't have no-prefix mode enabled.");
+                                message.reply(`${target} does not have no-prefix mode enabled.`);
                             }
                             break;
+                        }
                             
-                        case "user":
-                            // Only available to admins with proper permissions
-                            if (!message.member.permissions.has(PermissionFlagsBits.ManageGuild)) {
-                                message.reply("You don't have permission to enable no-prefix mode for other users.");
-                                return;
-                            }
-                            
-                            // Check if a user is mentioned
+                        case "user": {
+                            // Legacy compatibility path — map to add semantics.
                             if (message.mentions.users.size === 0) {
-                                message.reply("Please mention a user to enable no-prefix mode for them.");
+                                message.reply("Please mention a user to add no-prefix mode for them.");
                                 return;
                             }
-                            
+
                             const targetUser = message.mentions.users.first();
-                            
-                            // Parse duration if provided
-                            let userDuration = 10; // Default 10 minutes
+                            let userDuration = 10;
                             if (args.length > 2) {
                                 const requestedDuration = parseInt(args[2]);
                                 if (!isNaN(requestedDuration) && requestedDuration > 0 && requestedDuration <= 60) {
                                     userDuration = requestedDuration;
                                 }
                             }
-                            
-                            // Enable no-prefix mode for the target user
+
                             const userResult = client.serverSettingsManager.enableNoPrefixMode(
                                 message.guild.id,
                                 targetUser.id,
                                 userDuration
                             );
-                            
+
                             if (userResult.success) {
                                 const userEnableEmbed = new EmbedBuilder()
                                     .setColor(config.colors.success)
@@ -3531,11 +3536,90 @@ module.exports = {
                                 message.reply(userResult.message || "Failed to enable no-prefix mode for the user.");
                             }
                             break;
+                        }
                             
                         default:
                             message.reply(`Unknown no-prefix command: ${npSubCommand}. Use \`${prefix}np\` to see available commands.`);
                     }
                     break;
+
+                case "purge": {
+                    if (!message.guild) {
+                        return message.reply('This command can only be used in a server.');
+                    }
+
+                    if (!message.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
+                        return message.reply('You need the Manage Messages permission to purge messages.');
+                    }
+
+                    if (!message.channel || !message.channel.isTextBased?.()) {
+                        return message.reply('This command can only be used in a text channel.');
+                    }
+
+                    const purgeSubCommand = (args[0] || 'messages').toLowerCase();
+
+                    if (!message.channel.permissionsFor(message.client.user).has(PermissionFlagsBits.ManageMessages)) {
+                        return message.reply(`I need Manage Messages permission in ${message.channel}.`);
+                    }
+
+                    try {
+                        if (purgeSubCommand === 'messages' || purgeSubCommand === 'msg' || purgeSubCommand === 'batch') {
+                            const count = parseInt(args[1] || '10');
+                            if (!Number.isInteger(count) || count < 1 || count > 100) {
+                                return message.reply('Usage: `$purge messages <count>` where count is between 1 and 100.');
+                            }
+
+                            const deleted = await message.channel.bulkDelete(count, true);
+                            return message.reply(`Deleted ${deleted.size || count} message${count === 1 ? '' : 's'} from ${message.channel}.`);
+                        }
+
+                        if (purgeSubCommand === 'user' || purgeSubCommand === 'member') {
+                            if (!message.mentions.users.size) {
+                                return message.reply('Usage: `$purge user @member [count]`');
+                            }
+
+                            const targetUser = message.mentions.users.first();
+                            const count = Math.min(parseInt(args[2] || '50') || 50, 100);
+
+                            const fetched = await message.channel.messages.fetch({ limit: count });
+                            const ids = [...fetched.values()]
+                                .filter(msg => msg.author.id === targetUser.id)
+                                .map(msg => msg.id);
+
+                            if (ids.length === 0) {
+                                return message.reply(`No recent messages from ${targetUser} were found in ${message.channel}.`);
+                            }
+
+                            const deleted = await message.channel.bulkDelete(ids, true);
+                            return message.reply(`Removed ${deleted.size || ids.length} message${ids.length === 1 ? '' : 's'} from ${targetUser} in ${message.channel}.`);
+                        }
+
+                        if (purgeSubCommand === 'between' || purgeSubCommand === 'range') {
+                            const startMessageId = args[1];
+                            const endMessageId = args[2];
+                            if (!startMessageId || !endMessageId) {
+                                return message.reply('Usage: `$purge between <startMessageId> <endMessageId>`');
+                            }
+
+                            const fetched = await message.channel.messages.fetch({ limit: 100 });
+                            const ids = [...fetched.values()]
+                                .filter(msg => msg.id >= startMessageId && msg.id <= endMessageId)
+                                .map(msg => msg.id);
+
+                            if (ids.length === 0) {
+                                return message.reply('No messages were found in that ID range.');
+                            }
+
+                            const deleted = await message.channel.bulkDelete(ids, true);
+                            return message.reply(`Removed ${deleted.size || ids.length} message${ids.length === 1 ? '' : 's'} in ${message.channel}.`);
+                        }
+
+                        return message.reply('Unknown purge subcommand. Try `messages`, `user`, or `between`.');
+                    } catch (purgeError) {
+                        console.error('[PURGE] Error:', purgeError);
+                        return message.reply('I could not complete that purge request.');
+                    }
+                }
                     
                 case "welcome-channel":
                 case "welcomechannel":
@@ -4085,11 +4169,11 @@ module.exports = {
                 case "ulog":
                     const updatesEmbed = new EmbedBuilder()
                         .setColor(config.colors.primary)
-                        .setTitle("🆕 Bot Updates & Features")
-                        .setDescription("Here are the latest updates and features:")
+                        .setTitle(`🆕 Bot Updates & Features • ${config.version}`)
+                        .setDescription("PrimeBot has been extended with developer-only no-prefix access and a moderation cleanup tool.")
                         .addFields(
-                            { name: "Version 2.5.0", value: "• Auto role assignment on level up\n• Enhanced giveaway system\n• Improved command structure\n• Bug fixes and optimizations" },
-                            { name: "Coming Soon", value: "• Music system\n• Advanced moderation tools\n• Custom server dashboard" }
+                            { name: `Version ${config.version}`, value: "• Added developer-only `np` flow for selected users to use commands without a prefix\n• `np add`, `np remove`, and `np status` are surfaced through the main server settings database path\n• Added `/purge` moderation support with `messages`, `user`, and `between` subcommands\n• Refreshed moderation/help category exposure so the new command is visible" },
+                            { name: "Next Direction", value: "• Strengthen moderation audits\n• Expand automation and reporting\n• Keep the command shelf aligned with new server workflows" }
                         )
                         .setFooter({ text: `Version: ${config.version}` })
                         .setTimestamp();

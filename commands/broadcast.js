@@ -83,7 +83,7 @@ module.exports = {
                 .setDescription(broadcastMessage)
                 .setTimestamp()
                 .setFooter({
-                    text: `Sent by ${interaction.user.tag} • ${interaction.client.user.username} • Version 2.5.0`,
+                    text: `Sent by ${interaction.user.tag} • ${interaction.client.user.username} • Version ${config.version}`,
                     iconURL: interaction.client.user.displayAvatarURL()
                 });
                 
@@ -142,7 +142,7 @@ module.exports = {
                         { name: '⏰ Timing', value: `Estimated time to complete: ${Math.ceil(receptiveServers * 0.5)} seconds`, inline: false },
                         { name: 'Opt-Out Compliance', value: 'Servers can opt out using `/broadcastsettings disable` or `$broadcast disable` to comply with Discord ToS.', inline: false }
                     )
-                    .setFooter({ text: 'Version 2.5.0', iconURL: interaction.client.user.displayAvatarURL() }).setTimestamp();
+                    .setFooter({ text: `Version ${config.version}`, iconURL: interaction.client.user.displayAvatarURL() }).setTimestamp();
                 
                 // Send the preview with buttons
                 await interaction.reply({
@@ -273,7 +273,7 @@ Progress: ${processedCount}/${totalGuilds} servers
                         { name: "💬 Potential Reach", value: `Message potentially reached all members across ${successCount} servers`, inline: false }
                     )
                     .setTimestamp()
-                    .setFooter({ text: `Broadcast ID: ${Date.now().toString(36)} • Version 2.5.0` });
+                    .setFooter({ text: `Broadcast ID: ${Date.now().toString(36)} • Version ${config.version}` });
                     
                 await interaction.editReply({
                     content: "✅ Broadcast successfully completed!",

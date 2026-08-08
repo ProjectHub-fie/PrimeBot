@@ -292,7 +292,7 @@ async function handleAddRoleCommand(interaction, client) {
                 { name: '📊 Level', value: `${level}`, inline: true },
                 { name: '🎭 Role', value: `${role}`, inline: true }
             )
-            .setFooter({ text: 'Version 2.5.0', iconURL: this.client?.user?.displayAvatarURL() || client?.user?.displayAvatarURL() }).setTimestamp();
+            .setFooter({ text: `Version ${config.version}`, iconURL: this.client?.user?.displayAvatarURL() || client?.user?.displayAvatarURL() }).setTimestamp();
             
         await interaction.reply({ embeds: [embed] });
     } else {
@@ -319,7 +319,7 @@ async function handleRemoveRoleCommand(interaction, client) {
             .setColor(config.colors.success)
             .setTitle('✅ Role Reward Removed')
             .setDescription(`The role reward for **Level ${level}** has been removed.`)
-            .setFooter({ text: 'Version 2.5.0', iconURL: this.client?.user?.displayAvatarURL() || client?.user?.displayAvatarURL() }).setTimestamp();
+            .setFooter({ text: `Version ${config.version}`, iconURL: this.client?.user?.displayAvatarURL() || client?.user?.displayAvatarURL() }).setTimestamp();
             
         await interaction.reply({ embeds: [embed] });
     } else {
@@ -352,7 +352,7 @@ async function handleListRolesCommand(interaction, client) {
         .setColor(config.colors.primary)
         .setTitle('🎭 Role Rewards')
         .setDescription('Here are all the role rewards configured for this server:')
-        .setFooter({ text: 'Version 2.5.0', iconURL: this.client?.user?.displayAvatarURL() || client?.user?.displayAvatarURL() }).setTimestamp();
+        .setFooter({ text: `Version ${config.version}`, iconURL: this.client?.user?.displayAvatarURL() || client?.user?.displayAvatarURL() }).setTimestamp();
     
     let description = '';
     for (const reward of roleRewards) {
@@ -764,7 +764,7 @@ async function handleSettingsCommand(interaction, client) {
                     .setColor(config.colors.error)
                     .setTitle('⚠️ Reset All XP Data?')
                     .setDescription('**WARNING:** This will delete all user XP, levels, and progress in this server.\n\nThis action cannot be undone. Are you sure you want to proceed?')
-                    .setFooter({ text: 'This confirmation will expire in 30 seconds • Version 2.5.0' });
+                    .setFooter({ text: `This confirmation will expire in 30 seconds • Version ${config.version}` });
                 
                 interaction.editReply({
                     content: 'Please confirm:',
@@ -848,7 +848,7 @@ async function handleAwardCommand(interaction, client) {
                 { name: 'Previous Messages', value: `${oldMessages}`, inline: true },
                 { name: 'New Messages', value: `${userData.messages}`, inline: true }
             )
-            .setFooter({ text: 'Version 2.5.0', iconURL: this.client?.user?.displayAvatarURL() || client?.user?.displayAvatarURL() }).setTimestamp();
+            .setFooter({ text: `Version ${config.version}`, iconURL: this.client?.user?.displayAvatarURL() || client?.user?.displayAvatarURL() }).setTimestamp();
         
         // Check if user leveled up
         if (newLevel > oldLevel) {
@@ -920,7 +920,7 @@ async function handleAwardBadgeCommand(interaction, client) {
                     { name: 'Description', value: badge.description, inline: true },
                     { name: 'Type', value: badgeType.charAt(0).toUpperCase() + badgeType.slice(1), inline: true }
                 )
-                .setFooter({ text: 'Version 2.5.0', iconURL: this.client?.user?.displayAvatarURL() || client?.user?.displayAvatarURL() }).setTimestamp();
+                .setFooter({ text: `Version ${config.version}`, iconURL: this.client?.user?.displayAvatarURL() || client?.user?.displayAvatarURL() }).setTimestamp();
             
             interaction.editReply({ embeds: [embed], ephemeral: true });
         } else {

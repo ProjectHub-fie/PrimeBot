@@ -55,7 +55,7 @@ module.exports = {
                         { name: '📝 Poll ID', value: `\`${messageId}\`` },
                         { name: '🔍 Possible Reasons', value: '• The poll ID is incorrect\n• The poll has already ended\n• The poll was deleted\n• The poll belongs to a different server' }
                     )
-                    .setFooter({ text: 'Use /poll to create a new poll • Version 2.5.0', iconURL: interaction.client.user.displayAvatarURL()
+                    .setFooter({ text: `Use /poll to create a new poll • Version ${config.version}`, iconURL: interaction.client.user.displayAvatarURL()
                      });
                 
                 await interaction.reply({ 

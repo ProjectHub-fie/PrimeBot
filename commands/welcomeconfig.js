@@ -159,7 +159,7 @@ module.exports = {
                 const toggleEmbed = new EmbedBuilder()
                     .setColor(config.colors.success)
                     .setTitle('✅ Welcome System Updated')
-                    .setDescription(`Welcome messages have been ${enabled ? 'enabled' : 'disabled'} for this server.`).setFooter({ text: 'Version 2.5.0' });
+                    .setDescription(`Welcome messages have been ${enabled ? 'enabled' : 'disabled'} for this server.`).setFooter({ text: `Version ${config.version}` });
                 
                 await interaction.reply({ embeds: [toggleEmbed] });
                 break;
@@ -183,7 +183,7 @@ module.exports = {
                 const channelEmbed = new EmbedBuilder()
                     .setColor(config.colors.success)
                     .setTitle('✅ Welcome Channel Updated')
-                    .setDescription(`Welcome messages will now be sent to <#${channel.id}>.`).setFooter({ text: 'Version 2.5.0' });
+                    .setDescription(`Welcome messages will now be sent to <#${channel.id}>.`).setFooter({ text: `Version ${config.version}` });
                 
                 await interaction.reply({ embeds: [channelEmbed] });
                 break;
@@ -199,7 +199,7 @@ module.exports = {
                 const messageEmbed = new EmbedBuilder()
                     .setColor(config.colors.success)
                     .setTitle('✅ Welcome Message Updated')
-                    .setDescription('The welcome message has been updated.').setFooter({ text: 'Version 2.5.0' });
+                    .setDescription('The welcome message has been updated.').setFooter({ text: `Version ${config.version}` });
                 
                 await interaction.reply({ embeds: [messageEmbed] });
                 break;
@@ -224,7 +224,7 @@ module.exports = {
                     .setColor(config.colors.success)
                     .setTitle('✅ Welcome Banner Updated')
                     .setDescription('The welcome banner has been updated.')
-                    .setImage(url).setFooter({ text: 'Version 2.5.0' });
+                    .setImage(url).setFooter({ text: `Version ${config.version}` });
                 
                 await interaction.reply({ embeds: [bannerEmbed] });
                 break;
@@ -237,7 +237,7 @@ module.exports = {
                 const dmEmbed = new EmbedBuilder()
                     .setColor(config.colors.success)
                     .setTitle('✅ Welcome DMs Updated')
-                    .setDescription(`Welcome DMs have been ${newDmValue ? 'enabled' : 'disabled'} for this server.`).setFooter({ text: 'Version 2.5.0' });
+                    .setDescription(`Welcome DMs have been ${newDmValue ? 'enabled' : 'disabled'} for this server.`).setFooter({ text: `Version ${config.version}` });
                 
                 await interaction.reply({ embeds: [dmEmbed] });
                 break;
@@ -253,7 +253,7 @@ module.exports = {
                 const dmMessageEmbed = new EmbedBuilder()
                     .setColor(config.colors.success)
                     .setTitle('✅ Welcome DM Message Updated')
-                    .setDescription('The welcome DM message has been updated.').setFooter({ text: 'Version 2.5.0' });
+                    .setDescription('The welcome DM message has been updated.').setFooter({ text: `Version ${config.version}` });
                 
                 await interaction.reply({ embeds: [dmMessageEmbed] });
                 break;
@@ -277,7 +277,7 @@ module.exports = {
                 const colorEmbed = new EmbedBuilder()
                     .setColor(color)
                     .setTitle('✅ Welcome Color Updated')
-                    .setDescription(`The welcome embed color has been set to ${color}.`).setFooter({ text: 'Version 2.5.0' });
+                    .setDescription(`The welcome embed color has been set to ${color}.`).setFooter({ text: `Version ${config.version}` });
                 
                 await interaction.reply({ embeds: [colorEmbed] });
                 break;
@@ -318,7 +318,7 @@ module.exports = {
                 const featureEmbed = new EmbedBuilder()
                     .setColor(config.colors.success)
                     .setTitle('✅ Welcome Feature Updated')
-                    .setDescription(`The "${featureName}" feature is now ${featureState ? 'enabled' : 'disabled'}.`).setFooter({ text: 'Version 2.5.0' });
+                    .setDescription(`The "${featureName}" feature is now ${featureState ? 'enabled' : 'disabled'}.`).setFooter({ text: `Version ${config.version}` });
                 
                 await interaction.reply({ embeds: [featureEmbed] });
                 break;
@@ -334,7 +334,7 @@ module.exports = {
                 const titleEmbed = new EmbedBuilder()
                     .setColor(config.colors.success)
                     .setTitle('✅ Welcome Title Updated')
-                    .setDescription(title ? `Custom title set to: "${title}"` : 'Custom title has been reset to default.').setFooter({ text: 'Version 2.5.0' });
+                    .setDescription(title ? `Custom title set to: "${title}"` : 'Custom title has been reset to default.').setFooter({ text: `Version ${config.version}` });
                 
                 await interaction.reply({ embeds: [titleEmbed] });
                 break;
@@ -350,7 +350,7 @@ module.exports = {
                 const footerEmbed = new EmbedBuilder()
                     .setColor(config.colors.success)
                     .setTitle('✅ Welcome Footer Updated')
-                    .setDescription(footer ? `Custom footer set to: "${footer}"` : 'Custom footer has been reset to default.').setFooter({ text: 'Version 2.5.0' });
+                    .setDescription(footer ? `Custom footer set to: "${footer}"` : 'Custom footer has been reset to default.').setFooter({ text: `Version ${config.version}` });
                 
                 await interaction.reply({ embeds: [footerEmbed] });
                 break;
@@ -380,7 +380,7 @@ module.exports = {
                             `- Footer: ${welcomeSettings.customFooter || 'Default'}\n` +
                             `- Color: ${welcomeSettings.color || 'Default'}`
                         }
-                    ).setFooter({ text: 'Version 2.5.0' });
+                    ).setFooter({ text: `Version ${config.version}` });
                     
                 if (welcomeSettings.bannerUrl) {
                     configEmbed.setImage(welcomeSettings.bannerUrl);

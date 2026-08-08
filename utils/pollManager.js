@@ -156,8 +156,10 @@ class PollManager {
         const channel = await this.client.channels.fetch(channelId);
         if (!channel) throw new Error('Channel not found.');
 
-        const durationMs = ms(duration);
-        if (!durationMs) throw new Error('Invalid duration. Please use a valid format like 1m, 1h, 1d.');
+        const durationMs = typeof duration === 'number' ? duration : ms(duration);
+        if (!durationMs || Number.isNaN(durationMs)) {
+            throw new Error('Invalid duration. Please use a valid format like 1m, 1h, 1d.');
+        }
 
         const endTime = Date.now() + durationMs;
         const guildId = channel.guildId || channel.guild?.id || 'unknown';

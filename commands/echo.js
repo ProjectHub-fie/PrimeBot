@@ -53,8 +53,7 @@ module.exports = {
                 const echoEmbed = new EmbedBuilder()
                     .setColor(config.colors.primary)
                     .setDescription(message)
-                    .setFooter({ text: 'Echoed by ${interaction.user.tag} • Version 2.5.0', iconURL: interaction.user.displayAvatarURL({ dynamic: true  }) 
-                    })
+                    .setFooter({ text: `Echoed by ${interaction.user.tag} • Version ${config.version}`, iconURL: interaction.user.displayAvatarURL({ dynamic: true }) })
                     .setTimestamp();
                 
                 await channel.send({ embeds: [echoEmbed] });

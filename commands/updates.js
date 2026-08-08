@@ -13,36 +13,30 @@ module.exports = {
             // Create update log embed
             const updateEmbed = new EmbedBuilder()
                 .setColor(config.colors.success)
-                .setTitle("Update Log | Updated on 14/04/2025")
+                .setTitle(`Update Log • Version ${config.version}`)
                 .setDescription(
-                    "Keep track of the latest updates and upcoming features!",
+                    "PrimeBot has been extended with developer-only no-prefix management and a moderation cleanup command.",
                 )
                 .addFields(
                     {
                         name: "✅ Recent Updates",
                         value:
-                            "• Added custom ticket names with the /createticket command\n" +
-                            "• Added developer broadcast system\n" +
-                            "• Added Birthday celebration system with /birthday commands\n" +
-                            "• Added Poll system with /poll and /endpoll commands\n" +
-                            "• Added Multiplayer TicTacToe game with /tictactoe, /move, and /endgame commands\n" +
-                            "• Added ticket system for support requests\n" +
-                            "• Added slash commands support for all features",
+                            "• Added the developer-only `/np` command for selected users to use commands without a prefix\n" +
+                            "• Added `np add`, `np remove`, and `np status` developer flow through the no-prefix server settings table\n" +
+                            "• Added the `/purge` moderation command with `messages`, `user`, and `between` subcommands\n" +
+                            "• Added prefix-command support for `$purge` to mirror the slash command privacy and permissions model\n" +
+                            "• Refreshed the category browser and moderation help view so purge is discoverable",
                     },
                     { 
-                        name: '🔜 Coming Soon', 
+                        name: '🔜 Planned Work', 
                         value: 
-                            '• Leveling system\n' +
-                            '• Custom reaction roles\n' +
-                            '• Server statistics tracking\n' +
-                            '• Auto-responses for common questions'
+                            '• More role-based automation\n' +
+                            '• Additional moderation audit polish\n' +
+                            '• Performance and reliability improvements'
                     },
                 )
-                .setFooter({ text: 'Version 2.5.0', iconURL: this.client?.user?.displayAvatarURL() || client?.user?.displayAvatarURL() }).setTimestamp()
-                .setFooter({
-                    text: `Current Version: 1.1.0`,
-                    iconURL: interaction.client.user.displayAvatarURL()
-                });
+                .setFooter({ text: `Current Version: ${config.version}`, iconURL: interaction.client.user.displayAvatarURL() })
+                .setTimestamp();
                 
             await interaction.reply({ embeds: [updateEmbed] });
             

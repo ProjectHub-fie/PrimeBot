@@ -34,7 +34,7 @@ module.exports = {
                     .setColor(config.colors.success)
                     .setTitle('Question Added')
                     .setDescription(`Your ${type === 'truth' ? 'Truth' : 'Dare'} question has been added!`)
-                    .addFields({ name: 'Question', value: question }).setFooter({ text: 'Version 2.5.0' });
+                    .addFields({ name: 'Question', value: question }).setFooter({ text: `Version ${config.version}` });
                 
                 await interaction.reply({
                     embeds: [embed],

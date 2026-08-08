@@ -67,7 +67,7 @@ module.exports = {
                                 : 'The bot developers cannot send broadcast announcements to this server.'
                         }
                     )
-                    .setFooter({ text: `Server ID: ${interaction.guild.id} • Version 2.5.0` })
+                    .setFooter({ text: `Server ID: ${interaction.guild.id} • Version ${config.version}` })
                     .setTimestamp();
 
                 await interaction.reply({ embeds: [statusEmbed] });
@@ -93,7 +93,7 @@ module.exports = {
                         ? '✅ This server will now receive developer broadcasts.'
                         : '🔕 This server has opted out of developer broadcasts.'
                     )
-                    .setFooter({ text: `Server ID: ${interaction.guild.id} • Version 2.5.0` })
+                    .setFooter({ text: `Server ID: ${interaction.guild.id} • Version ${config.version}` })
                     .setTimestamp();
 
                 await interaction.reply({ embeds: [statusEmbed] });
@@ -111,7 +111,7 @@ module.exports = {
                             ? `Developer broadcasts will now be sent to ${channel}.`
                             : 'Developer broadcasts will now be sent to the first available text channel.'
                     )
-                    .setFooter({ text: `Server ID: ${interaction.guild.id} • Version 2.5.0` })
+                    .setFooter({ text: `Server ID: ${interaction.guild.id} • Version ${config.version}` })
                     .setTimestamp();
 
                 await interaction.reply({ embeds: [channelEmbed] });
@@ -140,7 +140,7 @@ module.exports = {
                             value: 'Use `/broadcastsettings enable` / `/broadcastsettings disable` to control broadcasts, or `/broadcastsettings channel` to set the channel.\nPrefix equivalents: `$broadcast enable`, `$broadcast disable`, `$broadcast channel`.'
                         }
                     )
-                    .setFooter({ text: `Server ID: ${interaction.guild.id} • Version 2.5.0` })
+                    .setFooter({ text: `Server ID: ${interaction.guild.id} • Version ${config.version}` })
                     .setTimestamp();
 
                 await interaction.reply({ embeds: [statusEmbed] });

@@ -114,7 +114,7 @@ module.exports = {
                         const embed = new EmbedBuilder()
                             .setColor(config.colors.success)
                             .setTitle('🎂 Birthday Set')
-                            .setDescription(`Successfully set ${userText} birthday to **${formattedDate}**${year ? ` (${year})` : ''}!`).setFooter({ text: 'Version 2.5.0' });
+                            .setDescription(`Successfully set ${userText} birthday to **${formattedDate}**${year ? ` (${year})` : ''}!`).setFooter({ text: `Version ${config.version}` });
                         
                         return interaction.reply({ embeds: [embed] });
                     } else {
@@ -148,7 +148,7 @@ module.exports = {
                         
                         const embed = new EmbedBuilder()
                             .setColor(config.colors.success)
-                            .setDescription(`✅ ${userText} birthday has been removed.`).setFooter({ text: 'Version 2.5.0' });
+                            .setDescription(`✅ ${userText} birthday has been removed.`).setFooter({ text: `Version ${config.version}` });
                         
                         return interaction.reply({ embeds: [embed] });
                     } else {
@@ -210,7 +210,7 @@ module.exports = {
                     const embed = new EmbedBuilder()
                         .setColor(config.colors.primary)
                         .setTitle('🎂 Birthday Information')
-                        .setDescription(`${userText} birthday is set to **${formattedDate}**${birthday.year ? ` (${birthday.year})` : ''}`).setFooter({ text: 'Version 2.5.0' });
+                        .setDescription(`${userText} birthday is set to **${formattedDate}**${birthday.year ? ` (${birthday.year})` : ''}`).setFooter({ text: `Version ${config.version}` });
                     
                     return interaction.reply({ embeds: [embed] });
                 }
@@ -232,7 +232,7 @@ module.exports = {
                     if (success) {
                         const embed = new EmbedBuilder()
                             .setColor(config.colors.success)
-                            .setDescription(`✅ Birthday announcements will now be sent to ${channel}.`).setFooter({ text: 'Version 2.5.0' });
+                            .setDescription(`✅ Birthday announcements will now be sent to ${channel}.`).setFooter({ text: `Version ${config.version}` });
                         
                         return interaction.reply({ embeds: [embed] });
                     } else {
@@ -260,7 +260,7 @@ module.exports = {
                     if (success) {
                         const embed = new EmbedBuilder()
                             .setColor(config.colors.success)
-                            .setDescription(`✅ The ${role} role will now be assigned to members on their birthday.`).setFooter({ text: 'Version 2.5.0' });
+                            .setDescription(`✅ The ${role} role will now be assigned to members on their birthday.`).setFooter({ text: `Version ${config.version}` });
                         
                         return interaction.reply({ embeds: [embed] });
                     } else {

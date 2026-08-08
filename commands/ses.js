@@ -49,7 +49,7 @@ module.exports = {
             const embed = new EmbedBuilder()
                 .setColor(config.colors.primary)
                 .setTitle('Server Engagement System')
-                .setFooter({ text: 'Version 2.5.0', iconURL: this.client?.user?.displayAvatarURL() || client?.user?.displayAvatarURL() }).setTimestamp();
+                .setFooter({ text: `Version ${config.version}`, iconURL: this.client?.user?.displayAvatarURL() || client?.user?.displayAvatarURL() }).setTimestamp();
             
             switch (subcommand) {
                 case 'status':

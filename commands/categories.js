@@ -18,14 +18,14 @@ module.exports = {
 async function showCategorySelector(interaction) {
     const mainEmbed = new EmbedBuilder()
         .setColor(config.colors.primary)
-        .setTitle('🗂️ Interactive Category Browser')
-        .setDescription('Use the dropdown menu below to explore different command categories. Each category contains specialized commands for different server needs.')
+        .setTitle('🗂️ PrimeBot Command Explorer')
+        .setDescription('✨ Browse this command universe by category and discover the tools your server can use.')
         .addFields(
-            { name: '📊 Quick Stats', value: `**Total Commands:** 25\n**Categories:** 6\n**Active Servers:** ${interaction.client.guilds.cache.size}`, inline: true },
-            { name: '🚀 Getting Started', value: 'Select a category from the menu to see available commands and their descriptions.', inline: true },
-            { name: '💡 Pro Tip', value: 'Use `/help` for traditional category browsing or `/categories` for this interactive experience.', inline: true }
+            { name: '📊 Quick Stats', value: `**Total Commands:** 26\n**Categories:** 6\n**Active Servers:** ${interaction.client.guilds.cache.size}`, inline: true },
+            { name: '🚀 What is new?', value: 'The moderation suite now includes the message cleanup command for channel-level hygiene.', inline: true },
+            { name: '🎞️ Command Flow', value: 'Choose a category from the selector below to open a full command view.', inline: true }
         )
-        .setFooter({ text: `Version: ${config.version}` })
+        .setFooter({ text: `Version: ${config.version} • Categories: Live` })
         .setTimestamp();
 
     const categorySelect = new ActionRowBuilder()
@@ -155,17 +155,18 @@ async function showCategoryDetails(interaction, category) {
             break;
 
         case 'moderation':
-            commandCount = 5;
+            commandCount = 6;
             categoryEmbed = new EmbedBuilder()
                 .setColor(config.colors.secondary)
                 .setTitle('🛡️ Moderation Tools')
-                .setDescription('Comprehensive moderation and server management tools for maintaining order and providing support.')
+                .setDescription('Comprehensive moderation and server management tools for maintaining order, support, and channel hygiene.')
                 .addFields(
                     { name: '</ticket:0>', value: '`Create ticket support system`\nSet up support channels with automatic categorization', inline: false },
                     { name: '</createticket:0>', value: '`Create ticket with custom name`\nInstantly create a support ticket with specific purpose', inline: false },
                     { name: '</tickethistory:0>', value: '`View ticket history and logs`\nReview past tickets and support interactions', inline: false },
                     { name: '</move:0>', value: '`Move members between voice channels`\nQuickly relocate users to different voice channels', inline: false },
-                    { name: '</end:0>', value: '`End ongoing activities`\nStop giveaways, polls, or other time-based activities', inline: false }
+                    { name: '</end:0>', value: '`End ongoing activities`\nStop giveaways, polls, or other time-based activities', inline: false },
+                    { name: '</purge:0>', value: '`Delete channel messages`\nUse batch, user, or range purging to clean a channel', inline: false }
                 );
             break;
 
