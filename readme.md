@@ -132,3 +132,52 @@ A sophisticated Discord bot engineered for advanced community engagement, featur
 ✓ Add prefix command support
 → Test cross-server functionality
 → Validate poll expiration and cleanup systems
+
+## Web Dashboard
+
+PrimeBot ships with a standalone web dashboard that lets Discord server
+admins configure the bot through a browser instead of slash commands.
+
+### What it can do
+- **Discord OAuth2 login** — admins sign in with Discord; only servers where
+  they have *Manage Server* are listed.
+- **Welcome system** — toggle welcome messages/DMs, set the channel, edit the
+  message template, banner URL, embed color, and on-card extras (member count,
+  join date, account age, custom title/footer).
+- **Leveling & XP** — enable/disable leveling, set the level-up channel, tune
+  the XP multiplier (0.1–5.0) and cooldown (5–300 s).
+- **Command prefix** — set a per-server text-command prefix (max 3 chars).
+- **Auto-reactions** — manage trigger-word → emoji rules with a master toggle.
+- **Broadcasts** — opt in/out of official PrimeBot announcements and pick the
+  channel.
+
+Changes are written straight to the same PostgreSQL tables the bot reads
+(`server_settings`, `welcome_settings`), so they take effect immediately — no
+restart needed.
+
+### Running it
+```bash
+npm run dashboard
+```
+The server listens on `DASHBOARD_PORT` (default `3000`).
+
+### Required environment variables
+Copy `.env.example` → `.env` and fill in:
+- `DISCORD_TOKEN` — the bot token (used to look up guilds/channels).
+- `DISCORD_CLIENT_ID` — the bot's application/client ID.
+- `DISCORD_CLIENT_SECRET` — from the Discord Developer Portal → OAuth2.
+- `SESSION_SECRET` — any long random string for signing session cookies.
+- `DATABASE_URL` (and optionally `WELCOME_DATABASE_URL`) — same DBs the bot uses.
+
+### OAuth2 redirect URI
+Set `DISCORD_REDIRECT_URI` (or rely on the default
+`<DASHBOARD_BASE_URL>/auth/callback`). Add this exact URL to your application's
+**OAuth2 → Redirects** list in the Discord Developer Portal.
+
+### How it fits alongside the bot
+The dashboard is a separate process and does **not** need the bot running — it
+talks directly to the database and Discord's REST API. Run them on the same
+host or separately; both can run at once. Because settings live in PostgreSQL,
+anything you change in the dashboard is picked up by the bot on its next
+command/event.
+
