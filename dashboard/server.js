@@ -367,7 +367,7 @@ app.patch('/api/guilds/:guildId/server', requireAuth, requireGuildAdmin, async (
 
 // ── Page routes (SPA-style: serve index.html for everything) ────────────────
 
-app.get(['/', '/dashboard', '/guild/:guildId'], (req, res) => {
+app.get(['/', '/dashboard', '/docs', '/guild/:guildId'], (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 

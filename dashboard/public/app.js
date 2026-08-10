@@ -91,6 +91,7 @@ function renderUserMenu(user) {
 
 const routes = [
   { match: /^\/(dashboard)?\/?$/, view: renderOverview },
+  { match: /^\/docs\/?$/, view: renderDocs },
   { match: /^\/guild\/(\d+)(?:\/(\w+))?$/, view: renderGuildSettings },
 ];
 
@@ -148,11 +149,182 @@ function renderLogin() {
       <h1 class="login-title">PrimeBot Dashboard</h1>
       <p class="login-sub">Sign in with Discord to configure PrimeBot for the servers you manage — welcome messages, leveling, prefixes, auto-reactions and more, all in one place.</p>
       <a href="/login" class="btn btn-discord">🚪 Login with Discord</a>
+      <a href="/docs" class="btn btn-secondary" data-link>📖 Documentation</a>
       <div class="feature-grid">
         <div class="feature"><div class="fi">👋</div><div class="ft">Welcome system</div><div class="fd">Custom messages, banners, DMs and channel routing.</div></div>
         <div class="feature"><div class="fi">📈</div><div class="ft">Leveling &amp; XP</div><div class="fd">Tune multipliers, cooldowns and level-up channels.</div></div>
         <div class="feature"><div class="fi">⚡</div><div class="ft">Command prefix</div><div class="fd">Set a per-server prefix instead of the default.</div></div>
         <div class="feature"><div class="fi">🔁</div><div class="ft">Auto-reactions</div><div class="fd">Trigger emojis on matching messages automatically.</div></div>
+      </div>
+    </div>
+  `;
+}
+
+// ── Documentation page ─────────────────────────────────────────────────────
+
+function renderDocs() {
+  // Show the nav on the docs page (login hides it).
+  document.querySelector('.topnav').style.display = '';
+
+  const clientId = esc(window.__clientId || '');
+  const inviteUrl = clientId
+    ? `https://discord.com/oauth2/authorize?client_id=${clientId}&scope=bot&permissions=8`
+    : 'https://discord.com/oauth2/authorize?client_id=YOUR_CLIENT_ID&scope=bot&permissions=8';
+
+  app.innerHTML = `
+    <div class="docs">
+      <div class="docs-hero">
+        <div class="docs-hero-icon">📖</div>
+        <h1 class="docs-title">PrimeBot Documentation</h1>
+        <p class="docs-lead">Everything you need to set up, configure and manage PrimeBot for your Discord server — from inviting the bot to tuning welcome messages, leveling and auto-reactions.</p>
+      </div>
+
+      <nav class="docs-toc">
+        <h3>On this page</h3>
+        <ul>
+          <li><a href="#getting-started" data-link>Getting started</a></li>
+          <li><a href="#login" data-link>Logging in</a></li>
+          <li><a href="#servers" data-link>Your servers</a></li>
+          <li><a href="#welcome" data-link>Welcome system</a></li>
+          <li><a href="#leveling" data-link>Leveling &amp; XP</a></li>
+          <li><a href="#prefix" data-link>Command prefix</a></li>
+          <li><a href="#reactions" data-link>Auto-reactions</a></li>
+          <li><a href="#broadcast" data-link>Broadcasts</a></li>
+          <li><a href="#commands" data-link>Command reference</a></li>
+          <li><a href="#faq" data-link>FAQ &amp; troubleshooting</a></li>
+        </ul>
+      </nav>
+
+      <section id="getting-started" class="docs-section">
+        <h2>1 · Getting started</h2>
+        <p>PrimeBot is a community engagement bot with welcome messages, an XP-based leveling system, polls, giveaways, ticketing, moderation and more. To use it in your server you first need to invite it.</p>
+        <ol class="docs-steps">
+          <li>
+            <strong>Invite PrimeBot to your server.</strong><br />
+            Use the official invite link with administrator permissions so all features work out of the box:
+            <div class="docs-code-row"><code class="docs-code">${inviteUrl}</code><a class="btn btn-primary btn-sm" href="${inviteUrl}" target="_blank" rel="noopener">Open invite</a></div>
+          </li>
+          <li><strong>Make sure you have permissions.</strong> You need the <em>Manage Server</em> permission (or be the server owner) to configure PrimeBot through this dashboard.</li>
+          <li><strong>Log in below.</strong> The dashboard uses Discord OAuth2, so you sign in with the same Discord account you use to manage your server.</li>
+        </ol>
+      </section>
+
+      <section id="login" class="docs-section">
+        <h2>2 · Logging in</h2>
+        <p>Click <strong>Login with Discord</strong> on the home screen. You'll be sent to Discord to authorize the dashboard to read your username and the list of servers you manage. We never see your password, and you can revoke access at any time from <em>Discord → Settings → Authorized Apps</em>.</p>
+        <div class="docs-callout docs-callout-info">
+          <strong>Privacy:</strong> The dashboard only requests the <code>identify</code> and <code>guilds</code> scopes. Your access token is stored in a server-side session tied to a secure cookie — it is never exposed to the browser or shared with third parties.
+        </div>
+      </section>
+
+      <section id="servers" class="docs-section">
+        <h2>3 · Your servers</h2>
+        <p>After logging in you'll land on the <strong>Servers</strong> overview. It lists every server where you have <em>Manage Server</em> rights, and shows whether PrimeBot is present. Click any server with the green “PrimeBot is here” badge to open its configuration.</p>
+        <p>Servers where the bot isn't a member are shown separately with an <strong>Invite</strong> button — use it to add PrimeBot, then refresh the list.</p>
+      </section>
+
+      <section id="welcome" class="docs-section">
+        <h2>4 · Welcome system</h2>
+        <p>Greet new members with a custom message, an auto-generated banner, and an optional DM. Configure:</p>
+        <ul class="docs-list">
+          <li><strong>Enabled</strong> — turn the whole welcome system on or off.</li>
+          <li><strong>Channel</strong> — where welcome messages are posted (leave empty to DM only).</li>
+          <li><strong>Message</strong> — supports placeholders such as <code>{user}</code> (mention) and <code>{server}</code> (server name).</li>
+          <li><strong>Color</strong> — the accent color of the welcome card, as a hex code (e.g. <code>#5865F2</code>).</li>
+          <li><strong>Banner URL</strong> — an optional image shown at the top of the card.</li>
+          <li><strong>DM enabled + DM message</strong> — send a private welcome message to the new member.</li>
+          <li><strong>Member count / join date / account age</strong> — toggle extra stats on the welcome card.</li>
+        </ul>
+      </section>
+
+      <section id="leveling" class="docs-section">
+        <h2>5 · Leveling &amp; XP</h2>
+        <p>Members earn XP by chatting. Tune the system per server:</p>
+        <ul class="docs-list">
+          <li><strong>Enabled</strong> — turn leveling on or off.</li>
+          <li><strong>XP multiplier</strong> — scales how fast members earn XP (0–5). <code>1.0</code> is default.</li>
+          <li><strong>XP cooldown</strong> — minimum seconds between XP awards (5–300s) to prevent spam.</li>
+          <li><strong>Level-up channel</strong> — where level-up announcements are posted (leave empty to disable announcements).</li>
+        </ul>
+      </section>
+
+      <section id="prefix" class="docs-section">
+        <h2>6 · Command prefix</h2>
+        <p>PrimeBot responds to both slash commands and a text prefix. Set a per-server prefix here (the default is <code>$</code>). Prefixes can be 1–5 characters and must not contain spaces.</p>
+      </section>
+
+      <section id="reactions" class="docs-section">
+        <h2>7 · Auto-reactions</h2>
+        <p>Have PrimeBot automatically react to messages that match keywords. Enable the feature, then add keyword → emoji pairs. When a message contains a matching keyword, the bot adds the configured emoji reaction.</p>
+      </section>
+
+      <section id="broadcast" class="docs-section">
+        <h2>8 · Broadcasts</h2>
+        <p>Opt a server into receiving bot-wide broadcast announcements. Toggle <strong>Receive broadcasts</strong> and pick a <strong>broadcast channel</strong>. Messages sent by the bot owner are delivered to every opted-in server's chosen channel.</p>
+      </section>
+
+      <section id="commands" class="docs-section">
+        <h2>9 · Command reference</h2>
+        <p>PrimeBot ships with 40+ commands. Here are the main categories. Slash commands use <code>/</code>; prefix commands use your server's prefix (default <code>$</code>).</p>
+        <div class="docs-cmd-grid">
+          <div class="docs-cmd-card">
+            <h4>🛡️ Moderation</h4>
+            <ul><li><code>ban</code> / <code>kick</code> — remove members</li><li><code>purge</code> — bulk-delete messages</li><li><code>lock</code> / <code>unlock</code> — lock channels</li><li><code>nuke</code> — clear &amp; recreate a channel</li><li><code>hide</code> / <code>unhide</code> — hide channels</li><li><code>move</code> — move members</li><li><code>role</code> — assign roles</li></ul>
+          </div>
+          <div class="docs-cmd-card">
+            <h4>🎉 Engagement</h4>
+            <ul><li><code>poll</code> / <code>endpoll</code> — simple polls</li><li><code>lpoll</code> / <code>endgame</code> — live polls</li><li><code>giveaway</code> / <code>reroll</code> / <code>end</code> — giveaways</li><li><code>counting</code> — counting game</li><li><code>tictactoe</code> — play tic-tac-toe</li><li><code>truthdare</code> — truth or dare</li></ul>
+          </div>
+          <div class="docs-cmd-card">
+            <h4>🎫 Tickets &amp; Support</h4>
+            <ul><li><code>createticket</code> / <code>ticket</code> — open tickets</li><li><code>tickethistory</code> — view past tickets</li><li><code>categories</code> — manage ticket categories</li></ul>
+          </div>
+          <div class="docs-cmd-card">
+            <h4>🎂 Community</h4>
+            <ul><li><code>birthday</code> — set birthdays</li><li><code>leveling</code> — view XP/rank</li><li><code>welcomeconfig</code> — quick welcome setup</li><li><code>about</code> — bot info</li><li><code>help</code> — command help</li></ul>
+          </div>
+          <div class="docs-cmd-card">
+            <h4>📣 Broadcasting</h4>
+            <ul><li><code>broadcast</code> — send a broadcast</li><li><code>broadcastsettings</code> — configure reception</li><li><code>updates</code> — bot update notes</li></ul>
+          </div>
+          <div class="docs-cmd-card">
+            <h4>🧰 Utility</h4>
+            <ul><li><code>echo</code> — repeat text</li><li><code>snipe</code> — recover deleted messages</li><li><code>sync</code> — sync server settings</li><li><code>np</code> — now playing</li><li><code>rm</code> / <code>ses</code> — session tools</li><li><code>beta</code> / <code>betaserver</code> — beta features</li></ul>
+          </div>
+        </div>
+      </section>
+
+      <section id="faq" class="docs-section">
+        <h2>10 · FAQ &amp; troubleshooting</h2>
+        <div class="docs-faq">
+          <details>
+            <summary>My server isn't showing up in the list.</summary>
+            <p>You need the <strong>Manage Server</strong> permission in that server. Ask an admin to grant it, or have them log in and configure the bot. Discord also caches the guild list briefly — try logging out and back in if you just got promoted.</p>
+          </details>
+          <details>
+            <summary>A server shows “PrimeBot is not here”.</summary>
+            <p>Click the <strong>Invite</strong> button on that server's card to add PrimeBot. After the bot joins, refresh the servers list.</p>
+          </details>
+          <details>
+            <summary>My changes don't seem to take effect.</summary>
+            <p>PrimeBot reads its configuration from the database on every command and event, so changes are effective immediately. If something still looks wrong, make sure you clicked <strong>Save</strong> on the settings panel and saw the success toast.</p>
+          </details>
+          <details>
+            <summary>I got logged out / my session expired.</summary>
+            <p>Sessions last 7 days. If you're prompted to log in again, just click <strong>Login with Discord</strong>. This can happen after the bot's OAuth credentials are rotated.</p>
+          </details>
+          <details>
+            <summary>Is my data safe?</summary>
+            <p>The dashboard only reads your Discord identity and guild list. Configuration changes are written to the same PostgreSQL database the bot uses. No messages are logged through the dashboard.</p>
+          </details>
+        </div>
+      </section>
+
+      <div class="docs-cta">
+        <h3>Ready to configure your server?</h3>
+        <p>Log in with Discord to manage PrimeBot across all your servers.</p>
+        <a href="/login" class="btn btn-discord">🚪 Login with Discord</a>
+        <a href="/" class="btn btn-secondary" data-link>← Back to dashboard</a>
       </div>
     </div>
   `;

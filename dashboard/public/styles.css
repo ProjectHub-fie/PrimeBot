@@ -591,3 +591,244 @@ input[type="color"] {
   .reaction-row { grid-template-columns: 1fr; }
   .page-head h1 { font-size: 22px; }
 }
+
+/* ── Documentation page ───────────────────────────────────────────────────── */
+
+.docs {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 8px 0 60px;
+}
+
+.docs-hero {
+  text-align: center;
+  padding: 40px 16px 28px;
+}
+
+.docs-hero-icon {
+  font-size: 52px;
+  margin-bottom: 8px;
+  filter: drop-shadow(0 0 20px rgba(88, 101, 242, 0.4));
+}
+
+.docs-title {
+  font-size: 32px;
+  font-weight: 800;
+  margin: 0 0 12px;
+  letter-spacing: -0.02em;
+}
+
+.docs-lead {
+  color: var(--text-dim);
+  max-width: 620px;
+  margin: 0 auto;
+  font-size: 16px;
+}
+
+.docs-toc {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 22px;
+  margin: 28px 0 36px;
+}
+
+.docs-toc h3 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+}
+
+.docs-toc ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 6px 18px;
+}
+
+.docs-toc a {
+  color: var(--text-dim);
+  font-size: 14px;
+}
+.docs-toc a:hover { color: var(--blurple); }
+
+.docs-section {
+  scroll-margin-top: 80px;
+  padding: 26px 0;
+  border-top: 1px solid var(--border-soft);
+}
+
+.docs-section:first-of-type { border-top: none; }
+
+.docs-section h2 {
+  font-size: 22px;
+  font-weight: 700;
+  margin: 0 0 14px;
+  letter-spacing: -0.01em;
+}
+
+.docs-section p {
+  color: var(--text);
+  margin: 0 0 12px;
+}
+
+.docs-section code {
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1px 6px;
+  font-size: 13px;
+  font-family: 'SF Mono', 'Fira Code', Consolas, monospace;
+  color: var(--green);
+}
+
+.docs-steps {
+  margin: 12px 0;
+  padding-left: 22px;
+}
+.docs-steps li { margin-bottom: 14px; }
+
+.docs-list {
+  margin: 8px 0;
+  padding-left: 22px;
+}
+.docs-list li { margin-bottom: 6px; }
+
+.docs-code-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.docs-code {
+  flex: 1 1 260px;
+  display: block;
+  padding: 8px 12px;
+  font-family: 'SF Mono', 'Fira Code', Consolas, monospace;
+  font-size: 12.5px;
+  overflow-x: auto;
+  color: var(--green);
+  border-radius: var(--radius-sm);
+}
+
+.btn-sm {
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+.docs-callout {
+  border-left: 3px solid var(--blurple);
+  background: var(--blurple-soft);
+  padding: 14px 18px;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  margin: 16px 0;
+  font-size: 14px;
+}
+.docs-callout-info { border-left-color: var(--blurple); }
+.docs-callout code { background: rgba(0, 0, 0, 0.25); }
+
+.docs-cmd-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.docs-cmd-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+}
+
+.docs-cmd-card h4 {
+  margin: 0 0 10px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.docs-cmd-card ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.docs-cmd-card li {
+  padding: 4px 0;
+  font-size: 13.5px;
+  color: var(--text-dim);
+  border-top: 1px solid var(--border-soft);
+}
+.docs-cmd-card li:first-child { border-top: none; }
+
+.docs-faq {
+  margin-top: 12px;
+}
+
+.docs-faq details {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+
+.docs-faq summary {
+  cursor: pointer;
+  padding: 14px 18px;
+  font-weight: 600;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.docs-faq summary::-webkit-details-marker { display: none; }
+.docs-faq summary::after {
+  content: '＋';
+  color: var(--text-faint);
+  font-size: 18px;
+  transition: transform 0.15s;
+}
+.docs-faq details[open] summary::after { content: '－'; }
+
+.docs-faq summary:hover { color: var(--blurple); }
+
+.docs-faq details p {
+  margin: 0;
+  padding: 0 18px 16px;
+  color: var(--text-dim);
+  font-size: 14px;
+}
+
+.docs-cta {
+  text-align: center;
+  margin-top: 40px;
+  padding: 36px 20px;
+  background: linear-gradient(180deg, var(--bg-card), var(--bg-soft));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.docs-cta h3 {
+  margin: 0 0 6px;
+  font-size: 20px;
+}
+
+.docs-cta p {
+  color: var(--text-dim);
+  margin: 0 0 20px;
+}
+
+.docs-cta .btn { margin: 0 8px 10px; }
+
+@media (max-width: 640px) {
+  .docs-toc ul { grid-template-columns: 1fr; }
+  .docs-code-row { flex-direction: column; align-items: stretch; }
+  .docs-code { flex: none; }
+}
+
