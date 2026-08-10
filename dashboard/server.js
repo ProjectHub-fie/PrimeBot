@@ -12,11 +12,13 @@
  */
 
 const path = require('path');
+const { Pool } = require('pg');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
 const express = require('express');
 const session = require('express-session');
 const cookieParser = require('cookie-parser');
+const PgSession = require('connect-pg-simple')(session);
 
 const discord = require('./discord');
 const { requireAuth, requireGuildAdmin } = require('./auth');
@@ -35,12 +37,33 @@ const app = express();
 // Trust the TLS-terminating proxy in front of us so req.secure / req.ip
 // reflect the real client connection (HTTPS). Without this, express-session
 // sees plain HTTP and refuses to set Secure cookies — login silently fails.
+// (Vercel, the work host, and any reverse proxy front this app.)
 app.set('trust proxy', 1);
 const PORT = parseInt(process.env.DASHBOARD_PORT || process.env.PORT || 3000, 10);
-const BASE_URL = process.env.DASHBOARD_BASE_URL || `http://localhost:${PORT}`;
+const BASE_URL = process.env.DASHBOARD_BASE_URL
+    || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : `http://localhost:${PORT}`);
 const REDIRECT_URI = process.env.DISCORD_REDIRECT_URI || `${BASE_URL}/auth/callback`;
 
 const SESSION_SECRET = process.env.SESSION_SECRET || 'primebot-dashboard-dev-secret-change-me';
+
+// On Vercel (serverless), MemoryStore is useless because each request may run
+// in a fresh instance. Store sessions in the same PostgreSQL DB the bot uses.
+function buildSessionStore() {
+    const dbUrl = process.env.DATABASE_URL;
+    if (dbUrl) {
+        return new PgSession({
+            pool: new Pool({ connectionString: dbUrl }),
+            // Use a dedicated table — a generic "session" table may already
+            // exist in the shared DB with a different schema (e.g. another app's
+            // auth table), which would break connect-pg-simple.
+            tableName: 'primebot_dashboard_session',
+            createTableIfNotExists: true,
+            pruneSessionInterval: false,
+        });
+    }
+    // Local dev fallback (single process).
+    return undefined;
+}
 
 // Resolved at boot via /users/@me — the real bot user ID (may differ from
 // DISCORD_CLIENT_ID if the env points token + client id at different apps).
@@ -52,14 +75,23 @@ let botSelf = null;
 app.use(cookieParser());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Secure cookies whenever we're not on plain localhost. Vercel, the work host,
+// and production all serve HTTPS, so the session cookie must be marked Secure
+// or browsers will silently drop it.
+const isLocalhost = BASE_URL.startsWith('http://localhost');
+const cookieSecure = !isLocalhost;
+
+const sessionStore = buildSessionStore();
 app.use(session({
     name: constants.SESSION_COOKIE,
     secret: SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
+    store: sessionStore,
     cookie: {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production' && !BASE_URL.startsWith('http://localhost'),
+        secure: cookieSecure,
         sameSite: 'lax',
         maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
     },
@@ -147,7 +179,8 @@ app.get('/logout', (req, res) => {
 
 // ── API: current user ───────────────────────────────────────────────────────
 
-app.get('/api/me', requireAuth, (req, res) => {
+app.get('/api/me', requireAuth, async (req, res) => {
+    await resolveBotSelf();
     res.json({ user: req.session.user, bot: botSelf, clientId: process.env.DISCORD_CLIENT_ID });
 });
 
@@ -380,23 +413,43 @@ function preflightCheck() {
     console.log(`   Add this to your Discord app's OAuth2 redirects.`);
 }
 
-app.listen(PORT, async () => {
-    console.log(` PrimeBot Dashboard running at ${BASE_URL}`);
-    preflightCheck();
-
-    // Resolve the bot's real user ID so REST calls use the correct identity.
-    if (process.env.DISCORD_TOKEN || process.env.DASHBOARD_BOT_TOKEN) {
+// Resolve the bot's real user ID once (idempotent). Runs eagerly on boot and is
+// also called lazily by /api/me so serverless cold starts still resolve it.
+let botSelfPromise = null;
+function resolveBotSelf() {
+    if (botSelfPromise) return botSelfPromise;
+    if (!process.env.DISCORD_TOKEN && !process.env.DASHBOARD_BOT_TOKEN) return Promise.resolve(null);
+    botSelfPromise = (async () => {
         try {
-            botSelf = await discord.getBotSelf();
-            botUserId = botSelf.id;
-            console.log(`🤖 Connected as bot user ${botSelf.username} (${botSelf.id})`);
-            if (process.env.DISCORD_CLIENT_ID && process.env.DISCORD_CLIENT_ID !== botSelf.id) {
-                console.warn(`⚠️  DISCORD_CLIENT_ID (${process.env.DISCORD_CLIENT_ID}) does not match the bot token's user id (${botSelf.id}).`);
+            const self = await discord.getBotSelf();
+            botSelf = self;
+            botUserId = self.id;
+            console.log(`🤖 Connected as bot user ${self.username} (${self.id})`);
+            if (process.env.DISCORD_CLIENT_ID && process.env.DISCORD_CLIENT_ID !== self.id) {
+                console.warn(`⚠️  DISCORD_CLIENT_ID (${process.env.DISCORD_CLIENT_ID}) does not match the bot token's user id (${self.id}).`);
                 console.warn('   OAuth2 login uses DISCORD_CLIENT_ID; guild/channel lookups use the token.');
                 console.warn('   Make sure both belong to the same application, or set DASHBOARD_BOT_TOKEN to the matching token.');
             }
+            return self;
         } catch (err) {
             console.warn(`⚠️  Could not verify bot token (${err.message}). Guild/channel lookups may fail.`);
+            return null;
         }
-    }
-});
+    })();
+    return botSelfPromise;
+}
+
+// Kick off resolution immediately (safe — awaited lazily where needed).
+resolveBotSelf();
+
+// Only bind a listening socket when run directly (`npm run dashboard` / node).
+// On Vercel the app is imported as a serverless handler — no listen() call.
+if (require.main === module) {
+    app.listen(PORT, () => {
+        console.log(` PrimeBot Dashboard running at ${BASE_URL}`);
+        preflightCheck();
+    });
+}
+
+// Exposed for Vercel's serverless runtime (@vercel/node) and for tests.
+module.exports = app;

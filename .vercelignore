@@ -1,0 +1,12 @@
+# Exclude bot runtime files the dashboard function does not import.
+# The dashboard only depends on: dashboard/**, server/db.js, server/welcomeDb.js,
+# shared/schema.js, utils/prefixHelper.js, config.js — included via vercel.json.
+commands/
+scripts/
+tests/
+logs/
+*.log
+.git
+.gitignore
+.env
+.env.local
