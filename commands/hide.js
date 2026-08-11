@@ -23,7 +23,11 @@ module.exports = {
                 ViewChannel: false,
             });
 
-            return interaction.reply({ content: `Hidden **${channel.name}** from @everyone.`, ephemeral: true });
+            return interaction.reply({
+                content: `Hidden **${channel.name}** from \`@everyone\`.`,
+                ephemeral: true,
+                allowedMentions: { parse: [] },
+            });
         } catch (error) {
             console.error('[HIDE] failed:', error);
             return interaction.reply({ content: 'I could not hide that channel.', ephemeral: true });

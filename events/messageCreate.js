@@ -758,7 +758,10 @@ module.exports = {
                     const everyone = hideChannel.guild.roles.everyone;
                     try {
                         await hideChannel.permissionOverwrites.edit(everyone, { ViewChannel: false });
-                        return message.reply(`Hidden **${hideChannel.name}** from @everyone.`);
+                        return message.reply({
+                            content: `Hidden **${hideChannel.name}** from \`@everyone\`.`,
+                            allowedMentions: { parse: [] },
+                        });
                     } catch (err) {
                         console.error('[PREFIX HIDE] Failed:', err);
                         return message.reply('I could not hide that channel.');
@@ -784,7 +787,10 @@ module.exports = {
                     const everyone = unhideChannel.guild.roles.everyone;
                     try {
                         await unhideChannel.permissionOverwrites.edit(everyone, { ViewChannel: null });
-                        return message.reply(`Unhidden **${unhideChannel.name}** for everyone in this server.`);
+                        return message.reply({
+                            content: `Unhidden **${unhideChannel.name}** for everyone in this server.`,
+                            allowedMentions: { parse: [] },
+                        });
                     } catch (err) {
                         console.error('[PREFIX UNHIDE] Failed:', err);
                         return message.reply('I could not unhide that channel.');

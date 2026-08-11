@@ -23,7 +23,11 @@ module.exports = {
                 ViewChannel: null,
             });
 
-            return interaction.reply({ content: `Unhidden **${channel.name}** for everyone in this server.`, ephemeral: true });
+            return interaction.reply({
+                content: `Unhidden **${channel.name}** for everyone in this server.`,
+                ephemeral: true,
+                allowedMentions: { parse: [] },
+            });
         } catch (error) {
             console.error('[UNHIDE] failed:', error);
             return interaction.reply({ content: 'I could not unhide that channel.', ephemeral: true });

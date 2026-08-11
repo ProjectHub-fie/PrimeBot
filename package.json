@@ -10,10 +10,11 @@
     "db:push": "drizzle-kit push"
   },
   "dependencies": {
+    "@discordjs/util": "^1.1.1",
     "connect-pg-simple": "^10.0.0",
     "cookie-parser": "^1.4.7",
     "debug": "^4.4.3",
-    "discord.js": "^14.27.0",
+    "discord.js": "^14.24.2",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.39.3",
     "express": "^5.2.1",
