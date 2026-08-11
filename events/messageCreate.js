@@ -509,11 +509,6 @@ module.exports = {
 
             // Handle commands
             switch (commandName) {
-                case "np":
-                case "noprefix":
-                    // Handle no-prefix mode - moved to separate case section for better organization
-                    break;
-
                 case "prefix": {
                     if (!message.member || !message.member.permissions.has(PermissionFlagsBits.Administrator)) {
                         return message.reply('You need Administrator permission to change the server prefix.');
