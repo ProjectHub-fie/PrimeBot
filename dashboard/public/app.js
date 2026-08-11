@@ -139,14 +139,30 @@ async function boot() {
   router();
 }
 
+// Render the login screen. If the server bounced us back to /login?error=...,
+// show a human-readable reason so the failure isn't silent (the most common
+// cause is the session store not persisting on Vercel — e.g. Postgres SSL).
+const LOGIN_ERRORS = {
+  missing_code: 'Authorization code was missing from the Discord callback.',
+  auth_failed: 'Discord sign-in failed. Please try again.',
+  session_failed: 'Signed in to Discord, but the server could not save your session. This usually means the database connection is failing on Vercel (check DATABASE_URL / SSL and that the primebot_dashboard_session table is reachable).',
+};
+
 // ── Login screen ───────────────────────────────────────────────────────────
 
 function renderLogin() {
   document.querySelector('.topnav').style.display = 'none';
+  const params = new URLSearchParams(window.location.search);
+  const errorKey = params.get('error');
+  const errorMsg = errorKey && LOGIN_ERRORS[errorKey];
+  const errorHTML = errorMsg
+    ? `<div class="alert alert-error" style="margin:0 0 16px;text-align:left">${esc(errorMsg)}</div>`
+    : '';
   app.innerHTML = `
     <div class="login-wrap">
       <div class="login-hero">⚡</div>
       <h1 class="login-title">PrimeBot Dashboard</h1>
+      ${errorHTML}
       <p class="login-sub">Sign in with Discord to configure PrimeBot for the servers you manage — welcome messages, leveling, prefixes, auto-reactions and more, all in one place.</p>
       <a href="/login" class="btn btn-discord">🚪 Login with Discord</a>
       <a href="/docs" class="btn btn-secondary" data-link>📖 Documentation</a>
@@ -436,6 +452,16 @@ async function renderGuildSettings(match) {
           <div class="alert alert-warn">PrimeBot is not in this server.</div>
           <p>To configure PrimeBot here, add it to your server first.</p>
           <p style="margin-top:16px"><a class="btn btn-primary" href="https://discord.com/oauth2/authorize?client_id=${esc(window.__clientId||'')}&scope=bot&permissions=8" target="_blank" rel="noopener">Invite PrimeBot</a></p>
+          <p style="margin-top:12px"><a href="/" data-link>← Back to servers</a></p>
+        </div>
+      `;
+      return;
+    }
+    if (err.status === 503) {
+      app.innerHTML = `
+        <div class="card">
+          <div class="alert alert-error">${esc(err.message)}</div>
+          <p>The dashboard server could not reach Discord as PrimeBot. An admin needs to set <code>DISCORD_TOKEN</code> (or <code>DASHBOARD_BOT_TOKEN</code>) in this Vercel project's Environment Variables, then redeploy.</p>
           <p style="margin-top:12px"><a href="/" data-link>← Back to servers</a></p>
         </div>
       `;
