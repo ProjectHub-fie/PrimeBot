@@ -1,0 +1,1 @@
+- [Discord.js runtime compatibility](discordjs-runtime-compatibility.md) — keep the Node runtime modern and avoid the malformed Discord utility package release.
