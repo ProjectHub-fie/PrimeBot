@@ -296,6 +296,17 @@ class ServerSettingsManager {
 
     // ── No-prefix mode ────────────────────────────────────────────────────────
 
+    _normalizeNoPrefixExpiration(value) {
+        const numericValue = Number(value);
+        if (!Number.isFinite(numericValue) || numericValue <= 0) return null;
+
+        // Older values may have been stored as Unix seconds. Normalize them
+        // once at read time so comparisons and Discord timestamps stay correct.
+        return numericValue < 1_000_000_000_000
+            ? numericValue * 1000
+            : numericValue;
+    }
+
     enableNoPrefixMode(guildId, userId, minutes = 10) {
         if (!userId) return { success: false, message: 'Invalid user' };
         if (minutes <= 0 || minutes > 60) return { success: false, message: 'Duration must be between 1 and 60 minutes' };
@@ -328,12 +339,14 @@ class ServerSettingsManager {
         try {
             if (!guildId || !userId) return false;
             const s = this.getGuildSettings(guildId);
-            if (!s.noPrefixUsers || !s.noPrefixUsers[userId]) return false;
-            if (Date.now() > s.noPrefixUsers[userId]) {
+            const expirationTime = this._normalizeNoPrefixExpiration(s.noPrefixUsers?.[userId]);
+            if (!expirationTime) return false;
+            if (Date.now() >= expirationTime) {
                 delete s.noPrefixUsers[userId];
                 this._saveGuildSettings(guildId);
                 return false;
             }
+            s.noPrefixUsers[userId] = expirationTime;
             return true;
         } catch (err) {
             console.error(`[SERVER SETTINGS] Error checking no-prefix mode:`, err);
@@ -345,14 +358,15 @@ class ServerSettingsManager {
         if (!userId) return null;
         const s = this.getGuildSettings(guildId);
         if (!s.noPrefixUsers) return null;
-        const exp = s.noPrefixUsers[userId];
+        const exp = this._normalizeNoPrefixExpiration(s.noPrefixUsers[userId]);
         if (!exp) return null;
-        if (Date.now() > exp) {
+        if (Date.now() >= exp) {
             delete s.noPrefixUsers[userId];
             this.serverSettings.set(guildId, s);
             this._saveGuildSettings(guildId);
             return null;
         }
+        s.noPrefixUsers[userId] = exp;
         return exp;
     }
 

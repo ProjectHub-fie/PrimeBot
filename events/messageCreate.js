@@ -444,22 +444,22 @@ module.exports = {
                     const simulatedMessage = Object.create(Object.getPrototypeOf(message));
                     Object.assign(simulatedMessage, message);
                     simulatedMessage.content = simulatedContent;
-                    simulatedMessage._processedAsNoPrefix = true;
-                    
                     console.log(`[NO-PREFIX] Simulated content: "${simulatedContent}"`);
                     
-                    // Process this new content as a command (recursive processing)
+                    // Process through the normal command switch so no-prefix users
+                    // have the same command coverage as prefixed users. The
+                    // simulated message already starts with the prefix, so this
+                    // does not recurse into no-prefix detection.
                     try {
-                        // Process the command by calling the command handler directly
-                        await processCommand(simulatedMessage, client, commandName, args, prefix);
+                        await module.exports.execute(simulatedMessage, client);
                         
                         // NO REACTION - Commands should execute silently in no-prefix mode
-                        
+
                         return; // Stop processing after handling the no-prefix command
                     } catch (error) {
                         console.error('[NO-PREFIX] Error processing no-prefix command:', error);
                         console.error('[NO-PREFIX] Stack trace:', error.stack);
-                        // Don't show error to user in no-prefix mode to avoid spam
+                        await message.reply('There was an error processing that no-prefix command.').catch(() => {});
                     }
                 }
             }
