@@ -40,8 +40,19 @@ const app = express();
 // (Vercel, the work host, and any reverse proxy front this app.)
 app.set('trust proxy', 1);
 const PORT = parseInt(process.env.DASHBOARD_PORT || process.env.PORT || 3000, 10);
+// Resolve the public base URL in priority order:
+//   1. DASHBOARD_BASE_URL  (explicit, always wins)
+//   2. VERCEL_PROJECT_PRODUCTION_URL — the STABLE production domain on Vercel
+//      (e.g. cpanel-primebot.vercel.app). This is critical: VERCEL_URL is a
+//      per-deployment hashed preview URL that changes every deploy, so the
+//      OAuth redirect_uri it produces never matches what's registered in the
+//      Discord Developer Portal → "invalid redirect_uri".
+//   3. VERCEL_URL — last-resort preview host
+//   4. localhost for local dev
 const BASE_URL = process.env.DASHBOARD_BASE_URL
-    || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : `http://localhost:${PORT}`);
+    || (process.env.VERCEL_PROJECT_PRODUCTION_URL
+        ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+        : (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : `http://localhost:${PORT}`));
 const REDIRECT_URI = process.env.DISCORD_REDIRECT_URI || `${BASE_URL}/auth/callback`;
 
 const SESSION_SECRET = process.env.SESSION_SECRET || 'primebot-dashboard-dev-secret-change-me';
