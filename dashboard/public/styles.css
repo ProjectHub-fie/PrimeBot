@@ -280,6 +280,99 @@ a:hover { text-decoration: underline; }
 .feature .ft { font-weight: 700; margin-bottom: 2px; }
 .feature .fd { color: var(--text-dim); font-size: 13px; }
 
+/* ── Login stats band ────────────────────────────────────────────────────── */
+
+.stats-band {
+  width: 100%;
+  max-width: 860px;
+  margin: 40px auto 0;
+  background: linear-gradient(180deg, var(--bg-card) 0%, var(--bg-soft) 100%);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+  text-align: left;
+  box-shadow: var(--shadow);
+}
+.stats-band-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+.stats-band-title { font-size: 14px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-dim); }
+.stats-band-sub { font-size: 12px; color: var(--text-faint); }
+
+.stats-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+@media (max-width: 620px) {
+  .stats-cards { grid-template-columns: 1fr; }
+}
+.stat-card {
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.stat-card.stat-primary {
+  border-color: var(--blurple);
+  background: linear-gradient(180deg, var(--blurple-soft) 0%, var(--bg) 100%);
+}
+.stat-icon { font-size: 18px; }
+.stat-value { font-size: 28px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.1; }
+.stat-label { font-size: 12px; color: var(--text-dim); }
+
+.stats-chart-wrap {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border-soft);
+}
+.stats-chart-head {
+  font-size: 13px; font-weight: 700; color: var(--text-dim);
+  margin-bottom: 14px;
+}
+.donut-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+@media (max-width: 620px) {
+  .donut-grid { grid-template-columns: repeat(2, 1fr); }
+}
+.donut-item { text-align: center; }
+.donut {
+  width: 88px; height: 88px;
+  border-radius: 50%;
+  margin: 0 auto 8px;
+  display: grid;
+  place-items: center;
+  position: relative;
+  transition: background 0.6s ease;
+}
+.donut::after {
+  content: '';
+  position: absolute;
+  inset: 12px;
+  background: var(--bg-card);
+  border-radius: 50%;
+  z-index: 0;
+}
+.donut-pct {
+  position: relative;
+  z-index: 1;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+.donut-label { font-size: 12px; color: var(--text-dim); }
+
 /* ── Guild grid ──────────────────────────────────────────────────────────── */
 
 .guild-grid {

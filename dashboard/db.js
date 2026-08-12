@@ -26,6 +26,7 @@ function getWelcomePool() {
 }
 
 const config = require('../config');
+const constants = require('./constants');
 const { normalizeGuildPrefix } = require('../utils/prefixHelper');
 
 // ── server_settings (prefix, leveling, auto-reactions, broadcast) ────────────
@@ -276,6 +277,67 @@ async function getGuildConfig(guildId) {
     return { server, welcome };
 }
 
+// ── Aggregated platform stats (public — shown on the login screen) ──────────
+//
+// These run simple COUNTs against the same tables the bot uses, so the numbers
+// reflect real, live configuration. Each query is wrapped so a missing/unreachable
+// database degrades to zero rather than throwing the whole endpoint — the login
+// page still renders, just with neutral stats.
+
+async function _count(query, fallback = 0) {
+    try {
+        const res = await pool.query(query);
+        return Number(res.rows[0]?.count ?? fallback);
+    } catch (err) {
+        console.error('[DASHBOARD DB] stats count failed:', err.message);
+        return fallback;
+    }
+}
+
+async function _welcomeCount(query, fallback = 0) {
+    try {
+        const res = await getWelcomePool().query(query);
+        return Number(res.rows[0]?.count ?? fallback);
+    } catch (err) {
+        console.error('[DASHBOARD DB] welcome stats count failed:', err.message);
+        return fallback;
+    }
+}
+
+async function getPlatformStats() {
+    const [
+        totalServers,
+        levelingEnabled,
+        welcomeEnabled,
+        autoReactionsEnabled,
+        broadcastEnabled,
+        welcomeBanners,
+    ] = await Promise.all([
+        _count(`SELECT COUNT(*) FROM server_settings`),
+        _count(`SELECT COUNT(*) FROM server_settings WHERE leveling_enabled = true`),
+        _welcomeCount(`SELECT COUNT(*) FROM welcome_settings WHERE enabled = true`),
+        _count(`SELECT COUNT(*) FROM server_settings WHERE auto_reactions_enabled = true`),
+        _count(`SELECT COUNT(*) FROM server_settings WHERE receive_broadcasts = true`),
+        _welcomeCount(`SELECT COUNT(*) FROM welcome_settings WHERE banner_url IS NOT NULL AND banner_url <> ''`),
+    ]);
+
+    // Adoption ratios (guard against divide-by-zero). These drive the donut charts.
+    const pct = (n, d) => (d > 0 ? Math.round((n / d) * 100) : 0);
+
+    return {
+        servers: totalServers,
+        botName: constants.BOT_NAME,
+        botVersion: constants.BOT_VERSION,
+        features: {
+            leveling: { count: levelingEnabled, percent: pct(levelingEnabled, totalServers) },
+            welcome: { count: welcomeEnabled, percent: pct(welcomeEnabled, totalServers) },
+            autoReactions: { count: autoReactionsEnabled, percent: pct(autoReactionsEnabled, totalServers) },
+            broadcasts: { count: broadcastEnabled, percent: pct(broadcastEnabled, totalServers) },
+        },
+        welcomeBanners,
+    };
+}
+
 module.exports = {
     getServerSettings,
     upsertServerSettings,
@@ -284,4 +346,5 @@ module.exports = {
     upsertWelcomeSettings,
     defaultWelcomeSettings,
     getGuildConfig,
+    getPlatformStats,
 };

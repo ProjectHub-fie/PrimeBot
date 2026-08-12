@@ -150,6 +150,26 @@ const LOGIN_ERRORS = {
 
 // ── Login screen ───────────────────────────────────────────────────────────
 
+// Count up from 0 → target with an ease-out curve.
+function animateCount(el, target, duration = 1200) {
+  const start = performance.now();
+  const from = 0;
+  const tick = (now) => {
+    const t = Math.min(1, (now - start) / duration);
+    const eased = 1 - Math.pow(1 - t, 3); // easeOutCubic
+    el.textContent = Math.round(from + (target - from) * eased).toLocaleString();
+    if (t < 1) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+
+// Render a conic-gradient donut (no canvas needed) inside an element.
+function renderDonut(el, percent, colorVar) {
+  const pct = Math.max(0, Math.min(100, percent));
+  el.style.background = `conic-gradient(var(${colorVar}) ${pct * 3.6}deg, var(--border) 0deg)`;
+  el.querySelector('.donut-pct').textContent = `${pct}%`;
+}
+
 function renderLogin() {
   document.querySelector('.topnav').style.display = 'none';
   const params = new URLSearchParams(window.location.search);
@@ -166,6 +186,52 @@ function renderLogin() {
       <p class="login-sub">Sign in with Discord to configure PrimeBot for the servers you manage — welcome messages, leveling, prefixes, auto-reactions and more, all in one place.</p>
       <a href="/login" class="btn btn-discord">🚪 Login with Discord</a>
       <a href="/docs" class="btn btn-secondary" data-link>📖 Documentation</a>
+
+      <div class="stats-band" id="stats-band" aria-live="polite">
+        <div class="stats-band-head">
+          <span class="stats-band-title">Live across the platform</span>
+          <span class="stats-band-sub" id="stats-sub">Loading live stats…</span>
+        </div>
+        <div class="stats-cards" id="stats-cards">
+          <div class="stat-card stat-primary">
+            <div class="stat-icon">🏰</div>
+            <div class="stat-value" id="stat-servers" data-target="0">0</div>
+            <div class="stat-label">Servers configured</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon">🖼️</div>
+            <div class="stat-value" id="stat-banners" data-target="0">0</div>
+            <div class="stat-label">Custom welcome banners</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon">🤖</div>
+            <div class="stat-value" id="stat-version">—</div>
+            <div class="stat-label">Bot version</div>
+          </div>
+        </div>
+        <div class="stats-chart-wrap">
+          <div class="stats-chart-head">Feature adoption</div>
+          <div class="donut-grid">
+            <div class="donut-item">
+              <div class="donut" id="donut-leveling"><span class="donut-pct">0%</span></div>
+              <div class="donut-label">📈 Leveling</div>
+            </div>
+            <div class="donut-item">
+              <div class="donut" id="donut-welcome"><span class="donut-pct">0%</span></div>
+              <div class="donut-label">👋 Welcome</div>
+            </div>
+            <div class="donut-item">
+              <div class="donut" id="donut-reactions"><span class="donut-pct">0%</span></div>
+              <div class="donut-label">🔁 Auto-reactions</div>
+            </div>
+            <div class="donut-item">
+              <div class="donut" id="donut-broadcasts"><span class="donut-pct">0%</span></div>
+              <div class="donut-label">📢 Broadcasts</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div class="feature-grid">
         <div class="feature"><div class="fi">👋</div><div class="ft">Welcome system</div><div class="fd">Custom messages, banners, DMs and channel routing.</div></div>
         <div class="feature"><div class="fi">📈</div><div class="ft">Leveling &amp; XP</div><div class="fd">Tune multipliers, cooldowns and level-up channels.</div></div>
@@ -174,6 +240,40 @@ function renderLogin() {
       </div>
     </div>
   `;
+  loadLoginStats();
+}
+
+// Fetch /api/stats and populate the login graphic. Fully optional — if the
+// request fails (e.g. cold DB on Vercel) the page stays usable with zeros.
+async function loadLoginStats() {
+  let stats;
+  try {
+    stats = await api('/api/stats');
+  } catch (err) {
+    const sub = document.getElementById('stats-sub');
+    if (sub) sub.textContent = 'Stats unavailable right now';
+    return;
+  }
+  const sub = document.getElementById('stats-sub');
+  if (sub) {
+    const bot = stats.bot;
+    sub.textContent = bot && bot.username
+      ? `Running as @${esc(bot.username)}`
+      : (stats.botName ? `${esc(stats.botName)} v${esc(stats.botVersion)}` : 'Live data from the bot database');
+  }
+
+  const serversEl = document.getElementById('stat-servers');
+  const bannersEl = document.getElementById('stat-banners');
+  const versionEl = document.getElementById('stat-version');
+  if (serversEl) animateCount(serversEl, stats.servers || 0);
+  if (bannersEl) animateCount(bannersEl, stats.welcomeBanners || 0);
+  if (versionEl) versionEl.textContent = stats.botVersion ? `v${stats.botVersion}` : '—';
+
+  const f = stats.features || {};
+  renderDonut(document.getElementById('donut-leveling'), f.leveling?.percent ?? 0, '--green');
+  renderDonut(document.getElementById('donut-welcome'), f.welcome?.percent ?? 0, '--blurple');
+  renderDonut(document.getElementById('donut-reactions'), f.autoReactions?.percent ?? 0, '--yellow');
+  renderDonut(document.getElementById('donut-broadcasts'), f.broadcasts?.percent ?? 0, '--gold');
 }
 
 // ── Documentation page ─────────────────────────────────────────────────────

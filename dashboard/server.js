@@ -235,6 +235,37 @@ app.get('/api/me', requireAuth, async (req, res) => {
     res.json({ user: req.session.user, bot: botSelf, clientId: process.env.DISCORD_CLIENT_ID });
 });
 
+// ── API: public platform stats (login screen, no auth required) ─────────────
+//
+// Aggregated adoption numbers pulled from the bot's settings tables. Used to
+// render the animated stat cards + donut charts on the login page. Every query
+// degrades to zero on failure, so a DB hiccup never blocks the login screen.
+
+app.get('/api/stats', async (req, res) => {
+    try {
+        await resolveBotSelf();
+        const stats = await dashboardDb.getPlatformStats();
+        res.json({ ...stats, bot: botSelf, clientId: process.env.DISCORD_CLIENT_ID });
+    } catch (err) {
+        console.error('[API] /api/stats error:', err.message);
+        // Return neutral stats so the login page still renders its graphic shell.
+        res.json({
+            servers: 0,
+            botName: constants.BOT_NAME,
+            botVersion: constants.BOT_VERSION,
+            features: {
+                leveling: { count: 0, percent: 0 },
+                welcome: { count: 0, percent: 0 },
+                autoReactions: { count: 0, percent: 0 },
+                broadcasts: { count: 0, percent: 0 },
+            },
+            welcomeBanners: 0,
+            bot: botSelf,
+            clientId: process.env.DISCORD_CLIENT_ID,
+        });
+    }
+});
+
 // ── API: list manageable guilds (admin's guilds where the bot is present) ───
 
 app.get('/api/guilds', requireAuth, async (req, res) => {
