@@ -25,6 +25,7 @@ class WelcomeSettingsManager {
     constructor() {
         this._cache = new Map();
         this._tableReady = false;
+        this._refreshTimer = null;
         this._init().catch(err =>
             console.error('[WELCOME SETTINGS] Init failed:', err.message)
         );
@@ -56,6 +57,34 @@ class WelcomeSettingsManager {
             );
         }, ms);
         this._reloadTimer.unref?.();
+        this._startRefreshLoop();
+    }
+
+    _startRefreshLoop() {
+        if (this._refreshTimer) return;
+        // Dashboard saves happen in a separate process. Refresh the in-memory
+        // cache so new welcome settings are used without restarting the bot.
+        this._refreshTimer = setInterval(() => {
+            this._refreshFromDatabase().catch(err =>
+                console.error('[WELCOME SETTINGS] Refresh failed:', err.message)
+            );
+        }, 5000);
+        this._refreshTimer.unref?.();
+    }
+
+    async _refreshFromDatabase() {
+        await this._ensureTable();
+        const res = await welcomePool.query('SELECT * FROM welcome_settings');
+        for (const row of res.rows) {
+            const next = this._rowToSettings(row);
+            const previous = this._cache.get(row.guild_id);
+            if (!previous || JSON.stringify(previous) !== JSON.stringify(next)) {
+                this._cache.set(row.guild_id, next);
+                if (previous) {
+                    console.log(`[WELCOME SETTINGS] Applied database update for guild ${row.guild_id}.`);
+                }
+            }
+        }
     }
 
     /**
