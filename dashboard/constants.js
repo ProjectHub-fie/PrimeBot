@@ -4,6 +4,7 @@
  * values the bot will read back correctly.
  */
 const config = require('../config');
+const { LOG_EVENTS } = require('../utils/logEvents');
 
 module.exports = {
     // OAuth scopes requested at login. "guilds" lets us list the admin's servers.
@@ -31,4 +32,8 @@ module.exports = {
 
     // Embed colors for the frontend palette.
     COLORS: config.colors,
+
+    // Loggable event types shared with the bot (utils/logEvents.js).
+    // Each entry: { key, label, icon, color, category }.
+    LOG_EVENTS,
 };

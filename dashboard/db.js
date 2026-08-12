@@ -28,6 +28,7 @@ function getWelcomePool() {
 const config = require('../config');
 const constants = require('./constants');
 const { normalizeGuildPrefix } = require('../utils/prefixHelper');
+const { normalizeEvents, DEFAULT_ENABLED_EVENTS } = require('../utils/logEvents');
 
 // ── server_settings (prefix, leveling, auto-reactions, broadcast) ────────────
 
@@ -261,10 +262,96 @@ function rowToWelcomeSettings(row) {
     };
 }
 
+// ── logging_settings ───────────────────────────────────────────────────────
+
+async function ensureLoggingTable() {
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS logging_settings (
+            guild_id              VARCHAR(50) PRIMARY KEY,
+            enabled               BOOLEAN NOT NULL DEFAULT false,
+            channel_id            VARCHAR(50),
+            webhook_url           TEXT,
+            webhook_name          VARCHAR(100) DEFAULT 'PrimeBot Logs',
+            events                JSONB NOT NULL DEFAULT '[]',
+            include_bots          BOOLEAN NOT NULL DEFAULT false,
+            color                 VARCHAR(20) DEFAULT '#5865F2',
+            updated_at            TIMESTAMP DEFAULT NOW()
+        )
+    `);
+    await pool.query(`ALTER TABLE logging_settings ADD COLUMN IF NOT EXISTS webhook_name  VARCHAR(100) DEFAULT 'PrimeBot Logs'`);
+    await pool.query(`ALTER TABLE logging_settings ADD COLUMN IF NOT EXISTS events        JSONB NOT NULL DEFAULT '[]'`);
+    await pool.query(`ALTER TABLE logging_settings ADD COLUMN IF NOT EXISTS include_bots  BOOLEAN NOT NULL DEFAULT false`);
+    await pool.query(`ALTER TABLE logging_settings ADD COLUMN IF NOT EXISTS color         VARCHAR(20) DEFAULT '#5865F2'`);
+}
+
+async function getLoggingSettings(guildId) {
+    await ensureLoggingTable();
+    const res = await pool.query(`SELECT * FROM logging_settings WHERE guild_id = $1`, [guildId]);
+    if (res.rows.length === 0) return defaultLoggingSettings();
+    return rowToLoggingSettings(res.rows[0]);
+}
+
+async function upsertLoggingSettings(guildId, patch) {
+    await ensureLoggingTable();
+    const current = await getLoggingSettings(guildId);
+    const merged = { ...current, ...patch };
+
+    await pool.query(`
+        INSERT INTO logging_settings (
+            guild_id, enabled, channel_id, webhook_url, webhook_name,
+            events, include_bots, color, updated_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())
+        ON CONFLICT (guild_id) DO UPDATE SET
+            enabled      = EXCLUDED.enabled,
+            channel_id   = EXCLUDED.channel_id,
+            webhook_url  = EXCLUDED.webhook_url,
+            webhook_name = EXCLUDED.webhook_name,
+            events       = EXCLUDED.events,
+            include_bots = EXCLUDED.include_bots,
+            color        = EXCLUDED.color,
+            updated_at   = NOW()
+    `, [
+        guildId,
+        merged.enabled ?? false,
+        merged.channelId ?? null,
+        merged.webhookUrl ?? null,
+        (merged.webhookName || 'PrimeBot Logs').slice(0, 100),
+        JSON.stringify(normalizeEvents(merged.events)),
+        merged.includeBots ?? false,
+        merged.color ?? '#5865F2',
+    ]);
+
+    return getLoggingSettings(guildId);
+}
+
+function defaultLoggingSettings() {
+    return {
+        enabled: false,
+        channelId: null,
+        webhookUrl: null,
+        webhookName: 'PrimeBot Logs',
+        events: [...DEFAULT_ENABLED_EVENTS],
+        includeBots: false,
+        color: '#5865F2',
+    };
+}
+
+function rowToLoggingSettings(row) {
+    return {
+        enabled: row.enabled,
+        channelId: row.channel_id || null,
+        webhookUrl: row.webhook_url || null,
+        webhookName: row.webhook_name || 'PrimeBot Logs',
+        events: normalizeEvents(row.events),
+        includeBots: row.include_bots,
+        color: row.color || '#5865F2',
+    };
+}
+
 // ── Combined view (one fetch per guild for the settings page) ───────────────
 
 async function getGuildConfig(guildId) {
-    const [server, welcome] = await Promise.all([
+    const [server, welcome, logging] = await Promise.all([
         getServerSettings(guildId).catch(err => {
             console.error('[DASHBOARD DB] server_settings read failed:', err.message);
             return defaultServerSettings();
@@ -273,8 +360,12 @@ async function getGuildConfig(guildId) {
             console.error('[DASHBOARD DB] welcome_settings read failed:', err.message);
             return defaultWelcomeSettings();
         }),
+        getLoggingSettings(guildId).catch(err => {
+            console.error('[DASHBOARD DB] logging_settings read failed:', err.message);
+            return defaultLoggingSettings();
+        }),
     ]);
-    return { server, welcome };
+    return { server, welcome, logging };
 }
 
 // ── Aggregated platform stats (public — shown on the login screen) ──────────
@@ -345,6 +436,9 @@ module.exports = {
     getWelcomeSettings,
     upsertWelcomeSettings,
     defaultWelcomeSettings,
+    getLoggingSettings,
+    upsertLoggingSettings,
+    defaultLoggingSettings,
     getGuildConfig,
     getPlatformStats,
 };

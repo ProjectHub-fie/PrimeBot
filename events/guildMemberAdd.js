@@ -1,5 +1,6 @@
 const { EmbedBuilder } = require('discord.js');
 const config = require('../config');
+const { logEvent } = require('../utils/serverLogger');
 
 const DEFAULT_WELCOME_GIF = 'https://www.mockofun.com/wp-content/uploads/2024/10/animated-discord-banners.gif';
 
@@ -7,6 +8,19 @@ module.exports = {
     name: 'guildMemberAdd',
     async execute(member, client) {
         try {
+            // Log the join event (no-op unless logging is enabled for this guild).
+            logEvent(client, member.guild.id, {
+                type: 'memberJoin',
+                title: 'Member Joined',
+                description: `${member.user.tag} (\`${member.id}\`)`,
+                fields: [
+                    { name: 'Account created', value: `<t:${Math.floor(member.user.createdTimestamp / 1000)}:R>`, inline: true },
+                    { name: 'Member count', value: String(member.guild.memberCount), inline: true },
+                ],
+                thumbnail: member.user.displayAvatarURL?.(),
+                isBot: member.user.bot,
+            });
+
             // Check if welcome settings manager is available
             if (!client.welcomeSettingsManager) {
                 console.warn('[WELCOME] Welcome settings manager not available, using defaults for all servers');

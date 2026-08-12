@@ -3,6 +3,18 @@
 const app = document.getElementById('app');
 const toastEl = document.getElementById('toast');
 
+// Loggable event types. Kept in sync with utils/logEvents.js (shared by the bot).
+const LOG_EVENTS = [
+  { key: 'memberJoin',    label: 'Member joined',          icon: '🟢', category: 'Members' },
+  { key: 'memberLeave',   label: 'Member left',            icon: '🔴', category: 'Members' },
+  { key: 'memberBan',     label: 'Member banned',          icon: '🔨', category: 'Members' },
+  { key: 'memberUnban',   label: 'Member unbanned',        icon: '🕊️', category: 'Members' },
+  { key: 'memberUpdate',  label: 'Member updated (roles / nickname)', icon: '📝', category: 'Members' },
+  { key: 'messageDelete', label: 'Message deleted',        icon: '🗑️', category: 'Messages' },
+  { key: 'messageUpdate', label: 'Message edited',         icon: '✏️', category: 'Messages' },
+  { key: 'commandUse',    label: 'Slash command used',     icon: '⚙️', category: 'Activity' },
+];
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 async function api(path, options = {}) {
@@ -284,8 +296,8 @@ function renderDocs() {
 
   const clientId = esc(window.__clientId || '');
   const inviteUrl = clientId
-    ? `https://discord.com/oauth2/authorize?client_id=${clientId}&scope=bot&permissions=8`
-    : 'https://discord.com/oauth2/authorize?client_id=YOUR_CLIENT_ID&scope=bot&permissions=8';
+    ? `https://discord.com/oauth2/authorize?client_id=${clientId}&permissions=8&integration_type=0&scope=bot%20applications.commands`
+    : 'https://discord.com/oauth2/authorize?client_id=YOUR_CLIENT_ID&permissions=8&integration_type=0&scope=bot%20applications.commands';
 
   app.innerHTML = `
     <div class="docs">
@@ -469,7 +481,7 @@ async function renderOverview() {
       <div class="guild-empty">
         <p style="font-size:40px;margin:0 0 8px">🔍</p>
         <p>You don't manage any servers yet, or PrimeBot isn't in any of them.</p>
-        <p style="margin-top:12px"><a class="btn btn-secondary" href="https://discord.com/oauth2/authorize?client_id=${esc(window.__clientId||'')}&scope=bot&permissions=8" target="_blank" rel="noopener">Invite PrimeBot to a server</a></p>
+        <p style="margin-top:12px"><a class="btn btn-secondary" href="https://discord.com/oauth2/authorize?client_id=${esc(window.__clientId||'')}&permissions=8&integration_type=0&scope=bot%20applications.commands" target="_blank" rel="noopener">Invite PrimeBot to a server</a></p>
       </div>
     `;
   } else {
@@ -551,7 +563,7 @@ async function renderGuildSettings(match) {
         <div class="card">
           <div class="alert alert-warn">PrimeBot is not in this server.</div>
           <p>To configure PrimeBot here, add it to your server first.</p>
-          <p style="margin-top:16px"><a class="btn btn-primary" href="https://discord.com/oauth2/authorize?client_id=${esc(window.__clientId||'')}&scope=bot&permissions=8" target="_blank" rel="noopener">Invite PrimeBot</a></p>
+          <p style="margin-top:16px"><a class="btn btn-primary" href="https://discord.com/oauth2/authorize?client_id=${esc(window.__clientId||'')}&permissions=8&integration_type=0&scope=bot%20applications.commands" target="_blank" rel="noopener">Invite PrimeBot</a></p>
           <p style="margin-top:12px"><a href="/" data-link>← Back to servers</a></p>
         </div>
       `;
@@ -596,6 +608,7 @@ async function renderGuildSettings(match) {
       <button class="tab" data-tab="prefix">⚡ Prefix</button>
       <button class="tab" data-tab="reactions">🔁 Auto-Reactions</button>
       <button class="tab" data-tab="broadcast">📢 Broadcasts</button>
+      <button class="tab" data-tab="logging">📜 Logging</button>
     </div>
 
     <div id="tab-welcome" class="tab-panel">${welcomePanelHTML(data.config.welcome)}</div>
@@ -603,6 +616,7 @@ async function renderGuildSettings(match) {
     <div id="tab-prefix" class="tab-panel">${prefixPanelHTML(data.config.server)}</div>
     <div id="tab-reactions" class="tab-panel">${reactionsPanelHTML(data.config.server)}</div>
     <div id="tab-broadcast" class="tab-panel">${broadcastPanelHTML(data.config.server)}</div>
+    <div id="tab-logging" class="tab-panel">${loggingPanelHTML(data.config.logging)}</div>
   `;
 
   selectTab(initialTab);
@@ -835,6 +849,82 @@ function broadcastPanelHTML(server) {
   `;
 }
 
+function loggingPanelHTML(logging) {
+  const s = logging || {};
+  const enabled = new Set(Array.isArray(s.events) ? s.events : []);
+  const categories = [...new Set(LOG_EVENTS.map(e => e.category))];
+  const eventToggles = categories.map(cat => {
+    const items = LOG_EVENTS.filter(e => e.category === cat)
+      .map(e => `
+        <label class="switch mini">
+          <input type="checkbox" class="log-event" data-event="${esc(e.key)}" ${enabled.has(e.key) ? 'checked' : ''}/>
+          <span class="slider"></span>
+          <span class="switch-text">${e.icon} ${esc(e.label)}</span>
+        </label>`).join('');
+    return `<div class="event-group"><div class="event-group-title">${esc(cat)}</div>${items}</div>`;
+  }).join('');
+
+  return `
+    <div class="card">
+      <div class="card-title"><span><span class="icon">📜</span> Server logging</span></div>
+      <p class="card-desc">Send rich embed logs of server events to a channel and/or a Discord webhook.</p>
+
+      <div class="switch-row">
+        <div class="switch-label">
+          <div class="sl-title">Enable logging</div>
+          <div class="sl-desc">Master switch. When off, no log embeds are sent for this server.</div>
+        </div>
+        <label class="switch"><input type="checkbox" id="logging-enabled" ${s.enabled ? 'checked' : ''}/><span class="slider"></span></label>
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="logging-channel">Log channel</label>
+        <select id="logging-channel" data-channel-select><option value="">— None —</option></select>
+        <div class="field-hint">Channel where log embeds are posted as the bot. The bot needs View Channel + Send Messages here.</div>
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="logging-webhook">Webhook URL (optional)</label>
+        <input type="url" id="logging-webhook" value="${esc(s.webhookUrl || '')}" placeholder="https://discord.com/api/webhooks/…" />
+        <div class="field-hint">When set, logs are also posted via this webhook. Works in channels the bot can't see. <a href="https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks" target="_blank" rel="noopener">How to make one →</a></div>
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="logging-webhook-name">Webhook display name</label>
+        <input type="text" id="logging-webhook-name" maxlength="100" value="${esc(s.webhookName || 'PrimeBot Logs')}" placeholder="PrimeBot Logs" />
+        <div class="field-hint">Name shown on webhook-delivered logs.</div>
+      </div>
+
+      <div class="switch-row">
+        <div class="switch-label">
+          <div class="sl-title">Include bot activity</div>
+          <div class="sl-desc">Also log actions performed by bots (off by default to reduce noise).</div>
+        </div>
+        <label class="switch"><input type="checkbox" id="logging-include-bots" ${s.includeBots ? 'checked' : ''}/><span class="slider"></span></label>
+      </div>
+
+      <div class="field">
+        <label class="field-label">Embed color</label>
+        <div class="color-field">
+          <input type="color" id="logging-color" value="${esc(s.color || '#5865F2')}" />
+          <input type="text" id="logging-color-text" value="${esc(s.color || '#5865F2')}" style="flex:1" />
+        </div>
+        <div class="field-hint">Default color for log embeds (some event types override this).</div>
+      </div>
+
+      <div class="field">
+        <label class="field-label">Logged events</label>
+        <div class="event-grid">${eventToggles}</div>
+        <div class="field-hint">Choose which event types generate a log embed.</div>
+      </div>
+
+      <div class="form-actions">
+        <button class="btn btn-primary" data-save="logging">Save logging settings</button>
+      </div>
+    </div>
+  `;
+}
+
 // ── Event binding ──────────────────────────────────────────────────────────
 
 function bindSettingsEvents(guildId) {
@@ -849,6 +939,16 @@ function bindSettingsEvents(guildId) {
     colorPicker.addEventListener('input', () => { colorText.value = colorPicker.value; });
     colorText.addEventListener('input', () => {
       if (/^#[0-9a-fA-F]{6}$/.test(colorText.value)) colorPicker.value = colorText.value;
+    });
+  }
+
+  // Sync logging color picker + text input.
+  const logColorPicker = app.querySelector('#logging-color');
+  const logColorText = app.querySelector('#logging-color-text');
+  if (logColorPicker && logColorText) {
+    logColorPicker.addEventListener('input', () => { logColorText.value = logColorPicker.value; });
+    logColorText.addEventListener('input', () => {
+      if (/^#[0-9a-fA-F]{6}$/.test(logColorText.value)) logColorPicker.value = logColorText.value;
     });
   }
 
@@ -943,6 +1043,25 @@ async function saveSettings(guildId, kind) {
       broadcastChannelId: app.querySelector('#broadcast-channel').value || null,
     };
     await api(`/api/guilds/${guildId}/server`, { method: 'PATCH', body: JSON.stringify(body) });
+  } else if (kind === 'logging') {
+    const events = [];
+    app.querySelectorAll('.log-event').forEach(cb => {
+      if (cb.checked) events.push(cb.dataset.event);
+    });
+    const webhookUrl = app.querySelector('#logging-webhook').value.trim();
+    if (webhookUrl && !/^https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/api\/webhooks\//i.test(webhookUrl)) {
+      throw new Error('Webhook URL must be a valid Discord webhook URL.');
+    }
+    const body = {
+      enabled: app.querySelector('#logging-enabled').checked,
+      channelId: app.querySelector('#logging-channel').value || null,
+      webhookUrl: webhookUrl || null,
+      webhookName: app.querySelector('#logging-webhook-name').value.trim() || 'PrimeBot Logs',
+      events,
+      includeBots: app.querySelector('#logging-include-bots').checked,
+      color: app.querySelector('#logging-color').value,
+    };
+    await api(`/api/guilds/${guildId}/logging`, { method: 'PATCH', body: JSON.stringify(body) });
   }
 }
 

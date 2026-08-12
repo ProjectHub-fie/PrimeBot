@@ -4,6 +4,7 @@ const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('
 const config = require('../config');
 const betaManager = require('../utils/betaManager');
 const { isBetaFeature } = require('../utils/betaFeatureMatcher');
+const { logEvent } = require('../utils/serverLogger');
 
 /**
  * Helper function to show main help menu for button interactions
@@ -225,6 +226,21 @@ module.exports = {
                 // Log the command usage
                 console.log(`[COMMAND] Executing slash command /${interaction.commandName} from ${interaction.user.tag}`);
                 interactionDebugger.logInteraction(interaction, `Slash Command (/${interaction.commandName})`);
+
+                // Emit a log event for command use (no-op unless logging is enabled for this guild).
+                if (interaction.guildId) {
+                    const subcmd = interaction.options?.getSubcommand(false);
+                    const cmdLabel = subcmd ? `/${interaction.commandName} ${subcmd}` : `/${interaction.commandName}`;
+                    logEvent(client, interaction.guildId, {
+                        type: 'commandUse',
+                        title: 'Command Used',
+                        description: `**${cmdLabel}** by ${interaction.user.tag} (\`${interaction.user.id}\`)`,
+                        fields: [
+                            { name: 'Channel', value: interaction.channel ? `<#${interaction.channelId}>` : 'DM', inline: true },
+                        ],
+                        isBot: interaction.user.bot,
+                    });
+                }
 
                 const command = client.commands.get(interaction.commandName);
 
