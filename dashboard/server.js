@@ -450,6 +450,37 @@ app.patch('/api/guilds/:guildId/server', requireAuth, requireGuildAdmin, async (
     }
 });
 
+// ── API: update logging settings (channel, webhook, events) ─────────────────
+
+app.patch('/api/guilds/:guildId/logging', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const allowed = [
+            'enabled', 'channelId', 'webhookUrl', 'webhookName',
+            'events', 'includeBots', 'color',
+        ];
+        const patch = {};
+        for (const key of allowed) {
+            if (key in req.body) patch[key] = req.body[key];
+        }
+        if ('enabled' in patch)     patch.enabled = Boolean(patch.enabled);
+        if ('includeBots' in patch) patch.includeBots = Boolean(patch.includeBots);
+        if ('channelId' in patch)   patch.channelId = patch.channelId || null;
+        if ('webhookUrl' in patch)  patch.webhookUrl = patch.webhookUrl || null;
+        // Basic webhook URL sanity check — must be a Discord webhook if provided.
+        if (patch.webhookUrl && !/^https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/api\/webhooks\//i.test(patch.webhookUrl)) {
+            return res.status(400).json({ error: 'Webhook URL must be a valid Discord webhook URL.' });
+        }
+        if ('color' in patch && patch.color && !/^#[0-9a-fA-F]{6}$/.test(patch.color)) {
+            return res.status(400).json({ error: 'Color must be a hex color like #5865F2.' });
+        }
+        const updated = await dashboardDb.upsertLoggingSettings(req.guild.id, patch);
+        res.json({ logging: updated });
+    } catch (err) {
+        console.error('[API] update logging error:', err.message);
+        res.status(500).json({ error: 'Failed to update logging settings.' });
+    }
+});
+
 // ── Page routes (SPA-style: serve index.html for everything) ────────────────
 
 app.get(['/', '/dashboard', '/docs', '/guild/:guildId'], (req, res) => {

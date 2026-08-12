@@ -97,6 +97,7 @@ client.betaManager = betaManager;
     client.snipeManager = { get: noop, store: noop };
     client.serverSettingsManager = { getGuildSettings: () => ({}), updateGuildSetting: noop };
     client.welcomeSettingsManager = { getWelcomeSettings: () => ({ enabled: false }), updateGuildSetting: noop, setWelcomeChannel: noop, setWelcomeMessage: noop, setWelcomeBanner: noop, setWelcomeColor: noop, setWelcomeDmMessage: noop, toggleWelcomeDm: noop, toggleWelcomeFeature: noop };
+    client.loggingSettingsManager = { getSettings: () => ({ enabled: false, events: [] }), isEnabled: () => false, updateSettings: noop };
 }
 
 // ── Real manager boot — runs exactly once when this node connects ─────────
@@ -120,6 +121,7 @@ async function initializeManagers() {
     const LevelingManager   = require('./utils/levelingManager');
     const ServerSettingsManager = require('./utils/serverSettingsManager');
     const WelcomeSettingsManager = require('./utils/welcomeSettingsManager');
+    const LoggingSettingsManager = require('./utils/loggingSettingsManager');
     const SnipeManager = require('./utils/snipeManager');
 
     client.giveawayManager  = new GiveawayManager(client);
@@ -133,6 +135,7 @@ async function initializeManagers() {
     client.snipeManager = new SnipeManager();
     client.serverSettingsManager = new ServerSettingsManager(client);
     client.welcomeSettingsManager = new WelcomeSettingsManager();
+    client.loggingSettingsManager = new LoggingSettingsManager();
 
     try {
         const BirthdayManager = require('./utils/birthdayManager');

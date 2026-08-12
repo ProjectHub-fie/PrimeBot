@@ -590,6 +590,49 @@ input[type="color"] {
 }
 .color-field input[type="color"] { flex-shrink: 0; }
 
+/* Logging event toggle grid */
+.event-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+}
+.event-group { display: flex; flex-direction: column; gap: 8px; }
+.event-group-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+}
+.switch.mini {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: auto;
+  height: auto;
+  padding: 8px 10px;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.switch.mini input {
+  width: 34px;
+  height: 20px;
+  opacity: 0;
+  position: absolute;
+  margin: 0;
+}
+.switch.mini .slider {
+  position: relative;
+  width: 34px;
+  height: 20px;
+  flex-shrink: 0;
+}
+.switch.mini .slider::before { height: 14px; width: 14px; left: 3px; bottom: 3px; }
+.switch.mini input:checked + .slider::before { transform: translateX(14px); }
+.switch-text { font-size: 13px; color: var(--text); }
+
 /* Tabs */
 .tabs {
   display: flex;

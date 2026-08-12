@@ -1,4 +1,4 @@
-const { pgTable, text, integer, timestamp, boolean, varchar, serial } = require('drizzle-orm/pg-core');
+const { pgTable, text, integer, timestamp, boolean, varchar, serial, jsonb } = require('drizzle-orm/pg-core');
 const { relations } = require('drizzle-orm');
 
 // Live polls table
@@ -299,6 +299,19 @@ const tickets = pgTable('tickets', {
   reopenedBy: varchar('reopened_by', { length: 50 }),
 });
 
+// Logging settings table (per-guild log channel + webhook + event toggles)
+const loggingSettings = pgTable('logging_settings', {
+  guildId: varchar('guild_id', { length: 50 }).primaryKey(),
+  enabled: boolean('enabled').default(false).notNull(),
+  channelId: varchar('channel_id', { length: 50 }),
+  webhookUrl: text('webhook_url'),
+  webhookName: varchar('webhook_name', { length: 100 }).default('PrimeBot Logs'),
+  events: jsonb('events').default([]).notNull(),
+  includeBots: boolean('include_bots').default(false).notNull(),
+  color: varchar('color', { length: 20 }).default('#5865F2'),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
 // Exports
 module.exports = {
   livePolls,
@@ -332,4 +345,5 @@ module.exports = {
   betaSettings,
   serverSettings,
   tickets,
+  loggingSettings,
 };
