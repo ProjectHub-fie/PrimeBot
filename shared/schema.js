@@ -299,6 +299,73 @@ const tickets = pgTable('tickets', {
   reopenedBy: varchar('reopened_by', { length: 50 }),
 });
 
+// Reaction-role menus — a "menu" is a message the bot watches for reactions
+// that grant roles. A menu has many reaction-role mappings (one emoji → role).
+const reactionRoles = pgTable('reaction_roles', {
+  id: serial('id').primaryKey(),
+  guildId: varchar('guild_id', { length: 50 }).notNull(),
+  // The message the bot watches. For bot-created menus this is the message the
+  // bot sent; for "attach to any message" menus it is an existing user message
+  // referenced by channelId + messageId.
+  channelId: varchar('channel_id', { length: 50 }).notNull(),
+  messageId: varchar('message_id', { length: 50 }).notNull(),
+  // A short label shown in the dashboard list (not the embed title).
+  title: varchar('title', { length: 255 }),
+  // The embed body the bot posts (for bot-created menus). Null when attaching
+  // to an existing message.
+  description: text('description'),
+  color: varchar('color', { length: 20 }).default('#5865F2'),
+  // Premium behavior modes:
+  //  'normal'   — toggle: react adds role, unreact removes role (default)
+  //  'sticky'   — react adds role and the bot removes the user's reaction but
+  //               keeps the role (one-click assign, no toggle)
+  //  'verify'   — react grants role once; unreacting does NOT remove it
+  //               (good for "I have read the rules" gates)
+  //  'unique'   — within the menu a member may hold only ONE role at a time;
+  //               reacting to a new option swaps the role
+  mode: varchar('mode', { length: 20 }).default('normal'),
+  // When true the bot re-applies roles on startup by fetching the message's
+  // current reactions (premium "persist" feature).
+  persistent: boolean('persistent').default(true),
+  // When true, bots are allowed to trigger the menu (off by default).
+  includeBots: boolean('include_bots').default(false),
+  // Optional role required before a member can use this menu (premium gating).
+  requiredRoleId: varchar('required_role_id', { length: 50 }),
+  // Optional role that is REMOVED when a member takes a role from this menu
+  // (premium "mutually exclusive" support across menus).
+  exclusiveRoleId: varchar('exclusive_role_id', { length: 50 }),
+  // Who created the menu and when.
+  createdBy: varchar('created_by', { length: 50 }),
+  enabled: boolean('enabled').default(true),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+// Emoji → role mappings for a reaction-role menu.
+const reactionRoleMappings = pgTable('reaction_role_mappings', {
+  id: serial('id').primaryKey(),
+  menuId: integer('menu_id').notNull(),
+  // The emoji as the bot stores it: a unicode emoji (e.g. "🎉") or a custom
+  // emoji reference string (e.g. "rolemoji:1234567890"). We store the raw
+  // identifier used to compare against incoming reactions.
+  emoji: varchar('emoji', { length: 100 }).notNull(),
+  roleId: varchar('role_id', { length: 50 }).notNull(),
+  // Optional per-mapping label shown in the embed field list.
+  label: varchar('label', { length: 255 }),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+const reactionRolesRelations = relations(reactionRoles, ({ many }) => ({
+  mappings: many(reactionRoleMappings),
+}));
+
+const reactionRoleMappingsRelations = relations(reactionRoleMappings, ({ one }) => ({
+  menu: one(reactionRoles, {
+    fields: [reactionRoleMappings.menuId],
+    references: [reactionRoles.id],
+  }),
+}));
+
 // Logging settings table (per-guild log channel + webhook + event toggles)
 const loggingSettings = pgTable('logging_settings', {
   guildId: varchar('guild_id', { length: 50 }).primaryKey(),
@@ -345,5 +412,9 @@ module.exports = {
   betaSettings,
   serverSettings,
   tickets,
+  reactionRoles,
+  reactionRoleMappings,
+  reactionRolesRelations,
+  reactionRoleMappingsRelations,
   loggingSettings,
 };

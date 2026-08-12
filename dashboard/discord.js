@@ -109,6 +109,49 @@ async function getBotSelf() {
     return fetchJson(`${API_BASE}/users/@me`, { headers: botHeaders() });
 }
 
+// ── Bot guild count (authoritative server count for the stats page) ─────────
+//
+// `SELECT COUNT(*) FROM server_settings` undercounts because rows are created
+// lazily — guilds the bot joined but never configured have no row. The real
+// number is "how many guilds is the bot in", which only Discord knows. We fetch
+// /users/@me/guilds with the bot token (paginated, 200/page) and count. The
+// result is cached for BOT_GUILD_COUNT_TTL_MS so the public /api/stats endpoint
+// (hit on every login-screen load) doesn't hammer the API.
+
+const BOT_GUILD_COUNT_TTL_MS = 60_000;
+let _botGuildCountCache = { value: null, expiresAt: 0 };
+
+/** Returns the number of guilds the bot is a member of, or null if it can't be
+ *  determined (e.g. DISCORD_TOKEN missing/invalid). */
+async function getBotGuildCount() {
+    const now = Date.now();
+    if (_botGuildCountCache.value != null && now < _botGuildCountCache.expiresAt) {
+        return _botGuildCountCache.value;
+    }
+    try {
+        let count = 0;
+        let after = '0';
+        // /users/@me/guilds returns up to 200 guilds per page, ordered by id.
+        // Paginate with the `after` cursor (the largest id seen so far) until a
+        // page comes back short or empty. Cap the loop to avoid pathological runs.
+        for (let i = 0; i < 50; i++) {
+            const url = `${API_BASE}/users/@me/guilds?limit=200${after !== '0' ? `&after=${after}` : ''}`;
+            const page = await fetchJson(url, { headers: botHeaders() });
+            if (!Array.isArray(page) || page.length === 0) break;
+            count += page.length;
+            if (page.length < 200) break; // last page
+            // Cursor = the largest id in this page (ids are snowflake-ordered).
+            after = page.reduce((m, g) => (g.id > m ? g.id : m), after);
+        }
+        _botGuildCountCache = { value: count, expiresAt: now + BOT_GUILD_COUNT_TTL_MS };
+        return count;
+    } catch (err) {
+        // Token issues (401) etc. — leave the cache empty so callers fall back.
+        console.warn('[DASHBOARD] getBotGuildCount failed:', err.message);
+        return null;
+    }
+}
+
 /** Get the bot's member object in a guild (for avatar/nickname display). */
 async function getBotMember(guildId, botUserId) {
     const uid = botUserId || process.env.DISCORD_CLIENT_ID;
@@ -125,6 +168,72 @@ async function getGuildChannels(guildId) {
 async function getGuildRoles(guildId) {
     const roles = await fetchJson(`${API_BASE}/guilds/${guildId}/roles`, { headers: botHeaders() });
     return (roles || []).filter(r => r.name !== '@everyone');
+}
+
+// ── Message helpers (used by the reaction-role dashboard flows) ─────────────
+//
+// The dashboard is a separate process from the bot, so for bot-created
+// reaction-role menus it posts the embed and adds reactions itself via REST
+// (using the bot token), captures the resulting message id, and persists the
+// menu row. The bot then picks up the row on its cache reload and starts
+// watching the message.
+
+/** Send a message (with embeds) to a channel. Returns the created message. */
+async function sendChannelMessage(channelId, payload = {}) {
+    return fetchJson(`${API_BASE}/channels/${channelId}/messages`, {
+        method: 'POST',
+        headers: { ...botHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
+}
+
+/** Edit a message's embeds/content. */
+async function editChannelMessage(channelId, messageId, payload = {}) {
+    return fetchJson(`${API_BASE}/channels/${channelId}/messages/${messageId}`, {
+        method: 'PATCH',
+        headers: { ...botHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
+}
+
+/** Delete a message the bot sent. */
+async function deleteChannelMessage(channelId, messageId) {
+    const res = await fetch(`${API_BASE}/channels/${channelId}/messages/${messageId}`, {
+        method: 'DELETE',
+        headers: botHeaders(),
+    });
+    return res.ok;
+}
+
+/** Fetch a single message by id (for attach-to-message validation). */
+async function getChannelMessage(channelId, messageId) {
+    return fetchJson(`${API_BASE}/channels/${channelId}/messages/${messageId}`, { headers: botHeaders() });
+}
+
+/** URL-encode an emoji for the reactions route. Unicode emojis are percent-
+ *  encoded; custom emojis use "name:id" (colon is safe unencoded in a path
+ *  segment, but we encode to be safe). */
+function encodeEmojiForRoute(emoji) {
+    if (/^\w+:\d+$/.test(emoji)) return encodeURIComponent(emoji);
+    return encodeURIComponent(emoji);
+}
+
+/** Add a reaction as the bot to a message. */
+async function addMessageReaction(channelId, messageId, emoji) {
+    const res = await fetch(
+        `${API_BASE}/channels/${channelId}/messages/${messageId}/reactions/${encodeEmojiForRoute(emoji)}/@me`,
+        { method: 'PUT', headers: botHeaders() }
+    );
+    return res.ok;
+}
+
+/** Delete all reactions for a specific emoji from a message. */
+async function removeAllReactionsForEmoji(channelId, messageId, emoji) {
+    const res = await fetch(
+        `${API_BASE}/channels/${channelId}/messages/${messageId}/reactions/${encodeEmojiForRoute(emoji)}`,
+        { method: 'DELETE', headers: botHeaders() }
+    );
+    return res.ok;
 }
 
 const MANAGE_GUILD_PERMISSION = 0x20;
@@ -144,10 +253,18 @@ module.exports = {
     getCurrentUser,
     getUserGuilds,
     getBotGuild,
+    getBotGuildCount,
     getBotSelf,
     getBotMember,
     getGuildChannels,
     getGuildRoles,
     canManageGuild,
     fetchJson,
+    sendChannelMessage,
+    editChannelMessage,
+    deleteChannelMessage,
+    getChannelMessage,
+    addMessageReaction,
+    removeAllReactionsForEmoji,
+    encodeEmojiForRoute,
 };

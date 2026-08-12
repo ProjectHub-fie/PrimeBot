@@ -247,7 +247,13 @@ app.get('/api/me', requireAuth, async (req, res) => {
 app.get('/api/stats', async (req, res) => {
     try {
         await resolveBotSelf();
-        const stats = await dashboardDb.getPlatformStats();
+        // The authoritative server count is "how many guilds the bot is in",
+        // fetched from Discord via REST. server_settings rows are created
+        // lazily and undercount guilds that were never configured. Fall back to
+        // the DB count if the REST call fails (e.g. token issue) so the page
+        // never renders a misleading 0.
+        const restCount = await discord.getBotGuildCount();
+        const stats = await dashboardDb.getPlatformStats(restCount);
         res.json({ ...stats, bot: botSelf, clientId: process.env.DISCORD_CLIENT_ID });
     } catch (err) {
         console.error('[API] /api/stats error:', err.message);
@@ -480,6 +486,197 @@ app.patch('/api/guilds/:guildId/logging', requireAuth, requireGuildAdmin, async 
         res.status(500).json({ error: 'Failed to update logging settings.' });
     }
 });
+
+// ── API: guild roles (for reaction-role selectors) ──────────────────────────
+
+app.get('/api/guilds/:guildId/roles', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const roles = await discord.getGuildRoles(req.guild.id);
+        // Only return roles the bot can assign (below its highest role) and
+        // integrations-managed roles can't be assigned by bots anyway — we
+        // surface position + color so the SPA can render.
+        res.json({ roles: roles.map(r => ({
+            id: r.id, name: r.name, position: r.position, color: r.color,
+            mentionable: r.mentionable, hoist: r.hoist,
+        })) });
+    } catch (err) {
+        console.error('[API] get roles error:', err.message);
+        res.status(500).json({ error: 'Failed to load roles. Make sure PrimeBot has the Manage Roles permission.' });
+    }
+});
+
+// ── API: reaction-role menus ────────────────────────────────────────────────
+//
+// Two creation flows mirror the /reactionrole slash command:
+//   POST .../reactionroles  { attach: false, channelId, title, description,
+//                            color, mode, mappings, ... }
+//       → dashboard posts the embed via REST, captures the message id, persists
+//         the row; the bot starts watching on its next cache reload.
+//   POST .../reactionroles  { attach: true, channelId, messageId, mappings, ... }
+//       → dashboard validates the message exists, adds the reactions via REST,
+//         and persists the row.
+//   PATCH .../reactionroles/:id   { ...patch }   edit settings/mappings
+//   DELETE .../reactionroles/:id                  delete (and remove the bot's
+//                                                 embed message if it sent it)
+
+function rrEmojiDisplay(emoji) {
+    if (/^\w+:\d+$/.test(emoji)) return `<:${emoji}>`;
+    return emoji;
+}
+
+function rrEmbedPayload(menu) {
+    const color = parseInt((menu.color || '#5865F2').replace('#', ''), 16);
+    const fields = (menu.mappings || []).length
+        ? [{ name: 'Roles', value: (menu.mappings || []).map(m => `${rrEmojiDisplay(m.emoji)} → <@&${m.roleId}>${m.label ? ` — ${m.label}` : ''}`).join('\n') }]
+        : [];
+    return {
+        embeds: [{
+            title: menu.title || 'Reaction Roles',
+            description: menu.description || 'React to get a role!',
+            color,
+            fields,
+            footer: { text: 'PrimeBot · Reaction Roles' },
+        }],
+    };
+}
+
+app.get('/api/guilds/:guildId/reactionroles', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const menus = await dashboardDb.getReactionRoles(req.guild.id);
+        res.json({ reactionRoles: menus });
+    } catch (err) {
+        console.error('[API] get reaction roles error:', err.message);
+        res.status(500).json({ error: 'Failed to load reaction roles.' });
+    }
+});
+
+app.post('/api/guilds/:guildId/reactionroles', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const body = req.body || {};
+        const mappings = Array.isArray(body.mappings) ? body.mappings : [];
+        if (mappings.length === 0) {
+            return res.status(400).json({ error: 'Add at least one emoji→role mapping.' });
+        }
+        if (!body.channelId) {
+            return res.status(400).json({ error: 'A channel is required.' });
+        }
+
+        // Normalize mappings through the dashboard's parser (dedupe + parse
+        // custom-emoji mention form). The bot will re-normalize on its side.
+        const cleanMappings = mappings.map(m => ({
+            emoji: m.emoji, roleId: m.roleId, label: m.label || null,
+        })).filter(m => m.emoji && m.roleId);
+
+        const attach = !!body.attach;
+        let messageId = body.messageId || null;
+
+        if (attach) {
+            if (!messageId) {
+                return res.status(400).json({ error: 'A message ID is required to attach to an existing message.' });
+            }
+            // Validate the target message exists and the bot can see it.
+            try {
+                await discord.getChannelMessage(body.channelId, messageId);
+            } catch (err) {
+                return res.status(400).json({ error: 'Could not find that message. Make sure the bot can see the channel and message.' });
+            }
+            // Add the reactions to the existing message.
+            for (const m of cleanMappings) {
+                await discord.addMessageReaction(body.channelId, messageId, parseEmojiForDiscord(m.emoji)).catch(() => {});
+            }
+        } else {
+            // Bot-created menu: post the embed via REST and capture the id.
+            const menuForEmbed = {
+                title: body.title, description: body.description,
+                color: body.color, mappings: cleanMappings,
+            };
+            const sent = await discord.sendChannelMessage(body.channelId, rrEmbedPayload(menuForEmbed));
+            messageId = sent.id;
+            for (const m of cleanMappings) {
+                await discord.addMessageReaction(body.channelId, messageId, parseEmojiForDiscord(m.emoji)).catch(() => {});
+            }
+        }
+
+        const menu = await dashboardDb.createReactionRole(req.guild.id, {
+            guildId: req.guild.id,
+            channelId: body.channelId,
+            messageId,
+            title: body.title || null,
+            description: attach ? null : (body.description || null),
+            color: body.color || '#5865F2',
+            mode: body.mode || 'normal',
+            persistent: body.persistent !== false,
+            includeBots: !!body.includeBots,
+            requiredRoleId: body.requiredRoleId || null,
+            exclusiveRoleId: body.exclusiveRoleId || null,
+            mappings: cleanMappings,
+            attach,
+        });
+        res.json({ reactionRole: menu });
+    } catch (err) {
+        console.error('[API] create reaction role error:', err.message);
+        res.status(500).json({ error: 'Failed to create reaction role: ' + err.message });
+    }
+});
+
+app.patch('/api/guilds/:guildId/reactionroles/:id', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const id = parseInt(req.params.id, 10);
+        if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid menu id.' });
+        const body = req.body || {};
+        const patch = {};
+        for (const key of ['title', 'description', 'color', 'mode', 'persistent', 'includeBots', 'requiredRoleId', 'exclusiveRoleId', 'enabled', 'mappings']) {
+            if (key in body) patch[key] = body[key];
+        }
+        const menu = await dashboardDb.updateReactionRole(id, patch);
+
+        // If mappings or embed-visible fields changed on a bot-created menu,
+        // re-render the embed and reconcile the reactions on the live message.
+        const embedKeys = ['title', 'description', 'color', 'mappings'];
+        if (embedKeys.some(k => k in patch) && menu && menu.messageId && menu.description != null) {
+            try {
+                await discord.editChannelMessage(menu.channelId, menu.messageId, rrEmbedPayload(menu));
+            } catch (err) {
+                console.error('[API] edit reaction-role embed failed:', err.message);
+            }
+            if (Array.isArray(patch.mappings)) {
+                // Re-add all configured reactions (idempotent).
+                for (const m of menu.mappings) {
+                    await discord.addMessageReaction(menu.channelId, menu.messageId, parseEmojiForDiscord(m.emoji)).catch(() => {});
+                }
+            }
+        }
+
+        res.json({ reactionRole: menu });
+    } catch (err) {
+        console.error('[API] update reaction role error:', err.message);
+        res.status(500).json({ error: 'Failed to update reaction role: ' + err.message });
+    }
+});
+
+app.delete('/api/guilds/:guildId/reactionroles/:id', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const id = parseInt(req.params.id, 10);
+        if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid menu id.' });
+        const menus = await dashboardDb.getReactionRoles(req.guild.id);
+        const menu = menus.find(m => m.id === id);
+        await dashboardDb.deleteReactionRole(id);
+        // If the bot created the embed (description != null), delete the message.
+        if (menu && menu.messageId && menu.description != null) {
+            await discord.deleteChannelMessage(menu.channelId, menu.messageId).catch(() => {});
+        }
+        res.json({ ok: true });
+    } catch (err) {
+        console.error('[API] delete reaction role error:', err.message);
+        res.status(500).json({ error: 'Failed to delete reaction role.' });
+    }
+});
+
+// Convert a stored/entered emoji into the form Discord's reactions route wants.
+// Custom emojis stored as "name:id" are accepted; the route uses the same form.
+function parseEmojiForDiscord(emoji) {
+    return emoji;
+}
 
 // ── Page routes (SPA-style: serve index.html for everything) ────────────────
 

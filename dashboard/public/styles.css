@@ -968,3 +968,14 @@ input[type="color"] {
   .docs-code { flex: none; }
 }
 
+/* ── Reaction Roles ────────────────────────────────────────────────────── */
+.rr-list { display: flex; flex-direction: column; gap: 12px; margin-bottom: 8px; }
+.rr-menu-card .card-title { justify-content: space-between; }
+.rr-meta {
+  display: flex; flex-wrap: wrap; gap: 8px 18px;
+  font-size: 13px; color: var(--text-dim); margin: 6px 0 8px;
+}
+.rr-mappings { font-size: 14px; padding: 8px 10px; background: rgba(0,0,0,0.04); border-radius: 8px; }
+.reaction-row .r-role { max-width: 200px; }
+.rr-menu-card .btn-sm { margin-left: 8px; }
+

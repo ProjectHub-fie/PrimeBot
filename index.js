@@ -98,6 +98,12 @@ client.betaManager = betaManager;
     client.serverSettingsManager = { getGuildSettings: () => ({}), updateGuildSetting: noop };
     client.welcomeSettingsManager = { getWelcomeSettings: () => ({ enabled: false }), updateGuildSetting: noop, setWelcomeChannel: noop, setWelcomeMessage: noop, setWelcomeBanner: noop, setWelcomeColor: noop, setWelcomeDmMessage: noop, toggleWelcomeDm: noop, toggleWelcomeFeature: noop };
     client.loggingSettingsManager = { getSettings: () => ({ enabled: false, events: [] }), isEnabled: () => false, updateSettings: noop };
+    client.reactionRoleManager = {
+        getMenuForMessage: () => null, getGuildMenus: () => [],
+        getMenuById: () => null, createMenu: noopAsync, updateMenu: noopAsync,
+        deleteMenu: noopAsync, handleReactionAdd: noopAsync, handleReactionRemove: noopAsync,
+        restorePersistentMenus: noopAsync,
+    };
 }
 
 // ── Real manager boot — runs exactly once when this node connects ─────────
@@ -122,6 +128,7 @@ async function initializeManagers() {
     const ServerSettingsManager = require('./utils/serverSettingsManager');
     const WelcomeSettingsManager = require('./utils/welcomeSettingsManager');
     const LoggingSettingsManager = require('./utils/loggingSettingsManager');
+    const ReactionRoleManager = require('./utils/reactionRoleManager');
     const SnipeManager = require('./utils/snipeManager');
 
     client.giveawayManager  = new GiveawayManager(client);
@@ -136,6 +143,13 @@ async function initializeManagers() {
     client.serverSettingsManager = new ServerSettingsManager(client);
     client.welcomeSettingsManager = new WelcomeSettingsManager();
     client.loggingSettingsManager = new LoggingSettingsManager();
+
+    try {
+        client.reactionRoleManager = new ReactionRoleManager(client);
+        console.log('[MANAGERS] ReactionRoleManager loaded.');
+    } catch (err) {
+        console.error('[MANAGERS] Failed to load ReactionRoleManager:', err.message);
+    }
 
     try {
         const BirthdayManager = require('./utils/birthdayManager');

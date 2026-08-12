@@ -72,6 +72,17 @@ module.exports = {
                 client.livePollManager.checkExpiredPolls();
             }, 60000); // Check every minute
         }
+
+        // Re-apply roles for persistent reaction-role menus so they survive
+        // bot restarts and Discord reaction-cache evictions.
+        if (client.reactionRoleManager && typeof client.reactionRoleManager.restorePersistentMenus === 'function') {
+            // Defer slightly so guild caches are populated.
+            setTimeout(() => {
+                client.reactionRoleManager.restorePersistentMenus().catch(err =>
+                    console.error('[REACTION ROLES] Restore failed:', err.message)
+                );
+            }, 5000);
+        }
     },
 };
 //
