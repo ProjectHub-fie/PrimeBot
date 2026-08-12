@@ -54,11 +54,22 @@ async function requireGuildAdmin(req, res, next) {
             return res.status(403).json({ error: 'You do not have permission to manage this server.' });
         }
 
-        // Confirm the bot is present in the guild.
+        // Confirm the bot is present in the guild. This uses the BOT token
+        // (process.env.DISCORD_TOKEN), NOT the user's OAuth token, so a 401 here
+        // means the bot token is missing/invalid — NOT that the user's session
+        // expired. Destroying the session on a bot-token 401 would log the user
+        // out for an unrelated reason, so we handle it separately below.
         let botGuild;
         try {
             botGuild = await discord.getBotGuild(guildId);
         } catch (err) {
+            if (err.status === 401) {
+                console.error('[AUTH] getBotGuild returned 401 — DISCORD_TOKEN is missing or invalid. Set DASHBOARD_BOT_TOKEN/DISCORD_TOKEN on Vercel.');
+                return res.status(503).json({
+                    error: 'PrimeBot is not reachable (bot token not configured). Ask an admin to set DISCORD_TOKEN on the dashboard deployment.',
+                    reason: 'bot_token_unauthorized',
+                });
+            }
             if (err.status === 403 || err.status === 404) {
                 return res.status(404).json({ error: 'PrimeBot is not in this server. Invite it first.' });
             }
@@ -76,8 +87,9 @@ async function requireGuildAdmin(req, res, next) {
         next();
     } catch (err) {
         console.error('[AUTH] requireGuildAdmin error:', err.message);
+        // A 401 reaching here can only come from the user's OAuth access token
+        // (getUserGuilds). That genuinely means the session expired — refresh it.
         if (err.status === 401) {
-            // Access token expired — clear session and prompt re-login.
             req.session.destroy(() => {});
             if (req.accepts('html')) return res.redirect('/login');
             return res.status(401).json({ error: 'Session expired. Please log in again.' });

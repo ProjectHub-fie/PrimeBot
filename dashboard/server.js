@@ -59,17 +59,40 @@ const SESSION_SECRET = process.env.SESSION_SECRET || 'primebot-dashboard-dev-sec
 
 // On Vercel (serverless), MemoryStore is useless because each request may run
 // in a fresh instance. Store sessions in the same PostgreSQL DB the bot uses.
+//
+// CRITICAL: the session pool must negotiate SSL the same way the bot's main
+// pool does (server/db.js). Production Postgres on Vercel (Neon, Supabase,
+// Vercel Postgres, etc.) REQUIRES SSL; a bare `new Pool({ connectionString })`
+// without ssl silently fails every session write. The OAuth callback then
+// redirects to "/" on a save error, the session row is never persisted, the
+// next /api/me returns 401, and the user lands back on the login screen —
+// i.e. "login works but never reaches the dashboard". So we reuse the bot's
+// already-SSL-aware pool rather than constructing a naive one.
 function buildSessionStore() {
-    const dbUrl = process.env.DATABASE_URL;
-    if (dbUrl) {
+    let pool = null;
+    try {
+        pool = require('../server/db').pool;
+    } catch (err) {
+        console.warn('[SESSION] Could not import bot DB pool, falling back to a local pool:', err.message);
+    }
+    if (!pool && process.env.DATABASE_URL) {
+        const dbUrl = process.env.DATABASE_URL;
+        pool = new Pool({
+            connectionString: dbUrl,
+            ssl: /sslmode=require/.test(dbUrl) ? { rejectUnauthorized: false } : (process.env.DB_SSL === 'require' ? { rejectUnauthorized: false } : undefined),
+        });
+    }
+    if (pool) {
         return new PgSession({
-            pool: new Pool({ connectionString: dbUrl }),
+            pool,
             // Use a dedicated table — a generic "session" table may already
             // exist in the shared DB with a different schema (e.g. another app's
             // auth table), which would break connect-pg-simple.
             tableName: 'primebot_dashboard_session',
             createTableIfNotExists: true,
             pruneSessionInterval: false,
+            // Surface connection failures instead of hanging on cold starts.
+            error: (err) => console.error('[SESSION] PgSession store error:', err.message),
         });
     }
     // Local dev fallback (single process).
@@ -97,6 +120,11 @@ const sessionStore = buildSessionStore();
 app.use(session({
     name: constants.SESSION_COOKIE,
     secret: SESSION_SECRET,
+    // Trust Vercel's TLS-terminating proxy so Secure cookies are set/sent
+    // correctly (x-forwarded-proto: https). Without `proxy: true`,
+    // express-session ignores the forward-proto header for the Secure-cookie
+    // decision and login silently fails on serverless.
+    proxy: true,
     resave: false,
     saveUninitialized: false,
     store: sessionStore,
@@ -133,6 +161,12 @@ if (process.env.DASHBOARD_LOG_REQUESTS === 'true') {
 
 app.get('/login', (req, res) => {
     if (req.session && req.session.user) return res.redirect('/');
+    // If we were sent back here with an error (e.g. session persistence
+    // failed after a successful Discord auth), render the SPA so it can
+    // surface the message instead of silently bouncing back to Discord.
+    if (req.query.error) {
+        return res.sendFile(path.join(__dirname, 'public', 'index.html'));
+    }
     const params = new URLSearchParams({
         client_id: process.env.DISCORD_CLIENT_ID,
         redirect_uri: REDIRECT_URI,
@@ -172,7 +206,13 @@ app.get('/auth/callback', async (req, res) => {
         // Persist the session before redirecting, otherwise the Set-Cookie
         // header is not guaranteed to be written before the browser follows
         // the redirect to "/" (causing a bounce back to /login).
-        req.session.save(() => {
+        // If the session store is broken (e.g. SSL to Postgres failed), surface
+        // it instead of redirecting to a dashboard that will immediately 401.
+        req.session.save((err) => {
+            if (err) {
+                console.error('[AUTH] Session save failed — redirecting to login with error:', err.message);
+                return res.redirect('/login?error=session_failed');
+            }
             res.redirect('/');
         });
     } catch (err) {
@@ -414,7 +454,9 @@ function preflightCheck() {
             console.warn('   Get it from the Discord Developer Portal → your app → OAuth2 → Client Secret.');
         }
         if (missing.includes('DISCORD_TOKEN')) {
-            console.warn('   DISCORD_TOKEN is used to look up guilds/channels the bot can see.');
+            console.warn('   DISCORD_TOKEN is used by the dashboard to look up guilds/channels the bot can see.');
+            console.warn('   Without it, opening any server shows "bot token not configured" (HTTP 503).');
+            console.warn('   On Vercel, set DISCORD_TOKEN (or DASHBOARD_BOT_TOKEN) in Settings → Environment Variables.');
         }
     }
     if (SESSION_SECRET === 'primebot-dashboard-dev-secret-change-me') {

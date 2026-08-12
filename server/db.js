@@ -2,19 +2,44 @@ const { Pool } = require('pg');
 const { drizzle } = require('drizzle-orm/node-postgres');
 const schema = require("../shared/schema.js");
 
+// Decide whether SSL should be enabled for a connection. Managed Postgres on
+// Vercel/Neon/Supabase requires SSL; we accept self-signed certs via
+// rejectUnauthorized:false so connections still succeed without a CA bundle.
+function shouldEnableSsl(connectionStr) {
+  return /sslmode\s*=\s*(require|prefer|verify-ca|verify-full|allow)/i.test(connectionStr || '')
+    || process.env.DB_SSL === 'require';
+}
+
+// Build an explicit pool config from a postgres:// connection string. We parse
+// the URL ourselves and DROP the `sslmode` query param before handing the
+// string to `pg`. Reason: pg-connection-string (used by `pg`) treats
+// `sslmode=require/prefer/verify-ca` as aliases for `verify-full` (strict cert
+// validation), which (a) prints a deprecation/security warning on every boot
+// and (b) breaks connections to hosts whose cert chain can't be fully verified
+// (common with managed DBs). We instead set `ssl` explicitly here.
+function configFromUrl(connectionStr) {
+  const url = new URL(connectionStr);
+  const sslmode = url.searchParams.get('sslmode');
+  url.searchParams.delete('sslmode');
+  // Re-serialize the cleaned query string (URL strips empty `?` automatically).
+  const clean = url.toString();
+  return {
+    connectionString: clean,
+    ssl: shouldEnableSsl(connectionStr) ? { rejectUnauthorized: false } : false,
+    max: 10,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 10000,
+    _sslmode: sslmode, // for logging only
+  };
+}
+
 // Parse PostgreSQL connection string - uses DATABASE_URL env var (set per-host in .env or secrets)
 function parseConnectionString() {
   if (process.env.DATABASE_URL) {
     try {
       const databaseUrl = process.env.DATABASE_URL;
-      console.log('✅ Using PostgreSQL DATABASE_URL');
-      return {
-        connectionString: databaseUrl,
-        ssl: databaseUrl.includes('sslmode=require') ? { rejectUnauthorized: false } : false,
-        max: 10, // Connection pool size
-        idleTimeoutMillis: 30000,
-        connectionTimeoutMillis: 10000,
-      };
+      console.log(`✅ Using PostgreSQL DATABASE_URL (sslmode=${/sslmode=([^&]+)/.exec(databaseUrl)?.[1] || 'off'})`);
+      return configFromUrl(databaseUrl);
     } catch (error) {
       console.warn('Failed to parse DATABASE_URL, falling back to individual env vars:', error.message);
     }
@@ -27,21 +52,7 @@ function parseConnectionString() {
   // Check if DB_HOST is a full PostgreSQL connection string
   if (dbHost.includes('postgresql://') || dbHost.includes('postgres://')) {
     try {
-      // PostgreSQL connection strings have the format:
-      // postgresql://username:password@host:port/database?options
-      const url = new URL(dbHost);
-      
-      return {
-        host: url.hostname || 'localhost',
-        port: parseInt(url.port) || 5432,
-        user: decodeURIComponent(url.username) || 'postgres',
-        password: decodeURIComponent(url.password) || '',
-        database: url.pathname.slice(1) || 'discord_bot', // Remove leading slash
-        ssl: url.searchParams.get('sslmode') === 'require' ? { rejectUnauthorized: false } : false,
-        max: 10, // Connection pool size
-        idleTimeoutMillis: 30000,
-        connectionTimeoutMillis: 10000,
-      };
+      return configFromUrl(dbHost);
     } catch (error) {
       console.warn('Failed to parse PostgreSQL connection string, using individual env vars:', error.message);
     }
