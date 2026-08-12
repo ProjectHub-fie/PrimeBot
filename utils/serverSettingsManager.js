@@ -41,6 +41,7 @@ class ServerSettingsManager {
         this.client = client;
         this.serverSettings = new Map();
         this._tableReady = false;
+        this._refreshTimer = null;
 
         this._init().catch(err =>
             console.error('[SERVER SETTINGS] Initialisation failed:', err.message)
@@ -60,6 +61,34 @@ class ServerSettingsManager {
         await this._ensureTable();
         await this._migrateFromJson();
         await this.loadSettings();
+        this._startRefreshLoop();
+    }
+
+    _startRefreshLoop() {
+        if (this._refreshTimer) return;
+        // The dashboard runs as a separate process, so startup-only loading
+        // leaves the bot with stale settings after a dashboard save.
+        this._refreshTimer = setInterval(() => {
+            this._refreshFromDatabase().catch(err =>
+                console.error('[SERVER SETTINGS] Refresh failed:', err.message)
+            );
+        }, 5000);
+        this._refreshTimer.unref?.();
+    }
+
+    async _refreshFromDatabase() {
+        await this._ensureTable();
+        const res = await pool.query('SELECT * FROM server_settings');
+        for (const row of res.rows) {
+            const next = this._rowToSettings(row);
+            const previous = this.serverSettings.get(row.guild_id);
+            if (!previous || JSON.stringify(previous) !== JSON.stringify(next)) {
+                this.serverSettings.set(row.guild_id, next);
+                if (previous) {
+                    console.log(`[SERVER SETTINGS] Applied database update for guild ${row.guild_id}.`);
+                }
+            }
+        }
     }
 
     /** One-time import of existing serverSettings.json data (non-welcome fields only).
