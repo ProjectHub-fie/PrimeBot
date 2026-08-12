@@ -591,6 +591,13 @@ async function renderGuildSettings(match) {
       populateChannelSelects();
     })
     .catch(() => { /* surfaced via empty selectors */ });
+  // Lazy-load roles for reaction-role selectors.
+  api(`/api/guilds/${guildId}/roles`)
+    .then(d => {
+      guildState.roles = d.roles || [];
+      populateRoleSelects();
+    })
+    .catch(() => { /* surfaced via empty selectors */ });
 
   app.innerHTML = `
     <div class="breadcrumb"><a href="/" data-link>Servers</a> <span>/</span> <span>${esc(data.guild.name)}</span></div>
@@ -607,6 +614,7 @@ async function renderGuildSettings(match) {
       <button class="tab" data-tab="leveling">📈 Leveling</button>
       <button class="tab" data-tab="prefix">⚡ Prefix</button>
       <button class="tab" data-tab="reactions">🔁 Auto-Reactions</button>
+      <button class="tab" data-tab="reactionroles">🎭 Reaction Roles</button>
       <button class="tab" data-tab="broadcast">📢 Broadcasts</button>
       <button class="tab" data-tab="logging">📜 Logging</button>
     </div>
@@ -615,6 +623,7 @@ async function renderGuildSettings(match) {
     <div id="tab-leveling" class="tab-panel">${levelingPanelHTML(data.config.server)}</div>
     <div id="tab-prefix" class="tab-panel">${prefixPanelHTML(data.config.server)}</div>
     <div id="tab-reactions" class="tab-panel">${reactionsPanelHTML(data.config.server)}</div>
+    <div id="tab-reactionroles" class="tab-panel">${reactionRolesPanelHTML(data.config.reactionRoles)}</div>
     <div id="tab-broadcast" class="tab-panel">${broadcastPanelHTML(data.config.server)}</div>
     <div id="tab-logging" class="tab-panel">${loggingPanelHTML(data.config.logging)}</div>
   `;
@@ -636,6 +645,17 @@ function populateChannelSelects() {
   app.querySelectorAll('select[data-channel-select]').forEach(sel => {
     const current = sel.value;
     sel.innerHTML = `<option value="">— None / default —</option>` + opts;
+    if (current) sel.value = current;
+  });
+}
+
+function populateRoleSelects() {
+  if (!guildState) return;
+  const opts = (guildState.roles || []).map(r => `<option value="${esc(r.id)}">${esc(r.name)}</option>`).join('');
+  app.querySelectorAll('select[data-role-select]').forEach(sel => {
+    const current = sel.value;
+    const placeholder = sel.dataset.placeholder || '— None —';
+    sel.innerHTML = `<option value="">${esc(placeholder)}</option>` + opts;
     if (current) sel.value = current;
   });
 }
@@ -849,6 +869,154 @@ function broadcastPanelHTML(server) {
   `;
 }
 
+// ── Reaction Roles (premium, free) ──────────────────────────────────────────
+//
+// Two creation flows surfaced in one tab:
+//   • Bot-created: the dashboard posts a role embed and the bot watches it.
+//   • Attach: attach emoji→role mappings to ANY existing message by id.
+// Plus a list of existing menus with edit/delete. Premium modes (normal,
+// sticky, verify, unique) and gating options are configurable per menu.
+
+const RR_MODES = [
+  { value: 'normal', label: 'Normal — toggle on/off' },
+  { value: 'sticky', label: 'Sticky — one-click assign (no toggle-off)' },
+  { value: 'verify', label: 'Verify — grant once, no remove' },
+  { value: 'unique', label: 'Unique — only one role at a time' },
+];
+
+function rrMappingRowHTML(m = {}) {
+  return `
+    <div class="reaction-row" data-index="">
+      <input type="text" class="r-emoji" value="${esc(m.emoji || '')}" placeholder="🎉 or <:name:id>" maxlength="100" />
+      <select class="r-role" data-role-select data-placeholder="Role">${m.roleId ? `<option value="${esc(m.roleId)}" selected>Role</option>` : ''}</select>
+      <input type="text" class="r-label" value="${esc(m.label || '')}" placeholder="label (optional)" maxlength="100" />
+      <button class="reaction-remove" type="button">✕</button>
+    </div>
+  `;
+}
+
+function rrMenuCardHTML(menu) {
+  const mappings = (menu.mappings || []).map(m => {
+    const e = /^\w+:\d+$/.test(m.emoji) ? `<:${m.emoji}>` : esc(m.emoji);
+    return `${e} → <@&${esc(m.roleId)}>${m.label ? ' — ' + esc(m.label) : ''}`;
+  }).join('<br/>');
+  return `
+    <div class="card rr-menu-card" data-menu="${menu.id}">
+      <div class="card-title">
+        <span><span class="icon">🎭</span> ${esc(menu.title || 'Untitled menu')} <span class="tag ${menu.enabled ? 'on' : 'off'}">#${menu.id}</span></span>
+        <button class="btn btn-secondary btn-sm rr-delete" data-menu="${menu.id}">Delete</button>
+      </div>
+      <div class="rr-meta">
+        <span><strong>Channel:</strong> <#${esc(menu.channelId)}></span>
+        <span><strong>Message:</strong> <code>${esc(menu.messageId)}</code></span>
+        <span><strong>Mode:</strong> <code>${esc(menu.mode)}</code></span>
+        <span><strong>Persistent:</strong> ${menu.persistent ? '✅' : '⛔'}</span>
+        <span><strong>Bot reactions:</strong> ${menu.includeBots ? '✅' : '⛔'}</span>
+      </div>
+      <div class="rr-mappings">${mappings || '<em>No mappings</em>'}</div>
+      ${menu.requiredRoleId ? `<div class="field-hint">Requires <@&${esc(menu.requiredRoleId)}></div>` : ''}
+      ${menu.exclusiveRoleId ? `<div class="field-hint">Removes <@&${esc(menu.exclusiveRoleId)}> on assign</div>` : ''}
+      <button class="btn btn-secondary btn-sm rr-edit" data-menu="${menu.id}" style="margin-top:8px">Edit</button>
+    </div>
+  `;
+}
+
+function reactionRolesPanelHTML(menus = []) {
+  const listHTML = menus.length
+    ? menus.map(rrMenuCardHTML).join('')
+    : `<div class="alert alert-warn">No reaction-role menus yet. Create one below.</div>`;
+  const modeOpts = RR_MODES.map(m => `<option value="${m.value}">${esc(m.label)}</option>`).join('');
+  return `
+    <div class="card">
+      <div class="card-title"><span><span class="icon">🎭</span> Reaction Roles</span></div>
+      <p class="card-desc">Let members self-assign roles by reacting. PrimeBot gives you premium modes for free: <strong>toggle</strong>, <strong>sticky</strong> (one-click assign), <strong>verify</strong> (grant once, e.g. rules gate), and <strong>unique</strong> (only one role at a time). Roles persist across bot restarts.</p>
+      <div class="rr-list">${listHTML}</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title"><span>Create a new menu</span></div>
+
+      <div class="switch-row">
+        <div class="switch-label">
+          <div class="sl-title">Attach to an existing message</div>
+          <div class="sl-desc">When ON, the bot adds reactions to a message you already posted (by message ID). When OFF, the bot posts a fresh role embed.</div>
+        </div>
+        <label class="switch"><input type="checkbox" id="rr-attach"/><span class="slider"></span></label>
+      </div>
+
+      <div class="field" id="rr-message-field" style="display:none">
+        <label class="field-label" for="rr-message-id">Message ID to attach to</label>
+        <input type="text" id="rr-message-id" placeholder="123456789012345678" />
+        <div class="field-hint">Right-click any message → Copy Message ID (enable Developer Mode in Discord settings).</div>
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="rr-channel">Channel</label>
+        <select id="rr-channel" data-channel-select><option value="">— Select channel —</option></select>
+        <div class="field-hint">Where the role embed is posted (or where the target message lives).</div>
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="rr-title">Embed title / menu label</label>
+        <input type="text" id="rr-title" maxlength="255" placeholder="Pick your roles!" />
+        <div class="field-hint">Shown as the embed title (bot-created) and as the menu label in the dashboard.</div>
+      </div>
+
+      <div class="field" id="rr-description-field">
+        <label class="field-label" for="rr-description">Embed description</label>
+        <textarea id="rr-description" placeholder="React below to give yourself a role!"></textarea>
+        <div class="field-hint">Body text of the role embed (hidden when attaching to an existing message).</div>
+      </div>
+
+      <div class="field">
+        <label class="field-label">Emoji → role mappings</label>
+        <div class="reactions-list" id="rr-mappings-list">${rrMappingRowHTML()}</div>
+        <button class="btn btn-secondary" id="rr-mapping-add">+ Add mapping</button>
+        <div class="field-hint">Use a unicode emoji or a custom emoji reference like <code>&lt;:name:id&gt;</code>.</div>
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="rr-mode">Behavior mode</label>
+        <select id="rr-mode">${modeOpts}</select>
+        <div class="field-hint">Premium modes — all free.</div>
+      </div>
+
+      <div class="field">
+        <label class="field-label">Embed color</label>
+        <div class="color-field">
+          <input type="color" id="rr-color" value="#5865F2" />
+          <input type="text" id="rr-color-text" value="#5865F2" style="flex:1" />
+        </div>
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="rr-required-role">Required role (optional)</label>
+        <select id="rr-required-role" data-role-select data-placeholder="— Anyone —"></select>
+        <div class="field-hint">Members must have this role to use the menu.</div>
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="rr-exclusive-role">Exclusive role (optional)</label>
+        <select id="rr-exclusive-role" data-role-select data-placeholder="— None —"></select>
+        <div class="field-hint">Removed from a member when they take a role from this menu (cross-menu mutual exclusion).</div>
+      </div>
+
+      <div class="switch-row">
+        <div class="switch-label"><div class="sl-title">Persistent</div><div class="sl-desc">Re-apply roles on bot restart by reading the message's reactions.</div></div>
+        <label class="switch"><input type="checkbox" id="rr-persistent" checked/><span class="slider"></span></label>
+      </div>
+      <div class="switch-row">
+        <div class="switch-label"><div class="sl-title">Allow bots</div><div class="sl-desc">Let bots trigger the menu too (off by default).</div></div>
+        <label class="switch"><input type="checkbox" id="rr-include-bots"/><span class="slider"></span></label>
+      </div>
+
+      <div class="form-actions">
+        <button class="btn btn-primary" id="rr-create">Create reaction-role menu</button>
+      </div>
+    </div>
+  `;
+}
+
 function loggingPanelHTML(logging) {
   const s = logging || {};
   const enabled = new Set(Array.isArray(s.events) ? s.events : []);
@@ -962,6 +1130,9 @@ function bindSettingsEvents(guildId) {
   });
   bindReactionRemovals();
 
+  // Reaction Roles tab bindings.
+  bindReactionRolesEvents(guildId);
+
   // Save buttons.
   app.querySelectorAll('[data-save]').forEach(btn => {
     btn.addEventListener('click', async () => {
@@ -990,6 +1161,156 @@ function bindReactionRemovals() {
       btn.closest('.reaction-row')?.remove();
     });
   });
+}
+
+// ── Reaction Roles tab: bindings + create/edit/delete ───────────────────────
+
+function collectRrMappings() {
+  const out = [];
+  app.querySelectorAll('#rr-mappings-list .reaction-row').forEach(row => {
+    const emoji = row.querySelector('.r-emoji')?.value.trim();
+    const roleId = row.querySelector('.r-role')?.value;
+    const label = row.querySelector('.r-label')?.value.trim();
+    if (emoji && roleId) out.push({ emoji, roleId, label: label || null });
+  });
+  return out;
+}
+
+async function refreshRrList(guildId) {
+  try {
+    const data = await api(`/api/guilds/${guildId}/reactionroles`);
+    const listEl = app.querySelector('.rr-list');
+    if (listEl) {
+      const menus = data.reactionRoles || [];
+      listEl.innerHTML = menus.length
+        ? menus.map(rrMenuCardHTML).join('')
+        : `<div class="alert alert-warn">No reaction-role menus yet. Create one below.</div>`;
+      bindRrCardActions(guildId);
+    }
+  } catch (_) { /* surfaced via toast elsewhere */ }
+}
+
+function bindRrCardActions(guildId) {
+  app.querySelectorAll('.rr-delete').forEach(btn => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.menu;
+      if (!confirm('Delete this reaction-role menu? The bot will stop watching the message. Roles already granted stay.')) return;
+      try {
+        await api(`/api/guilds/${guildId}/reactionroles/${id}`, { method: 'DELETE' });
+        toast('Menu deleted', 'success');
+        refreshRrList(guildId);
+      } catch (err) {
+        toast(err.message || 'Failed to delete', 'error');
+      }
+    });
+  });
+  app.querySelectorAll('.rr-edit').forEach(btn => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.menu;
+      const card = btn.closest('.rr-menu-card');
+      const menus = (await api(`/api/guilds/${guildId}/reactionroles`).catch(() => ({}))).reactionRoles || [];
+      const menu = menus.find(m => String(m.id) === String(id));
+      if (!menu) { toast('Menu not found', 'error'); return; }
+      // Inline edit modal (simple prompt-based for the common cases).
+      const nextTitle = prompt('Title (leave blank to keep):', menu.title || '');
+      if (nextTitle !== null && nextTitle !== (menu.title || '')) {
+        try {
+          await api(`/api/guilds/${guildId}/reactionroles/${id}`, { method: 'PATCH', body: JSON.stringify({ title: nextTitle }) });
+          toast('Updated', 'success');
+          refreshRrList(guildId);
+        } catch (err) { toast(err.message, 'error'); }
+      }
+    });
+  });
+}
+
+function bindReactionRolesEvents(guildId) {
+  // Toggle attach vs bot-created visibility.
+  const attachToggle = app.querySelector('#rr-attach');
+  if (attachToggle) {
+    const sync = () => {
+      const attach = attachToggle.checked;
+      const msgField = app.querySelector('#rr-message-field');
+      const descField = app.querySelector('#rr-description-field');
+      if (msgField) msgField.style.display = attach ? '' : 'none';
+      if (descField) descField.style.display = attach ? 'none' : '';
+    };
+    attachToggle.addEventListener('change', sync);
+    sync();
+  }
+
+  // Sync color picker + text.
+  const rrColor = app.querySelector('#rr-color');
+  const rrColorText = app.querySelector('#rr-color-text');
+  if (rrColor && rrColorText) {
+    rrColor.addEventListener('input', () => { rrColorText.value = rrColor.value; });
+    rrColorText.addEventListener('input', () => {
+      if (/^#[0-9a-fA-F]{6}$/.test(rrColorText.value)) rrColor.value = rrColorText.value;
+    });
+  }
+
+  // Add/remove mapping rows.
+  app.querySelector('#rr-mapping-add')?.addEventListener('click', () => {
+    const ml = app.querySelector('#rr-mappings-list');
+    if (!ml) return;
+    ml.insertAdjacentHTML('beforeend', rrMappingRowHTML());
+    bindReactionRemovals();
+    populateRoleSelects();
+  });
+  bindReactionRemovals();
+
+  // Create button.
+  app.querySelector('#rr-create')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    const attach = !!app.querySelector('#rr-attach')?.checked;
+    const channelId = app.querySelector('#rr-channel')?.value;
+    const messageId = app.querySelector('#rr-message-id')?.value.trim();
+    const mappings = collectRrMappings();
+    if (mappings.length === 0) { toast('Add at least one emoji→role mapping.', 'error'); return; }
+    if (!channelId) { toast('Select a channel.', 'error'); return; }
+    if (attach && !messageId) { toast('Enter the message ID to attach to.', 'error'); return; }
+    const body = {
+      attach,
+      channelId,
+      messageId: attach ? messageId : undefined,
+      title: app.querySelector('#rr-title')?.value.trim() || null,
+      description: app.querySelector('#rr-description')?.value || null,
+      color: app.querySelector('#rr-color')?.value || '#5865F2',
+      mode: app.querySelector('#rr-mode')?.value || 'normal',
+      persistent: app.querySelector('#rr-persistent')?.checked !== false,
+      includeBots: !!app.querySelector('#rr-include-bots')?.checked,
+      requiredRoleId: app.querySelector('#rr-required-role')?.value || null,
+      exclusiveRoleId: app.querySelector('#rr-exclusive-role')?.value || null,
+      mappings,
+    };
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.textContent = 'Creating…';
+    try {
+      await api(`/api/guilds/${guildId}/reactionroles`, { method: 'POST', body: JSON.stringify(body) });
+      toast('Reaction-role menu created', 'success');
+      refreshRrList(guildId);
+      // Clear the create form.
+      app.querySelector('#rr-title').value = '';
+      app.querySelector('#rr-description').value = '';
+      app.querySelector('#rr-message-id').value = '';
+      const ml = app.querySelector('#rr-mappings-list');
+      if (ml) ml.innerHTML = rrMappingRowHTML();
+      bindReactionRemovals();
+      populateRoleSelects();
+    } catch (err) {
+      toast(err.message || 'Failed to create', 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = orig;
+    }
+  });
+
+  bindRrCardActions(guildId);
 }
 
 async function saveSettings(guildId, kind) {

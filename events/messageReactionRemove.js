@@ -20,6 +20,15 @@ module.exports = {
             // Get client from reaction.client
             const client = reaction.client;
 
+            // Reaction-role menus (checked before giveaways).
+            if (client.reactionRoleManager && typeof client.reactionRoleManager.handleReactionRemove === 'function') {
+                try {
+                    await client.reactionRoleManager.handleReactionRemove(reaction, user);
+                } catch (rrErr) {
+                    console.error('[REACTION ROLES] handleReactionRemove error:', rrErr.message);
+                }
+            }
+
             // Check if this is a giveaway reaction
             const messageId = reaction.message.id;
 

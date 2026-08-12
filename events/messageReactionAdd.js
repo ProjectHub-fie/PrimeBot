@@ -19,7 +19,17 @@ module.exports = {
 
             // Get client from reaction.client
             const client = reaction.client;
-            
+
+            // Reaction-role menus (checked before giveaways so a reaction can
+            // serve both purposes; reaction roles are fire-and-forget).
+            if (client.reactionRoleManager && typeof client.reactionRoleManager.handleReactionAdd === 'function') {
+                try {
+                    await client.reactionRoleManager.handleReactionAdd(reaction, user);
+                } catch (rrErr) {
+                    console.error('[REACTION ROLES] handleReactionAdd error:', rrErr.message);
+                }
+            }
+
             // Check if this is a giveaway reaction
             const messageId = reaction.message.id;
             
