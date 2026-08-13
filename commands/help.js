@@ -176,9 +176,9 @@ async function showCategoryHelp(interaction, category) {
                 .setTitle('🛡️ Moderation Tools')
                 .setDescription('Server management and moderation:')
                 .addFields(
-                    { name: '/ticket', value: 'Create ticket support panel', inline: true },
-                    { name: '/createticket', value: 'Create ticket with custom name', inline: true },
-                    { name: '/tickethistory', value: 'View ticket history and logs', inline: true },
+                    { name: '/ticket', value: 'Ticket system (dashboard-only)', inline: true },
+                    { name: '/createticket', value: 'Ticket system (dashboard-only)', inline: true },
+                    { name: '/tickethistory', value: 'Ticket system (dashboard-only)', inline: true },
                     { name: '/move', value: 'Move members between voice channels', inline: true },
                     { name: '/end', value: 'End giveaways and other activities', inline: true }
                 );

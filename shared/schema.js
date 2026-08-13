@@ -423,6 +423,81 @@ const automodAppeals = pgTable('automod_appeals', {
   createdAt: timestamp('created_at').defaultNow(),
 });
 
+// Premium Ticket panels — configurable only from the dashboard. A "panel" is
+// the message the bot posts (embed or plain) with an "Open Ticket" button;
+// clicking it creates a ticket *instance* (a private channel/thread). Both the
+// bot (utils/ticketPanelManager.js / utils/ticketManager.js) and the dashboard
+// (dashboard/db.js) read/write these through the TICKET_DATABASE_URL pool
+// (falls back to DATABASE_URL).
+const ticketPanels = pgTable('ticket_panels', {
+  id: serial('id').primaryKey(),
+  guildId: varchar('guild_id', { length: 50 }).notNull(),
+  name: varchar('name', { length: 100 }).default('Support Ticket').notNull(),
+  channelId: varchar('channel_id', { length: 50 }),
+  messageId: varchar('message_id', { length: 50 }),
+  messageType: varchar('message_type', { length: 20 }).default('embed').notNull(),
+  title: varchar('title', { length: 255 }),
+  description: text('description'),
+  color: varchar('color', { length: 20 }).default('#5865F2'),
+  thumbnailUrl: text('thumbnail_url'),
+  imageUrl: text('image_url'),
+  footerText: varchar('footer_text', { length: 255 }),
+  content: text('content'),
+  buttonLabel: varchar('button_label', { length: 80 }).default('Open Ticket').notNull(),
+  buttonStyle: varchar('button_style', { length: 20 }).default('Primary').notNull(),
+  buttonEmoji: varchar('button_emoji', { length: 100 }),
+  category: varchar('category', { length: 50 }).default('general'),
+  ticketName: varchar('ticket_name', { length: 100 }),
+  supportRoleIds: jsonb('support_role_ids').default([]).notNull(),
+  pingRoleIds: jsonb('ping_role_ids').default([]).notNull(),
+  ticketCategoryId: varchar('ticket_category_id', { length: 50 }),
+  cooldownSeconds: integer('cooldown_seconds').default(0).notNull(),
+  maxOpenPerUser: integer('max_open_per_user').default(1).notNull(),
+  askReason: boolean('ask_reason').default(false).notNull(),
+  reasonPlaceholder: varchar('reason_placeholder', { length: 255 }),
+  welcomeMessage: text('welcome_message'),
+  closeButtonLabel: varchar('close_button_label', { length: 80 }).default('Close Ticket'),
+  closeButtonEmoji: varchar('close_button_emoji', { length: 100 }),
+  claimButtonLabel: varchar('claim_button_label', { length: 80 }),
+  claimButtonEmoji: varchar('claim_button_emoji', { length: 100 }),
+  enabled: boolean('enabled').default(true).notNull(),
+  createdBy: varchar('created_by', { length: 50 }),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+// Per-ticket instances (a private channel/thread tied to a panel + opener).
+const ticketInstances = pgTable('ticket_instances', {
+  id: serial('id').primaryKey(),
+  panelId: integer('panel_id'),
+  guildId: varchar('guild_id', { length: 50 }).notNull(),
+  channelId: varchar('channel_id', { length: 50 }).notNull(),
+  userId: varchar('user_id', { length: 50 }).notNull(),
+  category: varchar('category', { length: 50 }).default('general'),
+  isThread: boolean('is_thread').default(false).notNull(),
+  parentChannelId: varchar('parent_channel_id', { length: 50 }),
+  controlMessageId: varchar('control_message_id', { length: 50 }),
+  reason: text('reason'),
+  status: varchar('status', { length: 20 }).default('open').notNull(),
+  claimedBy: varchar('claimed_by', { length: 50 }),
+  createdAt: integer('created_at').notNull(),
+  closedAt: integer('closed_at'),
+  closedBy: varchar('closed_by', { length: 50 }),
+  reopenedAt: integer('reopened_at'),
+  reopenedBy: varchar('reopened_by', { length: 50 }),
+});
+
+const ticketPanelsRelations = relations(ticketPanels, ({ many }) => ({
+  instances: many(ticketInstances),
+}));
+
+const ticketInstancesRelations = relations(ticketInstances, ({ one }) => ({
+  panel: one(ticketPanels, {
+    fields: [ticketInstances.panelId],
+    references: [ticketPanels.id],
+  }),
+}));
+
 // Exports
 module.exports = {
   livePolls,
@@ -464,4 +539,8 @@ module.exports = {
   automodSettings,
   automodWarnings,
   automodAppeals,
+  ticketPanels,
+  ticketInstances,
+  ticketPanelsRelations,
+  ticketInstancesRelations,
 };

@@ -2050,185 +2050,11 @@ module.exports = {
                     break;
                 
                 case "thelp":
-                    // Show ticket command help
-                    const ticketHelpEmbed = new EmbedBuilder()
-                        .setColor(config.colors.primary)
-                        .setTitle("🎫 Ticket System Commands")
-                        .setDescription("Here are all available ticket commands:")
-                        .addFields(
-                            { name: `${prefix}ticket [channel] (role-mentions)`, value: "Creates a ticket panel in the specified channel with optional support roles" },
-                            { name: `${prefix}tcreate [channel-id] [ticket-name]`, value: "Creates a ticket with a custom name in a specific channel" },
-                            { name: `${prefix}thistory (page)`, value: "Shows ticket history with pagination (requires Manage Server permission)" }
-                        )
-                        .addFields({
-                            name: "Examples",
-                            value:
-                                `\`${prefix}ticket #support\` - Creates a ticket panel in #support channel\n` +
-                                `\`${prefix}ticket #help @Moderator @Admin\` - Creates a panel with specified support roles\n` +
-                                `\`${prefix}tcreate 123456789012345678 billing\` - Creates a ticket named "billing"\n` +
-                                `\`${prefix}thistory 2\` - Shows page 2 of the ticket history`
-                        })
-                        .setFooter({
-                            text: `Version: ${config.version}`,
-                            iconURL: client.user.displayAvatarURL()
-                        });
-                    
-                    return message.reply({ embeds: [ticketHelpEmbed] });
-                    
                 case "ticket":
-                    // Check permissions
-                    if (!message.member.permissions.has("ManageGuild")) {
-                        return message.reply(
-                            "You need the Manage Server permission to create ticket panels!",
-                        );
-                    }
-
-                    // Validate arguments
-                    if (args.length < 1) {
-                        return message.reply({ embeds: [ticketHelpEmbed] });
-                    }
-
-                    // Parse arguments
-                    const ticketChannelMention = args[0];
-                    const ticketChannelId = ticketChannelMention.replace(/[<#>]/g, "");
-
-                    // Parse support roles
-                    const ticketSupportRoles = [];
-                    for (let i = 1; i < args.length; i++) {
-                        const roleMention = args[i];
-                        const roleId = roleMention.replace(/[<@&>]/g, "");
-                        ticketSupportRoles.push(roleId);
-                    }
-
-                    // Create ticket panel
-                    try {
-                        await client.ticketManager.sendTicketEmbed({
-                            channelId: ticketChannelId,
-                            title: "Support Tickets",
-                            description:
-                                "Need help? Click the button below to create a support ticket!",
-                            buttonText: "Create Ticket",
-                            supportRoles: ticketSupportRoles,
-                        });
-
-                        // Send confirmation
-                        const confirmEmbed = new EmbedBuilder()
-                            .setColor(config.colors.success)
-                            .setDescription(
-                                `✅ Ticket panel created successfully in <#${ticketChannelId}>!`,
-                            );
-
-                        return message.reply({ embeds: [confirmEmbed] });
-                    } catch (error) {
-                        console.error("Error creating ticket panel:", error);
-                        return message.reply(
-                            "There was an error creating the ticket panel! Make sure the channel exists and I have permissions to send messages there.",
-                        );
-                    }
-                    break;
-                
                 case "tcreate":
-                    // Validate arguments
-                    if (args.length < 2) {
-                        const usageEmbed = new EmbedBuilder()
-                            .setColor(config.colors.error)
-                            .setTitle("Invalid Usage")
-                            .setDescription(
-                                `**Correct Usage:** \`${prefix}${commandName} [channel-id] [ticket-name]\``,
-                            )
-                            .addFields({
-                                name: "Examples",
-                                value:
-                                    `\`${prefix}${commandName} 123456789012345678 billing\` - Creates a ticket named "billing" in the specified channel\n` +
-                                    `\`${prefix}${commandName} 123456789012345678 technical-support\` - Creates a ticket for technical support`,
-                            });
-                        return message.reply({ embeds: [usageEmbed] });
-                    }
-
-                    try {
-                        // Get channel ID and ticket name
-                        const panelChannelId = args[0];
-                        const ticketName = args.slice(1).join("-").toLowerCase().replace(/[^a-z0-9-]/g, "");
-                        
-                        if (!ticketName) {
-                            return message.reply("Please provide a valid ticket name using only letters, numbers, and hyphens.");
-                        }
-                        
-                        // Create a mock interaction object
-                        const mockInteraction = {
-                            deferReply: async () => {},
-                            editReply: async (options) => message.reply(options),
-                            user: message.author,
-                            member: message.member,
-                            channelId: panelChannelId
-                        };
-                        
-                        // Create the ticket with custom name
-                        await client.ticketManager.handleTicketCreation(mockInteraction, ticketName);
-                        
-                    } catch (error) {
-                        console.error("Error creating custom ticket:", error);
-                        return message.reply("There was an error creating your ticket. Please try again later.");
-                    }
-                    break;
-
                 case "createt":
-                    // Alias for tcreate command
-                    return message.reply(`This command has been renamed to \`${prefix}tcreate\`. Please use that instead.`);
-                    break;
-
                 case "thistory":
-                    // Check permissions
-                    if (!message.member.permissions.has("ManageGuild")) {
-                        return message.reply(
-                            "You need the Manage Server permission to view ticket history!",
-                        );
-                    }
-
-                    // Get ticket history
-                    const history = client.ticketManager.getTicketHistory();
-
-                    if (history.length === 0) {
-                        return message.reply("No ticket history found.");
-                    }
-
-                    // Create pages of 10 tickets each
-                    const ticketPage = args[0] ? parseInt(args[0]) : 1;
-                    const ticketPageSize = 10;
-                    const ticketTotalPages = Math.ceil(history.length / ticketPageSize);
-                    const ticketStartIndex = (ticketPage - 1) * ticketPageSize;
-                    const ticketEndIndex = ticketStartIndex + ticketPageSize;
-                    const pageHistory = history.slice(ticketStartIndex, ticketEndIndex);
-
-                    // Create embed
-                    const historyEmbed = new EmbedBuilder()
-                        .setColor(config.colors.primary)
-                        .setTitle("Ticket History")
-                        .setDescription(
-                            `Showing ${pageHistory.length} of ${history.length} tickets. Page ${ticketPage}/${ticketTotalPages}`,
-                        )
-                        .setFooter({
-                            text: `Use ${prefix}thistory [page] to view different pages`,
-                        });
-
-                    // Add ticket info
-                    pageHistory.forEach((ticket, index) => {
-                        const createdAt = new Date(
-                            ticket.createdAt,
-                        ).toLocaleString();
-                        const closedAt = new Date(
-                            ticket.closedAt,
-                        ).toLocaleString();
-
-                        historyEmbed.addFields({
-                            name: `#${ticketStartIndex + index + 1} - ${ticket.threadName}`,
-                            value:
-                                `Created by: ${ticket.userName} on ${createdAt}\n` +
-                                `Closed by: ${ticket.closedByName} on ${closedAt}`,
-                        });
-                    });
-
-                    return message.reply({ embeds: [historyEmbed] });
+                    return message.reply('🎫 Ticket feature can only be used by dashboard. Configure ticket panels from the PrimeBot dashboard (🎫 Tickets tab).');
 
                 case "tictactoe":
                 case "tictactoi": // Alternate spelling as requested
@@ -4243,31 +4069,10 @@ module.exports = {
                     message.reply({ embeds: [bsEmbed] });
                     break;
 
-                // Ticket System Commands
+                // Ticket System Commands — configurable only from the dashboard.
                 case "createticket":
                 case "ticket":
-                    if (args.length < 1) {
-                        return message.reply(`**Correct Usage:** \`${prefix}${commandName} [ticket name]\``);
-                    }
-                    
-                    const ticketName = args.join(' ');
-                    
-                    try {
-                        await client.ticketManager.handleTicketCreation({
-                            reply: async (options) => await message.reply(options),
-                            options: {
-                                getString: () => ticketName
-                            },
-                            user: message.author,
-                            guild: message.guild,
-                            channel: message.channel
-                        }, ticketName);
-                    } catch (error) {
-                        console.error('Error creating ticket:', error);
-                        message.reply('There was an error creating your ticket! Please try again later.');
-                    }
-                    break;
-
+                    return message.reply('🎫 Ticket feature can only be used by dashboard. Configure ticket panels from the PrimeBot dashboard (🎫 Tickets tab).');
                 // About Command
                 case "about":
                 case "ab":
@@ -5121,9 +4926,9 @@ async function showPrefixCategoryHelp(message, category, prefix) {
                 .setTitle('🛡️ Moderation Tools')
                 .setDescription('Server management and moderation:')
                 .addFields(
-                    { name: `${prefix}ticket`, value: 'Create ticket support panel', inline: true },
-                    { name: `${prefix}createticket [name]`, value: 'Create ticket with custom name', inline: true },
-                    { name: `${prefix}thistory [page]`, value: 'View ticket history and logs', inline: true },
+                    { name: `${prefix}ticket`, value: 'Ticket system (dashboard-only)', inline: true },
+                    { name: `${prefix}createticket [name]`, value: 'Ticket system (dashboard-only)', inline: true },
+                    { name: `${prefix}thistory [page]`, value: 'Ticket system (dashboard-only)', inline: true },
                     { name: `${prefix}move`, value: 'Move members between voice channels', inline: true },
                     { name: `${prefix}end [id]`, value: 'End giveaways and other activities', inline: true },
                     { name: `${prefix}endpoll [id]`, value: 'End a poll early', inline: true },

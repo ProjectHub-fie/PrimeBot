@@ -83,6 +83,15 @@ module.exports = {
                 );
             }, 5000);
         }
+
+        // Restore ticket panels (re-bind live panel messages + open tickets).
+        if (client.ticketPanelManager && typeof client.ticketPanelManager.restorePanels === 'function') {
+            setTimeout(() => {
+                client.ticketPanelManager.restorePanels().catch(err =>
+                    console.error('[TICKETS] Restore failed:', err.message)
+                );
+            }, 6000);
+        }
     },
 };
 //
