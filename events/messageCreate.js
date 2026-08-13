@@ -72,6 +72,15 @@ module.exports = {
                 ? (client.serverSettingsManager?.getGuildPrefix?.(message.guild.id) || config.prefix)
                 : config.prefix;
 
+            // Premium Automod: scan guild messages against the configured rules.
+            // Runs before command parsing so a rule with a delete/kick/ban action
+            // stops the message from being processed as a command. Fire-and-forget
+            // failures never abort the message handler.
+            if (message.guild && client.automodManager?.isEnabled?.(message.guild.id)) {
+                const automodHit = await client.automodManager.scanMessage(message).catch(() => null);
+                if (automodHit) return; // message was actioned (e.g. deleted) — stop processing
+            }
+
             // Check for ping (mention)
             if (
                 client.user &&
@@ -903,7 +912,91 @@ module.exports = {
                         return message.reply('I could not ban that member.');
                     }
                 }
-                    
+
+                case "warn": {
+                    if (!message.member.permissions.has(PermissionFlagsBits.ModerateMembers)) {
+                        return message.reply('You need Moderate Members permission to warn members.');
+                    }
+                    const target = message.mentions.members?.first();
+                    if (!target) return message.reply(`Usage: \`${prefix}warn @member [reason]\``);
+                    const reason = args.slice(1).join(' ') || 'No reason provided';
+                    try {
+                        const r = await client.automodManager.warnMember(message, target, reason);
+                        if (r.escalated) {
+                            return message.reply(`⚠️ Warned **${target.user.tag}** (${r.count}/${r.warnThreshold}). They reached the threshold and were escalated to **${r.warnAction}**.`);
+                        }
+                        return message.reply(`⚠️ Warned **${target.user.tag}** — warning ${r.count}/${r.warnThreshold}. Reason: ${reason}`);
+                    } catch (err) {
+                        console.error('[PREFIX WARN] Failed:', err);
+                        return message.reply('I could not warn that member.');
+                    }
+                }
+
+                case "unwarn": {
+                    if (!message.member.permissions.has(PermissionFlagsBits.ModerateMembers)) {
+                        return message.reply('You need Moderate Members permission to remove warnings.');
+                    }
+                    const target = message.mentions.members?.first();
+                    if (!target) return message.reply(`Usage: \`${prefix}unwarn @member [count|all]\``);
+                    const amount = (args[1] || '1').toLowerCase();
+                    try {
+                        const remaining = await client.automodManager.removeWarnings(message.guild.id, target.id, amount);
+                        return message.reply(`✅ Removed warnings from **${target.user.tag}**. ${remaining} warning(s) remaining.`);
+                    } catch (err) {
+                        console.error('[PREFIX UNWARN] Failed:', err);
+                        return message.reply('I could not remove warnings for that member.');
+                    }
+                }
+
+                case "warnings": {
+                    const target = message.mentions.members?.first() || message.member;
+                    try {
+                        const warnings = await client.automodManager.getWarnings(message.guild.id, target.id);
+                        if (warnings.length === 0) {
+                            return message.reply(`**${target.user.tag}** has no warnings. ✨`);
+                        }
+                        const list = warnings.slice(0, 10).map((w, i) =>
+                            `**${i + 1}.** ${w.ruleType ? `\`${w.ruleType}\` · ` : ''}${w.reason} — <t:${Math.floor(new Date(w.createdAt).getTime() / 1000)}:R>`
+                        ).join('\n');
+                        return message.reply(`📋 **${target.user.tag}** has **${warnings.length}** warning(s):\n${list}`);
+                    } catch (err) {
+                        console.error('[PREFIX WARNINGS] Failed:', err);
+                        return message.reply('I could not fetch warnings for that member.');
+                    }
+                }
+
+                case "mute": {
+                    if (!message.member.permissions.has(PermissionFlagsBits.ModerateMembers)) {
+                        return message.reply('You need Moderate Members permission to mute members.');
+                    }
+                    const target = message.mentions.members?.first();
+                    if (!target) return message.reply(`Usage: \`${prefix}mute @member [seconds] [reason]\``);
+                    const seconds = parseInt(args[1], 10);
+                    const reason = args.slice(2).join(' ') || 'Muted by moderator';
+                    try {
+                        await client.automodManager.muteMember(message, target, Number.isFinite(seconds) ? seconds : null, reason);
+                        return message.reply(`🔇 Muted **${target.user.tag}**${Number.isFinite(seconds) ? ` for ${seconds}s` : ''}. Reason: ${reason}`);
+                    } catch (err) {
+                        console.error('[PREFIX MUTE] Failed:', err);
+                        return message.reply('I could not mute that member.');
+                    }
+                }
+
+                case "unmute": {
+                    if (!message.member.permissions.has(PermissionFlagsBits.ModerateMembers)) {
+                        return message.reply('You need Moderate Members permission to unmute members.');
+                    }
+                    const target = message.mentions.members?.first();
+                    if (!target) return message.reply(`Usage: \`${prefix}unmute @member\``);
+                    try {
+                        await client.automodManager.unmuteMember(message, target);
+                        return message.reply(`🔊 Unmuted **${target.user.tag}**.`);
+                    } catch (err) {
+                        console.error('[PREFIX UNMUTE] Failed:', err);
+                        return message.reply('I could not unmute that member.');
+                    }
+                }
+
                 case "commands":
                 
                     // Check if user wants a specific category
