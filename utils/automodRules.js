@@ -19,9 +19,10 @@
  * @property {string} category   - Grouping for the dashboard UI.
  * @property {string} description
  * @property {string[]} params   - Extra fields this rule accepts beyond the
- *                                  common { enabled, action } pair.
+ *                                  common { enabled, actions } pair.
  * @property {string[]} actions  - Action keys valid for this rule (subset of
  *                                  ACTIONS); empty = all actions allowed.
+ * @property {boolean} [needsAuthor] - Rule reads ctx.authorCreatedAt (newAccount).
  */
 
 const ACTIONS = [
@@ -61,6 +62,43 @@ const RULES = [
         description: 'Detect any URL (http/https) in messages.',
         params: [],
         actions: [],
+    },
+    {
+        key: 'badLinks',
+        label: 'Bad / phishing links',
+        icon: '🪝',
+        category: 'Content',
+        description: 'Detect known phishing/scam URLs and impersonation domains (discord, steam, nitro gift lures). Add your own domains via the "words" field.',
+        params: ['words'],
+        actions: [],
+    },
+    {
+        key: 'nsfw',
+        label: 'NSFW content',
+        icon: '🔞',
+        category: 'Content',
+        description: 'Detect common NSFW terms. Add your own terms via the "words" field.',
+        params: ['words'],
+        actions: [],
+    },
+    {
+        key: 'repeatedChars',
+        label: 'Repeated characters',
+        icon: '🔁',
+        category: 'Spam',
+        description: 'Act when a message contains a run of the same character. Threshold is the run length.',
+        params: ['threshold'],
+        actions: [],
+    },
+    {
+        key: 'newAccount',
+        label: 'New / alt account',
+        icon: '🐣',
+        category: 'Spam',
+        description: 'Act when the message author\'s account is newer than the configured age (days). Useful against raid/alt raids.',
+        params: ['threshold'],
+        actions: [],
+        needsAuthor: true,
     },
     {
         key: 'mentions',
@@ -121,12 +159,83 @@ const RULES = [
 const RULE_KEYS = RULES.map(r => r.key);
 const RULE_BY_KEY = Object.fromEntries(RULES.map(r => [r.key, r]));
 
+// Known phishing/impersonation domains & lures for the badLinks rule. Kept as a
+// small, opinionated starter list; guilds extend it via the rule's `words`.
+// Matched against hostnames extracted from links in the message.
+const BAD_LINK_DOMAINS = [
+    'steampowered', 'steamcommunity', 'steamcommunit', 'stearn', 'stearncorn',
+    'discrod', 'disord', 'dicsord', 'discorcl', 'discod', 'dizcord', 'discorc',
+    'discord-nitro', 'discordnitro', 'free-nitro', 'freenitro', 'nitro-generator',
+    'discordgift', 'discord-gift', 'steamgift', 'freegift', 'gift-discord',
+    'discrod-app', 'discordapp', 'discordclaims', 'discord-claim',
+];
+// Path/keyword lures commonly used in scams (matched against the full URL).
+const BAD_LINK_LURES = ['nitro', 'gift', 'free', 'claim', 'generator', 'airdrop', 'promo'];
+// Whitelist of safe hosts so legitimate links to the real services are not flagged.
+const BAD_LINK_SAFE_HOSTS = [
+    'discord.com', 'discordapp.com', 'discord.gg', 'steampowered.com',
+    'steamcommunity.com', 'google.com', 'youtube.com', 'youtu.be',
+    'github.com', 'twitter.com', 'x.com',
+];
+
+// Common NSFW terms for the nsfw rule. Intentionally non-exhaustive starter list;
+// guilds extend it via the rule's `words`. Lowercased, word/substring matched.
+const NSFW_TERMS = [
+    'porn', 'porno', 'pornography', 'xxx', 'nsfw', 'hentai', 'rule34',
+    'nude', 'nudes', 'naked', 'brazzers', 'onlyfans', 'camsoda', 'chaturbate',
+    'camgirl', 'camsex', 'sexcam', ' hookup', 'escort', 'hooker',
+    'dickpic', 'cockpic', 'boobs', 'milf', 'milfs', 'creampie',
+    'furryporn', 'femboy', 'transporn', 'gayporn',
+];
+
 /** Default rule set when automod is enabled without specifying rules. */
 const DEFAULT_RULES = [
-    { type: 'invites', enabled: true, action: 'delete' },
-    { type: 'spam', enabled: true, action: 'warn', threshold: 5, seconds: 10 },
-    { type: 'mentions', enabled: true, action: 'warn', threshold: 10 },
+    { type: 'invites', enabled: true, actions: ['delete'] },
+    { type: 'badLinks', enabled: true, actions: ['delete'] },
+    { type: 'spam', enabled: true, actions: ['warn'], threshold: 5, seconds: 10 },
+    { type: 'mentions', enabled: true, actions: ['warn'], threshold: 10 },
 ];
+
+/**
+ * Default DM message templates sent to members when an action is taken against
+ * them. Placeholders: {server}, {reason}, {action}, {threshold}. A guild can
+ * override any of these via settings.dmMessages. DMs are only sent when
+ * settings.dmEnabled is true.
+ */
+const DEFAULT_DM_MESSAGES = {
+    delete: 'Your message in **{server}** was removed: {reason}.',
+    warn: '⚠️ **Warning** in **{server}**: {reason}. Further warnings may escalate to further punishment.',
+    timeout: '🔇 You were timed out in **{server}** for: {reason}.',
+    kick: '👢 You were kicked from **{server}** for: {reason}.',
+    ban: '🔨 You were banned from **{server}** for: {reason}.',
+    escalation: '🚫 You reached the warning threshold in **{server}** and were escalated to **{action}**.',
+};
+
+/**
+ * Normalize an actions value (string or array) into a de-duplicated array of
+ * valid action keys. Accepts a legacy single `action` string for back-compat.
+ * An empty result falls back to [fallback].
+ */
+function normalizeActions(actions, fallback = 'delete') {
+    let arr;
+    if (Array.isArray(actions)) {
+        arr = actions;
+    } else if (typeof actions === 'string') {
+        arr = [actions];
+    } else {
+        arr = [];
+    }
+    const out = [];
+    const seen = new Set();
+    for (const a of arr) {
+        const key = String(a || '').trim();
+        if (ACTION_BY_KEY[key] && !seen.has(key)) {
+            seen.add(key);
+            out.push(key);
+        }
+    }
+    return out.length ? out : [fallback];
+}
 
 /** Normalize a raw rules array into a clean array of rule objects. */
 function normalizeRules(rules) {
@@ -140,10 +249,16 @@ function normalizeRules(rules) {
         if (!meta || seen.has(type)) continue;
         seen.add(type);
 
+        // Accept either `actions` (array) or legacy `action` (string).
+        const actions = normalizeActions(
+            Array.isArray(raw.actions) ? raw.actions : (raw.actions ?? raw.action),
+            'delete'
+        );
         const rule = {
             type,
             enabled: raw.enabled !== false,
-            action: normalizeAction(raw.action, 'delete'),
+            actions,
+            action: actions[0],
         };
         for (const param of meta.params) {
             if (param === 'words') {
@@ -160,6 +275,36 @@ function normalizeRules(rules) {
     return out;
 }
 
+/** Normalize the top-level warn escalation actions (multi-action escalation). */
+function normalizeWarnActions(actions, fallback = 'timeout') {
+    // Escalation excludes 'delete' (pointless) but allows warn/kick/ban/timeout.
+    const allowed = ['warn', 'timeout', 'kick', 'ban'];
+    let arr = Array.isArray(actions) ? actions : (typeof actions === 'string' ? [actions] : []);
+    const out = [];
+    const seen = new Set();
+    for (const a of arr) {
+        const key = String(a || '').trim();
+        if (allowed.includes(key) && !seen.has(key)) {
+            seen.add(key);
+            out.push(key);
+        }
+    }
+    return out.length ? out : [fallback];
+}
+
+/** Normalize the custom DM message overrides object against known action keys. */
+function normalizeDmMessages(dm) {
+    const out = {};
+    if (dm && typeof dm === 'object' && !Array.isArray(dm)) {
+        for (const [key, val] of Object.entries(dm)) {
+            if (typeof val === 'string' && val.trim()) {
+                out[key] = val.slice(0, 1000);
+            }
+        }
+    }
+    return out;
+}
+
 function normalizeAction(action, fallback = 'delete') {
     const a = String(action || '').trim();
     return ACTION_BY_KEY[a] ? a : fallback;
@@ -171,10 +316,11 @@ function metaFor(type) {
 
 /**
  * Pure, dependency-free rule matcher. Tests a single normalized rule against a
- * message context ({ content, guildId, userId, channelId }). The `spamState`
- * argument is a Map the caller owns (keyed by `guildId|userId`); the spam rule
- * reads/writes it to track recent messages within the rule's window. Returning
- * it here keeps the matcher pure w.r.t. everything except that one Map.
+ * message context ({ content, guildId, userId, channelId, authorCreatedAt }).
+ * The `spamState` argument is a Map the caller owns (keyed by `guildId|userId`);
+ * the spam rule reads/writes it to track recent messages within the rule's
+ * window. Returning it here keeps the matcher pure w.r.t. everything except
+ * that one Map.
  *
  * Returns { reason } on match, or null. Excludes the spam stateful rule's
  * cleanup; the caller prunes old entries periodically.
@@ -198,6 +344,54 @@ function matchRule(rule, ctx, spamState = new Map()) {
         case 'links': {
             const m = content.match(/https?:\/\/\S+/i);
             return m ? { reason: `Link: \`${m[0]}\`` } : null;
+        }
+        case 'badLinks': {
+            const urls = content.match(/https?:\/\/[^\s<]+/gi) || [];
+            if (urls.length === 0) return null;
+            const extra = Array.isArray(rule.words) ? rule.words.map(w => String(w).toLowerCase()).filter(Boolean) : [];
+            for (const url of urls) {
+                const u = url.toLowerCase();
+                const host = (u.match(/^https?:\/\/([^/]+)/) || [])[1] || '';
+                // Strip "www." and port for matching.
+                const bareHost = host.replace(/^www\./, '').replace(/:\d+$/, '');
+                if (BAD_LINK_SAFE_HOSTS.some(s => bareHost === s || bareHost.endsWith('.' + s))) continue;
+                const hostLabel = bareHost.split('.')[0] || bareHost;
+                const isImpersonation = BAD_LINK_DOMAINS.some(d => bareHost.includes(d) || hostLabel === d) ||
+                    extra.some(d => bareHost.includes(d) || hostLabel === d);
+                const hasLure = BAD_LINK_LURES.some(l => u.includes(l));
+                if (isImpersonation) {
+                    return { reason: `Suspicious/impersonation link: \`${url}\`` };
+                }
+                if (hasLure && /disc(o|0)rd|ste(a|4)m|nitr(o|0)|gift|free|claim/i.test(bareHost)) {
+                    return { reason: `Suspicious scam link: \`${url}\`` };
+                }
+            }
+            return null;
+        }
+        case 'nsfw': {
+            const terms = Array.from(new Set([...NSFW_TERMS, ...(Array.isArray(rule.words) ? rule.words : [])]));
+            if (terms.length === 0) return null;
+            const lower = content.toLowerCase();
+            const hit = terms.find(t => t && lower.includes(t));
+            return hit ? { reason: `NSFW term: \`${hit.trim()}\`` } : null;
+        }
+        case 'repeatedChars': {
+            const threshold = rule.threshold || 12;
+            const m = content.match(/(.)\1+/g);
+            if (!m) return null;
+            const longest = m.reduce((max, run) => Math.max(max, run.length), 0);
+            return longest >= threshold ? { reason: `Repeated characters (${longest}x)` } : null;
+        }
+        case 'newAccount': {
+            const days = rule.threshold || 7;
+            const created = ctx.authorCreatedAt;
+            if (!created) return null;
+            const ageMs = Date.now() - (created instanceof Date ? created.getTime() : new Date(created).getTime());
+            const ageDays = ageMs / (1000 * 60 * 60 * 24);
+            if (Number.isFinite(ageDays) && ageDays >= 0 && ageDays < days) {
+                return { reason: `New account (${ageDays.toFixed(1)} days old, < ${days}d)` };
+            }
+            return null;
         }
         case 'mentions': {
             const threshold = rule.threshold || 5;
@@ -248,6 +442,25 @@ function matchRule(rule, ctx, spamState = new Map()) {
     }
 }
 
+/**
+ * Render a DM message template, substituting placeholders with the provided
+ * values. Falls back to the default template for the action key if the custom
+ * override is empty/missing.
+ *
+ * Placeholders: {server}, {reason}, {action}, {threshold}.
+ */
+function renderDmMessage(action, { server = '', reason = '', actionLabel = '', threshold = '' } = {}, overrides = {}) {
+    const tmpl = (overrides && typeof overrides[action] === 'string' && overrides[action].trim())
+        ? overrides[action]
+        : (DEFAULT_DM_MESSAGES[action] || 'You were actioned in **{server}**: {reason}.');
+    return String(tmpl)
+        .replaceAll('{server}', server)
+        .replaceAll('{reason}', reason)
+        .replaceAll('{action}', actionLabel)
+        .replaceAll('{threshold}', String(threshold))
+        .slice(0, 2000);
+}
+
 module.exports = {
     ACTIONS,
     ACTION_KEYS,
@@ -256,8 +469,17 @@ module.exports = {
     RULE_KEYS,
     RULE_BY_KEY,
     DEFAULT_RULES,
+    DEFAULT_DM_MESSAGES,
+    BAD_LINK_DOMAINS,
+    BAD_LINK_LURES,
+    BAD_LINK_SAFE_HOSTS,
+    NSFW_TERMS,
     normalizeRules,
     normalizeAction,
+    normalizeActions,
+    normalizeWarnActions,
+    normalizeDmMessages,
     metaFor,
     matchRule,
+    renderDmMessage,
 };

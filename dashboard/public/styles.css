@@ -582,6 +582,44 @@ input[type="color"] {
 }
 .reaction-remove:hover { color: var(--red); border-color: var(--red); }
 
+/* Automod multi-action rule rows + groups */
+.am-rule-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.am-rule-row .am-rule-label { min-width: 140px; font-weight: 600; }
+.am-rule-row input[type="text"],
+.am-rule-row input[type="number"] { padding: 8px 10px; }
+.am-actions-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.am-action-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 13px;
+}
+.am-action-label .switch-text { white-space: nowrap; }
+.am-action-label input { margin: 0; }
+.field-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.field-rows { display: flex; flex-direction: column; gap: 4px; }
+
 /* Inline color + text field */
 .color-field {
   display: flex;

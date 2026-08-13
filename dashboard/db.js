@@ -45,7 +45,7 @@ const config = require('../config');
 const constants = require('./constants');
 const { normalizeGuildPrefix } = require('../utils/prefixHelper');
 const { normalizeEvents, DEFAULT_ENABLED_EVENTS } = require('../utils/logEvents');
-const { normalizeRules, normalizeAction } = require('../utils/automodRules');
+const { normalizeRules, normalizeAction, normalizeWarnActions, normalizeDmMessages } = require('../utils/automodRules');
 
 // ── server_settings (prefix, leveling, auto-reactions, broadcast) ────────────
 
@@ -602,6 +602,10 @@ async function ensureAutomodTables() {
             rules               JSONB NOT NULL DEFAULT '[]',
             warn_threshold      INTEGER NOT NULL DEFAULT 3,
             warn_action         VARCHAR(20) DEFAULT 'timeout',
+            warn_actions        JSONB NOT NULL DEFAULT '["timeout"]',
+            dm_enabled          BOOLEAN NOT NULL DEFAULT true,
+            dm_messages         JSONB NOT NULL DEFAULT '{}',
+            appeal_channel_id   VARCHAR(50),
             updated_at          TIMESTAMP DEFAULT NOW()
         )
     `);
@@ -612,6 +616,10 @@ async function ensureAutomodTables() {
     await getAutomodPool().query(`ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS rules              JSONB NOT NULL DEFAULT '[]'`);
     await getAutomodPool().query(`ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS warn_threshold     INTEGER NOT NULL DEFAULT 3`);
     await getAutomodPool().query(`ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS warn_action        VARCHAR(20) DEFAULT 'timeout'`);
+    await getAutomodPool().query(`ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS warn_actions       JSONB NOT NULL DEFAULT '["timeout"]'`);
+    await getAutomodPool().query(`ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS dm_enabled         BOOLEAN NOT NULL DEFAULT true`);
+    await getAutomodPool().query(`ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS dm_messages        JSONB NOT NULL DEFAULT '{}'`);
+    await getAutomodPool().query(`ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS appeal_channel_id  VARCHAR(50)`);
     await getAutomodPool().query(`
         CREATE TABLE IF NOT EXISTS automod_warnings (
             id           SERIAL PRIMARY KEY,
@@ -627,6 +635,26 @@ async function ensureAutomodTables() {
         CREATE INDEX IF NOT EXISTS automod_warnings_guild_idx
             ON automod_warnings (guild_id);
     `);
+    await getAutomodPool().query(`
+        CREATE TABLE IF NOT EXISTS automod_appeals (
+            id            SERIAL PRIMARY KEY,
+            guild_id      VARCHAR(50) NOT NULL,
+            user_id       VARCHAR(50) NOT NULL,
+            action        VARCHAR(20) NOT NULL,
+            reason        TEXT NOT NULL DEFAULT '',
+            status        VARCHAR(20) NOT NULL DEFAULT 'pending',
+            decision_note TEXT,
+            decided_by    VARCHAR(50),
+            decided_at    TIMESTAMP,
+            reversed      BOOLEAN NOT NULL DEFAULT false,
+            created_at    TIMESTAMP DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS automod_appeals_guild_idx
+            ON automod_appeals (guild_id);
+        CREATE INDEX IF NOT EXISTS automod_appeals_guild_status_idx
+            ON automod_appeals (guild_id, status);
+    `);
+    await getAutomodPool().query(`ALTER TABLE automod_appeals ADD COLUMN IF NOT EXISTS reversed BOOLEAN NOT NULL DEFAULT false`);
 }
 
 async function getAutomodSettings(guildId) {
@@ -646,10 +674,17 @@ function defaultAutomodSettings() {
         rules: [],
         warnThreshold: 3,
         warnAction: 'timeout',
+        warnActions: ['timeout'],
+        dmEnabled: true,
+        dmMessages: {},
+        appealChannelId: null,
     };
 }
 
 function rowToAutomodSettings(row) {
+    const warnActions = Array.isArray(row.warn_actions) && row.warn_actions.length
+        ? normalizeWarnActions(row.warn_actions, 'timeout')
+        : [normalizeAction(row.warn_action, 'timeout')];
     return {
         enabled: row.enabled,
         logChannelId: row.log_channel_id || null,
@@ -658,7 +693,11 @@ function rowToAutomodSettings(row) {
         exemptChannelIds: Array.isArray(row.exempt_channel_ids) ? row.exempt_channel_ids.map(String) : [],
         rules: normalizeRules(row.rules),
         warnThreshold: Math.max(1, parseInt(row.warn_threshold, 10) || 3),
-        warnAction: normalizeAction(row.warn_action, 'timeout'),
+        warnAction: warnActions[0],
+        warnActions,
+        dmEnabled: row.dm_enabled !== false,
+        dmMessages: normalizeDmMessages(row.dm_messages),
+        appealChannelId: row.appeal_channel_id || null,
     };
 }
 
@@ -674,13 +713,21 @@ async function upsertAutomodSettings(guildId, patch) {
     if ('rules' in patch)             merged.rules = normalizeRules(patch.rules);
     if ('warnThreshold' in patch)     merged.warnThreshold = Math.max(1, parseInt(patch.warnThreshold, 10) || 3);
     if ('warnAction' in patch)        merged.warnAction = normalizeAction(patch.warnAction, 'timeout');
+    if ('warnActions' in patch) {
+        merged.warnActions = normalizeWarnActions(patch.warnActions, merged.warnAction || 'timeout');
+        merged.warnAction = merged.warnActions[0];
+    }
+    if ('dmEnabled' in patch)         merged.dmEnabled = patch.dmEnabled !== false;
+    if ('dmMessages' in patch)        merged.dmMessages = normalizeDmMessages(patch.dmMessages);
+    if ('appealChannelId' in patch)   merged.appealChannelId = patch.appealChannelId || null;
 
     await getAutomodPool().query(`
         INSERT INTO automod_settings (
             guild_id, enabled, log_channel_id, mute_role_id,
             exempt_role_ids, exempt_channel_ids, rules,
-            warn_threshold, warn_action, updated_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())
+            warn_threshold, warn_action, warn_actions,
+            dm_enabled, dm_messages, appeal_channel_id, updated_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW())
         ON CONFLICT (guild_id) DO UPDATE SET
             enabled            = EXCLUDED.enabled,
             log_channel_id     = EXCLUDED.log_channel_id,
@@ -690,11 +737,17 @@ async function upsertAutomodSettings(guildId, patch) {
             rules              = EXCLUDED.rules,
             warn_threshold     = EXCLUDED.warn_threshold,
             warn_action        = EXCLUDED.warn_action,
+            warn_actions       = EXCLUDED.warn_actions,
+            dm_enabled         = EXCLUDED.dm_enabled,
+            dm_messages        = EXCLUDED.dm_messages,
+            appeal_channel_id  = EXCLUDED.appeal_channel_id,
             updated_at         = NOW()
     `, [
         guildId, merged.enabled, merged.logChannelId, merged.muteRoleId,
         JSON.stringify(merged.exemptRoleIds), JSON.stringify(merged.exemptChannelIds),
         JSON.stringify(merged.rules), merged.warnThreshold, merged.warnAction,
+        JSON.stringify(merged.warnActions), merged.dmEnabled,
+        JSON.stringify(merged.dmMessages), merged.appealChannelId,
     ]);
     return getAutomodSettings(guildId);
 }
@@ -719,6 +772,62 @@ async function clearAutomodWarnings(guildId, userId = null) {
         await getAutomodPool().query('DELETE FROM automod_warnings WHERE guild_id = $1', [guildId]);
     }
     return true;
+}
+
+// ── automod_appeals ──────────────────────────────────────────────────────────
+//
+// Members punished by automod can file an appeal. Moderators review pending
+// appeals and approve/deny them from the dashboard. The bot's AutomodManager
+// reverses the action when an appeal is approved (via the /appeal command or
+// dashboard); the dashboard writes the decision and the bot's manager handles
+// reversal, so these dashboard helpers only record the decision.
+
+async function submitAutomodAppeal(guildId, { userId, action, reason }) {
+    await ensureAutomodTables();
+    const res = await getAutomodPool().query(`
+        INSERT INTO automod_appeals (guild_id, user_id, action, reason)
+        VALUES ($1,$2,$3,$4)
+        RETURNING *
+    `, [guildId, userId, normalizeAction(action, 'timeout'), String(reason || '').slice(0, 1000) || 'No reason provided']);
+    return rowToAutomodAppeal(res.rows[0]);
+}
+
+async function getAutomodAppeals(guildId, { status = null } = {}) {
+    await ensureAutomodTables();
+    const params = [guildId];
+    let q = 'SELECT * FROM automod_appeals WHERE guild_id = $1';
+    if (status) { q += ' AND status = $2'; params.push(status); }
+    q += ' ORDER BY created_at DESC LIMIT 200';
+    const res = await getAutomodPool().query(q, params);
+    return res.rows.map(rowToAutomodAppeal);
+}
+
+async function decideAutomodAppeal(id, { approved, decidedBy, note = '' }) {
+    await ensureAutomodTables();
+    const status = approved ? 'approved' : 'denied';
+    const res = await getAutomodPool().query(`
+        UPDATE automod_appeals
+        SET status = $2, decision_note = $3, decided_by = $4, decided_at = NOW()
+        WHERE id = $1 AND status = 'pending'
+        RETURNING *
+    `, [id, status, String(note || '').slice(0, 1000), decidedBy]);
+    return res.rows[0] ? rowToAutomodAppeal(res.rows[0]) : null;
+}
+
+function rowToAutomodAppeal(row) {
+    return {
+        id: row.id,
+        guildId: row.guild_id,
+        userId: row.user_id,
+        action: row.action,
+        reason: row.reason,
+        status: row.status,
+        decisionNote: row.decision_note || null,
+        decidedBy: row.decided_by || null,
+        decidedAt: row.decided_at || null,
+        reversed: row.reversed === true,
+        createdAt: row.created_at,
+    };
 }
 
 // ── Combined view (one fetch per guild for the settings page) ───────────────
@@ -847,6 +956,9 @@ module.exports = {
     defaultAutomodSettings,
     getAutomodWarnings,
     clearAutomodWarnings,
+    submitAutomodAppeal,
+    getAutomodAppeals,
+    decideAutomodAppeal,
     getGuildConfig,
     getPlatformStats,
 };
