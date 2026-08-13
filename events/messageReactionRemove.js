@@ -17,6 +17,19 @@ module.exports = {
                 }
             }
 
+            // Resolve the message fully. With MessageManager maxSize 50 and
+            // ReactionManager maxSize 0, the message a reaction happened on is
+            // almost always a partial — and a partial message has no `.guild`,
+            // which would silently break reaction-role handling. Fetch it first.
+            if (reaction.message && reaction.message.partial) {
+                try {
+                    await reaction.message.fetch();
+                } catch (error) {
+                    console.error('Something went wrong when fetching the reaction message:', error);
+                    return;
+                }
+            }
+
             // Get client from reaction.client
             const client = reaction.client;
 

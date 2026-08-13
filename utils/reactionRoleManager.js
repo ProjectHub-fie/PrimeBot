@@ -292,11 +292,17 @@ class ReactionRoleManager {
         }
 
         const role = guild.roles.cache.get(mapping.roleId);
-        if (!role) return false;
+        if (!role) {
+            console.warn(`[REACTION ROLES] Role ${mapping.roleId} no longer exists in guild ${guild.id}.`);
+            return false;
+        }
 
         // Safety: don't try to assign a role at/above the bot's highest role.
         const me = guild.members.me;
-        if (me && role.position >= me.roles.highest.position) return false;
+        if (me && role.position >= me.roles.highest.position) {
+            console.warn(`[REACTION ROLES] Cannot assign role "${role.name}" — it is at/above the bot's highest role in guild ${guild.id}. Move the bot role above it.`);
+            return false;
+        }
 
         // Premium "unique" mode: remove all other roles from this menu first.
         if (menu.mode === 'unique') {
@@ -313,7 +319,12 @@ class ReactionRoleManager {
         }
 
         if (!member.roles.cache.has(mapping.roleId)) {
-            await member.roles.add(mapping.roleId, `Reaction role by ${user.tag}`).catch(() => {});
+            try {
+                await member.roles.add(mapping.roleId, `Reaction role by ${user.tag}`);
+            } catch (err) {
+                console.error(`[REACTION ROLES] Failed to add role ${role.name} to ${user.tag} in guild ${guild.id}:`, err.message);
+                return false;
+            }
         }
 
         // Premium "sticky"/"verify" modes: remove the user's reaction but keep
@@ -345,12 +356,23 @@ class ReactionRoleManager {
         if (!member) return false;
 
         const role = guild.roles.cache.get(mapping.roleId);
-        if (!role) return false;
+        if (!role) {
+            console.warn(`[REACTION ROLES] Role ${mapping.roleId} no longer exists in guild ${guild.id}.`);
+            return false;
+        }
         const me = guild.members.me;
-        if (me && role.position >= me.roles.highest.position) return false;
+        if (me && role.position >= me.roles.highest.position) {
+            console.warn(`[REACTION ROLES] Cannot remove role "${role.name}" — it is at/above the bot's highest role in guild ${guild.id}.`);
+            return false;
+        }
 
         if (member.roles.cache.has(mapping.roleId)) {
-            await member.roles.remove(mapping.roleId, `Reaction role removed by ${user.tag}`).catch(() => {});
+            try {
+                await member.roles.remove(mapping.roleId, `Reaction role removed by ${user.tag}`);
+            } catch (err) {
+                console.error(`[REACTION ROLES] Failed to remove role ${role.name} from ${user.tag} in guild ${guild.id}:`, err.message);
+                return false;
+            }
         }
         return true;
     }
