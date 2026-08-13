@@ -390,6 +390,10 @@ const automodSettings = pgTable('automod_settings', {
   rules: jsonb('rules').default([]).notNull(),
   warnThreshold: integer('warn_threshold').default(3).notNull(),
   warnAction: varchar('warn_action', { length: 20 }).default('timeout'),
+  warnActions: jsonb('warn_actions').default(['timeout']).notNull(),
+  dmEnabled: boolean('dm_enabled').default(true).notNull(),
+  dmMessages: jsonb('dm_messages').default({}).notNull(),
+  appealChannelId: varchar('appeal_channel_id', { length: 50 }),
   updatedAt: timestamp('updated_at').defaultNow(),
 });
 
@@ -401,6 +405,21 @@ const automodWarnings = pgTable('automod_warnings', {
   moderatorId: varchar('moderator_id', { length: 50 }),
   reason: text('reason').default('').notNull(),
   ruleType: varchar('rule_type', { length: 40 }),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// Automod appeals (members can appeal automod punishments)
+const automodAppeals = pgTable('automod_appeals', {
+  id: serial('id').primaryKey(),
+  guildId: varchar('guild_id', { length: 50 }).notNull(),
+  userId: varchar('user_id', { length: 50 }).notNull(),
+  action: varchar('action', { length: 20 }).notNull(),
+  reason: text('reason').default('').notNull(),
+  status: varchar('status', { length: 20 }).default('pending').notNull(),
+  decisionNote: text('decision_note'),
+  decidedBy: varchar('decided_by', { length: 50 }),
+  decidedAt: timestamp('decided_at'),
+  reversed: boolean('reversed').default(false).notNull(),
   createdAt: timestamp('created_at').defaultNow(),
 });
 
@@ -444,4 +463,5 @@ module.exports = {
   loggingSettings,
   automodSettings,
   automodWarnings,
+  automodAppeals,
 };

@@ -494,7 +494,8 @@ app.patch('/api/guilds/:guildId/automod', requireAuth, requireGuildAdmin, async 
         const allowed = [
             'enabled', 'logChannelId', 'muteRoleId',
             'exemptRoleIds', 'exemptChannelIds', 'rules',
-            'warnThreshold', 'warnAction',
+            'warnThreshold', 'warnAction', 'warnActions',
+            'dmEnabled', 'dmMessages', 'appealChannelId',
         ];
         const patch = {};
         for (const key of allowed) {
@@ -504,9 +505,19 @@ app.patch('/api/guilds/:guildId/automod', requireAuth, requireGuildAdmin, async 
         if ('logChannelId' in patch) patch.logChannelId = patch.logChannelId || null;
         if ('muteRoleId' in patch) patch.muteRoleId = patch.muteRoleId || null;
         if ('warnThreshold' in patch) patch.warnThreshold = parseInt(patch.warnThreshold, 10) || 3;
-        if ('warnAction' in patch && !['timeout', 'kick', 'ban'].includes(patch.warnAction)) {
-            return res.status(400).json({ error: 'warnAction must be timeout, kick, or ban.' });
+        if ('warnAction' in patch && !['warn', 'timeout', 'kick', 'ban'].includes(patch.warnAction)) {
+            return res.status(400).json({ error: 'warnAction must be warn, timeout, kick, or ban.' });
         }
+        if ('warnActions' in patch) {
+            const wa = Array.isArray(patch.warnActions) ? patch.warnActions : [];
+            const valid = wa.filter(a => ['warn', 'timeout', 'kick', 'ban'].includes(a));
+            if (valid.length === 0) {
+                return res.status(400).json({ error: 'warnActions must contain at least one of warn, timeout, kick, ban.' });
+            }
+            patch.warnActions = valid;
+        }
+        if ('dmEnabled' in patch) patch.dmEnabled = patch.dmEnabled !== false;
+        if ('appealChannelId' in patch) patch.appealChannelId = patch.appealChannelId || null;
         const updated = await dashboardDb.upsertAutomodSettings(req.guild.id, patch);
         res.json({ automod: updated });
     } catch (err) {
@@ -533,6 +544,52 @@ app.delete('/api/guilds/:guildId/automod/warnings', requireAuth, requireGuildAdm
     } catch (err) {
         console.error('[API] clear automod warnings error:', err.message);
         res.status(500).json({ error: 'Failed to clear warnings.' });
+    }
+});
+
+// ── API: Automod appeals ─────────────────────────────────────────────────────
+
+app.get('/api/guilds/:guildId/automod/appeals', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const status = req.query.status || null;
+        const appeals = await dashboardDb.getAutomodAppeals(req.guild.id, { status });
+        res.json({ appeals });
+    } catch (err) {
+        console.error('[API] get automod appeals error:', err.message);
+        res.status(500).json({ error: 'Failed to load appeals.' });
+    }
+});
+
+app.post('/api/guilds/:guildId/automod/appeals', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const userId = String(req.body?.userId || '').trim();
+        const action = String(req.body?.action || '').trim();
+        const reason = String(req.body?.reason || '').trim();
+        if (!userId || !action) {
+            return res.status(400).json({ error: 'userId and action are required.' });
+        }
+        const appeal = await dashboardDb.submitAutomodAppeal(req.guild.id, { userId, action, reason });
+        res.json({ appeal });
+    } catch (err) {
+        console.error('[API] submit automod appeal error:', err.message);
+        res.status(500).json({ error: 'Failed to submit appeal.' });
+    }
+});
+
+app.patch('/api/guilds/:guildId/automod/appeals/:id', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const id = parseInt(req.params.id, 10);
+        const approved = req.body?.approved === true || req.body?.decision === 'approved';
+        const note = String(req.body?.note || '').trim();
+        const decidedBy = req.user?.discordId || null;
+        const appeal = await dashboardDb.decideAutomodAppeal(id, { approved, decidedBy, note });
+        if (!appeal) return res.status(404).json({ error: 'Appeal not found or already decided.' });
+        // Ask the bot to reverse the action when approved (the bot reads the
+        // status change on its next reload; reversal is best-effort).
+        res.json({ appeal });
+    } catch (err) {
+        console.error('[API] decide automod appeal error:', err.message);
+        res.status(500).json({ error: 'Failed to decide appeal.' });
     }
 });
 

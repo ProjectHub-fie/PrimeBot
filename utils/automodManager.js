@@ -1,6 +1,10 @@
 const { automodPool: pool } = require('../server/automodDb');
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
-const { normalizeRules, metaFor, normalizeAction, ACTION_BY_KEY, matchRule } = require('./automodRules');
+const {
+    normalizeRules, metaFor, normalizeAction, normalizeActions,
+    normalizeWarnActions, normalizeDmMessages, ACTION_BY_KEY, matchRule,
+    renderDmMessage, DEFAULT_DM_MESSAGES,
+} = require('./automodRules');
 const { logEvent } = require('./serverLogger');
 
 /**
@@ -34,6 +38,10 @@ const CREATE_SETTINGS_SQL = `
         rules               JSONB NOT NULL DEFAULT '[]',
         warn_threshold      INTEGER NOT NULL DEFAULT 3,
         warn_action         VARCHAR(20) DEFAULT 'timeout',
+        warn_actions        JSONB NOT NULL DEFAULT '["timeout"]',
+        dm_enabled          BOOLEAN NOT NULL DEFAULT true,
+        dm_messages         JSONB NOT NULL DEFAULT '{}',
+        appeal_channel_id   VARCHAR(50),
         updated_at          TIMESTAMP DEFAULT NOW()
     )
 `;
@@ -45,6 +53,10 @@ const ENSURE_COLUMNS_SQL = `
     ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS rules              JSONB NOT NULL DEFAULT '[]';
     ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS warn_threshold     INTEGER NOT NULL DEFAULT 3;
     ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS warn_action        VARCHAR(20) DEFAULT 'timeout';
+    ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS warn_actions       JSONB NOT NULL DEFAULT '["timeout"]';
+    ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS dm_enabled         BOOLEAN NOT NULL DEFAULT true;
+    ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS dm_messages        JSONB NOT NULL DEFAULT '{}';
+    ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS appeal_channel_id  VARCHAR(50);
 `;
 
 const CREATE_WARNINGS_SQL = `
@@ -61,6 +73,27 @@ const CREATE_WARNINGS_SQL = `
         ON automod_warnings (guild_id, user_id);
     CREATE INDEX IF NOT EXISTS automod_warnings_guild_idx
         ON automod_warnings (guild_id);
+`;
+
+const CREATE_APPEALS_SQL = `
+    CREATE TABLE IF NOT EXISTS automod_appeals (
+        id            SERIAL PRIMARY KEY,
+        guild_id      VARCHAR(50) NOT NULL,
+        user_id       VARCHAR(50) NOT NULL,
+        action        VARCHAR(20) NOT NULL,
+        reason        TEXT NOT NULL DEFAULT '',
+        status        VARCHAR(20) NOT NULL DEFAULT 'pending',
+        decision_note TEXT,
+        decided_by    VARCHAR(50),
+        decided_at    TIMESTAMP,
+        reversed      BOOLEAN NOT NULL DEFAULT false,
+        created_at    TIMESTAMP DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS automod_appeals_guild_idx
+        ON automod_appeals (guild_id);
+    CREATE INDEX IF NOT EXISTS automod_appeals_guild_status_idx
+        ON automod_appeals (guild_id, status);
+    ALTER TABLE automod_appeals ADD COLUMN IF NOT EXISTS reversed BOOLEAN NOT NULL DEFAULT false;
 `;
 
 // In-memory spam tracker (not persisted): userId|guildId -> [{content, ts}]
@@ -84,6 +117,7 @@ class AutomodManager {
         await pool.query(CREATE_SETTINGS_SQL);
         await pool.query(ENSURE_COLUMNS_SQL);
         await pool.query(CREATE_WARNINGS_SQL);
+        await pool.query(CREATE_APPEALS_SQL);
         this._tableReady = true;
     }
 
@@ -91,6 +125,7 @@ class AutomodManager {
         await this._ensureTable();
         await this._loadAll();
         this._startReloadInterval();
+        this._startAppealReversalPoller();
     }
 
     _startReloadInterval() {
@@ -105,6 +140,34 @@ class AutomodManager {
                 console.error('[AUTOMOD] Refresh failed:', err.message)
             );
         }, 5000).unref?.();
+    }
+
+    /**
+     * Poll for appeals approved from the dashboard (status='approved',
+     * reversed=false) and reverse the underlying action. The dashboard and bot
+     * share only the DB, so this is how a dashboard approval reaches the bot.
+     * Marks each reversed appeal so it is processed only once.
+     */
+    _startAppealReversalPoller() {
+        const ms = parseInt(process.env.APPEAL_POLL_INTERVAL_MS, 10) || 15000;
+        setInterval(() => {
+            this._processApprovedAppeals().catch(err =>
+                console.error('[AUTOMOD] Appeal reversal poll failed:', err.message)
+            );
+        }, ms).unref?.();
+    }
+
+    async _processApprovedAppeals() {
+        await this._ensureTable();
+        const res = await pool.query(
+            `SELECT * FROM automod_appeals WHERE status = 'approved' AND reversed = false LIMIT 50`
+        );
+        for (const row of res.rows) {
+            const appeal = this._rowToAppeal(row);
+            await this._reverseAction(appeal).catch(() => {});
+            await pool.query('UPDATE automod_appeals SET reversed = true WHERE id = $1', [appeal.id]);
+            console.log(`[AUTOMOD] Reversed appeal #${appeal.id} (${appeal.action}) in guild ${appeal.guildId}.`);
+        }
     }
 
     async _refreshFromDatabase() {
@@ -135,6 +198,9 @@ class AutomodManager {
     }
 
     _rowToSettings(row) {
+        const warnActions = Array.isArray(row.warn_actions) && row.warn_actions.length
+            ? normalizeWarnActions(row.warn_actions, 'timeout')
+            : [normalizeAction(row.warn_action, 'timeout')];
         return {
             enabled: row.enabled,
             logChannelId: row.log_channel_id || null,
@@ -143,7 +209,11 @@ class AutomodManager {
             exemptChannelIds: normalizeIdArray(row.exempt_channel_ids),
             rules: normalizeRules(row.rules),
             warnThreshold: Math.max(1, parseInt(row.warn_threshold, 10) || 3),
-            warnAction: normalizeAction(row.warn_action, 'timeout'),
+            warnAction: warnActions[0],
+            warnActions,
+            dmEnabled: row.dm_enabled !== false,
+            dmMessages: normalizeDmMessages(row.dm_messages),
+            appealChannelId: row.appeal_channel_id || null,
         };
     }
 
@@ -157,6 +227,10 @@ class AutomodManager {
             rules: [],
             warnThreshold: 3,
             warnAction: 'timeout',
+            warnActions: ['timeout'],
+            dmEnabled: true,
+            dmMessages: {},
+            appealChannelId: null,
         };
     }
 
@@ -184,8 +258,9 @@ class AutomodManager {
             INSERT INTO automod_settings (
                 guild_id, enabled, log_channel_id, mute_role_id,
                 exempt_role_ids, exempt_channel_ids, rules,
-                warn_threshold, warn_action, updated_at
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())
+                warn_threshold, warn_action, warn_actions,
+                dm_enabled, dm_messages, appeal_channel_id, updated_at
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW())
             ON CONFLICT (guild_id) DO UPDATE SET
                 enabled            = EXCLUDED.enabled,
                 log_channel_id     = EXCLUDED.log_channel_id,
@@ -195,11 +270,17 @@ class AutomodManager {
                 rules              = EXCLUDED.rules,
                 warn_threshold     = EXCLUDED.warn_threshold,
                 warn_action        = EXCLUDED.warn_action,
+                warn_actions       = EXCLUDED.warn_actions,
+                dm_enabled         = EXCLUDED.dm_enabled,
+                dm_messages        = EXCLUDED.dm_messages,
+                appeal_channel_id  = EXCLUDED.appeal_channel_id,
                 updated_at         = NOW()
         `, [
             guildId, s.enabled, s.logChannelId, s.muteRoleId,
             JSON.stringify(s.exemptRoleIds), JSON.stringify(s.exemptChannelIds),
             JSON.stringify(s.rules), s.warnThreshold, s.warnAction,
+            JSON.stringify(s.warnActions), s.dmEnabled,
+            JSON.stringify(s.dmMessages), s.appealChannelId,
         ]);
     }
 
@@ -212,8 +293,15 @@ class AutomodManager {
         if ('exemptRoleIds' in patch)     next.exemptRoleIds = normalizeIdArray(patch.exemptRoleIds);
         if ('exemptChannelIds' in patch)  next.exemptChannelIds = normalizeIdArray(patch.exemptChannelIds);
         if ('rules' in patch)             next.rules = normalizeRules(patch.rules);
-        if ('warnThreshold' in patch)    next.warnThreshold = Math.max(1, parseInt(patch.warnThreshold, 10) || 3);
+        if ('warnThreshold' in patch)     next.warnThreshold = Math.max(1, parseInt(patch.warnThreshold, 10) || 3);
         if ('warnAction' in patch)        next.warnAction = normalizeAction(patch.warnAction, 'timeout');
+        if ('warnActions' in patch) {
+            next.warnActions = normalizeWarnActions(patch.warnActions, next.warnAction || 'timeout');
+            next.warnAction = next.warnActions[0];
+        }
+        if ('dmEnabled' in patch)         next.dmEnabled = patch.dmEnabled !== false;
+        if ('dmMessages' in patch)        next.dmMessages = normalizeDmMessages(patch.dmMessages);
+        if ('appealChannelId' in patch)   next.appealChannelId = patch.appealChannelId || null;
         this._cache.set(guildId, next);
         this._save(guildId);
         return next;
@@ -306,14 +394,15 @@ class AutomodManager {
                 guildId,
                 userId: message.author.id,
                 channelId: message.channelId,
+                authorCreatedAt: message.author?.createdAt || null,
             };
-            if (!ctx.content) return null;
+            if (!ctx.content && !ctx.authorCreatedAt) return null;
 
             for (const rule of settings.rules) {
                 const match = this.matchRule(rule, ctx);
                 if (match) {
-                    await this._enforce(message, rule, match.reason, settings);
-                    return { rule: rule.type, action: rule.action, reason: match.reason };
+                    const applied = await this._enforce(message, rule, match.reason, settings);
+                    return { rule: rule.type, actions: applied, reason: match.reason };
                 }
             }
             return null;
@@ -323,79 +412,145 @@ class AutomodManager {
         }
     }
 
+    /**
+     * Enforce a rule's actions (multi-action) against a message. `delete` is
+     * always applied first (so the offending content is removed before further
+     * action), then each remaining action runs in order. Returns the list of
+     * action keys actually applied.
+     */
     async _enforce(message, rule, reason, settings) {
         const meta = metaFor(rule.type);
-        const target = message.member || message.author;
+        const actions = Array.isArray(rule.actions) && rule.actions.length
+            ? rule.actions
+            : (rule.action ? [rule.action] : ['delete']);
+        // Always delete first if delete is among the actions.
+        const ordered = [...actions].sort((a) => (a === 'delete' ? -1 : 0));
+        const applied = [];
+
+        // Delete the message up-front if a delete action is present.
+        if (ordered.includes('delete')) {
+            await message.delete().catch(() => {});
+            applied.push('delete');
+        }
+
+        const ctx = {
+            guild: message.guild,
+            member: message.member,
+            author: message.author,
+            reason,
+            settings,
+            ruleType: rule.type,
+        };
+
+        for (const action of ordered) {
+            if (action === 'delete') continue;
+            try {
+                await this._executeAction(action, ctx);
+                applied.push(action);
+            } catch (err) {
+                console.error(`[AUTOMOD] action ${action} failed:`, err.message);
+            }
+        }
+
+        const actionLabels = applied.map(a => ACTION_BY_KEY[a]?.label || a).join(', ');
         const logFields = [
-            { name: 'Member', value: `${target.user ? target.user.tag : target.tag} (<@${message.author.id}>)`, inline: false },
+            { name: 'Member', value: `${ctx.member?.user?.tag || ctx.author?.tag} (<@${ctx.author.id}>)`, inline: false },
             { name: 'Channel', value: `<#${message.channelId}>`, inline: true },
             { name: 'Rule', value: `${meta.icon} ${meta.label} (\`${rule.type}\`)`, inline: true },
-            { name: 'Action', value: ACTION_BY_KEY[rule.action]?.label || rule.action, inline: true },
+            { name: 'Actions', value: actionLabels, inline: true },
             { name: 'Reason', value: reason, inline: false },
         ];
         if (message.content) {
             logFields.push({ name: 'Message', value: truncate(message.content, 1024), inline: false });
         }
 
-        switch (rule.action) {
-            case 'delete':
-                await message.delete().catch(() => {});
-                await this._notifyMember(message, `Your message in **${message.guild.name}** was removed: ${reason}.`);
-                break;
-            case 'warn':
-                await message.delete().catch(() => {});
-                await this.addWarning(message.guild.id, message.author.id, {
-                    moderatorId: null, reason, ruleType: rule.type,
-                });
-                const count = await this.getWarningCount(message.guild.id, message.author.id);
-                await this._notifyMember(message, `⚠️ **Warning ${count}/${settings.warnThreshold}** in **${message.guild.name}**: ${reason}. Further warnings may escalate to **${settings.warnAction}**.`);
-                if (count >= settings.warnThreshold) {
-                    await this._applyEscalation(message, settings, count);
-                }
-                break;
-            case 'timeout':
-                await message.delete().catch(() => {});
-                await this._applyTimeout(message, 600, reason);
-                break;
-            case 'kick':
-                await message.delete().catch(() => {});
-                await message.member?.kick(`Automod: ${reason}`).catch(() => {});
-                break;
-            case 'ban':
-                await message.delete().catch(() => {});
-                await message.guild.members.ban(message.author.id, { reason: `Automod: ${reason}` }).catch(() => {});
-                break;
-        }
-
-        // Send to the automod log channel (if configured) and to server logging.
         this._logToChannel(message, settings, meta, logFields);
         logEvent(this.client, message.guild.id, {
             type: 'memberUpdate',
             title: 'Automod action',
-            description: `${meta.icon} **${meta.label}** → **${ACTION_BY_KEY[rule.action]?.label || rule.action}**`,
+            description: `${meta.icon} **${meta.label}** → **${actionLabels}**`,
             fields: logFields,
         });
+
+        return applied;
     }
 
-    async _applyEscalation(message, settings, count) {
-        const action = settings.warnAction;
-        try {
-            if (action === 'timeout') {
-                await this._applyTimeout(message, 3600, `Reached ${count} warnings (automod escalation)`);
-            } else if (action === 'kick') {
-                await message.member?.kick(`Automod escalation: ${count} warnings`).catch(() => {});
-            } else if (action === 'ban') {
-                await message.guild.members.ban(message.author.id, { reason: `Automod escalation: ${count} warnings` }).catch(() => {});
+    /**
+     * Execute a single moderation action. Shared by rule enforcement and warn
+     * escalation. `ctx` = { guild, member, author, reason, settings, count }.
+     * Sends the appropriate DM (when enabled) for the action.
+     */
+    async _executeAction(action, ctx) {
+        const { guild, member, author, reason, settings } = ctx;
+        const serverName = guild?.name || 'this server';
+        const actionLabel = ACTION_BY_KEY[action]?.label || action;
+        const dmEnabled = settings ? settings.dmEnabled !== false : true;
+        const dm = (key) => {
+            if (!dmEnabled) return Promise.resolve();
+            return this._dmMember(author, renderDmMessage(key, {
+                server: serverName, reason, actionLabel, threshold: settings?.warnThreshold ?? '',
+            }, settings?.dmMessages));
+        };
+
+        switch (action) {
+            case 'delete':
+                // Handled by the caller; no-op here.
+                break;
+            case 'warn': {
+                await this.addWarning(guild.id, author.id, {
+                    moderatorId: null, reason, ruleType: ctx.ruleType,
+                });
+                const count = await this.getWarningCount(guild.id, author.id);
+                await dm('warn');
+                if (settings && count >= settings.warnThreshold) {
+                    await this._applyEscalation(ctx, settings, count);
+                }
+                break;
             }
-            await this._notifyMember(message, `🚫 You reached **${count}** warnings in **${message.guild.name}** and were escalated to **${action}**.`);
-            await this.removeWarnings(message.guild.id, message.author.id, 'all').catch(() => {});
+            case 'timeout':
+                await this._applyTimeout(guild, member, ctx.timeoutSeconds || 600, reason);
+                await dm('timeout');
+                break;
+            case 'kick':
+                await member?.kick(`Automod: ${reason}`).catch(() => {});
+                await dm('kick');
+                break;
+            case 'ban':
+                await guild.members.ban(author.id, { reason: `Automod: ${reason}` }).catch(() => {});
+                await dm('ban');
+                break;
+        }
+    }
+
+    async _applyEscalation(ctx, settings, count) {
+        const actions = Array.isArray(settings.warnActions) && settings.warnActions.length
+            ? settings.warnActions
+            : (settings.warnAction ? [settings.warnAction] : ['timeout']);
+        const dmEnabled = settings ? settings.dmEnabled !== false : true;
+        try {
+            for (const action of actions) {
+                if (action === 'warn' || action === 'delete') continue; // skip pointless escalation
+                await this._executeAction(action, {
+                    ...ctx,
+                    reason: `Reached ${count} warnings (automod escalation)`,
+                    timeoutSeconds: 3600,
+                });
+            }
+            const actionLabel = actions.map(a => ACTION_BY_KEY[a]?.label || a)
+                .filter(l => !['Warn'].includes(l)).join(', ') || 'timeout';
+            if (dmEnabled) {
+                await this._dmMember(ctx.author, renderDmMessage('escalation', {
+                    server: ctx.guild?.name || 'this server', action: actionLabel,
+                    reason: `Reached ${count} warnings`, actionLabel, threshold: settings.warnThreshold,
+                }, settings.dmMessages));
+            }
+            await this.removeWarnings(ctx.guild.id, ctx.author.id, 'all').catch(() => {});
         } catch (err) {
             console.error('[AUTOMOD] escalation failed:', err.message);
         }
     }
 
-    async _applyTimeout(message, seconds, reason) {
-        const member = message.member;
+    async _applyTimeout(guild, member, seconds, reason) {
         if (!member) return;
         // Prefer Discord native timeout (moderate members) when the bot can.
         if (member.moderatable) {
@@ -403,15 +558,16 @@ class AutomodManager {
             return;
         }
         // Fall back to the configured mute role.
-        const muteRoleId = this.getSettings(message.guild.id).muteRoleId;
+        const muteRoleId = this.getSettings(guild.id).muteRoleId;
         if (muteRoleId) {
             await member.roles.add(muteRoleId, `Automod: ${reason}`).catch(() => {});
         }
     }
 
-    async _notifyMember(message, text) {
+    async _dmMember(author, text) {
+        if (!author) return;
         try {
-            await message.author.send(text).catch(() => {});
+            await author.send(text).catch(() => {});
         } catch { /* DMs may be closed — fire and forget */ }
     }
 
@@ -447,10 +603,12 @@ class AutomodManager {
         const settings = this.getSettings(invoker.guild.id);
         let escalated = false;
         if (count >= settings.warnThreshold) {
-            await this._applyEscalation({ guild: invoker.guild, member, author: member.user }, settings, count);
+            await this._applyEscalation({
+                guild: invoker.guild, member, author: member.user, reason, settings,
+            }, settings, count);
             escalated = true;
         }
-        return { count, escalated, warnThreshold: settings.warnThreshold, warnAction: settings.warnAction };
+        return { count, escalated, warnThreshold: settings.warnThreshold, warnAction: settings.warnAction, warnActions: settings.warnActions };
     }
 
     async muteMember(invoker, member, seconds = null, reason = 'Muted by moderator') {
@@ -474,6 +632,98 @@ class AutomodManager {
         if (muteRoleId && member.roles.cache.has(muteRoleId)) {
             await member.roles.remove(muteRoleId, 'Unmuted by moderator').catch(() => {});
         }
+    }
+
+    // ─── Appeals ─────────────────────────────────────────────────────────────
+    //
+    // Members punished by automod can file an appeal (via /appeal or the
+    // dashboard). Moderators review pending appeals and approve/deny them.
+    // Approving reverses the action where possible: unbans, removes timeout/mute.
+
+    async submitAppeal({ guildId, userId, action, reason }) {
+        await this._ensureTable();
+        const res = await pool.query(`
+            INSERT INTO automod_appeals (guild_id, user_id, action, reason)
+            VALUES ($1,$2,$3,$4)
+            RETURNING *
+        `, [guildId, userId, normalizeAction(action, 'timeout'), String(reason || '').slice(0, 1000) || 'No reason provided']);
+        return this._rowToAppeal(res.rows[0]);
+    }
+
+    async getAppeals(guildId, { status = null } = {}) {
+        await this._ensureTable();
+        const params = [guildId];
+        let q = 'SELECT * FROM automod_appeals WHERE guild_id = $1';
+        if (status) { q += ' AND status = $2'; params.push(status); }
+        q += ' ORDER BY created_at DESC LIMIT 200';
+        const res = await pool.query(q, params);
+        return res.rows.map(r => this._rowToAppeal(r));
+    }
+
+    async getAppeal(id) {
+        await this._ensureTable();
+        const res = await pool.query('SELECT * FROM automod_appeals WHERE id = $1', [id]);
+        return res.rows[0] ? this._rowToAppeal(res.rows[0]) : null;
+    }
+
+    async decideAppeal(id, { approved, decidedBy, note = '' }) {
+        await this._ensureTable();
+        const status = approved ? 'approved' : 'denied';
+        const res = await pool.query(`
+            UPDATE automod_appeals
+            SET status = $2, decision_note = $3, decided_by = $4, decided_at = NOW()
+            WHERE id = $1 AND status = 'pending'
+            RETURNING *
+        `, [id, status, String(note || '').slice(0, 1000), decidedBy]);
+        const appeal = res.rows[0] ? this._rowToAppeal(res.rows[0]) : null;
+        if (appeal && approved) {
+            // Reversal is best-effort; mark reversed so the dashboard-approval
+            // poller doesn't double-process it.
+            const reversed = await this._reverseAction(appeal).then(() => true).catch(() => false);
+            if (reversed) {
+                await pool.query('UPDATE automod_appeals SET reversed = true WHERE id = $1', [appeal.id]).catch(() => {});
+                appeal.reversed = true;
+            }
+        }
+        return appeal;
+    }
+
+    /**
+     * Reverse a previously-applied automod action when an appeal is approved.
+     * Best-effort: unban, remove timeout, remove mute role. Failures are
+     * fire-and-forget.
+     */
+    async _reverseAction(appeal) {
+        const guild = this.client?.guilds?.cache?.get(appeal.guildId);
+        if (!guild) return;
+        const member = await guild.members.fetch(appeal.userId).catch(() => null);
+        if (appeal.action === 'ban') {
+            await guild.members.unban(appeal.userId, 'Appeal approved').catch(() => {});
+        } else if (member) {
+            if (member.communicationDisabledUntilTimestamp) {
+                await member.timeout(null, 'Appeal approved').catch(() => {});
+            }
+            const muteRoleId = this.getSettings(appeal.guildId).muteRoleId;
+            if (muteRoleId && member.roles.cache.has(muteRoleId)) {
+                await member.roles.remove(muteRoleId, 'Appeal approved').catch(() => {});
+            }
+        }
+    }
+
+    _rowToAppeal(row) {
+        return {
+            id: row.id,
+            guildId: row.guild_id,
+            userId: row.user_id,
+            action: row.action,
+            reason: row.reason,
+            status: row.status,
+            decisionNote: row.decision_note || null,
+            decidedBy: row.decided_by || null,
+            decidedAt: row.decided_at || null,
+            reversed: row.reversed === true,
+            createdAt: row.created_at,
+        };
     }
 }
 

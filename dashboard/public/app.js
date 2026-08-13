@@ -20,6 +20,10 @@ const AUTOMOD_RULES = [
   { key: 'blockedWords', label: 'Blocked words',       icon: '🚫', category: 'Content', params: ['words'] },
   { key: 'invites',      label: 'Discord invites',     icon: '📨', category: 'Content', params: [] },
   { key: 'links',        label: 'All links',           icon: '🔗', category: 'Content', params: [] },
+  { key: 'badLinks',     label: 'Bad / phishing links',icon: '🪝', category: 'Content', params: ['words'] },
+  { key: 'nsfw',         label: 'NSFW content',        icon: '🔞', category: 'Content', params: ['words'] },
+  { key: 'repeatedChars',label: 'Repeated characters', icon: '🔁', category: 'Spam',    params: ['threshold'] },
+  { key: 'newAccount',   label: 'New / alt account',   icon: '🐣', category: 'Spam',    params: ['threshold'] },
   { key: 'mentions',     label: 'Mass mentions',       icon: '@',  category: 'Spam',    params: ['threshold'] },
   { key: 'spam',         label: 'Duplicate / rapid spam', icon: '🌀', category: 'Spam',  params: ['threshold','seconds'] },
   { key: 'caps',         label: 'Excessive caps',      icon: '🔠', category: 'Content', params: ['threshold'] },
@@ -34,6 +38,9 @@ const AUTOMOD_ACTIONS = [
   { key: 'kick',    label: 'Kick',          icon: '👢' },
   { key: 'ban',     label: 'Ban',           icon: '🔨' },
 ];
+// Actions valid for warn escalation (no delete).
+const AUTOMOD_WARN_ACTIONS = AUTOMOD_ACTIONS.filter(a => ['warn','timeout','kick','ban'].includes(a.key));
+const AUTOMOD_DM_KEYS = ['delete','warn','timeout','kick','ban','escalation'];
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -1131,11 +1138,15 @@ function loggingPanelHTML(logging) {
 
 function automodRuleRowHTML(rule = {}) {
   const meta = AUTOMOD_RULES.find(r => r.key === rule.type) || AUTOMOD_RULES[0];
-  const actionOpts = AUTOMOD_ACTIONS.map(a =>
-    `<option value="${a.key}" ${rule.action === a.key ? 'selected' : ''}>${a.icon} ${esc(a.label)}</option>`).join('');
+  const selected = Array.isArray(rule.actions) && rule.actions.length
+    ? rule.actions
+    : (rule.action ? [rule.action] : ['delete']);
+  const actionChecks = AUTOMOD_ACTIONS.map(a =>
+    `<label class="switch mini am-action-label"><input type="checkbox" class="am-action" value="${a.key}" ${selected.includes(a.key) ? 'checked' : ''}/><span class="switch-text">${a.icon} ${esc(a.label)}</span></label>`
+  ).join('');
   let extra = '';
   if (meta.params.includes('words')) {
-    extra = `<input type="text" class="am-words" value="${esc((rule.words || []).join(', '))}" placeholder="bad, words (comma-separated)" />`;
+    extra = `<input type="text" class="am-words" value="${esc((rule.words || []).join(', '))}" placeholder="extra domains/terms (comma-separated)" />`;
   }
   if (meta.params.includes('threshold')) {
     extra += `<input type="number" class="am-threshold" value="${rule.threshold ?? ''}" placeholder="threshold" min="1" style="width:96px" />`;
@@ -1147,7 +1158,7 @@ function automodRuleRowHTML(rule = {}) {
     <div class="reaction-row am-rule-row" data-type="${esc(meta.key)}">
       <label class="switch mini"><input type="checkbox" class="am-enabled" ${rule.enabled !== false ? 'checked' : ''}/><span class="slider"></span></label>
       <span class="am-rule-label">${meta.icon} ${esc(meta.label)}</span>
-      <select class="am-action">${actionOpts}</select>
+      <div class="am-actions-group">${actionChecks}</div>
       ${extra}
       <button class="reaction-remove am-remove" type="button">✕</button>
     </div>
@@ -1159,12 +1170,20 @@ function automodPanelHTML(automod) {
   const rules = Array.isArray(s.rules) ? s.rules : [];
   const ruleRows = rules.length ? rules.map(automodRuleRowHTML).join('') : '';
   const addTypeOpts = AUTOMOD_RULES.map(r => `<option value="${r.key}">${r.icon} ${esc(r.label)}</option>`).join('');
-  const actionOpts = AUTOMOD_ACTIONS.map(a => `<option value="${a.key}" ${s.warnAction === a.key ? 'selected' : ''}>${a.icon} ${esc(a.label)}</option>`).join('');
+  const warnActionChecks = AUTOMOD_WARN_ACTIONS.map(a =>
+    `<label class="switch mini am-action-label"><input type="checkbox" class="am-warn-action" value="${a.key}" ${(s.warnActions || [s.warnAction || 'timeout']).includes(a.key) ? 'checked' : ''}/><span class="switch-text">${a.icon} ${esc(a.label)}</span></label>`
+  ).join('');
+  const dmMessages = s.dmMessages || {};
+  const dmRows = AUTOMOD_DM_KEYS.map(k => {
+    const a = AUTOMOD_ACTIONS.find(x => x.key === k);
+    const label = a ? `${a.icon} ${a.label}` : (k === 'escalation' ? '🚫 Escalation' : k);
+    return `<div class="field-row"><label class="field-label" style="min-width:120px">${label}</label><input type="text" class="am-dm-message" data-key="${k}" value="${esc(dmMessages[k] || '')}" placeholder="(use default)" style="flex:1"/></div>`;
+  }).join('');
 
   return `
     <div class="card">
       <div class="card-title"><span><span class="icon">🛡️</span> Premium Automod</span></div>
-      <p class="card-desc">Automatic moderation that scans every message against your rules. Premium features for free: blocked words, invite/link blocking, spam &amp; mass-mention detection, caps/emoji/zalgo filters, warning escalation, and more.</p>
+      <p class="card-desc">Automatic moderation that scans every message against your rules. Premium features for free: blocked words, invite/bad-link/NSFW filtering, spam &amp; mass-mention detection, caps/emoji/repeated-char/new-account filters, multi-action punishment, DM notifications, warning escalation, and appeals.</p>
 
       <div class="switch-row">
         <div class="switch-label"><div class="sl-title">Enable Automod</div><div class="sl-desc">Master switch. When off, no messages are scanned.</div></div>
@@ -1202,18 +1221,34 @@ function automodPanelHTML(automod) {
           <select id="am-add-type">${addTypeOpts}</select>
           <button class="btn btn-secondary" id="am-add-rule">+ Add rule</button>
         </div>
-        <div class="field-hint">Each rule runs its action on the first matching message.</div>
+        <div class="field-hint">Select one or more actions per rule. "Delete" is always applied first when chosen.</div>
       </div>
 
       <div class="field">
         <label class="field-label">Warning escalation</label>
         <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap">
           <label>After <input type="number" id="am-warn-threshold" value="${s.warnThreshold ?? 3}" min="1" max="50" style="width:72px"/> warnings</label>
-          <label>→
-            <select id="am-warn-action" style="min-width:160px">${actionOpts}</select>
-          </label>
+          <span>→ apply:</span>
         </div>
-        <div class="field-hint">When a member's total warnings reach the threshold, the action is applied automatically and their warnings are cleared.</div>
+        <div class="am-actions-group" id="am-warn-actions-group" style="margin-top:6px">${warnActionChecks}</div>
+        <div class="field-hint">When a member's total warnings reach the threshold, these actions apply automatically and their warnings are cleared. Select multiple to escalate through several punishments at once.</div>
+      </div>
+
+      <div class="switch-row">
+        <div class="switch-label"><div class="sl-title">DM punished members</div><div class="sl-desc">Send a direct message to members when an action is taken against them.</div></div>
+        <label class="switch"><input type="checkbox" id="am-dm-enabled" ${s.dmEnabled !== false ? 'checked' : ''}/><span class="slider"></span></label>
+      </div>
+
+      <div class="field">
+        <label class="field-label">Custom DM messages (optional)</label>
+        <div class="field-hint">Override the default message sent for each action. Placeholders: {server}, {reason}, {action}, {threshold}. Leave blank to use the default.</div>
+        <div class="field-rows" id="am-dm-messages">${dmRows}</div>
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="am-appeal-channel">Appeal channel (optional)</label>
+        <select id="am-appeal-channel" data-channel-select><option value="">— None —</option>${s.appealChannelId ? `<option value="${esc(s.appealChannelId)}" selected>Channel</option>` : ''}</select>
+        <div class="field-hint">New appeals filed via <code>/appeal</code> are posted here for moderators to review.</div>
       </div>
 
       <div class="form-actions">
@@ -1225,6 +1260,12 @@ function automodPanelHTML(automod) {
       <div class="card-title"><span><span class="icon">⚠️</span> Warnings</span></div>
       <p class="card-desc">Live warning ledger for this server (automod + manual <code>/warn</code>). <a href="#" id="am-refresh-warnings">Refresh</a></p>
       <div id="am-warnings-list"><div class="field-hint">Loading…</div></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title"><span><span class="icon">📨</span> Appeals</span></div>
+      <p class="card-desc">Punishment appeals filed by members. Approving an appeal reverses the action (unban/unmute) automatically. <a href="#" id="am-refresh-appeals">Refresh</a></p>
+      <div id="am-appeals-list"><div class="field-hint">Loading…</div></div>
     </div>
   `;
 }
@@ -1475,10 +1516,12 @@ function collectAmRules() {
   app.querySelectorAll('#am-rules-list .am-rule-row').forEach(row => {
     const type = row.dataset.type;
     if (!type) return;
+    const actions = [];
+    row.querySelectorAll('.am-action').forEach(cb => { if (cb.checked) actions.push(cb.value); });
     const rule = {
       type,
       enabled: row.querySelector('.am-enabled')?.checked !== false,
-      action: row.querySelector('.am-action')?.value || 'delete',
+      actions: actions.length ? actions : ['delete'],
     };
     const words = row.querySelector('.am-words')?.value.trim();
     if (words) rule.words = words.split(',').map(w => w.trim().toLowerCase()).filter(Boolean);
@@ -1513,6 +1556,56 @@ async function refreshAmWarnings(guildId) {
   }
 }
 
+async function refreshAmAppeals(guildId) {
+  const el = app.querySelector('#am-appeals-list');
+  if (!el) return;
+  el.innerHTML = '<div class="field-hint">Loading…</div>';
+  try {
+    const data = await api(`/api/guilds/${guildId}/automod/appeals`);
+    const appeals = data.appeals || [];
+    if (appeals.length === 0) {
+      el.innerHTML = '<div class="field-hint">No appeals filed.</div>';
+      return;
+    }
+    el.innerHTML = appeals.slice(0, 50).map(a => {
+      const when = new Date(a.createdAt).toLocaleString();
+      const who = a.userId ? `<@${esc(a.userId)}>` : 'unknown';
+      const statusBadge = a.status === 'pending'
+        ? '<span style="color:#faa61a">⏳ pending</span>'
+        : (a.status === 'approved' ? '<span style="color:#57f287">✅ approved</span>' : '<span style="color:#ed4245">⛔ denied</span>');
+      const decide = a.status === 'pending'
+        ? `<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
+             <input type="text" class="am-appeal-note" data-id="${a.id}" placeholder="note (optional)" style="flex:1;min-width:160px"/>
+             <button class="btn btn-primary am-appeal-approve" data-id="${a.id}">Approve</button>
+             <button class="btn btn-secondary am-appeal-deny" data-id="${a.id}">Deny</button>
+           </div>`
+        : `<div class="field-hint">Decided by ${esc(a.decidedBy || 'moderator')}${a.decisionNote ? ': ' + esc(a.decisionNote) : ''}${a.reversed ? ' · action reversed' : ''}</div>`;
+      return `<div class="rr-menu-card"><div class="card-title"><span>${esc(a.action)} · ${esc(a.reason || '')}</span></div><div class="rr-meta"><span><strong>User:</strong> ${who}</span><span><strong>Status:</strong> ${statusBadge}</span><span><strong>When:</strong> ${esc(when)}</span></div>${decide}</div>`;
+    }).join('');
+    // Wire approve/deny buttons.
+    el.querySelectorAll('.am-appeal-approve').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const id = btn.dataset.id;
+        const note = el.querySelector(`.am-appeal-note[data-id="${id}"]`)?.value || '';
+        btn.disabled = true;
+        await api(`/api/guilds/${guildId}/automod/appeals/${id}`, { method: 'PATCH', body: JSON.stringify({ approved: true, note }) });
+        await refreshAmAppeals(guildId);
+      });
+    });
+    el.querySelectorAll('.am-appeal-deny').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const id = btn.dataset.id;
+        const note = el.querySelector(`.am-appeal-note[data-id="${id}"]`)?.value || '';
+        btn.disabled = true;
+        await api(`/api/guilds/${guildId}/automod/appeals/${id}`, { method: 'PATCH', body: JSON.stringify({ approved: false, note }) });
+        await refreshAmAppeals(guildId);
+      });
+    });
+  } catch (err) {
+    el.innerHTML = '<div class="field-hint">Failed to load appeals.</div>';
+  }
+}
+
 function bindAutomodEvents(guildId) {
   renderAmExemptLists();
   bindReactionRemovals(); // also binds .am-remove via .reaction-remove
@@ -1521,7 +1614,7 @@ function bindAutomodEvents(guildId) {
     const type = app.querySelector('#am-add-type')?.value || 'invites';
     const list = app.querySelector('#am-rules-list');
     if (!list) return;
-    list.insertAdjacentHTML('beforeend', automodRuleRowHTML({ type, enabled: true, action: 'delete' }));
+    list.insertAdjacentHTML('beforeend', automodRuleRowHTML({ type, enabled: true, actions: ['delete'] }));
     bindReactionRemovals();
   });
 
@@ -1530,7 +1623,13 @@ function bindAutomodEvents(guildId) {
     refreshAmWarnings(guildId);
   });
 
+  app.querySelector('#am-refresh-appeals')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    refreshAmAppeals(guildId);
+  });
+
   refreshAmWarnings(guildId);
+  refreshAmAppeals(guildId);
 }
 
 async function saveSettings(guildId, kind) {
@@ -1608,6 +1707,14 @@ async function saveSettings(guildId, kind) {
     app.querySelectorAll('.am-exempt-role').forEach(cb => { if (cb.checked) exemptRoleIds.push(cb.value); });
     const exemptChannelIds = [];
     app.querySelectorAll('.am-exempt-channel').forEach(cb => { if (cb.checked) exemptChannelIds.push(cb.value); });
+    const warnActions = [];
+    app.querySelectorAll('.am-warn-action').forEach(cb => { if (cb.checked) warnActions.push(cb.value); });
+    const dmMessages = {};
+    app.querySelectorAll('.am-dm-message').forEach(inp => {
+      const key = inp.dataset.key;
+      const val = inp.value.trim();
+      if (key && val) dmMessages[key] = val;
+    });
     const body = {
       enabled: app.querySelector('#am-enabled').checked,
       logChannelId: app.querySelector('#am-log-channel').value || null,
@@ -1616,7 +1723,10 @@ async function saveSettings(guildId, kind) {
       exemptChannelIds,
       rules: collectAmRules(),
       warnThreshold: parseInt(app.querySelector('#am-warn-threshold').value, 10) || 3,
-      warnAction: app.querySelector('#am-warn-action').value,
+      warnActions: warnActions.length ? warnActions : ['timeout'],
+      dmEnabled: app.querySelector('#am-dm-enabled').checked,
+      dmMessages,
+      appealChannelId: app.querySelector('#am-appeal-channel').value || null,
     };
     await api(`/api/guilds/${guildId}/automod`, { method: 'PATCH', body: JSON.stringify(body) });
   }

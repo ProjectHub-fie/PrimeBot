@@ -7,8 +7,13 @@ const {
     ACTIONS,
     normalizeRules,
     normalizeAction,
+    normalizeActions,
+    normalizeWarnActions,
+    normalizeDmMessages,
     metaFor,
     matchRule,
+    renderDmMessage,
+    DEFAULT_DM_MESSAGES,
 } = require('../utils/automodRules');
 
 const CTX = { guildId: 'g1', userId: 'u1', channelId: 'c1' };
@@ -43,7 +48,7 @@ test('normalizeRules coerces a messy rules array into clean objects', () => {
         { type: 'links' }, // missing action defaults to 'delete'
     ]);
     assert.equal(out.length, 4);
-    assert.deepEqual(out[0], { type: 'invites', enabled: true, action: 'delete' });
+    assert.deepEqual(out[0], { type: 'invites', enabled: true, action: 'delete', actions: ['delete'] });
     assert.equal(out[1].type, 'blockedWords');
     assert.deepEqual(out[1].words, ['bad', 'worse']); // lowercased + trimmed
     assert.equal(out[1].enabled, false);
@@ -153,4 +158,99 @@ test('metaFor returns the catalog entry or a safe fallback for unknown types', (
     assert.equal(metaFor('invites').label, 'Discord invites');
     assert.equal(metaFor('totallyUnknown').key, 'totallyUnknown');
     assert.ok(metaFor('totallyUnknown').icon);
+});
+
+// ── New rule types ────────────────────────────────────────────────────────────
+
+test('badLinks flags impersonation domains but whitelists the real ones', () => {
+    const rule = { type: 'badLinks', enabled: true, actions: ['delete'] };
+    assert.ok(matchRule(rule, { ...CTX, content: 'free nitro https://discrod.com/gift' }));
+    assert.ok(matchRule(rule, { ...CTX, content: 'https://steamcommunitty.com/login' }));
+    // Real discord link is whitelisted.
+    assert.equal(matchRule(rule, { ...CTX, content: 'https://discord.com/channels/x' }), null);
+    // No link.
+    assert.equal(matchRule(rule, { ...CTX, content: 'no links here' }), null);
+});
+
+test('badLinks honours custom domains from the words param', () => {
+    const rule = { type: 'badLinks', enabled: true, actions: ['delete'], words: ['evilphish'] };
+    assert.ok(matchRule(rule, { ...CTX, content: 'https://evilphish.example/steal' }));
+    assert.equal(matchRule(rule, { ...CTX, content: 'https://example.com/ok' }), null);
+});
+
+test('nsfw matches built-in and custom terms', () => {
+    const rule = { type: 'nsfw', enabled: true, actions: ['delete'], words: ['mybadsite'] };
+    assert.ok(matchRule(rule, { ...CTX, content: 'check out this porn video' }));
+    assert.ok(matchRule(rule, { ...CTX, content: 'go to mybadsite now' }));
+    assert.equal(matchRule(rule, { ...CTX, content: 'a normal message about cooking' }), null);
+});
+
+test('repeatedChars trips on a long run of the same character', () => {
+    const rule = { type: 'repeatedChars', enabled: true, actions: ['delete'], threshold: 8 };
+    assert.ok(matchRule(rule, { ...CTX, content: 'aaaaaaaaa spam' }));
+    assert.equal(matchRule(rule, { ...CTX, content: 'aaaa not enough' }), null); // 4 < 8
+});
+
+test('newAccount trips when the author account is younger than the threshold', () => {
+    const rule = { type: 'newAccount', enabled: true, actions: ['kick'], threshold: 7 };
+    const young = { ...CTX, content: 'hi', authorCreatedAt: new Date(Date.now() - 1 * 86400000) };
+    const old = { ...CTX, content: 'hi', authorCreatedAt: new Date(Date.now() - 365 * 86400000) };
+    assert.ok(matchRule(rule, young));
+    assert.equal(matchRule(rule, old), null);
+    // Missing createdAt never matches (no false positives).
+    assert.equal(matchRule(rule, { ...CTX, content: 'hi' }), null);
+});
+
+// ── Multi-action normalization ────────────────────────────────────────────────
+
+test('normalizeActions accepts a string or array and dedupes, dropping unknowns', () => {
+    assert.deepEqual(normalizeActions(['warn', 'ban', 'ban', 'x', '']), ['warn', 'ban']);
+    assert.deepEqual(normalizeActions('kick'), ['kick']);
+    assert.deepEqual(normalizeActions([], 'delete'), ['delete']);
+    assert.deepEqual(normalizeActions(null, 'warn'), ['warn']);
+});
+
+test('normalizeRules produces a multi-action rule from actions and from legacy action', () => {
+    const out = normalizeRules([
+        { type: 'spam', enabled: true, actions: ['warn', 'delete'], threshold: 3, seconds: 5 },
+        { type: 'invites', action: 'ban' }, // legacy single action
+    ]);
+    assert.deepEqual(out[0].actions, ['warn', 'delete']);
+    assert.equal(out[0].action, 'warn'); // action mirrors actions[0]
+    assert.deepEqual(out[1].actions, ['ban']);
+    assert.equal(out[1].action, 'ban');
+});
+
+test('normalizeWarnActions drops delete and dedupes, falling back to a default', () => {
+    assert.deepEqual(normalizeWarnActions(['delete', 'timeout', 'ban', 'timeout']), ['timeout', 'ban']);
+    assert.deepEqual(normalizeWarnActions(['warn', 'kick']), ['warn', 'kick']);
+    assert.deepEqual(normalizeWarnActions([], 'timeout'), ['timeout']);
+});
+
+// ── DM messages ───────────────────────────────────────────────────────────────
+
+test('normalizeDmMessages keeps non-empty string overrides and drops the rest', () => {
+    assert.deepEqual(normalizeDmMessages({ warn: '  ', ban: 'You are banned', delete: 123 }), { ban: 'You are banned' });
+    assert.deepEqual(normalizeDmMessages(null), {});
+});
+
+test('renderDmMessage substitutes placeholders and falls back to the default', () => {
+    const out = renderDmMessage('ban', { server: 'My Server', reason: 'spam' });
+    assert.ok(out.includes('My Server'));
+    assert.ok(out.includes('spam'));
+    assert.ok(out.includes('banned'));
+    const custom = renderDmMessage('warn', { server: 'S', reason: 'r' }, { warn: 'Custom {server} {reason}' });
+    assert.equal(custom, 'Custom S r');
+});
+
+test('DEFAULT_DM_MESSAGES covers every action plus escalation', () => {
+    for (const key of ['delete', 'warn', 'timeout', 'kick', 'ban', 'escalation']) {
+        assert.ok(typeof DEFAULT_DM_MESSAGES[key] === 'string' && DEFAULT_DM_MESSAGES[key].length > 0, `missing default for ${key}`);
+    }
+});
+
+test('every new rule type has a catalog entry and a matcher', () => {
+    for (const key of ['badLinks', 'nsfw', 'repeatedChars', 'newAccount']) {
+        assert.ok(RULE_BY_KEY[key], `RULE_BY_KEY missing ${key}`);
+    }
 });
