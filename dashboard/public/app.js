@@ -194,6 +194,7 @@ function renderLogin() {
     <div class="login-wrap">
       <div class="login-hero">⚡</div>
       <h1 class="login-title">PrimeBot Dashboard</h1>
+      <h3>Premium features in free </h3> 
       ${errorHTML}
       <p class="login-sub">Sign in with Discord to configure PrimeBot for the servers you manage — welcome messages, leveling, prefixes, auto-reactions and more, all in one place.</p>
       <a href="/login" class="btn btn-discord">🚪 Login with Discord</a>
