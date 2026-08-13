@@ -17,6 +17,21 @@ module.exports = {
                 }
             }
 
+            // Resolve the message fully. With MessageManager maxSize 50 and
+            // ReactionManager maxSize 0, the message a reaction happened on is
+            // almost always a partial (e.g. attach-to-existing-message on an
+            // old message, or any message once >50 pass in the channel). A
+            // partial message has no `.guild`, which would silently break
+            // reaction-role (and giveaway) handling — fetch it first.
+            if (reaction.message && reaction.message.partial) {
+                try {
+                    await reaction.message.fetch();
+                } catch (error) {
+                    console.error('Something went wrong when fetching the reaction message:', error);
+                    return;
+                }
+            }
+
             // Get client from reaction.client
             const client = reaction.client;
 
