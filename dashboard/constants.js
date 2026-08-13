@@ -5,6 +5,7 @@
  */
 const config = require('../config');
 const { LOG_EVENTS } = require('../utils/logEvents');
+const { RULES: AUTOMOD_RULES, ACTIONS: AUTOMOD_ACTIONS } = require('../utils/automodRules');
 
 module.exports = {
     // OAuth scopes requested at login. "guilds" lets us list the admin's servers.
@@ -36,4 +37,8 @@ module.exports = {
     // Loggable event types shared with the bot (utils/logEvents.js).
     // Each entry: { key, label, icon, color, category }.
     LOG_EVENTS,
+
+    // Automod rule types + actions shared with the bot (utils/automodRules.js).
+    AUTOMOD_RULES,
+    AUTOMOD_ACTIONS,
 };

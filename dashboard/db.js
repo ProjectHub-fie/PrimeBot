@@ -2,13 +2,17 @@
  * Database access for the dashboard.
  *
  * Reuses the bot's existing pg pools so the dashboard reads/writes the exact
- * same rows the bot's managers use. Two pools are involved:
+ * same rows the bot's managers use. Pools are involved:
  *   - pool            → server_settings (prefix, leveling, auto-reactions, broadcast)
  *   - welcomePool     → welcome_settings (welcome messages/banners/DM)
+ *   - reactionPool    → reaction_roles + reaction_role_mappings
+ *   - automodPool     → automod_settings + automod_warnings (AUTOMOD_DATABASE_URL,
+ *                       falls back to DATABASE_URL)
  *
- * Both are created lazily in server/db.js and server/welcomeDb.js, so if an
- * env var is missing the pool still exists (queries will just fail and we
- * surface that to the dashboard UI gracefully).
+ * All are created lazily in server/db.js, server/welcomeDb.js,
+ * server/reactionDb.js, and server/automodDb.js, so if an env var is missing
+ * the pool still exists (queries will just fail and we surface that to the
+ * dashboard UI gracefully).
  */
 
 const { pool } = require('../server/db');
@@ -25,10 +29,23 @@ function getWelcomePool() {
     return welcomePool;
 }
 
+let automodPool = null;
+function getAutomodPool() {
+    if (automodPool) return automodPool;
+    try {
+        automodPool = require('../server/automodDb').automodPool;
+    } catch (err) {
+        console.error('[DASHBOARD DB] automodDb unavailable:', err.message);
+        automodPool = { query: async () => { throw new Error('Automod database not configured'); } };
+    }
+    return automodPool;
+}
+
 const config = require('../config');
 const constants = require('./constants');
 const { normalizeGuildPrefix } = require('../utils/prefixHelper');
 const { normalizeEvents, DEFAULT_ENABLED_EVENTS } = require('../utils/logEvents');
+const { normalizeRules, normalizeAction } = require('../utils/automodRules');
 
 // ── server_settings (prefix, leveling, auto-reactions, broadcast) ────────────
 
@@ -566,10 +583,148 @@ async function deleteReactionRole(id) {
     return true;
 }
 
+// ── automod_settings + automod_warnings ──────────────────────────────────────
+//
+// Premium Automod config + warnings ledger live in the AUTOMOD_DATABASE_URL pool
+// (falling back to DATABASE_URL), mirroring the bot's AutomodManager. The
+// dashboard reads/writes here; the bot's AutomodManager picks up changes via
+// its periodic cache reload.
+
+async function ensureAutomodTables() {
+    await getAutomodPool().query(`
+        CREATE TABLE IF NOT EXISTS automod_settings (
+            guild_id            VARCHAR(50) PRIMARY KEY,
+            enabled             BOOLEAN NOT NULL DEFAULT false,
+            log_channel_id      VARCHAR(50),
+            mute_role_id        VARCHAR(50),
+            exempt_role_ids     JSONB NOT NULL DEFAULT '[]',
+            exempt_channel_ids  JSONB NOT NULL DEFAULT '[]',
+            rules               JSONB NOT NULL DEFAULT '[]',
+            warn_threshold      INTEGER NOT NULL DEFAULT 3,
+            warn_action         VARCHAR(20) DEFAULT 'timeout',
+            updated_at          TIMESTAMP DEFAULT NOW()
+        )
+    `);
+    await getAutomodPool().query(`ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS log_channel_id     VARCHAR(50)`);
+    await getAutomodPool().query(`ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS mute_role_id       VARCHAR(50)`);
+    await getAutomodPool().query(`ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS exempt_role_ids    JSONB NOT NULL DEFAULT '[]'`);
+    await getAutomodPool().query(`ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS exempt_channel_ids JSONB NOT NULL DEFAULT '[]'`);
+    await getAutomodPool().query(`ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS rules              JSONB NOT NULL DEFAULT '[]'`);
+    await getAutomodPool().query(`ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS warn_threshold     INTEGER NOT NULL DEFAULT 3`);
+    await getAutomodPool().query(`ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS warn_action        VARCHAR(20) DEFAULT 'timeout'`);
+    await getAutomodPool().query(`
+        CREATE TABLE IF NOT EXISTS automod_warnings (
+            id           SERIAL PRIMARY KEY,
+            guild_id     VARCHAR(50) NOT NULL,
+            user_id      VARCHAR(50) NOT NULL,
+            moderator_id VARCHAR(50),
+            reason       TEXT NOT NULL DEFAULT '',
+            rule_type    VARCHAR(40),
+            created_at   TIMESTAMP DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS automod_warnings_guild_user_idx
+            ON automod_warnings (guild_id, user_id);
+        CREATE INDEX IF NOT EXISTS automod_warnings_guild_idx
+            ON automod_warnings (guild_id);
+    `);
+}
+
+async function getAutomodSettings(guildId) {
+    await ensureAutomodTables();
+    const res = await getAutomodPool().query(`SELECT * FROM automod_settings WHERE guild_id = $1`, [guildId]);
+    if (res.rows.length === 0) return defaultAutomodSettings();
+    return rowToAutomodSettings(res.rows[0]);
+}
+
+function defaultAutomodSettings() {
+    return {
+        enabled: false,
+        logChannelId: null,
+        muteRoleId: null,
+        exemptRoleIds: [],
+        exemptChannelIds: [],
+        rules: [],
+        warnThreshold: 3,
+        warnAction: 'timeout',
+    };
+}
+
+function rowToAutomodSettings(row) {
+    return {
+        enabled: row.enabled,
+        logChannelId: row.log_channel_id || null,
+        muteRoleId: row.mute_role_id || null,
+        exemptRoleIds: Array.isArray(row.exempt_role_ids) ? row.exempt_role_ids.map(String) : [],
+        exemptChannelIds: Array.isArray(row.exempt_channel_ids) ? row.exempt_channel_ids.map(String) : [],
+        rules: normalizeRules(row.rules),
+        warnThreshold: Math.max(1, parseInt(row.warn_threshold, 10) || 3),
+        warnAction: normalizeAction(row.warn_action, 'timeout'),
+    };
+}
+
+async function upsertAutomodSettings(guildId, patch) {
+    await ensureAutomodTables();
+    const current = await getAutomodSettings(guildId);
+    const merged = { ...current };
+    if ('enabled' in patch)           merged.enabled = Boolean(patch.enabled);
+    if ('logChannelId' in patch)      merged.logChannelId = patch.logChannelId || null;
+    if ('muteRoleId' in patch)        merged.muteRoleId = patch.muteRoleId || null;
+    if ('exemptRoleIds' in patch)     merged.exemptRoleIds = (Array.isArray(patch.exemptRoleIds) ? patch.exemptRoleIds : []).map(String);
+    if ('exemptChannelIds' in patch)  merged.exemptChannelIds = (Array.isArray(patch.exemptChannelIds) ? patch.exemptChannelIds : []).map(String);
+    if ('rules' in patch)             merged.rules = normalizeRules(patch.rules);
+    if ('warnThreshold' in patch)     merged.warnThreshold = Math.max(1, parseInt(patch.warnThreshold, 10) || 3);
+    if ('warnAction' in patch)        merged.warnAction = normalizeAction(patch.warnAction, 'timeout');
+
+    await getAutomodPool().query(`
+        INSERT INTO automod_settings (
+            guild_id, enabled, log_channel_id, mute_role_id,
+            exempt_role_ids, exempt_channel_ids, rules,
+            warn_threshold, warn_action, updated_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())
+        ON CONFLICT (guild_id) DO UPDATE SET
+            enabled            = EXCLUDED.enabled,
+            log_channel_id     = EXCLUDED.log_channel_id,
+            mute_role_id       = EXCLUDED.mute_role_id,
+            exempt_role_ids    = EXCLUDED.exempt_role_ids,
+            exempt_channel_ids = EXCLUDED.exempt_channel_ids,
+            rules              = EXCLUDED.rules,
+            warn_threshold     = EXCLUDED.warn_threshold,
+            warn_action        = EXCLUDED.warn_action,
+            updated_at         = NOW()
+    `, [
+        guildId, merged.enabled, merged.logChannelId, merged.muteRoleId,
+        JSON.stringify(merged.exemptRoleIds), JSON.stringify(merged.exemptChannelIds),
+        JSON.stringify(merged.rules), merged.warnThreshold, merged.warnAction,
+    ]);
+    return getAutomodSettings(guildId);
+}
+
+async function getAutomodWarnings(guildId) {
+    await ensureAutomodTables();
+    const res = await getAutomodPool().query(
+        `SELECT * FROM automod_warnings WHERE guild_id = $1 ORDER BY created_at DESC LIMIT 200`,
+        [guildId]
+    );
+    return res.rows.map(r => ({
+        id: r.id, userId: r.user_id, moderatorId: r.moderator_id,
+        reason: r.reason, ruleType: r.rule_type, createdAt: r.created_at,
+    }));
+}
+
+async function clearAutomodWarnings(guildId, userId = null) {
+    await ensureAutomodTables();
+    if (userId) {
+        await getAutomodPool().query('DELETE FROM automod_warnings WHERE guild_id = $1 AND user_id = $2', [guildId, userId]);
+    } else {
+        await getAutomodPool().query('DELETE FROM automod_warnings WHERE guild_id = $1', [guildId]);
+    }
+    return true;
+}
+
 // ── Combined view (one fetch per guild for the settings page) ───────────────
 
 async function getGuildConfig(guildId) {
-    const [server, welcome, logging, reactionRoles] = await Promise.all([
+    const [server, welcome, logging, reactionRoles, automod] = await Promise.all([
         getServerSettings(guildId).catch(err => {
             console.error('[DASHBOARD DB] server_settings read failed:', err.message);
             return defaultServerSettings();
@@ -586,8 +741,12 @@ async function getGuildConfig(guildId) {
             console.error('[DASHBOARD DB] reaction_roles read failed:', err.message);
             return [];
         }),
+        getAutomodSettings(guildId).catch(err => {
+            console.error('[DASHBOARD DB] automod_settings read failed:', err.message);
+            return defaultAutomodSettings();
+        }),
     ]);
-    return { server, welcome, logging, reactionRoles };
+    return { server, welcome, logging, reactionRoles, automod };
 }
 
 // ── Aggregated platform stats (public — shown on the login screen) ──────────
@@ -617,6 +776,16 @@ async function _welcomeCount(query, fallback = 0) {
     }
 }
 
+async function _automodCount(query, fallback = 0) {
+    try {
+        const res = await getAutomodPool().query(query);
+        return Number(res.rows[0]?.count ?? fallback);
+    } catch (err) {
+        console.error('[DASHBOARD DB] automod stats count failed:', err.message);
+        return fallback;
+    }
+}
+
 async function getPlatformStats(serverCountOverride) {
     const [
         totalServers,
@@ -625,6 +794,7 @@ async function getPlatformStats(serverCountOverride) {
         autoReactionsEnabled,
         broadcastEnabled,
         welcomeBanners,
+        automodEnabled,
     ] = await Promise.all([
         _count(`SELECT COUNT(*) FROM server_settings`),
         _count(`SELECT COUNT(*) FROM server_settings WHERE leveling_enabled = true`),
@@ -632,6 +802,7 @@ async function getPlatformStats(serverCountOverride) {
         _count(`SELECT COUNT(*) FROM server_settings WHERE auto_reactions_enabled = true`),
         _count(`SELECT COUNT(*) FROM server_settings WHERE receive_broadcasts = true`),
         _welcomeCount(`SELECT COUNT(*) FROM welcome_settings WHERE banner_url IS NOT NULL AND banner_url <> ''`),
+        _automodCount(`SELECT COUNT(*) FROM automod_settings WHERE enabled = true`),
     ]);
 
     // Use the authoritative server count (guilds the bot is actually in) when
@@ -651,6 +822,7 @@ async function getPlatformStats(serverCountOverride) {
             welcome: { count: welcomeEnabled, percent: pct(welcomeEnabled, servers) },
             autoReactions: { count: autoReactionsEnabled, percent: pct(autoReactionsEnabled, servers) },
             broadcasts: { count: broadcastEnabled, percent: pct(broadcastEnabled, servers) },
+            automod: { count: automodEnabled, percent: pct(automodEnabled, servers) },
         },
         welcomeBanners,
     };
@@ -670,6 +842,11 @@ module.exports = {
     createReactionRole,
     updateReactionRole,
     deleteReactionRole,
+    getAutomodSettings,
+    upsertAutomodSettings,
+    defaultAutomodSettings,
+    getAutomodWarnings,
+    clearAutomodWarnings,
     getGuildConfig,
     getPlatformStats,
 };

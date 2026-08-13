@@ -15,6 +15,26 @@ const LOG_EVENTS = [
   { key: 'commandUse',    label: 'Slash command used',     icon: '⚙️', category: 'Activity' },
 ];
 
+// Automod rule types + actions. Kept in sync with utils/automodRules.js.
+const AUTOMOD_RULES = [
+  { key: 'blockedWords', label: 'Blocked words',       icon: '🚫', category: 'Content', params: ['words'] },
+  { key: 'invites',      label: 'Discord invites',     icon: '📨', category: 'Content', params: [] },
+  { key: 'links',        label: 'All links',           icon: '🔗', category: 'Content', params: [] },
+  { key: 'mentions',     label: 'Mass mentions',       icon: '@',  category: 'Spam',    params: ['threshold'] },
+  { key: 'spam',         label: 'Duplicate / rapid spam', icon: '🌀', category: 'Spam',  params: ['threshold','seconds'] },
+  { key: 'caps',         label: 'Excessive caps',      icon: '🔠', category: 'Content', params: ['threshold'] },
+  { key: 'emojiSpam',    label: 'Emoji spam',         icon: '🎉', category: 'Content', params: ['threshold'] },
+  { key: 'newlines',     label: 'Wall of text / newlines', icon: '↩️', category: 'Content', params: ['threshold'] },
+  { key: 'zalgo',        label: 'Zalgo / glitch text', icon: '͓z̷', category: 'Content', params: [] },
+];
+const AUTOMOD_ACTIONS = [
+  { key: 'delete',  label: 'Delete message', icon: '🗑️' },
+  { key: 'warn',    label: 'Warn member',   icon: '⚠️' },
+  { key: 'timeout', label: 'Timeout (mute)', icon: '🔇' },
+  { key: 'kick',    label: 'Kick',          icon: '👢' },
+  { key: 'ban',     label: 'Ban',           icon: '🔨' },
+];
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 async function api(path, options = {}) {
@@ -241,6 +261,10 @@ function renderLogin() {
               <div class="donut" id="donut-broadcasts"><span class="donut-pct">0%</span></div>
               <div class="donut-label">📢 Broadcasts</div>
             </div>
+            <div class="donut-item">
+              <div class="donut" id="donut-automod"><span class="donut-pct">0%</span></div>
+              <div class="donut-label">🛡️ Automod</div>
+            </div>
           </div>
         </div>
       </div>
@@ -250,6 +274,7 @@ function renderLogin() {
         <div class="feature"><div class="fi">📈</div><div class="ft">Leveling &amp; XP</div><div class="fd">Tune multipliers, cooldowns and level-up channels.</div></div>
         <div class="feature"><div class="fi">⚡</div><div class="ft">Command prefix</div><div class="fd">Set a per-server prefix instead of the default.</div></div>
         <div class="feature"><div class="fi">🔁</div><div class="ft">Auto-reactions</div><div class="fd">Trigger emojis on matching messages automatically.</div></div>
+        <div class="feature"><div class="fi">🛡️</div><div class="ft">Premium Automod</div><div class="fd">Auto-mod with warnings, escalation, spam &amp; word filters — free.</div></div>
       </div>
     </div>
   `;
@@ -287,6 +312,7 @@ async function loadLoginStats() {
   renderDonut(document.getElementById('donut-welcome'), f.welcome?.percent ?? 0, '--blurple');
   renderDonut(document.getElementById('donut-reactions'), f.autoReactions?.percent ?? 0, '--yellow');
   renderDonut(document.getElementById('donut-broadcasts'), f.broadcasts?.percent ?? 0, '--gold');
+  renderDonut(document.getElementById('donut-automod'), f.automod?.percent ?? 0, '--red');
 }
 
 // ── Documentation page ─────────────────────────────────────────────────────
@@ -590,6 +616,7 @@ async function renderGuildSettings(match) {
     .then(d => {
       guildState.channels = d.channels || [];
       populateChannelSelects();
+      renderAmExemptLists();
     })
     .catch(() => { /* surfaced via empty selectors */ });
   // Lazy-load roles for reaction-role selectors.
@@ -597,6 +624,7 @@ async function renderGuildSettings(match) {
     .then(d => {
       guildState.roles = d.roles || [];
       populateRoleSelects();
+      renderAmExemptLists();
     })
     .catch(() => { /* surfaced via empty selectors */ });
 
@@ -618,6 +646,7 @@ async function renderGuildSettings(match) {
       <button class="tab" data-tab="reactionroles">🎭 Reaction Roles</button>
       <button class="tab" data-tab="broadcast">📢 Broadcasts</button>
       <button class="tab" data-tab="logging">📜 Logging</button>
+      <button class="tab" data-tab="automod">🛡️ Automod</button>
     </div>
 
     <div id="tab-welcome" class="tab-panel">${welcomePanelHTML(data.config.welcome)}</div>
@@ -627,6 +656,7 @@ async function renderGuildSettings(match) {
     <div id="tab-reactionroles" class="tab-panel">${reactionRolesPanelHTML(data.config.reactionRoles)}</div>
     <div id="tab-broadcast" class="tab-panel">${broadcastPanelHTML(data.config.server)}</div>
     <div id="tab-logging" class="tab-panel">${loggingPanelHTML(data.config.logging)}</div>
+    <div id="tab-automod" class="tab-panel">${automodPanelHTML(data.config.automod)}</div>
   `;
 
   selectTab(initialTab);
@@ -1094,6 +1124,111 @@ function loggingPanelHTML(logging) {
   `;
 }
 
+// ── Automod panel ───────────────────────────────────────────────────────────
+// Premium automod: per-guild rules (blocked words, invites, links, spam,
+// mentions, caps, emoji, newlines, zalgo), each with a configurable action,
+// plus a warning ledger with escalation. All free — PrimeBot's motto.
+
+function automodRuleRowHTML(rule = {}) {
+  const meta = AUTOMOD_RULES.find(r => r.key === rule.type) || AUTOMOD_RULES[0];
+  const actionOpts = AUTOMOD_ACTIONS.map(a =>
+    `<option value="${a.key}" ${rule.action === a.key ? 'selected' : ''}>${a.icon} ${esc(a.label)}</option>`).join('');
+  let extra = '';
+  if (meta.params.includes('words')) {
+    extra = `<input type="text" class="am-words" value="${esc((rule.words || []).join(', '))}" placeholder="bad, words (comma-separated)" />`;
+  }
+  if (meta.params.includes('threshold')) {
+    extra += `<input type="number" class="am-threshold" value="${rule.threshold ?? ''}" placeholder="threshold" min="1" style="width:96px" />`;
+  }
+  if (meta.params.includes('seconds')) {
+    extra += `<input type="number" class="am-seconds" value="${rule.seconds ?? ''}" placeholder="seconds" min="1" max="3600" style="width:96px" />`;
+  }
+  return `
+    <div class="reaction-row am-rule-row" data-type="${esc(meta.key)}">
+      <label class="switch mini"><input type="checkbox" class="am-enabled" ${rule.enabled !== false ? 'checked' : ''}/><span class="slider"></span></label>
+      <span class="am-rule-label">${meta.icon} ${esc(meta.label)}</span>
+      <select class="am-action">${actionOpts}</select>
+      ${extra}
+      <button class="reaction-remove am-remove" type="button">✕</button>
+    </div>
+  `;
+}
+
+function automodPanelHTML(automod) {
+  const s = automod || {};
+  const rules = Array.isArray(s.rules) ? s.rules : [];
+  const ruleRows = rules.length ? rules.map(automodRuleRowHTML).join('') : '';
+  const addTypeOpts = AUTOMOD_RULES.map(r => `<option value="${r.key}">${r.icon} ${esc(r.label)}</option>`).join('');
+  const actionOpts = AUTOMOD_ACTIONS.map(a => `<option value="${a.key}" ${s.warnAction === a.key ? 'selected' : ''}>${a.icon} ${esc(a.label)}</option>`).join('');
+
+  return `
+    <div class="card">
+      <div class="card-title"><span><span class="icon">🛡️</span> Premium Automod</span></div>
+      <p class="card-desc">Automatic moderation that scans every message against your rules. Premium features for free: blocked words, invite/link blocking, spam &amp; mass-mention detection, caps/emoji/zalgo filters, warning escalation, and more.</p>
+
+      <div class="switch-row">
+        <div class="switch-label"><div class="sl-title">Enable Automod</div><div class="sl-desc">Master switch. When off, no messages are scanned.</div></div>
+        <label class="switch"><input type="checkbox" id="am-enabled" ${s.enabled ? 'checked' : ''}/><span class="slider"></span></label>
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="am-log-channel">Automod log channel (optional)</label>
+        <select id="am-log-channel" data-channel-select><option value="">— None —</option>${s.logChannelId ? `<option value="${esc(s.logChannelId)}" selected>Channel</option>` : ''}</select>
+        <div class="field-hint">Where automod actions are posted as the bot.</div>
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="am-mute-role">Mute role (optional)</label>
+        <select id="am-mute-role" data-role-select data-placeholder="— None (use timeouts) —">${s.muteRoleId ? `<option value="${esc(s.muteRoleId)}" selected>Role</option>` : ''}</select>
+        <div class="field-hint">Used for mutes when the bot can't apply a native timeout. Set this to enable indefinite mutes.</div>
+      </div>
+
+      <div class="field">
+        <label class="field-label">Exempt roles</label>
+        <div class="field-hint">Members with these roles (and admins) are never actioned.</div>
+        <div class="rr-list" id="am-exempt-roles"></div>
+      </div>
+
+      <div class="field">
+        <label class="field-label">Exempt channels</label>
+        <div class="field-hint">Messages in these channels are never scanned.</div>
+        <div class="rr-list" id="am-exempt-channels"></div>
+      </div>
+
+      <div class="field">
+        <label class="field-label">Rules</label>
+        <div class="reactions-list" id="am-rules-list">${ruleRows}</div>
+        <div style="display:flex; gap:8px; align-items:center; margin-top:8px">
+          <select id="am-add-type">${addTypeOpts}</select>
+          <button class="btn btn-secondary" id="am-add-rule">+ Add rule</button>
+        </div>
+        <div class="field-hint">Each rule runs its action on the first matching message.</div>
+      </div>
+
+      <div class="field">
+        <label class="field-label">Warning escalation</label>
+        <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap">
+          <label>After <input type="number" id="am-warn-threshold" value="${s.warnThreshold ?? 3}" min="1" max="50" style="width:72px"/> warnings</label>
+          <label>→
+            <select id="am-warn-action" style="min-width:160px">${actionOpts}</select>
+          </label>
+        </div>
+        <div class="field-hint">When a member's total warnings reach the threshold, the action is applied automatically and their warnings are cleared.</div>
+      </div>
+
+      <div class="form-actions">
+        <button class="btn btn-primary" data-save="automod">Save automod settings</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title"><span><span class="icon">⚠️</span> Warnings</span></div>
+      <p class="card-desc">Live warning ledger for this server (automod + manual <code>/warn</code>). <a href="#" id="am-refresh-warnings">Refresh</a></p>
+      <div id="am-warnings-list"><div class="field-hint">Loading…</div></div>
+    </div>
+  `;
+}
+
 // ── Event binding ──────────────────────────────────────────────────────────
 
 function bindSettingsEvents(guildId) {
@@ -1133,6 +1268,9 @@ function bindSettingsEvents(guildId) {
 
   // Reaction Roles tab bindings.
   bindReactionRolesEvents(guildId);
+
+  // Automod tab bindings.
+  bindAutomodEvents(guildId);
 
   // Save buttons.
   app.querySelectorAll('[data-save]').forEach(btn => {
@@ -1314,6 +1452,87 @@ function bindReactionRolesEvents(guildId) {
   bindRrCardActions(guildId);
 }
 
+// ── Automod tab: bindings + warnings ─────────────────────────────────────────
+
+function renderAmExemptLists() {
+  const s = guildState?.config?.automod || {};
+  const roleSet = new Set(s.exemptRoleIds || []);
+  const chanSet = new Set(s.exemptChannelIds || []);
+  const roles = (guildState.roles || []).map(r =>
+    `<label class="switch mini"><input type="checkbox" class="am-exempt-role" value="${esc(r.id)}" ${roleSet.has(r.id) ? 'checked' : ''}/><span class="slider"></span><span class="switch-text">${esc(r.name)}</span></label>`
+  ).join('') || '<div class="field-hint">No roles loaded.</div>';
+  const channels = (guildState.channels || []).map(c =>
+    `<label class="switch mini"><input type="checkbox" class="am-exempt-channel" value="${esc(c.id)}" ${chanSet.has(c.id) ? 'checked' : ''}/><span class="slider"></span><span class="switch-text">${esc(c.name)}</span></label>`
+  ).join('') || '<div class="field-hint">No channels loaded.</div>';
+  const rolesEl = app.querySelector('#am-exempt-roles');
+  const chanEl = app.querySelector('#am-exempt-channels');
+  if (rolesEl) rolesEl.innerHTML = roles;
+  if (chanEl) chanEl.innerHTML = channels;
+}
+
+function collectAmRules() {
+  const out = [];
+  app.querySelectorAll('#am-rules-list .am-rule-row').forEach(row => {
+    const type = row.dataset.type;
+    if (!type) return;
+    const rule = {
+      type,
+      enabled: row.querySelector('.am-enabled')?.checked !== false,
+      action: row.querySelector('.am-action')?.value || 'delete',
+    };
+    const words = row.querySelector('.am-words')?.value.trim();
+    if (words) rule.words = words.split(',').map(w => w.trim().toLowerCase()).filter(Boolean);
+    const threshold = parseInt(row.querySelector('.am-threshold')?.value, 10);
+    if (Number.isFinite(threshold)) rule.threshold = threshold;
+    const seconds = parseInt(row.querySelector('.am-seconds')?.value, 10);
+    if (Number.isFinite(seconds)) rule.seconds = seconds;
+    out.push(rule);
+  });
+  return out;
+}
+
+async function refreshAmWarnings(guildId) {
+  const el = app.querySelector('#am-warnings-list');
+  if (!el) return;
+  el.innerHTML = '<div class="field-hint">Loading…</div>';
+  try {
+    const data = await api(`/api/guilds/${guildId}/automod/warnings`);
+    const warnings = data.warnings || [];
+    if (warnings.length === 0) {
+      el.innerHTML = '<div class="field-hint">No warnings recorded. ✨</div>';
+      return;
+    }
+    el.innerHTML = warnings.slice(0, 50).map(w => {
+      const when = new Date(w.createdAt).toLocaleString();
+      const who = w.userId ? `<@${esc(w.userId)}>` : 'unknown';
+      const by = w.moderatorId ? (w.moderatorId === 'automod' ? 'Automod' : `<@${esc(w.moderatorId)}>`) : 'Automod';
+      return `<div class="rr-menu-card"><div class="card-title"><span>${esc(w.ruleType || 'manual')} · ${esc(w.reason || '')}</span></div><div class="rr-meta"><span><strong>User:</strong> ${who}</span><span><strong>By:</strong> ${by}</span><span><strong>When:</strong> ${esc(when)}</span></div></div>`;
+    }).join('');
+  } catch (err) {
+    el.innerHTML = '<div class="field-hint">Failed to load warnings.</div>';
+  }
+}
+
+function bindAutomodEvents(guildId) {
+  renderAmExemptLists();
+  bindReactionRemovals(); // also binds .am-remove via .reaction-remove
+
+  app.querySelector('#am-add-rule')?.addEventListener('click', () => {
+    const type = app.querySelector('#am-add-type')?.value || 'invites';
+    const list = app.querySelector('#am-rules-list');
+    if (!list) return;
+    list.insertAdjacentHTML('beforeend', automodRuleRowHTML({ type, enabled: true, action: 'delete' }));
+    bindReactionRemovals();
+  });
+
+  app.querySelector('#am-refresh-warnings')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    refreshAmWarnings(guildId);
+  });
+
+  refreshAmWarnings(guildId);
+}
+
 async function saveSettings(guildId, kind) {
   if (kind === 'welcome') {
     const body = {
@@ -1384,6 +1603,22 @@ async function saveSettings(guildId, kind) {
       color: app.querySelector('#logging-color').value,
     };
     await api(`/api/guilds/${guildId}/logging`, { method: 'PATCH', body: JSON.stringify(body) });
+  } else if (kind === 'automod') {
+    const exemptRoleIds = [];
+    app.querySelectorAll('.am-exempt-role').forEach(cb => { if (cb.checked) exemptRoleIds.push(cb.value); });
+    const exemptChannelIds = [];
+    app.querySelectorAll('.am-exempt-channel').forEach(cb => { if (cb.checked) exemptChannelIds.push(cb.value); });
+    const body = {
+      enabled: app.querySelector('#am-enabled').checked,
+      logChannelId: app.querySelector('#am-log-channel').value || null,
+      muteRoleId: app.querySelector('#am-mute-role').value || null,
+      exemptRoleIds,
+      exemptChannelIds,
+      rules: collectAmRules(),
+      warnThreshold: parseInt(app.querySelector('#am-warn-threshold').value, 10) || 3,
+      warnAction: app.querySelector('#am-warn-action').value,
+    };
+    await api(`/api/guilds/${guildId}/automod`, { method: 'PATCH', body: JSON.stringify(body) });
   }
 }
 

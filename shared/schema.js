@@ -379,6 +379,31 @@ const loggingSettings = pgTable('logging_settings', {
   updatedAt: timestamp('updated_at').defaultNow(),
 });
 
+// Automod settings table (per-guild premium automod config)
+const automodSettings = pgTable('automod_settings', {
+  guildId: varchar('guild_id', { length: 50 }).primaryKey(),
+  enabled: boolean('enabled').default(false).notNull(),
+  logChannelId: varchar('log_channel_id', { length: 50 }),
+  muteRoleId: varchar('mute_role_id', { length: 50 }),
+  exemptRoleIds: jsonb('exempt_role_ids').default([]).notNull(),
+  exemptChannelIds: jsonb('exempt_channel_ids').default([]).notNull(),
+  rules: jsonb('rules').default([]).notNull(),
+  warnThreshold: integer('warn_threshold').default(3).notNull(),
+  warnAction: varchar('warn_action', { length: 20 }).default('timeout'),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+// Automod warnings ledger (per-guild-per-user)
+const automodWarnings = pgTable('automod_warnings', {
+  id: serial('id').primaryKey(),
+  guildId: varchar('guild_id', { length: 50 }).notNull(),
+  userId: varchar('user_id', { length: 50 }).notNull(),
+  moderatorId: varchar('moderator_id', { length: 50 }),
+  reason: text('reason').default('').notNull(),
+  ruleType: varchar('rule_type', { length: 40 }),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
 // Exports
 module.exports = {
   livePolls,
@@ -417,4 +442,6 @@ module.exports = {
   reactionRolesRelations,
   reactionRoleMappingsRelations,
   loggingSettings,
+  automodSettings,
+  automodWarnings,
 };

@@ -487,6 +487,55 @@ app.patch('/api/guilds/:guildId/logging', requireAuth, requireGuildAdmin, async 
     }
 });
 
+// ── API: Premium Automod settings + warnings ─────────────────────────────────
+
+app.patch('/api/guilds/:guildId/automod', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const allowed = [
+            'enabled', 'logChannelId', 'muteRoleId',
+            'exemptRoleIds', 'exemptChannelIds', 'rules',
+            'warnThreshold', 'warnAction',
+        ];
+        const patch = {};
+        for (const key of allowed) {
+            if (key in req.body) patch[key] = req.body[key];
+        }
+        if ('enabled' in patch) patch.enabled = Boolean(patch.enabled);
+        if ('logChannelId' in patch) patch.logChannelId = patch.logChannelId || null;
+        if ('muteRoleId' in patch) patch.muteRoleId = patch.muteRoleId || null;
+        if ('warnThreshold' in patch) patch.warnThreshold = parseInt(patch.warnThreshold, 10) || 3;
+        if ('warnAction' in patch && !['timeout', 'kick', 'ban'].includes(patch.warnAction)) {
+            return res.status(400).json({ error: 'warnAction must be timeout, kick, or ban.' });
+        }
+        const updated = await dashboardDb.upsertAutomodSettings(req.guild.id, patch);
+        res.json({ automod: updated });
+    } catch (err) {
+        console.error('[API] update automod error:', err.message);
+        res.status(500).json({ error: 'Failed to update automod settings.' });
+    }
+});
+
+app.get('/api/guilds/:guildId/automod/warnings', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const warnings = await dashboardDb.getAutomodWarnings(req.guild.id);
+        res.json({ warnings });
+    } catch (err) {
+        console.error('[API] get automod warnings error:', err.message);
+        res.status(500).json({ error: 'Failed to load warnings.' });
+    }
+});
+
+app.delete('/api/guilds/:guildId/automod/warnings', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const userId = req.query.userId || null;
+        await dashboardDb.clearAutomodWarnings(req.guild.id, userId);
+        res.json({ ok: true });
+    } catch (err) {
+        console.error('[API] clear automod warnings error:', err.message);
+        res.status(500).json({ error: 'Failed to clear warnings.' });
+    }
+});
+
 // ── API: guild roles (for reaction-role selectors) ──────────────────────────
 
 app.get('/api/guilds/:guildId/roles', requireAuth, requireGuildAdmin, async (req, res) => {

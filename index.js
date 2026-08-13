@@ -98,6 +98,13 @@ client.betaManager = betaManager;
     client.serverSettingsManager = { getGuildSettings: () => ({}), updateGuildSetting: noop };
     client.welcomeSettingsManager = { getWelcomeSettings: () => ({ enabled: false }), updateGuildSetting: noop, setWelcomeChannel: noop, setWelcomeMessage: noop, setWelcomeBanner: noop, setWelcomeColor: noop, setWelcomeDmMessage: noop, toggleWelcomeDm: noop, toggleWelcomeFeature: noop };
     client.loggingSettingsManager = { getSettings: () => ({ enabled: false, events: [] }), isEnabled: () => false, updateSettings: noop };
+    client.automodManager = {
+        isEnabled: () => false, getSettings: () => ({ enabled: false, rules: [], warnThreshold: 3, warnAction: 'timeout' }),
+        updateSettings: noop, scanMessage: noopAsync,
+        addWarning: noopAsync, removeWarnings: async () => 0, getWarnings: async () => [], getWarningCount: async () => 0,
+        warnMember: async () => ({ count: 0, escalated: false, warnThreshold: 3, warnAction: 'timeout' }),
+        muteMember: noopAsync, unmuteMember: noopAsync,
+    };
     client.reactionRoleManager = {
         getMenuForMessage: () => null, getGuildMenus: () => [],
         getMenuById: () => null, createMenu: noopAsync, updateMenu: noopAsync,
@@ -129,6 +136,7 @@ async function initializeManagers() {
     const WelcomeSettingsManager = require('./utils/welcomeSettingsManager');
     const LoggingSettingsManager = require('./utils/loggingSettingsManager');
     const ReactionRoleManager = require('./utils/reactionRoleManager');
+    const AutomodManager = require('./utils/automodManager');
     const SnipeManager = require('./utils/snipeManager');
 
     client.giveawayManager  = new GiveawayManager(client);
@@ -143,6 +151,13 @@ async function initializeManagers() {
     client.serverSettingsManager = new ServerSettingsManager(client);
     client.welcomeSettingsManager = new WelcomeSettingsManager();
     client.loggingSettingsManager = new LoggingSettingsManager();
+
+    try {
+        client.automodManager = new AutomodManager(client);
+        console.log('[MANAGERS] AutomodManager loaded.');
+    } catch (err) {
+        console.error('[MANAGERS] Failed to load AutomodManager:', err.message);
+    }
 
     try {
         client.reactionRoleManager = new ReactionRoleManager(client);
