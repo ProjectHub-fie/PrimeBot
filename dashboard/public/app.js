@@ -5,38 +5,38 @@ const toastEl = document.getElementById('toast');
 
 // Loggable event types. Kept in sync with utils/logEvents.js (shared by the bot).
 const LOG_EVENTS = [
-  { key: 'memberJoin',    label: 'Member joined',          icon: '🟢', category: 'Members' },
-  { key: 'memberLeave',   label: 'Member left',            icon: '🔴', category: 'Members' },
-  { key: 'memberBan',     label: 'Member banned',          icon: '🔨', category: 'Members' },
-  { key: 'memberUnban',   label: 'Member unbanned',        icon: '🕊️', category: 'Members' },
-  { key: 'memberUpdate',  label: 'Member updated (roles / nickname)', icon: '📝', category: 'Members' },
-  { key: 'messageDelete', label: 'Message deleted',        icon: '🗑️', category: 'Messages' },
-  { key: 'messageUpdate', label: 'Message edited',         icon: '✏️', category: 'Messages' },
-  { key: 'commandUse',    label: 'Slash command used',     icon: '⚙️', category: 'Activity' },
+  { key: 'memberJoin',    label: 'Member joined',          icon: 'userPlus', category: 'Members' },
+  { key: 'memberLeave',   label: 'Member left',            icon: 'userMinus', category: 'Members' },
+  { key: 'memberBan',     label: 'Member banned',          icon: 'ban', category: 'Members' },
+  { key: 'memberUnban',   label: 'Member unbanned',        icon: 'userCheck', category: 'Members' },
+  { key: 'memberUpdate',  label: 'Member updated (roles / nickname)', icon: 'pencil', category: 'Members' },
+  { key: 'messageDelete', label: 'Message deleted',        icon: 'trash', category: 'Messages' },
+  { key: 'messageUpdate', label: 'Message edited',         icon: 'pencil', category: 'Messages' },
+  { key: 'commandUse',    label: 'Slash command used',     icon: 'terminal', category: 'Activity' },
 ];
 
 // Automod rule types + actions. Kept in sync with utils/automodRules.js.
 const AUTOMOD_RULES = [
-  { key: 'blockedWords', label: 'Blocked words',       icon: '🚫', category: 'Content', params: ['words'] },
-  { key: 'invites',      label: 'Discord invites',     icon: '📨', category: 'Content', params: [] },
-  { key: 'links',        label: 'All links',           icon: '🔗', category: 'Content', params: [] },
-  { key: 'badLinks',     label: 'Bad / phishing links',icon: '🪝', category: 'Content', params: ['words'] },
-  { key: 'nsfw',         label: 'NSFW content',        icon: '🔞', category: 'Content', params: ['words'] },
-  { key: 'repeatedChars',label: 'Repeated characters', icon: '🔁', category: 'Spam',    params: ['threshold'] },
-  { key: 'newAccount',   label: 'New / alt account',   icon: '🐣', category: 'Spam',    params: ['threshold'] },
-  { key: 'mentions',     label: 'Mass mentions',       icon: '@',  category: 'Spam',    params: ['threshold'] },
-  { key: 'spam',         label: 'Duplicate / rapid spam', icon: '🌀', category: 'Spam',  params: ['threshold','seconds'] },
-  { key: 'caps',         label: 'Excessive caps',      icon: '🔠', category: 'Content', params: ['threshold'] },
-  { key: 'emojiSpam',    label: 'Emoji spam',         icon: '🎉', category: 'Content', params: ['threshold'] },
-  { key: 'newlines',     label: 'Wall of text / newlines', icon: '↩️', category: 'Content', params: ['threshold'] },
-  { key: 'zalgo',        label: 'Zalgo / glitch text', icon: '͓z̷', category: 'Content', params: [] },
+  { key: 'blockedWords', label: 'Blocked words',       icon: 'ban', category: 'Content', params: ['words'] },
+  { key: 'invites',      label: 'Discord invites',     icon: 'envelope', category: 'Content', params: [] },
+  { key: 'links',        label: 'All links',           icon: 'link', category: 'Content', params: [] },
+  { key: 'badLinks',     label: 'Bad / phishing links',icon: 'linkOff', category: 'Content', params: ['words'] },
+  { key: 'nsfw',         label: 'NSFW content',        icon: 'eyeOff', category: 'Content', params: ['words'] },
+  { key: 'repeatedChars',label: 'Repeated characters', icon: 'repeat', category: 'Spam',    params: ['threshold'] },
+  { key: 'newAccount',   label: 'New / alt account',   icon: 'userClock', category: 'Spam',    params: ['threshold'] },
+  { key: 'mentions',     label: 'Mass mentions',       icon: 'at',  category: 'Spam',    params: ['threshold'] },
+  { key: 'spam',         label: 'Duplicate / rapid spam', icon: 'alertTriangle', category: 'Spam',  params: ['threshold','seconds'] },
+  { key: 'caps',         label: 'Excessive caps',      icon: 'type', category: 'Content', params: ['threshold'] },
+  { key: 'emojiSpam',    label: 'Emoji spam',         icon: 'smile', category: 'Content', params: ['threshold'] },
+  { key: 'newlines',     label: 'Wall of text / newlines', icon: 'alignLeft', category: 'Content', params: ['threshold'] },
+  { key: 'zalgo',        label: 'Zalgo / glitch text', icon: 'zap', category: 'Content', params: [] },
 ];
 const AUTOMOD_ACTIONS = [
-  { key: 'delete',  label: 'Delete message', icon: '🗑️' },
-  { key: 'warn',    label: 'Warn member',   icon: '⚠️' },
-  { key: 'timeout', label: 'Timeout (mute)', icon: '🔇' },
-  { key: 'kick',    label: 'Kick',          icon: '👢' },
-  { key: 'ban',     label: 'Ban',           icon: '🔨' },
+  { key: 'delete',  label: 'Delete message', icon: 'trash' },
+  { key: 'warn',    label: 'Warn member',   icon: 'alertTriangle' },
+  { key: 'timeout', label: 'Timeout (mute)', icon: 'clock' },
+  { key: 'kick',    label: 'Kick',          icon: 'userX' },
+  { key: 'ban',     label: 'Ban',           icon: 'ban' },
 ];
 // Actions valid for warn escalation (no delete).
 const AUTOMOD_WARN_ACTIONS = AUTOMOD_ACTIONS.filter(a => ['warn','timeout','kick','ban'].includes(a.key));
@@ -79,6 +79,96 @@ function esc(str) {
   return String(str).replace(/[&<>"']/g, c => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   }[c]));
+}
+
+// ── Inline SVG icon system ────────────────────────────────────────────────
+// Stroke-based, 24x24 viewBox, currentColor. Replaces emoji iconography.
+const ICONS = {
+  zap: '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
+  hand: '<path d="M18 11V6a1.5 1.5 0 0 0-3 0v4"/><path d="M15 11V5a1.5 1.5 0 0 0-3 0v6"/><path d="M12 11V7a1.5 1.5 0 0 0-3 0v6"/><path d="M9 11V9a1.5 1.5 0 0 0-3 0v7a8 8 0 0 0 8 8h1a8 8 0 0 0 7-4l2-3.5a1.5 1.5 0 0 0-2.5-1.6L18 14"/>',
+  trendingUp: '<polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>',
+  hash: '<line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/>',
+  repeat: '<polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>',
+  tag: '<path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z"/><circle cx="7.5" cy="7.5" r=".5" fill="currentColor"/>',
+  megaphone: '<path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>',
+  fileText: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>',
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+  ticket: '<path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2z"/><path d="M13 5v2"/><path d="M13 17v2"/><path d="M13 11v2"/>',
+  calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>',
+  book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>',
+  server: '<rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><line x1="7" y1="7" x2="7.01" y2="7"/><line x1="7" y1="17" x2="7.01" y2="17"/>',
+  image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.5-3.5L9 20"/>',
+  robot: '<rect x="4" y="8" width="16" height="12" rx="2"/><path d="M12 8V4"/><circle cx="12" cy="3" r="1"/><line x1="2" y1="14" x2="4" y2="14"/><line x1="20" y1="14" x2="22" y2="14"/><line x1="9" y1="14" x2="9" y2="18"/><line x1="15" y1="14" x2="15" y2="18"/>',
+  arrowRight: '<line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>',
+  check: '<polyline points="20 6 9 17 4 12"/>',
+  x: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
+  plus: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
+  refresh: '<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>',
+  copy: '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+  trophy: '<path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2z"/>',
+  key: '<circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+  chart: '<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>',
+  gift: '<rect x="3" y="8" width="18" height="4" rx="1"/><path d="M12 8v13"/><path d="M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7"/><path d="M7.5 8a2.5 2.5 0 0 1 0-5C11 3 12 8 12 8s1-5 4.5-5a2.5 2.5 0 0 1 0 5"/>',
+  search: '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>',
+  inbox: '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+  alertTriangle: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+  ban: '<circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>',
+  userPlus: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/>',
+  userMinus: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="22" y1="11" x2="16" y2="11"/>',
+  userCheck: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><polyline points="16 11 18 13 22 9"/>',
+  userX: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="17" y1="11" x2="23" y2="17"/><line x1="23" y1="11" x2="17" y2="17"/>',
+  userClock: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/><path d="M22 10v6"/><path d="m19 12.5 2 1.5 2-1.5"/>',
+  pencil: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  trash: '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+  linkOff: '<path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 0 1 0 10h-2"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="2" y1="2" x2="22" y2="22"/>',
+  envelope: '<rect x="3" y="5" width="18" height="14" rx="2"/><polyline points="3 7 12 13 21 7"/>',
+  eye: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
+  eyeOff: '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>',
+  lock: '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  unlock: '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/>',
+  message: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  type: '<polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/>',
+  smile: '<circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/>',
+  alignLeft: '<line x1="17" y1="10" x2="3" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="17" y1="18" x2="3" y2="18"/>',
+  shieldAlert: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>',
+  terminal: '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>',
+  at: '<circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"/>',
+  info: '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>',
+};
+
+function svgIcon(name, cls = '') {
+  const body = ICONS[name] || '';
+  const c = cls ? ` ${cls}` : '';
+  return `<svg class="ico${c}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+}
+
+// Smooth entrance for dynamically rendered card lists.
+function animateCards(container) {
+  if (!container) return;
+  const cards = container.querySelectorAll('.card, .guild-card, .live-card, .rr-menu-card, .ev-card');
+  cards.forEach((card, i) => {
+    card.style.opacity = '0';
+    card.style.transform = 'translateY(6px)';
+    card.style.transition = 'opacity 220ms ease, transform 220ms ease';
+    setTimeout(() => {
+      card.style.opacity = '1';
+      card.style.transform = 'translateY(0)';
+    }, 50 * i);
+  });
+}
+
+// Polished empty state for list containers.
+function emptyState(container, message, icon = '') {
+  if (!container) return;
+  const iconHTML = icon || svgIcon('inbox');
+  container.innerHTML = `
+    <div style="text-align:center;padding:36px 20px;color:var(--text-dim)">
+      <div class="empty-ico" style="justify-content:center;margin-bottom:10px">${iconHTML}</div>
+      <div style="font-size:14px;font-weight:600">${esc(message)}</div>
+    </div>
+  `;
 }
 
 function guildIconUrl(guild) {
@@ -220,13 +310,13 @@ function renderLogin() {
     : '';
   app.innerHTML = `
     <div class="login-wrap">
-      <div class="login-hero">⚡</div>
+      <div class="login-hero">${svgIcon('zap')}</div>
       <h1 class="login-title">PrimeBot Dashboard</h1>
-      <h3>Premium features in free </h3> 
+      <p class="login-tagline">Premium features in free</p>
       ${errorHTML}
       <p class="login-sub">Sign in with Discord to configure PrimeBot for the servers you manage — welcome messages, leveling, prefixes, auto-reactions and more, all in one place.</p>
-      <a href="/login" class="btn btn-discord">🚪 Login with Discord</a>
-      <a href="/docs" class="btn btn-secondary" data-link>📖 Documentation</a>
+      <a href="/login" class="btn btn-discord">${svgIcon('arrowRight')} Login with Discord</a>
+      <a href="/docs" class="btn btn-secondary" data-link>${svgIcon('book')} Documentation</a>
 
       <div class="stats-band" id="stats-band" aria-live="polite">
         <div class="stats-band-head">
@@ -235,17 +325,17 @@ function renderLogin() {
         </div>
         <div class="stats-cards" id="stats-cards">
           <div class="stat-card stat-primary">
-            <div class="stat-icon">🏰</div>
+            <div class="stat-icon">${svgIcon('server')}</div>
             <div class="stat-value" id="stat-servers" data-target="0">0</div>
             <div class="stat-label">Servers configured</div>
           </div>
           <div class="stat-card">
-            <div class="stat-icon">🖼️</div>
+            <div class="stat-icon">${svgIcon('image')}</div>
             <div class="stat-value" id="stat-banners" data-target="0">0</div>
             <div class="stat-label">Custom welcome banners</div>
           </div>
           <div class="stat-card">
-            <div class="stat-icon">🤖</div>
+            <div class="stat-icon">${svgIcon('robot')}</div>
             <div class="stat-value" id="stat-version">—</div>
             <div class="stat-label">Bot version</div>
           </div>
@@ -255,38 +345,38 @@ function renderLogin() {
           <div class="donut-grid">
             <div class="donut-item">
               <div class="donut" id="donut-leveling"><span class="donut-pct">0%</span></div>
-              <div class="donut-label">📈 Leveling</div>
+              <div class="donut-label">${svgIcon('trendingUp')} Leveling</div>
             </div>
             <div class="donut-item">
               <div class="donut" id="donut-welcome"><span class="donut-pct">0%</span></div>
-              <div class="donut-label">👋 Welcome</div>
+              <div class="donut-label">${svgIcon('hand')} Welcome</div>
             </div>
             <div class="donut-item">
               <div class="donut" id="donut-reactions"><span class="donut-pct">0%</span></div>
-              <div class="donut-label">🔁 Auto-reactions</div>
+              <div class="donut-label">${svgIcon('repeat')} Auto-reactions</div>
             </div>
             <div class="donut-item">
               <div class="donut" id="donut-broadcasts"><span class="donut-pct">0%</span></div>
-              <div class="donut-label">📢 Broadcasts</div>
+              <div class="donut-label">${svgIcon('megaphone')} Broadcasts</div>
             </div>
             <div class="donut-item">
               <div class="donut" id="donut-automod"><span class="donut-pct">0%</span></div>
-              <div class="donut-label">🛡️ Automod</div>
+              <div class="donut-label">${svgIcon('shield')} Automod</div>
             </div>
             <div class="donut-item">
               <div class="donut" id="donut-tickets"><span class="donut-pct">0%</span></div>
-              <div class="donut-label">🎫 Tickets</div>
+              <div class="donut-label">${svgIcon('ticket')} Tickets</div>
             </div>
           </div>
         </div>
       </div>
 
       <div class="feature-grid">
-        <div class="feature"><div class="fi">👋</div><div class="ft">Welcome system</div><div class="fd">Custom messages, banners, DMs and channel routing.</div></div>
-        <div class="feature"><div class="fi">📈</div><div class="ft">Leveling &amp; XP</div><div class="fd">Tune multipliers, cooldowns and level-up channels.</div></div>
-        <div class="feature"><div class="fi">⚡</div><div class="ft">Command prefix</div><div class="fd">Set a per-server prefix instead of the default.</div></div>
-        <div class="feature"><div class="fi">🔁</div><div class="ft">Auto-reactions</div><div class="fd">Trigger emojis on matching messages automatically.</div></div>
-        <div class="feature"><div class="fi">🛡️</div><div class="ft">Premium Automod</div><div class="fd">Auto-mod with warnings, escalation, spam &amp; word filters — free.</div></div>
+        <div class="feature"><div class="fi">${svgIcon('hand')}</div><div class="ft">Welcome system</div><div class="fd">Custom messages, banners, DMs and channel routing.</div></div>
+        <div class="feature"><div class="fi">${svgIcon('trendingUp')}</div><div class="ft">Leveling &amp; XP</div><div class="fd">Tune multipliers, cooldowns and level-up channels.</div></div>
+        <div class="feature"><div class="fi">${svgIcon('hash')}</div><div class="ft">Command prefix</div><div class="fd">Set a per-server prefix instead of the default.</div></div>
+        <div class="feature"><div class="fi">${svgIcon('repeat')}</div><div class="ft">Auto-reactions</div><div class="fd">Trigger emojis on matching messages automatically.</div></div>
+        <div class="feature"><div class="fi">${svgIcon('shield')}</div><div class="ft">Premium Automod</div><div class="fd">Auto-mod with warnings, escalation, spam &amp; word filters — free.</div></div>
       </div>
     </div>
   `;
@@ -341,8 +431,8 @@ function renderDocs() {
 
   app.innerHTML = `
     <div class="docs">
-      <div class="docs-hero">
-        <div class="docs-hero-icon">📖</div>
+        <div class="docs-hero">
+        <div class="docs-hero-icon">${svgIcon('book')}</div>
         <h1 class="docs-title">PrimeBot Documentation</h1>
         <p class="docs-lead">Everything you need to set up, configure and manage PrimeBot for your Discord server — from inviting the bot to tuning welcome messages, leveling and auto-reactions.</p>
       </div>
@@ -436,27 +526,27 @@ function renderDocs() {
         <p>PrimeBot ships with 40+ commands. Here are the main categories. Slash commands use <code>/</code>; prefix commands use your server's prefix (default <code>$</code>).</p>
         <div class="docs-cmd-grid">
           <div class="docs-cmd-card">
-            <h4>🛡️ Moderation</h4>
+            <h4>${svgIcon('shield')} Moderation</h4>
             <ul><li><code>ban</code> / <code>kick</code> — remove members</li><li><code>purge</code> — bulk-delete messages</li><li><code>lock</code> / <code>unlock</code> — lock channels</li><li><code>nuke</code> — clear &amp; recreate a channel</li><li><code>hide</code> / <code>unhide</code> — hide channels</li><li><code>move</code> — move members</li><li><code>role</code> — assign roles</li></ul>
           </div>
           <div class="docs-cmd-card">
-            <h4>🎉 Engagement</h4>
+            <h4>${svgIcon('gift')} Engagement</h4>
             <ul><li><code>poll</code> / <code>endpoll</code> — simple polls</li><li><code>lpoll</code> / <code>endgame</code> — live polls</li><li><code>giveaway</code> / <code>reroll</code> / <code>end</code> — giveaways</li><li><code>counting</code> — counting game</li><li><code>tictactoe</code> — play tic-tac-toe</li><li><code>truthdare</code> — truth or dare</li></ul>
           </div>
           <div class="docs-cmd-card">
-            <h4>🎫 Tickets &amp; Support</h4>
+            <h4>${svgIcon('ticket')} Tickets &amp; Support</h4>
             <ul><li><code>createticket</code> / <code>ticket</code> — open tickets</li><li><code>tickethistory</code> — view past tickets</li><li><code>categories</code> — manage ticket categories</li></ul>
           </div>
           <div class="docs-cmd-card">
-            <h4>🎂 Community</h4>
+            <h4>${svgIcon('smile')} Community</h4>
             <ul><li><code>birthday</code> — set birthdays</li><li><code>leveling</code> — view XP/rank</li><li><code>welcomeconfig</code> — quick welcome setup</li><li><code>about</code> — bot info</li><li><code>help</code> — command help</li></ul>
           </div>
           <div class="docs-cmd-card">
-            <h4>📣 Broadcasting</h4>
+            <h4>${svgIcon('megaphone')} Broadcasting</h4>
             <ul><li><code>broadcast</code> — send a broadcast</li><li><code>broadcastsettings</code> — configure reception</li><li><code>updates</code> — bot update notes</li></ul>
           </div>
           <div class="docs-cmd-card">
-            <h4>🧰 Utility</h4>
+            <h4>${svgIcon('terminal')} Utility</h4>
             <ul><li><code>echo</code> — repeat text</li><li><code>snipe</code> — recover deleted messages</li><li><code>sync</code> — sync server settings</li><li><code>np</code> — now playing</li><li><code>rm</code> / <code>ses</code> — session tools</li><li><code>beta</code> / <code>betaserver</code> — beta features</li></ul>
           </div>
         </div>
@@ -491,7 +581,7 @@ function renderDocs() {
       <div class="docs-cta">
         <h3>Ready to configure your server?</h3>
         <p>Log in with Discord to manage PrimeBot across all your servers.</p>
-        <a href="/login" class="btn btn-discord">🚪 Login with Discord</a>
+        <a href="/login" class="btn btn-discord">${svgIcon('arrowRight')} Login with Discord</a>
         <a href="/" class="btn btn-secondary" data-link>← Back to dashboard</a>
       </div>
     </div>
@@ -514,7 +604,7 @@ async function renderLive() {
     <div class="page-head">
       <h1>Live</h1>
       <p>Running and ended cross-server live polls and live giveaways. Create them with <code>${esc(LIVE_PREFIX)}lpoll</code> / <code>${esc(LIVE_PREFIX)}lgiveway</code> in Discord.</p>
-      <button class="btn btn-secondary" id="live-refresh">↻ Refresh</button>
+      <button class="btn btn-secondary" id="live-refresh">${svgIcon('refresh')} Refresh</button>
     </div>
     <div id="live-root"><div class="splash"><div class="spinner"></div><p>Loading live data…</p></div></div>
     <div id="live-join-modal" class="modal-overlay hidden"></div>
@@ -535,6 +625,7 @@ async function loadLive() {
       </div>
     `;
     bindLiveEvents();
+    animateCards(root);
   } catch (err) {
     if (err.status === 401) { window.location.href = '/login'; return; }
     root.innerHTML = `<div class="card"><div class="alert alert-error">${esc(err.message || 'Failed to load live data.')}</div></div>`;
@@ -542,15 +633,15 @@ async function loadLive() {
 }
 
 function livePanelHTML(title, running, ended, kind) {
-  const titleIcon = kind === 'poll' ? '📊' : '🎉';
+  const titleIcon = kind === 'poll' ? 'chart' : 'gift';
   return `
     <div class="card live-panel">
-      <h2>${titleIcon} ${esc(title === 'polls' ? 'Live Polls' : 'Live Giveaways')}</h2>
-      <h3 class="live-section-head">🟢 Running</h3>
+      <h2>${svgIcon(titleIcon)} ${esc(title === 'polls' ? 'Live Polls' : 'Live Giveaways')}</h2>
+      <h3 class="live-section-head"><span class="status-dot live"></span> Running</h3>
       <div class="live-list" data-live-running="${kind}">
         ${running.length ? running.map(item => liveRunningCardHTML(item, kind)).join('') : '<p class="live-empty">No running items.</p>'}
       </div>
-      <h3 class="live-section-head">🔴 Ended${kind === 'poll' ? ' (winners)' : ' (winners)'}</h3>
+      <h3 class="live-section-head"><span class="status-dot ended"></span> Ended</h3>
       <div class="live-list" data-live-ended="${kind}">
         ${ended.length ? ended.map(item => liveEndedCardHTML(item, kind)).join('') : '<p class="live-empty">No ended items.</p>'}
       </div>
@@ -565,13 +656,13 @@ function liveRunningCardHTML(item, kind) {
     ? `${item.totalVotes ?? 0} votes`
     : `${item.entries ?? 0} entries • ${item.winnerCount ?? 1} winner(s)`;
   const expires = item.expiresAt || item.endsAt
-    ? `<span class="live-meta">⏱️ ends ${esc(new Date(item.expiresAt || item.endsAt).toLocaleString())}</span>`
-    : '<span class="live-meta">⏱️ permanent</span>';
+    ? `<span class="live-meta">${svgIcon('clock')} ends ${esc(new Date(item.expiresAt || item.endsAt).toLocaleString())}</span>`
+    : `<span class="live-meta">${svgIcon('clock')} permanent</span>`;
   return `
     <div class="live-card" data-key="${esc(key)}" data-kind="${kind}">
       <div class="live-card-title">${title}</div>
       <div class="live-card-meta">${esc(meta)} ${expires}</div>
-      <div class="live-card-code">🔑 Pass code: <code>${esc(key)}</code></div>
+      <div class="live-card-code">${svgIcon('key')} Pass code: <code>${esc(key)}</code></div>
       <button class="btn btn-primary live-join-btn" data-key="${esc(key)}" data-kind="${kind}">Join</button>
     </div>
   `;
@@ -586,7 +677,7 @@ function liveEndedCardHTML(item, kind) {
         <div class="live-card-title">${esc(item.question || '')}</div>
         <div class="live-card-meta">${esc((item.options || []).reduce((s, o) => s + o.votes, 0))} votes</div>
         ${opts ? `<div class="live-card-opts">${esc(opts)}</div>` : ''}
-        <div class="live-winners">🏆 Winner(s): ${winners}</div>
+        <div class="live-winners">${svgIcon('trophy')} Winner(s): ${winners}</div>
       </div>
     `;
   }
@@ -594,7 +685,7 @@ function liveEndedCardHTML(item, kind) {
   return `
     <div class="live-card live-ended">
       <div class="live-card-title">Prize: ${esc(item.prize || '')}</div>
-      <div class="live-winners">🏆 Winner(s): ${winners}</div>
+      <div class="live-winners">${svgIcon('trophy')} Winner(s): ${winners}</div>
     </div>
   `;
 }
@@ -612,8 +703,8 @@ function openJoinModal(key, kind) {
   modal.innerHTML = `
     <div class="modal floating-window">
       <div class="modal-head">
-        <h3>${kind === 'poll' ? '📊 Join Live Poll' : '🎉 Join Live Giveaway'}</h3>
-        <button class="modal-close" id="live-join-close">×</button>
+        <h3>${svgIcon(kind === 'poll' ? 'chart' : 'gift')} ${kind === 'poll' ? 'Join Live Poll' : 'Join Live Giveaway'}</h3>
+        <button class="modal-close" id="live-join-close" aria-label="Close">${svgIcon('x')}</button>
       </div>
       <div class="modal-body">
         <p>Run this command in any Discord server where PrimeBot is present to join:</p>
@@ -632,12 +723,18 @@ function openJoinModal(key, kind) {
   const close = () => modal.classList.add('hidden');
   modal.querySelector('#live-join-close').addEventListener('click', close);
   modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
-  modal.querySelector('#live-join-copy').addEventListener('click', () => {
-    navigator.clipboard?.writeText(`${LIVE_PREFIX}${command}`).then(() => toast('Command copied!'), () => {});
+  modal.querySelector('#live-join-copy').addEventListener('click', async () => {
+    const btn = modal.querySelector('#live-join-copy');
+    const original = btn.textContent;
+    try {
+      await navigator.clipboard.writeText(`${LIVE_PREFIX}${command}`);
+      btn.textContent = 'Copied!';
+      setTimeout(() => (btn.textContent = original), 1200);
+    } catch {
+      toast('Copy failed', 'error');
+    }
   });
   modal.querySelector('#live-join-do').addEventListener('click', async () => {
-    // The dashboard can't join on behalf of a Discord user (it needs a guild
-    // context + member). We surface the exact command to run instead.
     const status = modal.querySelector('#live-join-status');
     status.innerHTML = `<div class="alert alert-warn">The dashboard can't join for you — run the command above in Discord to join the ${kind === 'poll' ? 'poll' : 'giveaway'}.</div>`;
   });
@@ -662,7 +759,7 @@ async function renderOverview() {
   if (manageable.length === 0 && absent.length === 0) {
     listHTML = `
       <div class="guild-empty">
-        <p style="font-size:40px;margin:0 0 8px">🔍</p>
+        <div class="empty-ico">${svgIcon('search')}</div>
         <p>You don't manage any servers yet, or PrimeBot isn't in any of them.</p>
         <p style="margin-top:12px"><a class="btn btn-secondary" href="https://discord.com/oauth2/authorize?client_id=${esc(window.__clientId||'')}&permissions=8&integration_type=0&scope=bot%20applications.commands" target="_blank" rel="noopener">Invite PrimeBot to a server</a></p>
       </div>
@@ -685,8 +782,9 @@ async function renderOverview() {
       <p>Pick a server to configure PrimeBot. Only servers where you have <strong>Manage Server</strong> permission are shown.</p>
     </div>
     ${statsHTML}
-    ${listHTML}
+    <div id="guild-list-root">${listHTML}</div>
   `;
+  animateCards(app.querySelector('#guild-list-root'));
 
   app.querySelectorAll('.guild-card[data-guild]').forEach(card => {
     card.addEventListener('click', () => {
@@ -700,8 +798,8 @@ function guildCardHTML(g, present) {
   const tags = [];
   tags.push(`<span class="tag prefix">${esc(g.prefix || '$')} prefix</span>`);
   if (present) {
-    tags.push(g.welcomeEnabled ? `<span class="tag on">👋 Welcome</span>` : `<span class="tag off">Welcome off</span>`);
-    tags.push(g.levelingEnabled ? `<span class="tag on">📈 Leveling</span>` : `<span class="tag off">Leveling off</span>`);
+    tags.push(g.welcomeEnabled ? `<span class="tag on"><span class="dot"></span>Welcome</span>` : `<span class="tag off"><span class="dot"></span>Welcome off</span>`);
+    tags.push(g.levelingEnabled ? `<span class="tag on"><span class="dot"></span>Leveling</span>` : `<span class="tag off"><span class="dot"></span>Leveling off</span>`);
   } else {
     tags.push(`<span class="tag absent">Bot not added</span>`);
   }
@@ -794,29 +892,34 @@ async function renderGuildSettings(match) {
       </div>
     </div>
 
-    <div class="tabs">
-      <button class="tab" data-tab="welcome">👋 Welcome</button>
-      <button class="tab" data-tab="leveling">📈 Leveling</button>
-      <button class="tab" data-tab="prefix">⚡ Prefix</button>
-      <button class="tab" data-tab="reactions">🔁 Auto-Reactions</button>
-      <button class="tab" data-tab="reactionroles">🎭 Reaction Roles</button>
-      <button class="tab" data-tab="broadcast">📢 Broadcasts</button>
-      <button class="tab" data-tab="logging">📜 Logging</button>
-      <button class="tab" data-tab="automod">🛡️ Automod</button>
-      <button class="tab" data-tab="tickets">🎫 Tickets</button>
-      <button class="tab" data-tab="events">📅 Events</button>
+    <div class="settings-layout">
+      <aside class="settings-nav">
+        <div class="tabs">
+          <button class="tab" data-tab="welcome"><span class="tab-ico">${svgIcon('hand')}</span> Welcome</button>
+          <button class="tab" data-tab="leveling"><span class="tab-ico">${svgIcon('trendingUp')}</span> Leveling</button>
+          <button class="tab" data-tab="prefix"><span class="tab-ico">${svgIcon('hash')}</span> Prefix</button>
+          <button class="tab" data-tab="reactions"><span class="tab-ico">${svgIcon('repeat')}</span> Auto-Reactions</button>
+          <button class="tab" data-tab="reactionroles"><span class="tab-ico">${svgIcon('tag')}</span> Reaction Roles</button>
+          <button class="tab" data-tab="broadcast"><span class="tab-ico">${svgIcon('megaphone')}</span> Broadcasts</button>
+          <button class="tab" data-tab="logging"><span class="tab-ico">${svgIcon('fileText')}</span> Logging</button>
+          <button class="tab" data-tab="automod"><span class="tab-ico">${svgIcon('shield')}</span> Automod</button>
+          <button class="tab" data-tab="tickets"><span class="tab-ico">${svgIcon('ticket')}</span> Tickets</button>
+          <button class="tab" data-tab="events"><span class="tab-ico">${svgIcon('calendar')}</span> Events</button>
+        </div>
+      </aside>
+      <div class="settings-content">
+        <div id="tab-welcome" class="tab-panel">${welcomePanelHTML(data.config.welcome)}</div>
+        <div id="tab-leveling" class="tab-panel">${levelingPanelHTML(data.config.server)}</div>
+        <div id="tab-prefix" class="tab-panel">${prefixPanelHTML(data.config.server)}</div>
+        <div id="tab-reactions" class="tab-panel">${reactionsPanelHTML(data.config.server)}</div>
+        <div id="tab-reactionroles" class="tab-panel">${reactionRolesPanelHTML(data.config.reactionRoles)}</div>
+        <div id="tab-broadcast" class="tab-panel">${broadcastPanelHTML(data.config.server)}</div>
+        <div id="tab-logging" class="tab-panel">${loggingPanelHTML(data.config.logging)}</div>
+        <div id="tab-automod" class="tab-panel">${automodPanelHTML(data.config.automod)}</div>
+        <div id="tab-tickets" class="tab-panel">${ticketsPanelHTML(data.config.ticketPanels)}</div>
+        <div id="tab-events" class="tab-panel">${eventsPanelHTML()}</div>
+      </div>
     </div>
-
-    <div id="tab-welcome" class="tab-panel">${welcomePanelHTML(data.config.welcome)}</div>
-    <div id="tab-leveling" class="tab-panel">${levelingPanelHTML(data.config.server)}</div>
-    <div id="tab-prefix" class="tab-panel">${prefixPanelHTML(data.config.server)}</div>
-    <div id="tab-reactions" class="tab-panel">${reactionsPanelHTML(data.config.server)}</div>
-    <div id="tab-reactionroles" class="tab-panel">${reactionRolesPanelHTML(data.config.reactionRoles)}</div>
-    <div id="tab-broadcast" class="tab-panel">${broadcastPanelHTML(data.config.server)}</div>
-    <div id="tab-logging" class="tab-panel">${loggingPanelHTML(data.config.logging)}</div>
-    <div id="tab-automod" class="tab-panel">${automodPanelHTML(data.config.automod)}</div>
-    <div id="tab-tickets" class="tab-panel">${ticketsPanelHTML(data.config.ticketPanels)}</div>
-    <div id="tab-events" class="tab-panel">${eventsPanelHTML()}</div>
   `;
 
   selectTab(initialTab);
@@ -859,7 +962,7 @@ function welcomePanelHTML(w) {
   const s = w || {};
   return `
     <div class="card">
-      <div class="card-title"><span><span class="icon">👋</span> Welcome messages</span></div>
+      <div class="card-title"><span><span class="icon">${svgIcon('hand')}</span> Welcome messages</span></div>
       <p class="card-desc">Greet new members with a customizable message, banner and optional DM.</p>
 
       <div class="switch-row">
@@ -942,7 +1045,7 @@ function levelingPanelHTML(server) {
   const lev = server?.leveling || {};
   return `
     <div class="card">
-      <div class="card-title"><span><span class="icon">📈</span> Leveling &amp; XP</span></div>
+      <div class="card-title"><span><span class="icon">${svgIcon('trendingUp')}</span> Leveling &amp; XP</span></div>
       <p class="card-desc">Reward members with XP for chatting and earn badges as they level up.</p>
 
       <div class="switch-row">
@@ -981,7 +1084,7 @@ function levelingPanelHTML(server) {
 function prefixPanelHTML(server) {
   return `
     <div class="card">
-      <div class="card-title"><span><span class="icon">⚡</span> Command prefix</span></div>
+      <div class="card-title"><span><span class="icon">${svgIcon('hash')}</span> Command prefix</span></div>
       <p class="card-desc">Set a custom prefix for text commands in this server (max 3 characters, no spaces).</p>
       <div class="field">
         <label class="field-label" for="prefix-value">Prefix</label>
@@ -1000,7 +1103,7 @@ function reactionsPanelHTML(server) {
   const rows = (ar.reactions || []).map((r, i) => reactionRowHTML(r, i)).join('');
   return `
     <div class="card">
-      <div class="card-title"><span><span class="icon">🔁</span> Auto-reactions</span></div>
+      <div class="card-title"><span><span class="icon">${svgIcon('repeat')}</span> Auto-reactions</span></div>
       <p class="card-desc">Automatically react to messages containing a trigger word with an emoji.</p>
 
       <div class="switch-row">
@@ -1030,7 +1133,7 @@ function reactionRowHTML(r, i) {
     <div class="reaction-row" data-index="${i}">
       <input type="text" class="r-trigger" value="${esc(r.trigger || '')}" placeholder="trigger word" />
       <input type="text" class="r-emoji" value="${esc(r.emoji || '')}" placeholder="🎉" maxlength="30" />
-      <button class="reaction-remove" type="button">✕</button>
+      <button class="reaction-remove" type="button">${svgIcon('x')}</button>
     </div>
   `;
 }
@@ -1038,7 +1141,7 @@ function reactionRowHTML(r, i) {
 function broadcastPanelHTML(server) {
   return `
     <div class="card">
-      <div class="card-title"><span><span class="icon">📢</span> Broadcasts</span></div>
+      <div class="card-title"><span><span class="icon">${svgIcon('megaphone')}</span> Broadcasts</span></div>
       <p class="card-desc">Choose whether this server receives official PrimeBot broadcast announcements.</p>
 
       <div class="switch-row">
@@ -1083,7 +1186,7 @@ function rrMappingRowHTML(m = {}) {
       <input type="text" class="r-emoji" value="${esc(m.emoji || '')}" placeholder="🎉 or <:name:id>" maxlength="100" />
       <select class="r-role" data-role-select data-placeholder="Role">${m.roleId ? `<option value="${esc(m.roleId)}" selected>Role</option>` : ''}</select>
       <input type="text" class="r-label" value="${esc(m.label || '')}" placeholder="label (optional)" maxlength="100" />
-      <button class="reaction-remove" type="button">✕</button>
+      <button class="reaction-remove" type="button">${svgIcon('x')}</button>
     </div>
   `;
 }
@@ -1096,15 +1199,15 @@ function rrMenuCardHTML(menu) {
   return `
     <div class="card rr-menu-card" data-menu="${menu.id}">
       <div class="card-title">
-        <span><span class="icon">🎭</span> ${esc(menu.title || 'Untitled menu')} <span class="tag ${menu.enabled ? 'on' : 'off'}">#${menu.id}</span></span>
+        <span><span class="icon">${svgIcon('tag')}</span> ${esc(menu.title || 'Untitled menu')} <span class="tag ${menu.enabled ? 'on' : 'off'}">#${menu.id}</span></span>
         <button class="btn btn-secondary btn-sm rr-delete" data-menu="${menu.id}">Delete</button>
       </div>
       <div class="rr-meta">
         <span><strong>Channel:</strong> <#${esc(menu.channelId)}></span>
         <span><strong>Message:</strong> <code>${esc(menu.messageId)}</code></span>
         <span><strong>Mode:</strong> <code>${esc(menu.mode)}</code></span>
-        <span><strong>Persistent:</strong> ${menu.persistent ? '✅' : '⛔'}</span>
-        <span><strong>Bot reactions:</strong> ${menu.includeBots ? '✅' : '⛔'}</span>
+        <span><strong>Persistent:</strong> ${menu.persistent ? svgIcon('check') + ' Yes' : svgIcon('x') + ' No'}</span>
+        <span><strong>Bot reactions:</strong> ${menu.includeBots ? svgIcon('check') + ' Yes' : svgIcon('x') + ' No'}</span>
       </div>
       <div class="rr-mappings">${mappings || '<em>No mappings</em>'}</div>
       ${menu.requiredRoleId ? `<div class="field-hint">Requires <@&${esc(menu.requiredRoleId)}></div>` : ''}
@@ -1134,7 +1237,7 @@ function ticketPanelCardHTML(panel) {
   return `
     <div class="card rr-menu-card" data-panel="${panel.id}">
       <div class="card-title">
-        <span><span class="icon">🎫</span> ${esc(panel.name)} <span class="tag ${panel.enabled ? 'on' : 'off'}">#${panel.id}</span></span>
+        <span><span class="icon">${svgIcon('ticket')}</span> ${esc(panel.name)} <span class="tag ${panel.enabled ? 'on' : 'off'}">#${panel.id}</span></span>
         <span style="display:flex;gap:6px;flex-wrap:wrap">
           <button class="btn btn-secondary btn-sm tk-send" data-panel="${panel.id}">Send / Resend</button>
           <button class="btn btn-secondary btn-sm tk-update" data-panel="${panel.id}">Update message</button>
@@ -1165,7 +1268,7 @@ function ticketRoleRowHTML(selected = {}, prefix = 'tk-support') {
   return `
     <div class="reaction-row" data-index="">
       <select class="${prefix}-role" data-role-select data-placeholder="Role">${selected.roleId ? `<option value="${esc(selected.roleId)}" selected>Role</option>` : ''}</select>
-      <button class="reaction-remove" type="button">✕</button>
+      <button class="reaction-remove" type="button">${svgIcon('x')}</button>
     </div>
   `;
 }
@@ -1178,7 +1281,7 @@ function ticketsPanelHTML(panels = []) {
   const typeOpts = TICKET_MESSAGE_TYPES.map(t => `<option value="${t.value}">${esc(t.label)}</option>`).join('');
   return `
     <div class="card">
-      <div class="card-title"><span><span class="icon">🎫</span> Tickets</span></div>
+      <div class="card-title"><span><span class="icon">${svgIcon('ticket')}</span> Tickets</span></div>
       <p class="card-desc">Ticket panels are configurable <strong>only from the dashboard</strong> — slash and prefix ticket commands are disabled. Build a panel (embed or plain message, custom button, support/ping roles, claim button, per-user limits), then <strong>Send</strong> it to a channel and use <strong>Update message</strong> to re-render an existing message by id.</p>
       <div class="rr-list">${listHTML}</div>
     </div>
@@ -1421,6 +1524,7 @@ async function refreshTicketList(guildId) {
         ? panels.map(ticketPanelCardHTML).join('')
         : `<div class="alert alert-warn">No ticket panels yet. Create one below — panels can only be configured from the dashboard.</div>`;
       bindTicketCardActions(guildId);
+      animateCards(listEl);
     }
   } catch (_) { /* surfaced via toast elsewhere */ }
 }
@@ -1573,20 +1677,20 @@ function bindTicketEvents(guildId) {
 // message. The bot's EventManager reads these tables and runs the tasks.
 
 const EVENT_ACTIONS = [
-  { key: 'lock',      label: 'Lock channels',        icon: '🔒', needs: 'channels' },
-  { key: 'unlock',    label: 'Unlock channels',      icon: '🔓', needs: 'channels' },
-  { key: 'hide',      label: 'Hide channels',        icon: '🙈', needs: 'channels' },
-  { key: 'unhide',    label: 'Unhide channels',      icon: '👀', needs: 'channels' },
-  { key: 'addrole',   label: 'Add role to members',  icon: '➕', needs: 'roles' },
-  { key: 'removerole',label: 'Remove role from members', icon: '➖', needs: 'roles' },
-  { key: 'sendtext',  label: 'Send text message',    icon: '💬', needs: 'message' },
-  { key: 'sendembed', label: 'Send embed message',   icon: '🖼️', needs: 'embed' },
+  { key: 'lock',      label: 'Lock channels',        icon: 'lock', needs: 'channels' },
+  { key: 'unlock',    label: 'Unlock channels',      icon: 'unlock', needs: 'channels' },
+  { key: 'hide',      label: 'Hide channels',        icon: 'eyeOff', needs: 'channels' },
+  { key: 'unhide',    label: 'Unhide channels',      icon: 'eye', needs: 'channels' },
+  { key: 'addrole',   label: 'Add role to members',  icon: 'userPlus', needs: 'roles' },
+  { key: 'removerole',label: 'Remove role from members', icon: 'userMinus', needs: 'roles' },
+  { key: 'sendtext',  label: 'Send text message',    icon: 'message', needs: 'message' },
+  { key: 'sendembed', label: 'Send embed message',   icon: 'image', needs: 'embed' },
 ];
 
 function eventsPanelHTML() {
   return `
     <div class="card">
-      <h2>📅 Event Management</h2>
+      <h2>${svgIcon('calendar')} Event Management</h2>
       <p>Schedule an event with a countdown and a list of timed tasks. The bot will lock/unlock or hide/unhide channels, add/remove roles, or send a text/embed message at the offsets you set (seconds from the event start).</p>
       <div class="ev-form" id="ev-form">
         <div class="form-row">
@@ -1611,7 +1715,7 @@ function eventsPanelHTML() {
 
 function evTaskRowHTML(task = {}) {
   const a = EVENT_ACTIONS.find(x => x.key === task.action) || EVENT_ACTIONS[0];
-  const actionOpts = EVENT_ACTIONS.map(x => `<option value="${x.key}" ${x.key === (task.action || 'sendtext') ? 'selected' : ''}>${x.icon} ${esc(x.label)}</option>`).join('');
+  const actionOpts = EVENT_ACTIONS.map(x => `<option value="${x.key}" ${x.key === (task.action || 'sendtext') ? 'selected' : ''}>${esc(x.label)}</option>`).join('');
   const channelOpts = (guildState.channels || []).map(c => `<option value="${esc(c.id)}" ${String(c.id) === String(task.channelId) ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
   const roleOpts = (guildState.roles || []).map(r => `<option value="${esc(r.id)}">${esc(r.name)}</option>`).join('');
   return `
@@ -1630,7 +1734,7 @@ function evTaskRowHTML(task = {}) {
           <label class="ev-tg-channels">Send to channel(s)<select class="ev-target-embed-channels" multiple>${channelOpts}</select></label>
         </div>
       </div>
-      <button class="btn btn-secondary ev-remove-task" title="Remove task">✕</button>
+      <button class="btn btn-secondary ev-remove-task" title="Remove task">${svgIcon('x')}</button>
     </div>
   `;
 }
@@ -1705,7 +1809,7 @@ function eventStatusBadge(status) {
 function eventScheduleCardHTML(s) {
   const tasksHTML = (s.tasks || []).map(t => {
     const meta = EVENT_ACTIONS.find(x => x.key === t.action) || {};
-    return `<li>${meta.icon || ''} ${esc(meta.label || t.action)} @ +${t.offsetSeconds}s</li>`;
+    return `<li>${meta.icon ? svgIcon(meta.icon) : ''} ${esc(meta.label || t.action)} @ +${t.offsetSeconds}s</li>`;
   }).join('');
   const start = s.startAt ? new Date(s.startAt).toLocaleString() : '—';
   return `
@@ -1733,6 +1837,7 @@ async function loadEventSchedules(guildId) {
       ? schedules.map(eventScheduleCardHTML).join('')
       : '<p class="live-empty">No events yet. Create one above.</p>';
     bindEventCardActions(guildId);
+    animateCards(list);
   } catch (err) {
     list.innerHTML = `<div class="alert alert-error">${esc(err.message || 'Failed to load events.')}</div>`;
   }
@@ -1781,7 +1886,7 @@ function reactionRolesPanelHTML(menus = []) {
   const modeOpts = RR_MODES.map(m => `<option value="${m.value}">${esc(m.label)}</option>`).join('');
   return `
     <div class="card">
-      <div class="card-title"><span><span class="icon">🎭</span> Reaction Roles</span></div>
+      <div class="card-title"><span><span class="icon">${svgIcon('tag')}</span> Reaction Roles</span></div>
       <p class="card-desc">Let members self-assign roles by reacting. PrimeBot gives you premium modes for free: <strong>toggle</strong>, <strong>sticky</strong> (one-click assign), <strong>verify</strong> (grant once, e.g. rules gate), and <strong>unique</strong> (only one role at a time). Roles persist across bot restarts.</p>
       <div class="rr-list">${listHTML}</div>
     </div>
@@ -1887,7 +1992,7 @@ function loggingPanelHTML(logging) {
 
   return `
     <div class="card">
-      <div class="card-title"><span><span class="icon">📜</span> Server logging</span></div>
+      <div class="card-title"><span><span class="icon">${svgIcon('fileText')}</span> Server logging</span></div>
       <p class="card-desc">Send rich embed logs of server events to a channel and/or a Discord webhook.</p>
 
       <div class="switch-row">
@@ -1957,7 +2062,7 @@ function automodRuleRowHTML(rule = {}) {
     ? rule.actions
     : (rule.action ? [rule.action] : ['delete']);
   const actionChecks = AUTOMOD_ACTIONS.map(a =>
-    `<label class="switch mini am-action-label"><input type="checkbox" class="am-action" value="${a.key}" ${selected.includes(a.key) ? 'checked' : ''}/><span class="switch-text">${a.icon} ${esc(a.label)}</span></label>`
+    `<label class="switch mini am-action-label"><input type="checkbox" class="am-action" value="${a.key}" ${selected.includes(a.key) ? 'checked' : ''}/><span class="switch-text">${svgIcon(a.icon)} ${esc(a.label)}</span></label>`
   ).join('');
   let extra = '';
   if (meta.params.includes('words')) {
@@ -1972,10 +2077,10 @@ function automodRuleRowHTML(rule = {}) {
   return `
     <div class="reaction-row am-rule-row" data-type="${esc(meta.key)}">
       <label class="switch mini"><input type="checkbox" class="am-enabled" ${rule.enabled !== false ? 'checked' : ''}/><span class="slider"></span></label>
-      <span class="am-rule-label">${meta.icon} ${esc(meta.label)}</span>
+      <span class="am-rule-label">${svgIcon(meta.icon)} ${esc(meta.label)}</span>
       <div class="am-actions-group">${actionChecks}</div>
       ${extra}
-      <button class="reaction-remove am-remove" type="button">✕</button>
+      <button class="reaction-remove am-remove" type="button">${svgIcon('x')}</button>
     </div>
   `;
 }
@@ -1984,20 +2089,20 @@ function automodPanelHTML(automod) {
   const s = automod || {};
   const rules = Array.isArray(s.rules) ? s.rules : [];
   const ruleRows = rules.length ? rules.map(automodRuleRowHTML).join('') : '';
-  const addTypeOpts = AUTOMOD_RULES.map(r => `<option value="${r.key}">${r.icon} ${esc(r.label)}</option>`).join('');
+  const addTypeOpts = AUTOMOD_RULES.map(r => `<option value="${r.key}">${esc(r.label)}</option>`).join('');
   const warnActionChecks = AUTOMOD_WARN_ACTIONS.map(a =>
-    `<label class="switch mini am-action-label"><input type="checkbox" class="am-warn-action" value="${a.key}" ${(s.warnActions || [s.warnAction || 'timeout']).includes(a.key) ? 'checked' : ''}/><span class="switch-text">${a.icon} ${esc(a.label)}</span></label>`
+    `<label class="switch mini am-action-label"><input type="checkbox" class="am-warn-action" value="${a.key}" ${(s.warnActions || [s.warnAction || 'timeout']).includes(a.key) ? 'checked' : ''}/><span class="switch-text">${svgIcon(a.icon)} ${esc(a.label)}</span></label>`
   ).join('');
   const dmMessages = s.dmMessages || {};
   const dmRows = AUTOMOD_DM_KEYS.map(k => {
     const a = AUTOMOD_ACTIONS.find(x => x.key === k);
-    const label = a ? `${a.icon} ${a.label}` : (k === 'escalation' ? '🚫 Escalation' : k);
+    const label = a ? `${svgIcon(a.icon)} ${a.label}` : (k === 'escalation' ? 'Escalation' : k);
     return `<div class="field-row"><label class="field-label" style="min-width:120px">${label}</label><input type="text" class="am-dm-message" data-key="${k}" value="${esc(dmMessages[k] || '')}" placeholder="(use default)" style="flex:1"/></div>`;
   }).join('');
 
   return `
     <div class="card">
-      <div class="card-title"><span><span class="icon">🛡️</span> Premium Automod</span></div>
+      <div class="card-title"><span><span class="icon">${svgIcon('shield')}</span> Premium Automod</span></div>
       <p class="card-desc">Automatic moderation that scans every message against your rules. Premium features for free: blocked words, invite/bad-link/NSFW filtering, spam &amp; mass-mention detection, caps/emoji/repeated-char/new-account filters, multi-action punishment, DM notifications, warning escalation, and appeals.</p>
 
       <div class="switch-row">
@@ -2072,13 +2177,13 @@ function automodPanelHTML(automod) {
     </div>
 
     <div class="card">
-      <div class="card-title"><span><span class="icon">⚠️</span> Warnings</span></div>
+      <div class="card-title"><span><span class="icon">${svgIcon('alertTriangle')}</span> Warnings</span></div>
       <p class="card-desc">Live warning ledger for this server (automod + manual <code>/warn</code>). <a href="#" id="am-refresh-warnings">Refresh</a></p>
       <div id="am-warnings-list"><div class="field-hint">Loading…</div></div>
     </div>
 
     <div class="card">
-      <div class="card-title"><span><span class="icon">📨</span> Appeals</span></div>
+      <div class="card-title"><span><span class="icon">${svgIcon('envelope')}</span> Appeals</span></div>
       <p class="card-desc">Punishment appeals filed by members. Approving an appeal reverses the action (unban/unmute) automatically. <a href="#" id="am-refresh-appeals">Refresh</a></p>
       <div id="am-appeals-list"><div class="field-hint">Loading…</div></div>
     </div>
@@ -2186,6 +2291,7 @@ async function refreshRrList(guildId) {
         ? menus.map(rrMenuCardHTML).join('')
         : `<div class="alert alert-warn">No reaction-role menus yet. Create one below.</div>`;
       bindRrCardActions(guildId);
+      animateCards(listEl);
     }
   } catch (_) { /* surfaced via toast elsewhere */ }
 }
@@ -2362,7 +2468,7 @@ async function refreshAmWarnings(guildId) {
     const data = await api(`/api/guilds/${guildId}/automod/warnings`);
     const warnings = data.warnings || [];
     if (warnings.length === 0) {
-      el.innerHTML = '<div class="field-hint">No warnings recorded. ✨</div>';
+      el.innerHTML = '<div class="field-hint">No warnings recorded.</div>';
       return;
     }
     el.innerHTML = warnings.slice(0, 50).map(w => {
@@ -2391,8 +2497,8 @@ async function refreshAmAppeals(guildId) {
       const when = new Date(a.createdAt).toLocaleString();
       const who = a.userId ? `<@${esc(a.userId)}>` : 'unknown';
       const statusBadge = a.status === 'pending'
-        ? '<span style="color:#faa61a">⏳ pending</span>'
-        : (a.status === 'approved' ? '<span style="color:#57f287">✅ approved</span>' : '<span style="color:#ed4245">⛔ denied</span>');
+        ? '<span style="color:var(--warn)">pending</span>'
+        : (a.status === 'approved' ? '<span style="color:var(--green)">approved</span>' : '<span style="color:var(--red)">denied</span>');
       const decide = a.status === 'pending'
         ? `<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
              <input type="text" class="am-appeal-note" data-id="${a.id}" placeholder="note (optional)" style="flex:1;min-width:160px"/>
