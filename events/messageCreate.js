@@ -449,9 +449,18 @@ module.exports = {
                     // Create a simulated prefixed message for the command handler
                     const simulatedContent = `${prefix}${commandName}${args.length > 0 ? ' ' + args.join(' ') : ''}`;
                     
-                    // Create a new message object to avoid reference issues
+                    // Create a new message object to avoid reference issues.
+                    // discord.js stores `client` as a non-enumerable own property
+                    // (set via Object.defineProperty in Base), so Object.assign
+                    // does NOT copy it — a shallow clone would lose its client
+                    // reference and crash any getter that reads this.client
+                    // (e.g. Message.guild → this.client.guilds). Copy client
+                    // explicitly to keep the clone fully functional.
                     const simulatedMessage = Object.create(Object.getPrototypeOf(message));
                     Object.assign(simulatedMessage, message);
+                    Object.defineProperty(simulatedMessage, 'client', {
+                        value: message.client, writable: true, configurable: true, enumerable: false,
+                    });
                     simulatedMessage.content = simulatedContent;
                     console.log(`[NO-PREFIX] Simulated content: "${simulatedContent}"`);
                     
@@ -1803,6 +1812,51 @@ module.exports = {
                     } catch (error) {
                         console.error("Error in live poll command:", error);
                         return message.reply("There was an error processing your live poll command. Please try again later.");
+                    }
+                    break;
+
+                case "lgiveway":
+                case "lgiveaway":
+                case "livegiveaway":
+                    try {
+                        // Handle live giveaway prefix commands
+                        if (args.length < 1) {
+                            const usageEmbed = new EmbedBuilder()
+                                .setColor(config.colors.primary)
+                                .setTitle("Live Giveaway Commands")
+                                .setDescription("Cross-server giveaways with pass code sharing")
+                                .addFields(
+                                    { name: `${prefix}lgiveway create [prize] [duration] [winners] [description]`, value: "Create a new cross-server giveaway" },
+                                    { name: `${prefix}lgiveway join [giveaway_id_or_passcode]`, value: "Join an existing giveaway" },
+                                    { name: `${prefix}lgiveway results [giveaway_id_or_passcode]`, value: "View live giveaway results/winners" },
+                                    { name: `${prefix}lgiveway end [giveaway_id]`, value: "End your giveaway (creator only)" },
+                                    { name: `${prefix}lgiveway list`, value: "List your created giveaways with IDs/codes" },
+                                    { name: "Examples", value: `\`${prefix}lgiveway create "Nitro Classic" 24h 1\`\n\`${prefix}lgiveway join ABC123\`` }
+                                )
+                                .setFooter({ text: `Version: ${config.version}` });
+                            return message.reply({ embeds: [usageEmbed] });
+                        }
+
+                        const subcommand = args[0].toLowerCase();
+                        const subArgs = args.slice(1);
+
+                        switch (subcommand) {
+                            case "create":
+                                return await handleLiveGiveawayCreate(message, subArgs, prefix, client);
+                            case "join":
+                                return await handleLiveGiveawayJoin(message, subArgs, prefix, client);
+                            case "results":
+                                return await handleLiveGiveawayResults(message, subArgs, prefix, client);
+                            case "end":
+                                return await handleLiveGiveawayEnd(message, subArgs, prefix, client);
+                            case "list":
+                                return await handleLiveGiveawayList(message, subArgs, prefix, client);
+                            default:
+                                return message.reply(`Unknown subcommand. Use \`${prefix}lgiveway\` to see available commands.`);
+                        }
+                    } catch (error) {
+                        console.error("Error in live giveaway command:", error);
+                        return message.reply("There was an error processing your live giveaway command. Please try again later.");
                     }
                     break;
 
@@ -5456,6 +5510,208 @@ async function handleLivePollList(message, args, prefix, client) {
     } catch (error) {
         console.error('Error listing live polls:', error);
         return message.reply('There was an error retrieving your polls. Please try again later.');
+    }
+}
+
+/**
+ * Handle live giveaway create command (prefix)
+ * Usage: $lgiveway create [prize] [duration] [winners] [description]
+ * If the prize contains spaces, wrap it in quotes. duration e.g. 24h. winners is a number.
+ */
+async function handleLiveGiveawayCreate(message, args, prefix, client) {
+    const ms = require('ms');
+
+    if (args.length < 1) {
+        return message.reply(`**Correct Usage:** \`${prefix}lgiveway create [prize] [duration] [winners] [description]\`\n**Example:** \`${prefix}lgiveway create "Nitro Classic" 24h 1 "Premium giveaway"\``);
+    }
+
+    // Parse prize: support a quoted prize.
+    let prize, rest;
+    if (args[0].startsWith('"')) {
+        const fullMessage = args.join(' ');
+        const prizeMatch = fullMessage.match(/"([^"]+)"/);
+        if (prizeMatch) {
+            prize = prizeMatch[1];
+            rest = fullMessage.replace(prizeMatch[0], '').trim().split(/\s+/).filter(a => a);
+        } else {
+            prize = args[0].replace(/"/g, '');
+            rest = args.slice(1);
+        }
+    } else {
+        prize = args[0];
+        rest = args.slice(1);
+    }
+
+    let duration = null;
+    let winnerCount = 1;
+    let description = null;
+
+    // Next token: duration if it parses with ms, else winners, else description.
+    if (rest.length > 0) {
+        const parsed = ms(rest[0]);
+        if (parsed && parsed >= 60000) {
+            duration = parsed;
+            rest = rest.slice(1);
+        }
+    }
+    // Next: winners (integer)
+    if (rest.length > 0 && /^\d+$/.test(rest[0])) {
+        winnerCount = Math.min(10, Math.max(1, parseInt(rest[0], 10)));
+        rest = rest.slice(1);
+    }
+    // Remaining: description (may be quoted)
+    if (rest.length > 0) {
+        description = rest.join(' ').replace(/^"|"$/g, '');
+    }
+
+    try {
+        const result = await client.liveGiveawayManager.createGiveaway({
+            prize, description, creatorId: message.author.id, winnerCount, duration,
+        });
+
+        const embed = new EmbedBuilder()
+            .setColor(config.colors.success)
+            .setTitle('🎉 Live Giveaway Created!')
+            .setDescription(`**Prize**: ${prize}`)
+            .addFields(
+                { name: '🆔 Giveaway ID', value: `\`${result.giveawayId}\``, inline: true },
+                { name: '🔑 Pass Code', value: `\`${result.passCode}\``, inline: true },
+                { name: '🏆 Winners', value: `${winnerCount}`, inline: true },
+                { name: '🔗 Share Info', value: 'Share the **Giveaway ID** or **Pass Code** so others can join!', inline: false },
+            )
+            .setFooter({ text: `Created by ${message.author.tag} • Version ${config.version}`, iconURL: message.author.displayAvatarURL({ dynamic: true }) })
+            .setTimestamp();
+
+        if (duration) {
+            embed.addFields({ name: '⏰ Expires', value: `<t:${Math.floor((Date.now() + duration) / 1000)}:R>`, inline: true });
+        } else {
+            embed.addFields({ name: '⏰ Duration', value: 'Permanent (until manually ended)', inline: true });
+        }
+
+        await message.reply({ embeds: [embed] });
+
+        const giveaway = await client.liveGiveawayManager.getGiveaway(result.giveawayId);
+        if (giveaway) {
+            const votingEmbed = client.liveGiveawayManager.createGiveawayEmbed(giveaway, 0);
+            const buttons = client.liveGiveawayManager.createJoinButton(result.giveawayId);
+            const votingMessage = await message.channel.send({ embeds: [votingEmbed], components: buttons });
+            await client.liveGiveawayManager.updateGiveawayMessage(result.giveawayId, votingMessage.id, message.channel.id);
+        }
+    } catch (error) {
+        console.error('Error creating live giveaway:', error);
+        return message.reply('There was an error creating the live giveaway. Please try again later.');
+    }
+}
+
+/**
+ * Handle live giveaway join command (prefix)
+ */
+async function handleLiveGiveawayJoin(message, args, prefix, client) {
+    if (args.length < 1) {
+        return message.reply(`**Correct Usage:** \`${prefix}lgiveway join <giveaway_id_or_passcode>\``);
+    }
+    const identifier = args[0];
+    try {
+        const giveaway = await client.liveGiveawayManager.getGiveaway(identifier);
+        if (!giveaway) {
+            return message.reply('Giveaway not found. Please check the Giveaway ID or Pass Code.');
+        }
+        if (!giveaway.isActive || giveaway.ended) {
+            return message.reply('This giveaway has ended.');
+        }
+        if (giveaway.endsAt && new Date() > new Date(giveaway.endsAt)) {
+            return message.reply('This giveaway has ended.');
+        }
+        const embed = client.liveGiveawayManager.createGiveawayEmbed(giveaway, giveaway.participants.size);
+        const buttons = client.liveGiveawayManager.createJoinButton(giveaway.giveawayId);
+        await message.reply({ embeds: [embed], components: buttons });
+    } catch (error) {
+        console.error('Error joining live giveaway:', error);
+        return message.reply('There was an error accessing the giveaway. Please try again later.');
+    }
+}
+
+/**
+ * Handle live giveaway results command (prefix)
+ */
+async function handleLiveGiveawayResults(message, args, prefix, client) {
+    if (args.length < 1) {
+        return message.reply(`**Correct Usage:** \`${prefix}lgiveway results <giveaway_id_or_passcode>\``);
+    }
+    const identifier = args[0];
+    try {
+        const results = await client.liveGiveawayManager.getGiveawayResults(identifier);
+        if (!results) {
+            return message.reply('Giveaway not found. Please check the Giveaway ID or Pass Code.');
+        }
+        const embed = client.liveGiveawayManager.createGiveawayEmbed(
+            results.giveaway, results.participants.length, results.winners, !results.giveaway.isActive
+        );
+        await message.reply({ embeds: [embed] });
+    } catch (error) {
+        console.error('Error getting live giveaway results:', error);
+        return message.reply('There was an error retrieving giveaway results. Please try again later.');
+    }
+}
+
+/**
+ * Handle live giveaway end command (prefix)
+ */
+async function handleLiveGiveawayEnd(message, args, prefix, client) {
+    if (args.length < 1) {
+        return message.reply(`**Correct Usage:** \`${prefix}lgiveway end <giveaway_id>\``);
+    }
+    const giveawayId = args[0];
+    try {
+        const result = await client.liveGiveawayManager.endGiveaway(giveawayId, message.author.id);
+        if (!result.success) {
+            return message.reply(result.message);
+        }
+        if (result.winners && result.winners.length > 0) {
+            const winnersEmbed = client.liveGiveawayManager.createGiveawayEmbed(
+                result.giveaway, result.participants.length, result.winners, true
+            );
+            await message.reply({ embeds: [winnersEmbed] });
+        } else {
+            const embed = new EmbedBuilder()
+                .setColor(config.colors.success)
+                .setTitle('🎉 Giveaway Ended')
+                .setDescription(`Giveaway \`${giveawayId}\` has been ended.\n\nNo one entered this giveaway.`)
+                .setFooter({ text: `Ended by ${message.author.tag} • Version ${config.version}`, iconURL: message.author.displayAvatarURL({ dynamic: true }) })
+                .setTimestamp();
+            await message.reply({ embeds: [embed] });
+        }
+    } catch (error) {
+        console.error('Error ending live giveaway:', error);
+        return message.reply('There was an error ending the giveaway. Please try again later.');
+    }
+}
+
+/**
+ * Handle live giveaway list command (prefix)
+ */
+async function handleLiveGiveawayList(message, args, prefix, client) {
+    try {
+        const giveaways = await client.liveGiveawayManager.getUserGiveaways(message.author.id);
+        if (giveaways.length === 0) {
+            return message.reply("You haven't created any live giveaways yet.");
+        }
+        const embed = new EmbedBuilder()
+            .setColor(config.colors.primary)
+            .setTitle('🎉 Your Live Giveaways')
+            .setDescription('Here are your created giveaways:')
+            .setFooter({ text: `Requested by ${message.author.tag} • Version ${config.version}`, iconURL: message.author.displayAvatarURL({ dynamic: true }) })
+            .setTimestamp();
+        const list = giveaways.map(g => {
+            const status = g.isActive ? '🟢 Active' : '🔴 Ended';
+            const expires = g.endsAt ? `<t:${Math.floor(new Date(g.endsAt).getTime() / 1000)}:R>` : 'Permanent';
+            return `**ID:** \`${g.giveawayId}\` | **Code:** \`${g.passCode}\`\n${status} • Expires: ${expires}\n**Prize:** ${g.prize}`;
+        }).join('\n\n');
+        embed.addFields({ name: 'Giveaways', value: list, inline: false });
+        await message.reply({ embeds: [embed] });
+    } catch (error) {
+        console.error('Error listing live giveaways:', error);
+        return message.reply('There was an error retrieving your giveaways. Please try again later.');
     }
 }
 

@@ -53,6 +53,30 @@ function getTicketPool() {
     return ticketPool;
 }
 
+let livePool = null;
+function getLivePool() {
+    if (livePool) return livePool;
+    try {
+        livePool = require('../server/liveDb').livePool;
+    } catch (err) {
+        console.error('[DASHBOARD DB] liveDb unavailable:', err.message);
+        livePool = { query: async () => { throw new Error('Live database not configured'); } };
+    }
+    return livePool;
+}
+
+let eventPool = null;
+function getEventPool() {
+    if (eventPool) return eventPool;
+    try {
+        eventPool = require('../server/eventDb').eventPool;
+    } catch (err) {
+        console.error('[DASHBOARD DB] eventDb unavailable:', err.message);
+        eventPool = { query: async () => { throw new Error('Event database not configured'); } };
+    }
+    return eventPool;
+}
+
 const config = require('../config');
 const constants = require('./constants');
 const { normalizeGuildPrefix } = require('../utils/prefixHelper');
@@ -1038,6 +1062,9 @@ async function ensureTicketTables() {
         CREATE INDEX IF NOT EXISTS ticket_instances_guild_idx ON ticket_instances (guild_id);
         CREATE INDEX IF NOT EXISTS ticket_instances_panel_idx ON ticket_instances (panel_id);
         CREATE INDEX IF NOT EXISTS ticket_instances_guild_user_idx ON ticket_instances (guild_id, user_id);
+        ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS open_name_template     VARCHAR(100);
+        ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS claimed_name_template VARCHAR(100);
+        ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS closed_name_template   VARCHAR(100);
     `);
 }
 
@@ -1231,6 +1258,334 @@ async function renameTicketPanel(id, newName) {
     return _fetchTicketPanel(id);
 }
 
+// ── Live polls + live giveaways (LIVE_DATABASE_URL) ────────────────────────
+//
+// The dashboard surfaces all running and ended live polls and live giveaways
+// in the "Live" page. Live polls live in the main DB schema (live_polls etc.),
+// while live giveaways live in the dedicated LIVE_DATABASE_URL pool. Both are
+// read-only here (creation is via the bot commands) — the dashboard just lists
+// them. The bot's managers cache in memory and re-read periodically, so the
+// numbers here reflect the live state within that window.
+
+async function getLivePolls() {
+    try {
+        const res = await pool.query(`
+            SELECT p.poll_id, p.pass_code, p.question, p.is_active,
+                   p.created_at, p.expires_at,
+                   (SELECT COUNT(*) FROM live_poll_votes v WHERE v.poll_id = p.poll_id) AS total_votes
+            FROM live_polls p
+            ORDER BY p.created_at DESC
+        `);
+        return res.rows.map(r => ({
+            pollId: r.poll_id,
+            passCode: r.pass_code,
+            question: r.question,
+            isActive: r.is_active !== false,
+            createdAt: r.created_at,
+            expiresAt: r.expires_at,
+            totalVotes: Number(r.total_votes) || 0,
+        }));
+    } catch (err) {
+        console.error('[DASHBOARD DB] live polls read failed:', err.message);
+        return [];
+    }
+}
+
+async function getLiveGiveaways() {
+    try {
+        const p = getLivePool();
+        const res = await p.query(`
+            SELECT g.giveaway_id, g.pass_code, g.prize, g.description, g.is_active,
+                   g.ended, g.created_at, g.ends_at,
+                   (SELECT COUNT(*) FROM live_giveaway_participants pt WHERE pt.giveaway_id = g.giveaway_id) AS entries
+            FROM live_giveaways g
+            ORDER BY g.created_at DESC
+        `);
+        return res.rows.map(r => ({
+            giveawayId: r.giveaway_id,
+            passCode: r.pass_code,
+            prize: r.prize,
+            description: r.description,
+            isActive: r.is_active !== false,
+            ended: r.ended === true,
+            createdAt: r.created_at,
+            endsAt: r.ends_at,
+            entries: Number(r.entries) || 0,
+        }));
+    } catch (err) {
+        console.error('[DASHBOARD DB] live giveaways read failed:', err.message);
+        return [];
+    }
+}
+
+// Ended live giveaways also expose the selected winners (the dashboard only
+// shows winners for ended items).
+async function getEndedLiveGiveaways() {
+    try {
+        const p = getLivePool();
+        const res = await p.query(`
+            SELECT g.giveaway_id, g.pass_code, g.prize, g.created_at, g.ends_at,
+                   COALESCE(json_agg(w.user_id) FILTER (WHERE w.user_id IS NOT NULL), '[]') AS winners
+            FROM live_giveaways g
+            LEFT JOIN live_giveaway_winners w ON w.giveaway_id = g.giveaway_id
+            WHERE g.ended = true
+            GROUP BY g.id
+            ORDER BY g.created_at DESC
+        `);
+        return res.rows.map(r => ({
+            giveawayId: r.giveaway_id,
+            passCode: r.pass_code,
+            prize: r.prize,
+            createdAt: r.created_at,
+            endsAt: r.ends_at,
+            winners: Array.isArray(r.winners) ? r.winners : [],
+        }));
+    } catch (err) {
+        console.error('[DASHBOARD DB] ended live giveaways read failed:', err.message);
+        return [];
+    }
+}
+
+// Ended live polls surface the winning option(s) (the dashboard shows winners
+// for ended items only).
+async function getEndedLivePolls() {
+    try {
+        const res = await pool.query(`
+            SELECT p.poll_id, p.pass_code, p.question, p.created_at, p.expires_at,
+                   o.option_text, o.vote_count
+            FROM live_polls p
+            JOIN live_poll_options o ON o.poll_id = p.poll_id
+            WHERE p.is_active = false
+            ORDER BY p.created_at DESC, o.option_index
+        `);
+        const byPoll = new Map();
+        for (const r of res.rows) {
+            if (!byPoll.has(r.poll_id)) {
+                byPoll.set(r.poll_id, {
+                    pollId: r.poll_id,
+                    passCode: r.pass_code,
+                    question: r.question,
+                    createdAt: r.created_at,
+                    expiresAt: r.expires_at,
+                    options: [],
+                });
+            }
+            byPoll.get(r.poll_id).options.push({ text: r.option_text, votes: Number(r.vote_count) || 0 });
+        }
+        const out = [];
+        for (const poll of byPoll.values()) {
+            const maxVotes = Math.max(0, ...poll.options.map(o => o.votes));
+            poll.winners = maxVotes > 0 ? poll.options.filter(o => o.votes === maxVotes).map(o => o.text) : [];
+            out.push(poll);
+        }
+        return out;
+    } catch (err) {
+        console.error('[DASHBOARD DB] ended live polls read failed:', err.message);
+        return [];
+    }
+}
+
+// ── Event management (EVENT_DATABASE_URL) ───────────────────────────────────
+//
+// Event schedules are configured from the dashboard's 📅 Events tab. Each
+// schedule carries a countdown (seconds to start) and a list of tasks. The bot
+// reads these tables through its EventManager cache and runs the tasks; the
+// dashboard creates/edits/cancels them and the bot picks up changes via its
+// periodic reload.
+
+const VALID_EVENT_ACTIONS = new Set([
+    'lock', 'unlock', 'hide', 'unhide', 'addrole', 'removerole', 'sendtext', 'sendembed',
+]);
+const VALID_EVENT_STATUSES = new Set(['scheduled', 'running', 'completed', 'cancelled']);
+
+async function ensureEventTables() {
+    await getEventPool().query(`
+        CREATE TABLE IF NOT EXISTS event_schedules (
+            id                SERIAL PRIMARY KEY,
+            guild_id          VARCHAR(50) NOT NULL,
+            name              VARCHAR(100) NOT NULL,
+            description       TEXT,
+            status            VARCHAR(20) NOT NULL DEFAULT 'scheduled',
+            countdown_seconds INTEGER NOT NULL DEFAULT 0,
+            start_at          TIMESTAMP,
+            triggered         BOOLEAN NOT NULL DEFAULT false,
+            enabled           BOOLEAN NOT NULL DEFAULT true,
+            created_by_id     VARCHAR(50),
+            created_at        TIMESTAMP DEFAULT NOW(),
+            updated_at        TIMESTAMP DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS event_schedules_guild_idx ON event_schedules (guild_id);
+        CREATE TABLE IF NOT EXISTS event_tasks (
+            id                SERIAL PRIMARY KEY,
+            schedule_id       INTEGER NOT NULL REFERENCES event_schedules(id) ON DELETE CASCADE,
+            offset_seconds    INTEGER NOT NULL DEFAULT 0,
+            action            VARCHAR(30) NOT NULL,
+            target_type       VARCHAR(20) NOT NULL DEFAULT 'channel',
+            target_ids        JSONB NOT NULL DEFAULT '[]',
+            message_content   TEXT,
+            embed_title       VARCHAR(255),
+            embed_description TEXT,
+            embed_color       VARCHAR(20) DEFAULT '#5865F2',
+            embed_image_url   TEXT,
+            channel_id        VARCHAR(50),
+            executed_at       TIMESTAMP,
+            created_at        TIMESTAMP DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS event_tasks_schedule_idx ON event_tasks (schedule_id);
+    `);
+}
+
+function eventRowToSchedule(row, taskRows = []) {
+    return {
+        id: row.id,
+        guildId: row.guild_id,
+        name: row.name,
+        description: row.description || null,
+        status: row.status || 'scheduled',
+        countdownSeconds: Number(row.countdown_seconds) || 0,
+        startAt: row.start_at ? new Date(row.start_at).toISOString() : null,
+        triggered: row.triggered === true,
+        enabled: row.enabled !== false,
+        createdById: row.created_by_id || null,
+        createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+        updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
+        tasks: (taskRows || []).map(t => ({
+            id: t.id,
+            scheduleId: t.schedule_id,
+            offsetSeconds: Number(t.offset_seconds) || 0,
+            action: t.action,
+            targetType: t.target_type || 'channel',
+            targetIds: Array.isArray(t.target_ids) ? t.target_ids : [],
+            messageContent: t.message_content || null,
+            embedTitle: t.embed_title || null,
+            embedDescription: t.embed_description || null,
+            embedColor: t.embed_color || '#5865F2',
+            embedImageUrl: t.embed_image_url || null,
+            channelId: t.channel_id || null,
+            executedAt: t.executed_at ? new Date(t.executed_at).toISOString() : null,
+        })),
+    };
+}
+
+function normalizeEventTask(data, keepUndefined = false) {
+    const out = keepUndefined ? { ...(data || {}) } : {
+        offsetSeconds: 0, action: 'sendtext', targetType: 'channel',
+        targetIds: [], messageContent: null, embedTitle: null,
+        embedDescription: null, embedColor: '#5865F2', embedImageUrl: null,
+        channelId: null, ...(data || {}),
+    };
+    out.offsetSeconds = Math.max(0, parseInt(out.offsetSeconds, 10) || 0);
+    out.action = VALID_EVENT_ACTIONS.has(out.action) ? out.action : 'sendtext';
+    out.targetType = ['channel', 'role', 'user'].includes(out.targetType) ? out.targetType : 'channel';
+    out.targetIds = Array.isArray(out.targetIds) ? out.targetIds.map(String) : [];
+    if (out.embedColor && !/^#[0-9a-fA-F]{6}$/.test(out.embedColor)) out.embedColor = '#5865F2';
+    return out;
+}
+
+async function getEventSchedules(guildId) {
+    await ensureEventTables();
+    const p = getEventPool();
+    const res = await p.query('SELECT * FROM event_schedules WHERE guild_id = $1 ORDER BY id', [guildId]);
+    const out = [];
+    for (const row of res.rows) {
+        const tRes = await p.query('SELECT * FROM event_tasks WHERE schedule_id = $1 ORDER BY offset_seconds, id', [row.id]);
+        out.push(eventRowToSchedule(row, tRes.rows));
+    }
+    return out;
+}
+
+async function createEventSchedule(guildId, data, createdById = null) {
+    await ensureEventTables();
+    const p = getEventPool();
+    const name = (data.name || '').trim().slice(0, 100) || 'Untitled Event';
+    const countdown = Math.max(0, parseInt(data.countdownSeconds, 10) || 0);
+    const description = data.description || null;
+    // Pre-compute start_at = now + countdown for new schedules (status scheduled).
+    const startAt = new Date(Date.now() + countdown * 1000);
+    const res = await p.query(`
+        INSERT INTO event_schedules (guild_id, name, description, status, countdown_seconds, start_at, enabled, created_by_id, created_at, updated_at)
+        VALUES ($1,$2,$3,'scheduled',$4,$5,true,$6,NOW(),NOW()) RETURNING id
+    `, [guildId, name, description, countdown, startAt, createdById]);
+    const id = res.rows[0].id;
+    const tasks = Array.isArray(data.tasks) ? data.tasks : [];
+    for (const t of tasks) {
+        const nt = normalizeEventTask(t);
+        await p.query(`
+            INSERT INTO event_tasks (schedule_id, offset_seconds, action, target_type, target_ids, message_content,
+                embed_title, embed_description, embed_color, embed_image_url, channel_id, created_at)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())
+        `, [id, nt.offsetSeconds, nt.action, nt.targetType, JSON.stringify(nt.targetIds),
+            nt.messageContent, nt.embedTitle, nt.embedDescription, nt.embedColor, nt.embedImageUrl, nt.channelId]);
+    }
+    const row = (await p.query('SELECT * FROM event_schedules WHERE id = $1', [id])).rows[0];
+    const tRes = await p.query('SELECT * FROM event_tasks WHERE schedule_id = $1 ORDER BY offset_seconds, id', [id]);
+    return eventRowToSchedule(row, tRes.rows);
+}
+
+async function updateEventSchedule(id, patch) {
+    await ensureEventTables();
+    const p = getEventPool();
+    const cur = await p.query('SELECT * FROM event_schedules WHERE id = $1', [id]);
+    if (cur.rows.length === 0) throw new Error('Event schedule not found.');
+    const row = cur.rows[0];
+    const name = patch.name != null ? (String(patch.name).trim().slice(0, 100) || row.name) : row.name;
+    const description = patch.description != null ? patch.description : row.description;
+    const countdown = patch.countdownSeconds != null ? Math.max(0, parseInt(patch.countdownSeconds, 10) || 0) : row.countdown_seconds;
+    const enabled = patch.enabled != null ? !!patch.enabled : row.enabled;
+    // If countdown changes and the event hasn't started, recompute start_at.
+    let startAt = row.start_at;
+    if (patch.countdownSeconds != null && row.status === 'scheduled' && !row.triggered) {
+        startAt = new Date(Date.now() + countdown * 1000);
+    }
+    await p.query(`
+        UPDATE event_schedules SET name = $2, description = $3, countdown_seconds = $4,
+            start_at = $5, enabled = $6, updated_at = NOW() WHERE id = $1
+    `, [id, name, description, countdown, startAt, enabled]);
+
+    if (Array.isArray(patch.tasks)) {
+        await p.query('DELETE FROM event_tasks WHERE schedule_id = $1', [id]);
+        for (const t of patch.tasks) {
+            const nt = normalizeEventTask(t);
+            await p.query(`
+                INSERT INTO event_tasks (schedule_id, offset_seconds, action, target_type, target_ids, message_content,
+                    embed_title, embed_description, embed_color, embed_image_url, channel_id, created_at)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())
+            `, [id, nt.offsetSeconds, nt.action, nt.targetType, JSON.stringify(nt.targetIds),
+                nt.messageContent, nt.embedTitle, nt.embedDescription, nt.embedColor, nt.embedImageUrl, nt.channelId]);
+        }
+    }
+    const row2 = (await p.query('SELECT * FROM event_schedules WHERE id = $1', [id])).rows[0];
+    const tRes = await p.query('SELECT * FROM event_tasks WHERE schedule_id = $1 ORDER BY offset_seconds, id', [id]);
+    return eventRowToSchedule(row2, tRes.rows);
+}
+
+async function deleteEventSchedule(id) {
+    await ensureEventTables();
+    await getEventPool().query('DELETE FROM event_schedules WHERE id = $1', [id]);
+    return true;
+}
+
+async function startEventSchedule(id) {
+    await ensureEventTables();
+    const p = getEventPool();
+    const cur = await p.query('SELECT * FROM event_schedules WHERE id = $1', [id]);
+    if (cur.rows.length === 0) throw new Error('Event schedule not found.');
+    // Set status running + start_at now; the bot's EventManager.startNow /
+    // exec loop will fire the tasks. We only flip DB state; the bot picks it up.
+    await p.query(`
+        UPDATE event_schedules SET status = 'running', start_at = NOW(), triggered = true, enabled = true, updated_at = NOW() WHERE id = $1
+    `, [id]);
+    return true;
+}
+
+async function cancelEventSchedule(id) {
+    await ensureEventTables();
+    await getEventPool().query(`
+        UPDATE event_schedules SET status = 'cancelled', enabled = false, updated_at = NOW() WHERE id = $1
+    `, [id]);
+    return true;
+}
+
 module.exports = {
     getServerSettings,
     upsertServerSettings,
@@ -1261,4 +1616,14 @@ module.exports = {
     renameTicketPanel,
     getGuildConfig,
     getPlatformStats,
+    getLivePolls,
+    getLiveGiveaways,
+    getEndedLivePolls,
+    getEndedLiveGiveaways,
+    getEventSchedules,
+    createEventSchedule,
+    updateEventSchedule,
+    deleteEventSchedule,
+    startEventSchedule,
+    cancelEventSchedule,
 };

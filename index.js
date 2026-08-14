@@ -94,6 +94,7 @@ client.betaManager = betaManager;
     client.ticTacToeManager = { games: new Map() };
     client.pollManager      = { polls: new Map() };
     client.livePollManager  = { polls: new Map() };
+    client.liveGiveawayManager = { giveaways: new Map() };
     client.birthdayManager  = { getBirthday: noop, setBirthday: noop, removeBirthday: noop,
                                  getAllBirthdays: () => new Map(), getUpcomingBirthdays: async () => [],
                                  getGuildBirthdays: async () => ({ channel: null, role: null, users: new Map() }),
@@ -137,6 +138,8 @@ async function initializeManagers() {
     const TicTacToeManager  = require('./utils/ticTacToeManager');
     const PollManager       = require('./utils/pollManager');
     const LivePollManager   = require('./utils/livePollManager');
+    const LiveGiveawayManager = require('./utils/liveGiveawayManager');
+    const EventManager      = require('./utils/eventManager');
     const EmojiManager      = require('./utils/emojiManager');
     const CountingManager   = require('./utils/countingManager');
     const TruthDareManager  = require('./utils/truthDareManager');
@@ -155,6 +158,7 @@ async function initializeManagers() {
     client.ticTacToeManager = new TicTacToeManager(client);
     client.pollManager      = new PollManager(client);
     client.livePollManager  = new LivePollManager(client);
+    client.liveGiveawayManager = new LiveGiveawayManager(client);
     client.emojiManager     = new EmojiManager();
     client.countingManager  = new CountingManager(client);
     client.truthDareManager = new TruthDareManager(client);
@@ -175,6 +179,18 @@ async function initializeManagers() {
         console.log('[MANAGERS] ReactionRoleManager loaded.');
     } catch (err) {
         console.error('[MANAGERS] Failed to load ReactionRoleManager:', err.message);
+    }
+
+    try {
+        client.eventManager = new EventManager(client);
+        console.log('[MANAGERS] EventManager loaded.');
+    } catch (err) {
+        console.error('[MANAGERS] Failed to load EventManager:', err.message);
+        client.eventManager = {
+            getGuildSchedules: () => [], getSchedule: () => null,
+            startNow: async () => {}, cancelSchedule: async () => {}, restore: async () => {},
+            normalizeTask: () => ({}),
+        };
     }
 
     try {

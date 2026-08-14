@@ -365,6 +365,40 @@ module.exports = {
                     return; // Exit early for vote buttons to prevent further processing
                 }
 
+                // Handle live giveaway Join buttons (customId: lgive_<giveawayId>)
+                if (customId.startsWith('lgive_')) {
+                    try {
+                        if (!interaction.replied && !interaction.deferred) {
+                            await interaction.deferUpdate();
+                        } else {
+                            return;
+                        }
+                        const giveawayId = customId.slice('lgive_'.length);
+                        if (!client.liveGiveawayManager) {
+                            await interaction.followUp({ content: 'Giveaway system is not available. Please try again later.', ephemeral: true });
+                            return;
+                        }
+                        const result = await client.liveGiveawayManager.joinGiveaway(giveawayId, interaction.user.id);
+                        if (result && result.success) {
+                            const giveaway = await client.liveGiveawayManager.getGiveaway(giveawayId);
+                            if (giveaway) {
+                                const embed = client.liveGiveawayManager.createGiveawayEmbed(giveaway, giveaway.participants.size);
+                                const buttons = client.liveGiveawayManager.createJoinButton(giveaway.giveawayId);
+                                await interaction.editReply({ embeds: [embed], components: buttons });
+                            }
+                            await interaction.followUp({ content: result.message, ephemeral: true }).catch(() => {});
+                        } else {
+                            await interaction.followUp({ content: result ? result.message : 'Failed to join giveaway', ephemeral: true }).catch(() => {});
+                        }
+                    } catch (joinError) {
+                        console.error('[LIVE GIVEAWAY] Join error:', joinError.message);
+                        try {
+                            await interaction.followUp({ content: 'There was an error joining the giveaway. Please try again.', ephemeral: true });
+                        } catch (_) {}
+                    }
+                    return;
+                }
+
                 // Log detailed button information for debugging (for non-vote buttons)
                 console.log(`[DEBUG] Button pressed with customId: "${customId}"`);
 

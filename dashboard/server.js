@@ -969,9 +969,108 @@ app.post('/api/guilds/:guildId/tickets/:id/update', requireAuth, requireGuildAdm
     }
 });
 
+// ── API: Live polls + live giveaways (Live page) ─────────────────────────────
+//
+// Read-only listing of all running and ended live polls and live giveaways.
+// Live polls live in the main DB; live giveaways live in the LIVE_DATABASE_URL
+// pool. The "Live" SPA page renders these in two panels, each with separate
+// running and ended divs. Only ended items expose winners.
+
+app.get('/api/live', requireAuth, async (req, res) => {
+    try {
+        const [polls, giveaways, endedPolls, endedGiveaways] = await Promise.all([
+            dashboardDb.getLivePolls(),
+            dashboardDb.getLiveGiveaways(),
+            dashboardDb.getEndedLivePolls(),
+            dashboardDb.getEndedLiveGiveaways(),
+        ]);
+        const runningPolls = polls.filter(p => p.isActive);
+        const runningGiveaways = giveaways.filter(g => g.isActive && !g.ended);
+        res.json({
+            runningPolls,
+            endedPolls,
+            runningGiveaways,
+            endedGiveaways,
+        });
+    } catch (err) {
+        console.error('[API] /api/live error:', err.message);
+        res.status(500).json({ error: 'Failed to load live data.' });
+    }
+});
+
+// ── API: Event management (📅 Events tab) ────────────────────────────────────
+
+app.get('/api/guilds/:guildId/events', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const schedules = await dashboardDb.getEventSchedules(req.guild.id);
+        res.json({ schedules });
+    } catch (err) {
+        console.error('[API] get events error:', err.message);
+        res.status(500).json({ error: 'Failed to load events.' });
+    }
+});
+
+app.post('/api/guilds/:guildId/events', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const schedule = await dashboardDb.createEventSchedule(req.guild.id, req.body || {}, req.user.id);
+        res.json({ schedule });
+    } catch (err) {
+        console.error('[API] create event error:', err.message);
+        res.status(500).json({ error: 'Failed to create event: ' + err.message });
+    }
+});
+
+app.patch('/api/guilds/:guildId/events/:id', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const id = parseInt(req.params.id, 10);
+        if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid event id.' });
+        const schedule = await dashboardDb.updateEventSchedule(id, req.body || {});
+        res.json({ schedule });
+    } catch (err) {
+        console.error('[API] update event error:', err.message);
+        res.status(500).json({ error: 'Failed to update event: ' + err.message });
+    }
+});
+
+app.delete('/api/guilds/:guildId/events/:id', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const id = parseInt(req.params.id, 10);
+        if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid event id.' });
+        await dashboardDb.deleteEventSchedule(id);
+        res.json({ ok: true });
+    } catch (err) {
+        console.error('[API] delete event error:', err.message);
+        res.status(500).json({ error: 'Failed to delete event.' });
+    }
+});
+
+app.post('/api/guilds/:guildId/events/:id/start', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const id = parseInt(req.params.id, 10);
+        if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid event id.' });
+        await dashboardDb.startEventSchedule(id);
+        res.json({ ok: true });
+    } catch (err) {
+        console.error('[API] start event error:', err.message);
+        res.status(500).json({ error: 'Failed to start event: ' + err.message });
+    }
+});
+
+app.post('/api/guilds/:guildId/events/:id/cancel', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const id = parseInt(req.params.id, 10);
+        if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid event id.' });
+        await dashboardDb.cancelEventSchedule(id);
+        res.json({ ok: true });
+    } catch (err) {
+        console.error('[API] cancel event error:', err.message);
+        res.status(500).json({ error: 'Failed to cancel event.' });
+    }
+});
+
 // ── Page routes (SPA-style: serve index.html for everything) ────────────────
 
-app.get(['/', '/dashboard', '/docs', '/guild/:guildId'], (req, res) => {
+app.get(['/', '/dashboard', '/docs', '/live', '/guild/:guildId'], (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 

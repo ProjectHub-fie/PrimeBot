@@ -1017,3 +1017,66 @@ input[type="color"] {
 .reaction-row .r-role { max-width: 200px; }
 .rr-menu-card .btn-sm { margin-left: 8px; }
 
+
+
+/* ── Live page + Join modal + Events tab ─────────────────────────────────── */
+.live-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+@media (max-width: 900px) { .live-grid { grid-template-columns: 1fr; } }
+.live-panel h2 { margin: 0 0 10px; font-size: 18px; }
+.live-section-head { font-size: 14px; margin: 18px 0 8px; color: var(--text-dim); }
+.live-list { display: flex; flex-direction: column; gap: 10px; }
+.live-empty { color: var(--text-dim); font-size: 13px; margin: 4px 0; }
+.live-card {
+  border: 1px solid var(--border, #e3e3e8);
+  border-radius: 12px; padding: 12px 14px; background: rgba(0,0,0,0.03);
+  display: flex; flex-direction: column; gap: 6px;
+}
+.live-card-title { font-weight: 600; font-size: 15px; }
+.live-card-meta { font-size: 12px; color: var(--text-dim); display: flex; gap: 10px; flex-wrap: wrap; }
+.live-card-code { font-size: 12px; }
+.live-card-code code { background: rgba(0,0,0,0.06); padding: 1px 6px; border-radius: 6px; }
+.live-card-opts { font-size: 12px; color: var(--text-dim); }
+.live-winners { font-size: 13px; }
+.live-winners code { background: rgba(0,0,0,0.06); padding: 1px 6px; border-radius: 6px; }
+.live-ended { opacity: 0.85; }
+.live-join-btn { align-self: flex-start; margin-top: 4px; }
+
+/* Modal / floating window */
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.45);
+  display: flex; align-items: center; justify-content: center; z-index: 1000;
+}
+.modal-overlay.hidden { display: none !important; }
+.modal.floating-window {
+  background: var(--card, #fff); color: var(--text, #111);
+  border-radius: 16px; width: min(520px, 92vw); max-height: 86vh; overflow: auto;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.35); padding: 0;
+}
+.modal-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--border, #e3e3e8); }
+.modal-head h3 { margin: 0; font-size: 17px; }
+.modal-close { background: none; border: none; font-size: 24px; line-height: 1; cursor: pointer; color: var(--text-dim); }
+.modal-body { padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; }
+.command-box { display: flex; align-items: center; gap: 10px; justify-content: space-between; background: rgba(0,0,0,0.05); border-radius: 10px; padding: 10px 12px; }
+.command-box code { font-size: 14px; word-break: break-all; }
+.btn-copy { padding: 4px 10px; }
+.live-modal-note { font-size: 13px; color: var(--text-dim); }
+.live-join-actions { display: flex; gap: 10px; }
+
+/* Events tab */
+.ev-form { display: flex; flex-direction: column; gap: 12px; margin: 14px 0 8px; }
+.ev-form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 600; }
+.ev-form .form-row { display: flex; gap: 12px; flex-wrap: wrap; }
+.ev-form .form-row label { flex: 1; min-width: 160px; }
+.ev-form input, .ev-form textarea, .ev-form select { font-weight: 400; }
+.ev-tasks-head { margin: 6px 0 0; font-size: 14px; }
+.ev-task-row { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: start; border: 1px solid var(--border, #e3e3e8); border-radius: 10px; padding: 10px; background: rgba(0,0,0,0.02); }
+.ev-task-row label { font-size: 12px; }
+.ev-task-row .ev-target { display: flex; flex-direction: column; gap: 8px; }
+.ev-tg-embed { display: flex; flex-direction: column; gap: 6px; }
+.ev-tg-embed label { font-size: 12px; }
+.ev-remove-task { align-self: start; }
+.ev-list-head { margin: 22px 0 8px; font-size: 16px; }
+.ev-card { gap: 8px; }
+.ev-tasks ul { margin: 4px 0 0; padding-left: 20px; font-size: 13px; }
+.ev-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.ev-actions .btn { padding: 4px 12px; font-size: 13px; }

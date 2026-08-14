@@ -131,6 +131,7 @@ function renderUserMenu(user) {
 const routes = [
   { match: /^\/(dashboard)?\/?$/, view: renderOverview },
   { match: /^\/docs\/?$/, view: renderDocs },
+  { match: /^\/live\/?$/, view: renderLive },
   { match: /^\/guild\/(\d+)(?:\/(\w+))?$/, view: renderGuildSettings },
 ];
 
@@ -499,6 +500,149 @@ function renderDocs() {
 
 // ── Overview (server list) ─────────────────────────────────────────────────
 
+// ── Live page (live polls + live giveaways) ────────────────────────────────
+//
+// Two panels: Live Polls and Live Giveaways. Each shows a "Running" list and a
+// separate "Ended" list. Running items show a Join button that opens a
+// floating window (modal) explaining how to join via the bot commands
+// (`$lpoll join <key>` / `$lgiveway join <key>`). Ended items only show winners.
+
+const LIVE_PREFIX = '$';
+
+async function renderLive() {
+  app.innerHTML = `
+    <div class="page-head">
+      <h1>Live</h1>
+      <p>Running and ended cross-server live polls and live giveaways. Create them with <code>${esc(LIVE_PREFIX)}lpoll</code> / <code>${esc(LIVE_PREFIX)}lgiveway</code> in Discord.</p>
+      <button class="btn btn-secondary" id="live-refresh">↻ Refresh</button>
+    </div>
+    <div id="live-root"><div class="splash"><div class="spinner"></div><p>Loading live data…</p></div></div>
+    <div id="live-join-modal" class="modal-overlay hidden"></div>
+  `;
+  await loadLive();
+  app.querySelector('#live-refresh')?.addEventListener('click', loadLive);
+}
+
+async function loadLive() {
+  const root = app.querySelector('#live-root');
+  if (!root) return;
+  try {
+    const data = await api('/api/live');
+    root.innerHTML = `
+      <div class="live-grid">
+        ${livePanelHTML('polls', data.runningPolls || [], data.endedPolls || [], 'poll')}
+        ${livePanelHTML('giveaways', data.runningGiveaways || [], data.endedGiveaways || [], 'giveaway')}
+      </div>
+    `;
+    bindLiveEvents();
+  } catch (err) {
+    if (err.status === 401) { window.location.href = '/login'; return; }
+    root.innerHTML = `<div class="card"><div class="alert alert-error">${esc(err.message || 'Failed to load live data.')}</div></div>`;
+  }
+}
+
+function livePanelHTML(title, running, ended, kind) {
+  const titleIcon = kind === 'poll' ? '📊' : '🎉';
+  return `
+    <div class="card live-panel">
+      <h2>${titleIcon} ${esc(title === 'polls' ? 'Live Polls' : 'Live Giveaways')}</h2>
+      <h3 class="live-section-head">🟢 Running</h3>
+      <div class="live-list" data-live-running="${kind}">
+        ${running.length ? running.map(item => liveRunningCardHTML(item, kind)).join('') : '<p class="live-empty">No running items.</p>'}
+      </div>
+      <h3 class="live-section-head">🔴 Ended${kind === 'poll' ? ' (winners)' : ' (winners)'}</h3>
+      <div class="live-list" data-live-ended="${kind}">
+        ${ended.length ? ended.map(item => liveEndedCardHTML(item, kind)).join('') : '<p class="live-empty">No ended items.</p>'}
+      </div>
+    </div>
+  `;
+}
+
+function liveRunningCardHTML(item, kind) {
+  const key = kind === 'poll' ? (item.passCode || item.pollId) : (item.passCode || item.giveawayId);
+  const title = kind === 'poll' ? esc(item.question || '') : `Prize: ${esc(item.prize || '')}`;
+  const meta = kind === 'poll'
+    ? `${item.totalVotes ?? 0} votes`
+    : `${item.entries ?? 0} entries • ${item.winnerCount ?? 1} winner(s)`;
+  const expires = item.expiresAt || item.endsAt
+    ? `<span class="live-meta">⏱️ ends ${esc(new Date(item.expiresAt || item.endsAt).toLocaleString())}</span>`
+    : '<span class="live-meta">⏱️ permanent</span>';
+  return `
+    <div class="live-card" data-key="${esc(key)}" data-kind="${kind}">
+      <div class="live-card-title">${title}</div>
+      <div class="live-card-meta">${esc(meta)} ${expires}</div>
+      <div class="live-card-code">🔑 Pass code: <code>${esc(key)}</code></div>
+      <button class="btn btn-primary live-join-btn" data-key="${esc(key)}" data-kind="${kind}">Join</button>
+    </div>
+  `;
+}
+
+function liveEndedCardHTML(item, kind) {
+  if (kind === 'poll') {
+    const winners = (item.winners || []).map(w => esc(w)).join(', ') || '—';
+    const opts = (item.options || []).map(o => `${esc(o.text)}: ${o.votes}`).join(' · ');
+    return `
+      <div class="live-card live-ended">
+        <div class="live-card-title">${esc(item.question || '')}</div>
+        <div class="live-card-meta">${esc((item.options || []).reduce((s, o) => s + o.votes, 0))} votes</div>
+        ${opts ? `<div class="live-card-opts">${esc(opts)}</div>` : ''}
+        <div class="live-winners">🏆 Winner(s): ${winners}</div>
+      </div>
+    `;
+  }
+  const winners = (item.winners || []).map(w => `<code>${esc(w)}</code>`).join(', ') || '—';
+  return `
+    <div class="live-card live-ended">
+      <div class="live-card-title">Prize: ${esc(item.prize || '')}</div>
+      <div class="live-winners">🏆 Winner(s): ${winners}</div>
+    </div>
+  `;
+}
+
+function bindLiveEvents() {
+  app.querySelectorAll('.live-join-btn').forEach(btn => {
+    btn.addEventListener('click', () => openJoinModal(btn.dataset.key, btn.dataset.kind));
+  });
+}
+
+function openJoinModal(key, kind) {
+  const modal = app.querySelector('#live-join-modal');
+  if (!modal) return;
+  const command = kind === 'poll' ? `lpoll join ${key}` : `lgiveway join ${key}`;
+  modal.innerHTML = `
+    <div class="modal floating-window">
+      <div class="modal-head">
+        <h3>${kind === 'poll' ? '📊 Join Live Poll' : '🎉 Join Live Giveaway'}</h3>
+        <button class="modal-close" id="live-join-close">×</button>
+      </div>
+      <div class="modal-body">
+        <p>Run this command in any Discord server where PrimeBot is present to join:</p>
+        <div class="command-box"><code>${esc(LIVE_PREFIX)}${esc(command)}</code>
+          <button class="btn btn-secondary btn-copy" id="live-join-copy">Copy</button>
+        </div>
+        <p class="live-modal-note">Key: <code>${esc(key)}</code></p>
+        <div id="live-join-status"></div>
+        <div class="live-join-actions">
+          <button class="btn btn-primary" id="live-join-do">Join now</button>
+        </div>
+      </div>
+    </div>
+  `;
+  modal.classList.remove('hidden');
+  const close = () => modal.classList.add('hidden');
+  modal.querySelector('#live-join-close').addEventListener('click', close);
+  modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+  modal.querySelector('#live-join-copy').addEventListener('click', () => {
+    navigator.clipboard?.writeText(`${LIVE_PREFIX}${command}`).then(() => toast('Command copied!'), () => {});
+  });
+  modal.querySelector('#live-join-do').addEventListener('click', async () => {
+    // The dashboard can't join on behalf of a Discord user (it needs a guild
+    // context + member). We surface the exact command to run instead.
+    const status = modal.querySelector('#live-join-status');
+    status.innerHTML = `<div class="alert alert-warn">The dashboard can't join for you — run the command above in Discord to join the ${kind === 'poll' ? 'poll' : 'giveaway'}.</div>`;
+  });
+}
+
 async function renderOverview() {
   const data = await api('/api/guilds');
   const guilds = data.guilds || [];
@@ -660,6 +804,7 @@ async function renderGuildSettings(match) {
       <button class="tab" data-tab="logging">📜 Logging</button>
       <button class="tab" data-tab="automod">🛡️ Automod</button>
       <button class="tab" data-tab="tickets">🎫 Tickets</button>
+      <button class="tab" data-tab="events">📅 Events</button>
     </div>
 
     <div id="tab-welcome" class="tab-panel">${welcomePanelHTML(data.config.welcome)}</div>
@@ -671,10 +816,13 @@ async function renderGuildSettings(match) {
     <div id="tab-logging" class="tab-panel">${loggingPanelHTML(data.config.logging)}</div>
     <div id="tab-automod" class="tab-panel">${automodPanelHTML(data.config.automod)}</div>
     <div id="tab-tickets" class="tab-panel">${ticketsPanelHTML(data.config.ticketPanels)}</div>
+    <div id="tab-events" class="tab-panel">${eventsPanelHTML()}</div>
   `;
 
   selectTab(initialTab);
   bindSettingsEvents(guildId);
+  // Lazy-load event schedules when the Events tab is opened.
+  loadEventSchedules(guildId);
 }
 
 function selectTab(name) {
@@ -1416,6 +1564,216 @@ function bindTicketEvents(guildId) {
   bindTicketCardActions(guildId);
 }
 
+// ── Events tab (event management) ───────────────────────────────────────────
+//
+// Build per-guild event schedules from the dashboard. Each schedule has a name,
+// a countdown (seconds to start), and a list of tasks. Each task runs at a
+// relative offset (seconds from start) and performs one action:
+// lock/unlock/hide/unhide channels, add/remove roles, or send a text/embed
+// message. The bot's EventManager reads these tables and runs the tasks.
+
+const EVENT_ACTIONS = [
+  { key: 'lock',      label: 'Lock channels',        icon: '🔒', needs: 'channels' },
+  { key: 'unlock',    label: 'Unlock channels',      icon: '🔓', needs: 'channels' },
+  { key: 'hide',      label: 'Hide channels',        icon: '🙈', needs: 'channels' },
+  { key: 'unhide',    label: 'Unhide channels',      icon: '👀', needs: 'channels' },
+  { key: 'addrole',   label: 'Add role to members',  icon: '➕', needs: 'roles' },
+  { key: 'removerole',label: 'Remove role from members', icon: '➖', needs: 'roles' },
+  { key: 'sendtext',  label: 'Send text message',    icon: '💬', needs: 'message' },
+  { key: 'sendembed', label: 'Send embed message',   icon: '🖼️', needs: 'embed' },
+];
+
+function eventsPanelHTML() {
+  return `
+    <div class="card">
+      <h2>📅 Event Management</h2>
+      <p>Schedule an event with a countdown and a list of timed tasks. The bot will lock/unlock or hide/unhide channels, add/remove roles, or send a text/embed message at the offsets you set (seconds from the event start).</p>
+      <div class="ev-form" id="ev-form">
+        <div class="form-row">
+          <label>Event name<input type="text" id="ev-name" placeholder="e.g. Game Night" /></label>
+          <label>Countdown (seconds)<input type="number" id="ev-countdown" min="0" value="0" /></label>
+        </div>
+        <label>Description <textarea id="ev-description" rows="2" placeholder="Optional description"></textarea></label>
+        <h4 class="ev-tasks-head">Tasks</h4>
+        <div id="ev-tasks-list"></div>
+        <button class="btn btn-secondary" id="ev-add-task">+ Add task</button>
+        <div class="form-actions">
+          <button class="btn btn-primary" id="ev-save">Create event</button>
+          <button class="btn btn-secondary" id="ev-clear">Clear</button>
+        </div>
+      </div>
+      <h3 class="ev-list-head">Scheduled events</h3>
+      <div id="ev-list"><p class="live-empty">Loading…</p></div>
+    </div>
+    <div id="ev-modal" class="modal-overlay hidden"></div>
+  `;
+}
+
+function evTaskRowHTML(task = {}) {
+  const a = EVENT_ACTIONS.find(x => x.key === task.action) || EVENT_ACTIONS[0];
+  const actionOpts = EVENT_ACTIONS.map(x => `<option value="${x.key}" ${x.key === (task.action || 'sendtext') ? 'selected' : ''}>${x.icon} ${esc(x.label)}</option>`).join('');
+  const channelOpts = (guildState.channels || []).map(c => `<option value="${esc(c.id)}" ${String(c.id) === String(task.channelId) ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
+  const roleOpts = (guildState.roles || []).map(r => `<option value="${esc(r.id)}">${esc(r.name)}</option>`).join('');
+  return `
+    <div class="ev-task-row" data-ev-task>
+      <label>Offset (s)<input type="number" min="0" class="ev-offset" value="${task.offsetSeconds ?? 0}" /></label>
+      <label>Action<select class="ev-action">${actionOpts}</select></label>
+      <div class="ev-target">
+        <label class="ev-tg-channels">Target channels<select class="ev-target-channels" multiple>${channelOpts}</select></label>
+        <label class="ev-tg-roles hidden">Target roles<select class="ev-target-roles" multiple>${roleOpts}</select></label>
+        <label class="ev-tg-message hidden">Message text <textarea class="ev-message" rows="2">${esc(task.messageContent || '')}</textarea></label>
+        <div class="ev-tg-embed hidden">
+          <label>Embed title <input type="text" class="ev-embed-title" value="${esc(task.embedTitle || '')}" /></label>
+          <label>Embed description <textarea class="ev-embed-desc" rows="2">${esc(task.embedDescription || '')}</textarea></label>
+          <label>Embed color <input type="color" class="ev-embed-color" value="${task.embedColor || '#5865F2'}" /></label>
+          <label>Embed image URL <input type="text" class="ev-embed-image" value="${esc(task.embedImageUrl || '')}" /></label>
+          <label class="ev-tg-channels">Send to channel(s)<select class="ev-target-embed-channels" multiple>${channelOpts}</select></label>
+        </div>
+      </div>
+      <button class="btn btn-secondary ev-remove-task" title="Remove task">✕</button>
+    </div>
+  `;
+}
+
+function bindEvTaskRow(row) {
+  const updateVisibility = () => {
+    const action = row.querySelector('.ev-action').value;
+    const meta = EVENT_ACTIONS.find(x => x.key === action);
+    const needs = meta ? meta.needs : 'channels';
+    row.querySelector('.ev-tg-channels').classList.toggle('hidden', needs !== 'channels');
+    row.querySelector('.ev-tg-roles').classList.toggle('hidden', needs !== 'roles');
+    row.querySelector('.ev-tg-message').classList.toggle('hidden', needs !== 'message');
+    row.querySelector('.ev-tg-embed').classList.toggle('hidden', needs !== 'embed');
+  };
+  row.querySelector('.ev-action').addEventListener('change', updateVisibility);
+  row.querySelector('.ev-remove-task').addEventListener('click', () => row.remove());
+  updateVisibility();
+}
+
+function readEventForm() {
+  const tasks = [];
+  app.querySelectorAll('#ev-tasks-list .ev-task-row').forEach(row => {
+    const action = row.querySelector('.ev-action').value;
+    const meta = EVENT_ACTIONS.find(x => x.key === action);
+    const task = {
+      offsetSeconds: parseInt(row.querySelector('.ev-offset').value, 10) || 0,
+      action,
+      targetType: meta && meta.needs === 'roles' ? 'role' : 'channel',
+    };
+    if (action === 'addrole' || action === 'removerole') {
+      task.targetIds = Array.from(row.querySelector('.ev-target-roles').selectedOptions).map(o => o.value);
+    } else if (action === 'sendtext') {
+      task.messageContent = row.querySelector('.ev-message').value;
+      task.targetIds = Array.from(row.querySelector('.ev-target-channels').selectedOptions).map(o => o.value);
+    } else if (action === 'sendembed') {
+      task.embedTitle = row.querySelector('.ev-embed-title').value;
+      task.embedDescription = row.querySelector('.ev-embed-desc').value;
+      task.embedColor = row.querySelector('.ev-embed-color').value;
+      task.embedImageUrl = row.querySelector('.ev-embed-image').value;
+      task.targetIds = Array.from(row.querySelector('.ev-target-embed-channels').selectedOptions).map(o => o.value);
+    } else {
+      task.targetIds = Array.from(row.querySelector('.ev-target-channels').selectedOptions).map(o => o.value);
+    }
+    tasks.push(task);
+  });
+  return {
+    name: app.querySelector('#ev-name').value,
+    countdownSeconds: parseInt(app.querySelector('#ev-countdown').value, 10) || 0,
+    description: app.querySelector('#ev-description').value,
+    tasks,
+  };
+}
+
+function clearEventForm() {
+  app.querySelector('#ev-name').value = '';
+  app.querySelector('#ev-countdown').value = '0';
+  app.querySelector('#ev-description').value = '';
+  app.querySelector('#ev-tasks-list').innerHTML = '';
+}
+
+function eventStatusBadge(status) {
+  const map = {
+    scheduled: { c: 'tag off', t: 'Scheduled' },
+    running: { c: 'tag on', t: 'Running' },
+    completed: { c: 'tag prefix', t: 'Completed' },
+    cancelled: { c: 'tag off', t: 'Cancelled' },
+  };
+  const m = map[status] || map.scheduled;
+  return `<span class="${m.c}">${m.t}</span>`;
+}
+
+function eventScheduleCardHTML(s) {
+  const tasksHTML = (s.tasks || []).map(t => {
+    const meta = EVENT_ACTIONS.find(x => x.key === t.action) || {};
+    return `<li>${meta.icon || ''} ${esc(meta.label || t.action)} @ +${t.offsetSeconds}s</li>`;
+  }).join('');
+  const start = s.startAt ? new Date(s.startAt).toLocaleString() : '—';
+  return `
+    <div class="live-card ev-card" data-ev-id="${s.id}">
+      <div class="live-card-title">${esc(s.name)}</div>
+      <div class="live-card-meta">${eventStatusBadge(s.status)} • countdown ${s.countdownSeconds}s • start ${esc(start)}</div>
+      ${s.description ? `<div class="live-card-opts">${esc(s.description)}</div>` : ''}
+      <div class="ev-tasks"><strong>Tasks:</strong><ul>${tasksHTML || '<li>none</li>'}</ul></div>
+      <div class="ev-actions">
+        <button class="btn btn-primary ev-start" data-id="${s.id}">Start now</button>
+        <button class="btn btn-secondary ev-cancel" data-id="${s.id}">Cancel</button>
+        <button class="btn btn-secondary ev-delete" data-id="${s.id}">Delete</button>
+      </div>
+    </div>
+  `;
+}
+
+async function loadEventSchedules(guildId) {
+  const list = app.querySelector('#ev-list');
+  if (!list) return;
+  try {
+    const data = await api(`/api/guilds/${guildId}/events`);
+    const schedules = data.schedules || [];
+    list.innerHTML = schedules.length
+      ? schedules.map(eventScheduleCardHTML).join('')
+      : '<p class="live-empty">No events yet. Create one above.</p>';
+    bindEventCardActions(guildId);
+  } catch (err) {
+    list.innerHTML = `<div class="alert alert-error">${esc(err.message || 'Failed to load events.')}</div>`;
+  }
+}
+
+function bindEventCardActions(guildId) {
+  app.querySelectorAll('#ev-list .ev-start').forEach(btn => btn.addEventListener('click', async () => {
+    try { await api(`/api/guilds/${guildId}/events/${btn.dataset.id}/start`, { method: 'POST' }); toast('Event started.'); loadEventSchedules(guildId); }
+    catch (e) { toast(e.message, 'error'); }
+  }));
+  app.querySelectorAll('#ev-list .ev-cancel').forEach(btn => btn.addEventListener('click', async () => {
+    try { await api(`/api/guilds/${guildId}/events/${btn.dataset.id}/cancel`, { method: 'POST' }); toast('Event cancelled.'); loadEventSchedules(guildId); }
+    catch (e) { toast(e.message, 'error'); }
+  }));
+  app.querySelectorAll('#ev-list .ev-delete').forEach(btn => btn.addEventListener('click', async () => {
+    try { await api(`/api/guilds/${guildId}/events/${btn.dataset.id}`, { method: 'DELETE' }); toast('Event deleted.'); loadEventSchedules(guildId); }
+    catch (e) { toast(e.message, 'error'); }
+  }));
+}
+
+function bindEventsTab(guildId) {
+  app.querySelector('#ev-add-task')?.addEventListener('click', () => {
+    const row = document.createElement('div');
+    row.innerHTML = evTaskRowHTML({});
+    const el = row.firstElementChild;
+    app.querySelector('#ev-tasks-list').appendChild(el);
+    bindEvTaskRow(el);
+  });
+  app.querySelector('#ev-clear')?.addEventListener('click', clearEventForm);
+  app.querySelector('#ev-save')?.addEventListener('click', async () => {
+    const body = readEventForm();
+    if (!body.name.trim()) { toast('Event name is required.', 'error'); return; }
+    try {
+      await api(`/api/guilds/${guildId}/events`, { method: 'POST', body: JSON.stringify(body) });
+      toast('Event created.');
+      clearEventForm();
+      loadEventSchedules(guildId);
+    } catch (e) { toast(e.message, 'error'); }
+  });
+}
+
 function reactionRolesPanelHTML(menus = []) {
   const listHTML = menus.length
     ? menus.map(rrMenuCardHTML).join('')
@@ -1733,6 +2091,8 @@ function bindSettingsEvents(guildId) {
   app.querySelectorAll('.tab').forEach(t => {
     t.addEventListener('click', () => selectTab(t.dataset.tab));
   });
+
+  bindEventsTab(guildId);
 
   // Sync color picker + text input.
   const colorPicker = app.querySelector('#welcome-color');
