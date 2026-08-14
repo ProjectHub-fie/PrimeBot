@@ -272,6 +272,10 @@ function renderLogin() {
               <div class="donut" id="donut-automod"><span class="donut-pct">0%</span></div>
               <div class="donut-label">🛡️ Automod</div>
             </div>
+            <div class="donut-item">
+              <div class="donut" id="donut-tickets"><span class="donut-pct">0%</span></div>
+              <div class="donut-label">🎫 Tickets</div>
+            </div>
           </div>
         </div>
       </div>
@@ -320,6 +324,7 @@ async function loadLoginStats() {
   renderDonut(document.getElementById('donut-reactions'), f.autoReactions?.percent ?? 0, '--yellow');
   renderDonut(document.getElementById('donut-broadcasts'), f.broadcasts?.percent ?? 0, '--gold');
   renderDonut(document.getElementById('donut-automod'), f.automod?.percent ?? 0, '--red');
+  renderDonut(document.getElementById('donut-tickets'), f.tickets?.percent ?? 0, '--blurple');
 }
 
 // ── Documentation page ─────────────────────────────────────────────────────
@@ -654,6 +659,7 @@ async function renderGuildSettings(match) {
       <button class="tab" data-tab="broadcast">📢 Broadcasts</button>
       <button class="tab" data-tab="logging">📜 Logging</button>
       <button class="tab" data-tab="automod">🛡️ Automod</button>
+      <button class="tab" data-tab="tickets">🎫 Tickets</button>
     </div>
 
     <div id="tab-welcome" class="tab-panel">${welcomePanelHTML(data.config.welcome)}</div>
@@ -664,6 +670,7 @@ async function renderGuildSettings(match) {
     <div id="tab-broadcast" class="tab-panel">${broadcastPanelHTML(data.config.server)}</div>
     <div id="tab-logging" class="tab-panel">${loggingPanelHTML(data.config.logging)}</div>
     <div id="tab-automod" class="tab-panel">${automodPanelHTML(data.config.automod)}</div>
+    <div id="tab-tickets" class="tab-panel">${ticketsPanelHTML(data.config.ticketPanels)}</div>
   `;
 
   selectTab(initialTab);
@@ -957,6 +964,456 @@ function rrMenuCardHTML(menu) {
       <button class="btn btn-secondary btn-sm rr-edit" data-menu="${menu.id}" style="margin-top:8px">Edit</button>
     </div>
   `;
+}
+
+// ── Tickets tab: panel list + editor + clone/rename/send/update ──────────────
+
+const TICKET_BUTTON_STYLES = [
+  { value: 'Primary', label: 'Blurple (Primary)' },
+  { value: 'Secondary', label: 'Grey (Secondary)' },
+  { value: 'Success', label: 'Green (Success)' },
+  { value: 'Danger', label: 'Red (Danger)' },
+];
+const TICKET_MESSAGE_TYPES = [
+  { value: 'embed', label: 'Embed message' },
+  { value: 'plain', label: 'Plain text message' },
+];
+
+function ticketPanelCardHTML(panel) {
+  const supportRoles = (panel.supportRoleIds || []).map(id => `<@&${esc(id)}>`).join(', ') || '—';
+  const pingRoles = (panel.pingRoleIds || []).map(id => `<@&${esc(id)}>`).join(', ') || '—';
+  const msgType = panel.messageType === 'plain' ? 'Plain text' : 'Embed';
+  return `
+    <div class="card rr-menu-card" data-panel="${panel.id}">
+      <div class="card-title">
+        <span><span class="icon">🎫</span> ${esc(panel.name)} <span class="tag ${panel.enabled ? 'on' : 'off'}">#${panel.id}</span></span>
+        <span style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn btn-secondary btn-sm tk-send" data-panel="${panel.id}">Send / Resend</button>
+          <button class="btn btn-secondary btn-sm tk-update" data-panel="${panel.id}">Update message</button>
+          <button class="btn btn-secondary btn-sm tk-rename" data-panel="${panel.id}">Rename</button>
+          <button class="btn btn-secondary btn-sm tk-clone" data-panel="${panel.id}">Clone</button>
+          <button class="btn btn-secondary btn-sm tk-edit" data-panel="${panel.id}">Edit</button>
+          <button class="btn btn-secondary btn-sm tk-delete" data-panel="${panel.id}">Delete</button>
+        </span>
+      </div>
+      <div class="rr-meta">
+        <span><strong>Type:</strong> ${esc(msgType)}</span>
+        <span><strong>Channel:</strong> ${panel.channelId ? `<#${esc(panel.channelId)}>` : 'not sent'}</span>
+        <span><strong>Message:</strong> <code>${esc(panel.messageId || '—')}</code></span>
+        <span><strong>Button:</strong> ${esc(panel.buttonEmoji || '')} ${esc(panel.buttonLabel)}</span>
+        <span><strong>Max/user:</strong> ${esc(panel.maxOpenPerUser)}</span>
+      </div>
+      <div class="rr-mappings">
+        <strong>Title:</strong> ${esc(panel.title || '—')}<br/>
+        <strong>Support roles:</strong> ${supportRoles}<br/>
+        <strong>Ping roles:</strong> ${pingRoles}
+      </div>
+      ${panel.claimButtonLabel ? `<div class="field-hint">Claim button: ${esc(panel.claimButtonLabel)}</div>` : ''}
+    </div>
+  `;
+}
+
+function ticketRoleRowHTML(selected = {}, prefix = 'tk-support') {
+  return `
+    <div class="reaction-row" data-index="">
+      <select class="${prefix}-role" data-role-select data-placeholder="Role">${selected.roleId ? `<option value="${esc(selected.roleId)}" selected>Role</option>` : ''}</select>
+      <button class="reaction-remove" type="button">✕</button>
+    </div>
+  `;
+}
+
+function ticketsPanelHTML(panels = []) {
+  const listHTML = panels.length
+    ? panels.map(ticketPanelCardHTML).join('')
+    : `<div class="alert alert-warn">No ticket panels yet. Create one below — panels can only be configured from the dashboard.</div>`;
+  const styleOpts = TICKET_BUTTON_STYLES.map(s => `<option value="${s.value}">${esc(s.label)}</option>`).join('');
+  const typeOpts = TICKET_MESSAGE_TYPES.map(t => `<option value="${t.value}">${esc(t.label)}</option>`).join('');
+  return `
+    <div class="card">
+      <div class="card-title"><span><span class="icon">🎫</span> Tickets</span></div>
+      <p class="card-desc">Ticket panels are configurable <strong>only from the dashboard</strong> — slash and prefix ticket commands are disabled. Build a panel (embed or plain message, custom button, support/ping roles, claim button, per-user limits), then <strong>Send</strong> it to a channel and use <strong>Update message</strong> to re-render an existing message by id.</p>
+      <div class="rr-list">${listHTML}</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title"><span>Create / edit a panel</span></div>
+      <div class="field">
+        <label class="field-label" for="tk-name">Panel name</label>
+        <input type="text" id="tk-name" maxlength="100" placeholder="Support Ticket" />
+        <div class="field-hint">Unique per server. Shown as the ticket title and in the dashboard list.</div>
+      </div>
+      <div class="field">
+        <label class="field-label" for="tk-message-type">Message type</label>
+        <select id="tk-message-type">${typeOpts}</select>
+        <div class="field-hint">Embed (rich) or plain text. The open-ticket button is always attached.</div>
+      </div>
+      <div class="field">
+        <label class="field-label" for="tk-title">Embed title</label>
+        <input type="text" id="tk-title" maxlength="255" placeholder="🎫 Support Tickets" />
+      </div>
+      <div class="field">
+        <label class="field-label" for="tk-description">Embed description</label>
+        <textarea id="tk-description" placeholder="Click the button below to open a support ticket."></textarea>
+      </div>
+      <div class="field">
+        <label class="field-label" for="tk-content">Content / @mentions (above embed, or plain body)</label>
+        <textarea id="tk-content" placeholder="Optional: @support or any text shown above the embed / as the plain body."></textarea>
+      </div>
+      <div class="field">
+        <label class="field-label" for="tk-footer">Embed footer text</label>
+        <input type="text" id="tk-footer" maxlength="255" placeholder="PrimeBot · Tickets" />
+      </div>
+      <div class="field">
+        <label class="field-label" for="tk-thumbnail">Thumbnail image URL</label>
+        <input type="text" id="tk-thumbnail" placeholder="https://…/icon.png" />
+      </div>
+      <div class="field">
+        <label class="field-label" for="tk-image">Large image URL</label>
+        <input type="text" id="tk-image" placeholder="https://…/banner.png" />
+      </div>
+      <div class="field">
+        <label class="field-label">Embed color</label>
+        <div class="color-field">
+          <input type="color" id="tk-color" value="#5865F2" />
+          <input type="text" id="tk-color-text" value="#5865F2" style="flex:1" />
+        </div>
+      </div>
+      <div class="field">
+        <label class="field-label" for="tk-button-label">Open button label</label>
+        <input type="text" id="tk-button-label" maxlength="80" value="Open Ticket" />
+      </div>
+      <div class="field">
+        <label class="field-label" for="tk-button-emoji">Open button emoji (optional)</label>
+        <input type="text" id="tk-button-emoji" maxlength="100" placeholder="🎫" />
+      </div>
+      <div class="field">
+        <label class="field-label" for="tk-button-style">Open button style</label>
+        <select id="tk-button-style">${styleOpts}</select>
+      </div>
+      <div class="field">
+        <label class="field-label" for="tk-category">Ticket category label</label>
+        <input type="text" id="tk-category" maxlength="50" value="general" />
+      </div>
+      <div class="field">
+        <label class="field-label" for="tk-ticket-name">Ticket channel name (optional)</label>
+        <input type="text" id="tk-ticket-name" maxlength="100" placeholder="Defaults to ticket-username" />
+      </div>
+      <div class="field">
+        <label class="field-label" for="tk-open-name">Channel name when OPEN</label>
+        <input type="text" id="tk-open-name" maxlength="100" placeholder="(open) {name}" />
+        <div class="field-hint">Template applied when a ticket opens/reopens. Placeholders: {name} (ticket name or username), {username}, {id}, {panel}. Blank = no rename.</div>
+      </div>
+      <div class="field">
+        <label class="field-label" for="tk-claimed-name">Channel name when CLAIMED</label>
+        <input type="text" id="tk-claimed-name" maxlength="100" placeholder="(solved) {name}" />
+        <div class="field-hint">Template applied when support claims the ticket. Same placeholders. Blank = no rename.</div>
+      </div>
+      <div class="field">
+        <label class="field-label" for="tk-closed-name">Channel name when CLOSED</label>
+        <input type="text" id="tk-closed-name" maxlength="100" placeholder="(closed) {name}" />
+        <div class="field-hint">Template applied when the ticket is closed (visible for archived threads). Same placeholders. Blank = no rename.</div>
+      </div>
+      <div class="field">
+        <label class="field-label">Support roles (can see tickets)</label>
+        <div class="reactions-list" id="tk-support-list">${ticketRoleRowHTML({}, 'tk-support')}</div>
+        <button class="btn btn-secondary" id="tk-support-add">+ Add role</button>
+      </div>
+      <div class="field">
+        <label class="field-label">Ping roles (mentioned on open)</label>
+        <div class="reactions-list" id="tk-ping-list">${ticketRoleRowHTML({}, 'tk-ping')}</div>
+        <button class="btn btn-secondary" id="tk-ping-add">+ Add role</button>
+      </div>
+      <div class="field">
+        <label class="field-label" for="tk-ticket-category-id">Discord channel category ID (optional)</label>
+        <input type="text" id="tk-ticket-category-id" placeholder="123456789012345678" />
+        <div class="field-hint">Created ticket channels open under this category. Leave blank to use the current channel / threads.</div>
+      </div>
+      <div class="field">
+        <label class="field-label" for="tk-max-open">Max open tickets per user</label>
+        <input type="number" id="tk-max-open" min="0" value="1" />
+      </div>
+      <div class="switch-row">
+        <div class="switch-label"><div class="sl-title">Ask for reason on open</div><div class="sl-desc">Prompt the member for a reason (captured on the ticket). Note: requires a follow-up flow; the button still opens a ticket.</div></div>
+        <label class="switch"><input type="checkbox" id="tk-ask-reason"/><span class="slider"></span></label>
+      </div>
+      <div class="field">
+        <label class="field-label" for="tk-welcome">In-ticket welcome message</label>
+        <textarea id="tk-welcome" placeholder="Welcome to your support ticket! Please describe your issue."></textarea>
+      </div>
+      <div class="field">
+        <label class="field-label" for="tk-close-label">Close button label</label>
+        <input type="text" id="tk-close-label" maxlength="80" value="Close Ticket" />
+      </div>
+      <div class="field">
+        <label class="field-label" for="tk-close-emoji">Close button emoji (optional)</label>
+        <input type="text" id="tk-close-emoji" maxlength="100" value="🔒" />
+      </div>
+      <div class="field">
+        <label class="field-label" for="tk-claim-label">Claim button label (optional — leave blank for no claim button)</label>
+        <input type="text" id="tk-claim-label" maxlength="80" placeholder="Claim" />
+      </div>
+      <div class="field">
+        <label class="field-label" for="tk-claim-emoji">Claim button emoji (optional)</label>
+        <input type="text" id="tk-claim-emoji" maxlength="100" placeholder="✋" />
+      </div>
+      <div class="switch-row">
+        <div class="switch-label"><div class="sl-title">Enabled</div><div class="sl-desc">When off, the open button is disabled.</div></div>
+        <label class="switch"><input type="checkbox" id="tk-enabled" checked/><span class="slider"></span></label>
+      </div>
+      <div class="form-actions">
+        <input type="hidden" id="tk-edit-id" value="" />
+        <button class="btn btn-primary" id="tk-save">Create panel</button>
+        <button class="btn btn-secondary" id="tk-cancel-edit" style="display:none">Cancel edit</button>
+      </div>
+    </div>
+  `;
+}
+
+function collectTicketRoles(listSelector, roleClass) {
+  const out = [];
+  app.querySelectorAll(`${listSelector} .${roleClass}`).forEach(sel => {
+    const v = sel.value;
+    if (v) out.push(v);
+  });
+  return out;
+}
+
+function readTicketForm() {
+  return {
+    name: app.querySelector('#tk-name').value.trim() || 'Support Ticket',
+    messageType: app.querySelector('#tk-message-type').value || 'embed',
+    title: app.querySelector('#tk-title').value.trim() || null,
+    description: app.querySelector('#tk-description').value.trim() || null,
+    content: app.querySelector('#tk-content').value.trim() || null,
+    footerText: app.querySelector('#tk-footer').value.trim() || null,
+    thumbnailUrl: app.querySelector('#tk-thumbnail').value.trim() || null,
+    imageUrl: app.querySelector('#tk-image').value.trim() || null,
+    color: app.querySelector('#tk-color').value || '#5865F2',
+    buttonLabel: app.querySelector('#tk-button-label').value.trim() || 'Open Ticket',
+    buttonEmoji: app.querySelector('#tk-button-emoji').value.trim() || null,
+    buttonStyle: app.querySelector('#tk-button-style').value || 'Primary',
+    category: app.querySelector('#tk-category').value.trim() || 'general',
+    ticketName: app.querySelector('#tk-ticket-name').value.trim() || null,
+    openNameTemplate: app.querySelector('#tk-open-name').value.trim() || null,
+    claimedNameTemplate: app.querySelector('#tk-claimed-name').value.trim() || null,
+    closedNameTemplate: app.querySelector('#tk-closed-name').value.trim() || null,
+    supportRoleIds: collectTicketRoles('#tk-support-list', 'tk-support-role'),
+    pingRoleIds: collectTicketRoles('#tk-ping-list', 'tk-ping-role'),
+    ticketCategoryId: app.querySelector('#tk-ticket-category-id').value.trim() || null,
+    maxOpenPerUser: parseInt(app.querySelector('#tk-max-open').value, 10) || 1,
+    askReason: !!app.querySelector('#tk-ask-reason').checked,
+    welcomeMessage: app.querySelector('#tk-welcome').value.trim() || null,
+    closeButtonLabel: app.querySelector('#tk-close-label').value.trim() || 'Close Ticket',
+    closeButtonEmoji: app.querySelector('#tk-close-emoji').value.trim() || null,
+    claimButtonLabel: app.querySelector('#tk-claim-label').value.trim() || null,
+    claimButtonEmoji: app.querySelector('#tk-claim-emoji').value.trim() || null,
+    enabled: !!app.querySelector('#tk-enabled').checked,
+  };
+}
+
+function fillTicketForm(panel) {
+  app.querySelector('#tk-edit-id').value = panel.id || '';
+  app.querySelector('#tk-name').value = panel.name || '';
+  app.querySelector('#tk-message-type').value = panel.messageType || 'embed';
+  app.querySelector('#tk-title').value = panel.title || '';
+  app.querySelector('#tk-description').value = panel.description || '';
+  app.querySelector('#tk-content').value = panel.content || '';
+  app.querySelector('#tk-footer').value = panel.footerText || '';
+  app.querySelector('#tk-thumbnail').value = panel.thumbnailUrl || '';
+  app.querySelector('#tk-image').value = panel.imageUrl || '';
+  app.querySelector('#tk-color').value = panel.color || '#5865F2';
+  app.querySelector('#tk-color-text').value = panel.color || '#5865F2';
+  app.querySelector('#tk-button-label').value = panel.buttonLabel || 'Open Ticket';
+  app.querySelector('#tk-button-emoji').value = panel.buttonEmoji || '';
+  app.querySelector('#tk-button-style').value = panel.buttonStyle || 'Primary';
+  app.querySelector('#tk-category').value = panel.category || 'general';
+  app.querySelector('#tk-ticket-name').value = panel.ticketName || '';
+  app.querySelector('#tk-open-name').value = panel.openNameTemplate || '';
+  app.querySelector('#tk-claimed-name').value = panel.claimedNameTemplate || '';
+  app.querySelector('#tk-closed-name').value = panel.closedNameTemplate || '';
+  app.querySelector('#tk-ticket-category-id').value = panel.ticketCategoryId || '';
+  app.querySelector('#tk-max-open').value = panel.maxOpenPerUser != null ? panel.maxOpenPerUser : 1;
+  app.querySelector('#tk-ask-reason').checked = !!panel.askReason;
+  app.querySelector('#tk-welcome').value = panel.welcomeMessage || '';
+  app.querySelector('#tk-close-label').value = panel.closeButtonLabel || 'Close Ticket';
+  app.querySelector('#tk-close-emoji').value = panel.closeButtonEmoji || '';
+  app.querySelector('#tk-claim-label').value = panel.claimButtonLabel || '';
+  app.querySelector('#tk-claim-emoji').value = panel.claimButtonEmoji || '';
+  app.querySelector('#tk-enabled').checked = panel.enabled !== false;
+  // Support / ping role lists.
+  const supList = app.querySelector('#tk-support-list');
+  supList.innerHTML = (panel.supportRoleIds && panel.supportRoleIds.length
+    ? panel.supportRoleIds : [null]
+  ).map(id => ticketRoleRowHTML(id ? { roleId: id } : {}, 'tk-support')).join('');
+  const pingList = app.querySelector('#tk-ping-list');
+  pingList.innerHTML = (panel.pingRoleIds && panel.pingRoleIds.length
+    ? panel.pingRoleIds : [null]
+  ).map(id => ticketRoleRowHTML(id ? { roleId: id } : {}, 'tk-ping')).join('');
+  populateRoleSelects();
+  // Reflect edit mode.
+  const saveBtn = app.querySelector('#tk-save');
+  saveBtn.textContent = 'Save panel';
+  app.querySelector('#tk-cancel-edit').style.display = '';
+}
+
+function clearTicketForm() {
+  app.querySelector('#tk-edit-id').value = '';
+  const saveBtn = app.querySelector('#tk-save');
+  saveBtn.textContent = 'Create panel';
+  app.querySelector('#tk-cancel-edit').style.display = 'none';
+}
+
+async function refreshTicketList(guildId) {
+  try {
+    const data = await api(`/api/guilds/${guildId}/tickets`);
+    const listEl = app.querySelector('#tab-tickets .rr-list');
+    if (listEl) {
+      const panels = data.ticketPanels || [];
+      listEl.innerHTML = panels.length
+        ? panels.map(ticketPanelCardHTML).join('')
+        : `<div class="alert alert-warn">No ticket panels yet. Create one below — panels can only be configured from the dashboard.</div>`;
+      bindTicketCardActions(guildId);
+    }
+  } catch (_) { /* surfaced via toast elsewhere */ }
+}
+
+function bindTicketCardActions(guildId) {
+  const action = async (selector, fn) => {
+    app.querySelectorAll(selector).forEach(btn => {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', () => fn(btn));
+    });
+  };
+
+  action('.tk-delete', async (btn) => {
+    const id = btn.dataset.panel;
+    if (!confirm('Delete this ticket panel? The panel message will be removed if the bot sent it.')) return;
+    try {
+      await api(`/api/guilds/${guildId}/tickets/${id}`, { method: 'DELETE' });
+      toast('Panel deleted', 'success');
+      refreshTicketList(guildId);
+    } catch (err) { toast(err.message || 'Failed to delete', 'error'); }
+  });
+
+  action('.tk-edit', async (btn) => {
+    const id = btn.dataset.panel;
+    const panels = (await api(`/api/guilds/${guildId}/tickets`).catch(() => ({}))).ticketPanels || [];
+    const panel = panels.find(p => String(p.id) === String(id));
+    if (!panel) { toast('Panel not found', 'error'); return; }
+    fillTicketForm(panel);
+    document.getElementById('tab-tickets')?.scrollIntoView({ behavior: 'smooth' });
+  });
+
+  action('.tk-clone', async (btn) => {
+    const id = btn.dataset.panel;
+    const name = prompt('Name for the cloned panel (leave blank for "<name> (copy)"):', '');
+    if (name === null) return;
+    try {
+      await api(`/api/guilds/${guildId}/tickets/${id}/clone`, { method: 'POST', body: JSON.stringify({ name: name || undefined }) });
+      toast('Panel cloned', 'success');
+      refreshTicketList(guildId);
+    } catch (err) { toast(err.message || 'Failed to clone', 'error'); }
+  });
+
+  action('.tk-rename', async (btn) => {
+    const id = btn.dataset.panel;
+    const panels = (await api(`/api/guilds/${guildId}/tickets`).catch(() => ({}))).ticketPanels || [];
+    const panel = panels.find(p => String(p.id) === String(id));
+    const name = prompt('New panel name:', panel ? panel.name : '');
+    if (name === null || !name.trim()) return;
+    try {
+      await api(`/api/guilds/${guildId}/tickets/${id}/rename`, { method: 'POST', body: JSON.stringify({ name }) });
+      toast('Panel renamed', 'success');
+      refreshTicketList(guildId);
+    } catch (err) { toast(err.message || 'Failed to rename', 'error'); }
+  });
+
+  action('.tk-send', async (btn) => {
+    const id = btn.dataset.panel;
+    const channelId = prompt('Channel ID to send the panel to (or the panel channel if blank):', '');
+    if (channelId === null) return;
+    try {
+      const body = channelId.trim() ? { channelId: channelId.trim() } : {};
+      await api(`/api/guilds/${guildId}/tickets/${id}/send`, { method: 'POST', body: JSON.stringify(body) });
+      toast('Panel sent to channel', 'success');
+      refreshTicketList(guildId);
+    } catch (err) { toast(err.message || 'Failed to send', 'error'); }
+  });
+
+  action('.tk-update', async (btn) => {
+    const id = btn.dataset.panel;
+    const messageId = prompt('Message ID to update with this panel (leave blank to update the panel’s last sent message):', '');
+    if (messageId === null) return;
+    try {
+      const body = messageId.trim() ? { messageId: messageId.trim() } : {};
+      await api(`/api/guilds/${guildId}/tickets/${id}/update`, { method: 'POST', body: JSON.stringify(body) });
+      toast('Panel message updated', 'success');
+      refreshTicketList(guildId);
+    } catch (err) { toast(err.message || 'Failed to update', 'error'); }
+  });
+}
+
+function bindTicketEvents(guildId) {
+  // Sync color picker + text.
+  const tkColor = app.querySelector('#tk-color');
+  const tkColorText = app.querySelector('#tk-color-text');
+  if (tkColor && tkColorText) {
+    tkColor.addEventListener('input', () => { tkColorText.value = tkColor.value; });
+    tkColorText.addEventListener('input', () => {
+      if (/^#[0-9a-fA-F]{6}$/.test(tkColorText.value)) tkColor.value = tkColorText.value;
+    });
+  }
+
+  // Add support / ping role rows.
+  app.querySelector('#tk-support-add')?.addEventListener('click', () => {
+    const ml = app.querySelector('#tk-support-list');
+    if (!ml) return;
+    ml.insertAdjacentHTML('beforeend', ticketRoleRowHTML({}, 'tk-support'));
+    bindReactionRemovals();
+    populateRoleSelects();
+  });
+  app.querySelector('#tk-ping-add')?.addEventListener('click', () => {
+    const ml = app.querySelector('#tk-ping-list');
+    if (!ml) return;
+    ml.insertAdjacentHTML('beforeend', ticketRoleRowHTML({}, 'tk-ping'));
+    bindReactionRemovals();
+    populateRoleSelects();
+  });
+  bindReactionRemovals();
+
+  // Save (create or update).
+  app.querySelector('#tk-save')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    const editId = app.querySelector('#tk-edit-id').value;
+    const body = readTicketForm();
+    if (!body.name.trim()) { toast('A panel name is required.', 'error'); return; }
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.textContent = 'Saving…';
+    try {
+      if (editId) {
+        await api(`/api/guilds/${guildId}/tickets/${editId}`, { method: 'PATCH', body: JSON.stringify(body) });
+        toast('Panel saved', 'success');
+      } else {
+        await api(`/api/guilds/${guildId}/tickets`, { method: 'POST', body: JSON.stringify(body) });
+        toast('Panel created', 'success');
+      }
+      clearTicketForm();
+      refreshTicketList(guildId);
+    } catch (err) {
+      toast(err.message || 'Failed to save', 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = orig;
+    }
+  });
+
+  app.querySelector('#tk-cancel-edit')?.addEventListener('click', () => {
+    clearTicketForm();
+  });
+
+  bindTicketCardActions(guildId);
 }
 
 function reactionRolesPanelHTML(menus = []) {
@@ -1312,6 +1769,9 @@ function bindSettingsEvents(guildId) {
 
   // Automod tab bindings.
   bindAutomodEvents(guildId);
+
+  // Tickets tab bindings.
+  bindTicketEvents(guildId);
 
   // Save buttons.
   app.querySelectorAll('[data-save]').forEach(btn => {

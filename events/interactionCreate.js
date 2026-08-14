@@ -142,9 +142,9 @@ async function showCategoryHelpUpdate(interaction, category) {
                 .setTitle('🛡️ Moderation Tools')
                 .setDescription('Server management and moderation:')
                 .addFields(
-                    { name: '/ticket', value: 'Create ticket support panel', inline: true },
-                    { name: '/createticket', value: 'Create ticket with custom name', inline: true },
-                    { name: '/tickethistory', value: 'View ticket history and logs', inline: true },
+                    { name: '/ticket', value: 'Ticket system (dashboard-only)', inline: true },
+                    { name: '/createticket', value: 'Ticket system (dashboard-only)', inline: true },
+                    { name: '/tickethistory', value: 'Ticket system (dashboard-only)', inline: true },
                     { name: '/move', value: 'Move members between voice channels', inline: true },
                     { name: '/end', value: 'End giveaways and other activities', inline: true },
                     { name: '/purge', value: 'Delete messages with messages, user, and between subcommands', inline: true }
@@ -375,20 +375,36 @@ module.exports = {
                     // For other buttons that use colons as separators, extract the parts
                     const [action, ...params] = customId.split(':');
                     // Route to the appropriate handler based on customId or action
-                    if (action === 'create-ticket' || interaction.customId === 'create-ticket' || interaction.customId === 'ticket_create') {
-                        await safeExecute(
-                            client.ticketManager.createTicket.bind(client.ticketManager),
-                            [interaction],
-                            null,
-                            'Ticket creation button'
-                        );
+                    if (action === 'ticketpanel') {
+                        // Premium ticket panels (configured from the dashboard).
+                        // customId forms: ticketpanel:open:<panelId> | ticketpanel:close | ticketpanel:reopen | ticketpanel:claim | ticketpanel:rename
+                        const sub = params[0];
+                        const mgr = client.ticketPanelManager || client.ticketManager;
+                        if (sub === 'open') {
+                            const panelId = params[1];
+                            const panel = mgr.getPanelById ? mgr.getPanelById(panelId) : null;
+                            if (!panel) {
+                                await safeReply(interaction, { content: 'This ticket panel could not be found. It may have been deleted.', ephemeral: true });
+                            } else {
+                                await safeExecute(mgr.handleOpen.bind(mgr), [interaction, panel], null, 'Ticket panel open');
+                            }
+                        } else if (sub === 'close') {
+                            await safeExecute(mgr.handleClose.bind(mgr), [interaction], null, 'Ticket panel close');
+                        } else if (sub === 'reopen') {
+                            await safeExecute(mgr.handleReopen.bind(mgr), [interaction], null, 'Ticket panel reopen');
+                        } else if (sub === 'claim') {
+                            await safeExecute(mgr.handleClaim.bind(mgr), [interaction], null, 'Ticket panel claim');
+                        } else if (sub === 'rename') {
+                            await safeExecute(mgr.handleRename.bind(mgr), [interaction], null, 'Ticket panel rename');
+                        } else {
+                            await safeReply(interaction, { content: 'Unknown ticket action.', ephemeral: true });
+                        }
+                    } else if (action === 'create-ticket' || interaction.customId === 'create-ticket' || interaction.customId === 'ticket_create') {
+                        // Legacy ticket-create buttons — panels are now dashboard-only.
+                        await safeReply(interaction, { content: '🎫 Ticket feature can only be used by dashboard. Configure ticket panels from the PrimeBot dashboard (🎫 Tickets tab).', ephemeral: true });
                     } else if (action === 'close-ticket' || interaction.customId === 'close-ticket' || interaction.customId === 'ticket_close' || action === 'reopen-ticket' || interaction.customId === 'reopen-ticket' || interaction.customId === 'ticket_reopen' || interaction.customId === 'ticket_toggle') {
-                        await safeExecute(
-                            client.ticketManager.toggleTicket.bind(client.ticketManager),
-                            [interaction],
-                            null,
-                            'Ticket toggle button'
-                        );
+                        // Legacy ticket-toggle buttons — no longer active.
+                        await safeReply(interaction, { content: '🎫 Ticket feature can only be used by dashboard. Configure ticket panels from the PrimeBot dashboard (🎫 Tickets tab).', ephemeral: true });
                     } else if (action === 'tictactoe') {
                         const position = params[0];
                         if (position) {
@@ -683,6 +699,14 @@ module.exports = {
                         [interaction],
                         null,
                         'Truth or Dare modal submission'
+                    );
+                } else if (interaction.customId === 'ticketpanel:rename') {
+                    const mgr = client.ticketPanelManager || client.ticketManager;
+                    await safeExecute(
+                        mgr.handleRenameSubmit.bind(mgr),
+                        [interaction],
+                        null,
+                        'Ticket panel rename modal'
                     );
                 }
                 return;

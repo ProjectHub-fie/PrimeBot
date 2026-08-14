@@ -41,6 +41,18 @@ function getAutomodPool() {
     return automodPool;
 }
 
+let ticketPool = null;
+function getTicketPool() {
+    if (ticketPool) return ticketPool;
+    try {
+        ticketPool = require('../server/ticketDb').ticketPool;
+    } catch (err) {
+        console.error('[DASHBOARD DB] ticketDb unavailable:', err.message);
+        ticketPool = { query: async () => { throw new Error('Ticket database not configured'); } };
+    }
+    return ticketPool;
+}
+
 const config = require('../config');
 const constants = require('./constants');
 const { normalizeGuildPrefix } = require('../utils/prefixHelper');
@@ -833,7 +845,7 @@ function rowToAutomodAppeal(row) {
 // ── Combined view (one fetch per guild for the settings page) ───────────────
 
 async function getGuildConfig(guildId) {
-    const [server, welcome, logging, reactionRoles, automod] = await Promise.all([
+    const [server, welcome, logging, reactionRoles, automod, ticketPanels] = await Promise.all([
         getServerSettings(guildId).catch(err => {
             console.error('[DASHBOARD DB] server_settings read failed:', err.message);
             return defaultServerSettings();
@@ -854,8 +866,12 @@ async function getGuildConfig(guildId) {
             console.error('[DASHBOARD DB] automod_settings read failed:', err.message);
             return defaultAutomodSettings();
         }),
+        getTicketPanels(guildId).catch(err => {
+            console.error('[DASHBOARD DB] ticket_panels read failed:', err.message);
+            return [];
+        }),
     ]);
-    return { server, welcome, logging, reactionRoles, automod };
+    return { server, welcome, logging, reactionRoles, automod, ticketPanels };
 }
 
 // ── Aggregated platform stats (public — shown on the login screen) ──────────
@@ -895,6 +911,16 @@ async function _automodCount(query, fallback = 0) {
     }
 }
 
+async function _ticketCount(query, fallback = 0) {
+    try {
+        const res = await getTicketPool().query(query);
+        return Number(res.rows[0]?.count ?? fallback);
+    } catch (err) {
+        console.error('[DASHBOARD DB] ticket stats count failed:', err.message);
+        return fallback;
+    }
+}
+
 async function getPlatformStats(serverCountOverride) {
     const [
         totalServers,
@@ -904,6 +930,7 @@ async function getPlatformStats(serverCountOverride) {
         broadcastEnabled,
         welcomeBanners,
         automodEnabled,
+        ticketPanels,
     ] = await Promise.all([
         _count(`SELECT COUNT(*) FROM server_settings`),
         _count(`SELECT COUNT(*) FROM server_settings WHERE leveling_enabled = true`),
@@ -912,6 +939,7 @@ async function getPlatformStats(serverCountOverride) {
         _count(`SELECT COUNT(*) FROM server_settings WHERE receive_broadcasts = true`),
         _welcomeCount(`SELECT COUNT(*) FROM welcome_settings WHERE banner_url IS NOT NULL AND banner_url <> ''`),
         _automodCount(`SELECT COUNT(*) FROM automod_settings WHERE enabled = true`),
+        _ticketCount(`SELECT COUNT(*) FROM ticket_panels WHERE enabled = true`),
     ]);
 
     // Use the authoritative server count (guilds the bot is actually in) when
@@ -932,9 +960,275 @@ async function getPlatformStats(serverCountOverride) {
             autoReactions: { count: autoReactionsEnabled, percent: pct(autoReactionsEnabled, servers) },
             broadcasts: { count: broadcastEnabled, percent: pct(broadcastEnabled, servers) },
             automod: { count: automodEnabled, percent: pct(automodEnabled, servers) },
+            tickets: { count: ticketPanels, percent: pct(ticketPanels, servers) },
         },
         welcomeBanners,
     };
+}
+
+// ── ticket_panels + ticket_instances ──────────────────────────────────────────
+//
+// Premium ticket panels live in the TICKET_DATABASE_URL pool (falling back to
+// DATABASE_URL), mirroring the bot's TicketPanelManager. The dashboard reads/
+// writes here; the bot's TicketPanelManager picks up changes via its periodic
+// cache reload. Panels are configurable ONLY from the dashboard — slash/prefix
+// ticket commands are disabled and reply with a notice.
+
+async function ensureTicketTables() {
+    const pool = getTicketPool();
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS ticket_panels (
+            id              SERIAL PRIMARY KEY,
+            guild_id        VARCHAR(50) NOT NULL,
+            name            VARCHAR(100) NOT NULL DEFAULT 'Support Ticket',
+            channel_id      VARCHAR(50),
+            message_id      VARCHAR(50),
+            message_type    VARCHAR(20) NOT NULL DEFAULT 'embed',
+            title           VARCHAR(255),
+            description     TEXT,
+            color           VARCHAR(20) DEFAULT '#5865F2',
+            thumbnail_url   TEXT,
+            image_url       TEXT,
+            footer_text     VARCHAR(255),
+            content         TEXT,
+            button_label    VARCHAR(80) NOT NULL DEFAULT 'Open Ticket',
+            button_style    VARCHAR(20) NOT NULL DEFAULT 'Primary',
+            button_emoji    VARCHAR(100),
+            category        VARCHAR(50) DEFAULT 'general',
+            ticket_name     VARCHAR(100),
+            support_role_ids    JSONB NOT NULL DEFAULT '[]',
+            ping_role_ids       JSONB NOT NULL DEFAULT '[]',
+            ticket_category_id  VARCHAR(50),
+            cooldown_seconds        INTEGER NOT NULL DEFAULT 0,
+            max_open_per_user      INTEGER NOT NULL DEFAULT 1,
+            ask_reason             BOOLEAN NOT NULL DEFAULT false,
+            reason_placeholder     VARCHAR(255),
+            welcome_message        TEXT,
+            close_button_label     VARCHAR(80) DEFAULT 'Close Ticket',
+            close_button_emoji     VARCHAR(100),
+            claim_button_label     VARCHAR(80),
+            claim_button_emoji     VARCHAR(100),
+            enabled             BOOLEAN NOT NULL DEFAULT true,
+            created_by          VARCHAR(50),
+            created_at          TIMESTAMP DEFAULT NOW(),
+            updated_at          TIMESTAMP DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS ticket_panels_guild_idx ON ticket_panels (guild_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS ticket_panels_guild_name_idx ON ticket_panels (guild_id, name);
+        CREATE TABLE IF NOT EXISTS ticket_instances (
+            id                  SERIAL PRIMARY KEY,
+            panel_id            INTEGER REFERENCES ticket_panels(id) ON DELETE SET NULL,
+            guild_id            VARCHAR(50) NOT NULL,
+            channel_id          VARCHAR(50) NOT NULL,
+            user_id             VARCHAR(50) NOT NULL,
+            category            VARCHAR(50) DEFAULT 'general',
+            is_thread           BOOLEAN NOT NULL DEFAULT false,
+            parent_channel_id   VARCHAR(50),
+            control_message_id  VARCHAR(50),
+            reason              TEXT,
+            status              VARCHAR(20) NOT NULL DEFAULT 'open',
+            claimed_by          VARCHAR(50),
+            created_at          BIGINT NOT NULL,
+            closed_at           BIGINT,
+            closed_by           VARCHAR(50),
+            reopened_at         BIGINT,
+            reopened_by         VARCHAR(50)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ticket_instances_channel_idx ON ticket_instances (channel_id);
+        CREATE INDEX IF NOT EXISTS ticket_instances_guild_idx ON ticket_instances (guild_id);
+        CREATE INDEX IF NOT EXISTS ticket_instances_panel_idx ON ticket_instances (panel_id);
+        CREATE INDEX IF NOT EXISTS ticket_instances_guild_user_idx ON ticket_instances (guild_id, user_id);
+    `);
+}
+
+const VALID_TICKET_BUTTON_STYLES = new Set(['Primary', 'Secondary', 'Success', 'Danger']);
+const VALID_TICKET_MESSAGE_TYPES = new Set(['embed', 'plain']);
+
+function ticketRowToPanel(row) {
+    return {
+        id: row.id,
+        guildId: row.guild_id,
+        name: row.name || 'Support Ticket',
+        channelId: row.channel_id || null,
+        messageId: row.message_id || null,
+        messageType: row.message_type || 'embed',
+        title: row.title || null,
+        description: row.description || null,
+        color: row.color || '#5865F2',
+        thumbnailUrl: row.thumbnail_url || null,
+        imageUrl: row.image_url || null,
+        footerText: row.footer_text || null,
+        content: row.content || null,
+        buttonLabel: row.button_label || 'Open Ticket',
+        buttonStyle: row.button_style || 'Primary',
+        buttonEmoji: row.button_emoji || null,
+        category: row.category || 'general',
+        ticketName: row.ticket_name || null,
+        supportRoleIds: Array.isArray(row.support_role_ids) ? row.support_role_ids : [],
+        pingRoleIds: Array.isArray(row.ping_role_ids) ? row.ping_role_ids : [],
+        ticketCategoryId: row.ticket_category_id || null,
+        cooldownSeconds: Number(row.cooldown_seconds) || 0,
+        maxOpenPerUser: Number(row.max_open_per_user) || 1,
+        askReason: !!row.ask_reason,
+        reasonPlaceholder: row.reason_placeholder || 'Briefly describe your issue',
+        welcomeMessage: row.welcome_message || null,
+        closeButtonLabel: row.close_button_label || 'Close Ticket',
+        closeButtonEmoji: row.close_button_emoji || null,
+        claimButtonLabel: row.claim_button_label || null,
+        claimButtonEmoji: row.claim_button_emoji || null,
+        openNameTemplate: row.open_name_template != null ? row.open_name_template : null,
+        claimedNameTemplate: row.claimed_name_template != null ? row.claimed_name_template : null,
+        closedNameTemplate: row.closed_name_template != null ? row.closed_name_template : null,
+        enabled: row.enabled !== false,
+        createdBy: row.created_by || null,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+    };
+}
+
+function normalizeTicketPanel(data, keepUndefined = false) {
+    const defaults = {
+        name: 'Support Ticket', messageType: 'embed', title: null, description: null,
+        color: '#5865F2', thumbnailUrl: null, imageUrl: null, footerText: null,
+        content: null, buttonLabel: 'Open Ticket', buttonStyle: 'Primary',
+        buttonEmoji: null, category: 'general', ticketName: null,
+        supportRoleIds: [], pingRoleIds: [], ticketCategoryId: null,
+        cooldownSeconds: 0, maxOpenPerUser: 1, askReason: false,
+        reasonPlaceholder: 'Briefly describe your issue',
+        welcomeMessage: null, closeButtonLabel: 'Close Ticket',
+        closeButtonEmoji: '🔒', claimButtonLabel: null, claimButtonEmoji: null,
+        openNameTemplate: null, claimedNameTemplate: null, closedNameTemplate: null,
+        enabled: true, channelId: null, messageId: null,
+    };
+    const out = keepUndefined ? { ...(data || {}) } : { ...defaults, ...(data || {}) };
+    out.name = (out.name == null ? '' : String(out.name)).trim() || 'Support Ticket';
+    out.messageType = VALID_TICKET_MESSAGE_TYPES.has(out.messageType) ? out.messageType : 'embed';
+    out.buttonStyle = VALID_TICKET_BUTTON_STYLES.has(out.buttonStyle) ? out.buttonStyle : 'Primary';
+    out.color = /^#[0-9a-fA-F]{6}$/.test(out.color) ? out.color : '#5865F2';
+    out.supportRoleIds = Array.isArray(out.supportRoleIds) ? out.supportRoleIds.map(String) : [];
+    out.pingRoleIds = Array.isArray(out.pingRoleIds) ? out.pingRoleIds.map(String) : [];
+    out.cooldownSeconds = Math.max(0, parseInt(out.cooldownSeconds, 10) || 0);
+    out.maxOpenPerUser = Math.max(0, parseInt(out.maxOpenPerUser, 10) || 1);
+    out.askReason = !!out.askReason;
+    out.enabled = out.enabled !== false;
+    for (const f of ['openNameTemplate', 'claimedNameTemplate', 'closedNameTemplate']) {
+        if (out[f] != null) out[f] = String(out[f]).trim().slice(0, 100) || null;
+    }
+    return out;
+}
+
+const TICKET_PANEL_FIELDS = {
+    name: 1, channelId: 1, messageId: 1, messageType: 1, title: 1, description: 1,
+    color: 1, thumbnailUrl: 1, imageUrl: 1, footerText: 1, content: 1,
+    buttonLabel: 1, buttonStyle: 1, buttonEmoji: 1, category: 1, ticketName: 1,
+    supportRoleIds: 1, pingRoleIds: 1, ticketCategoryId: 1, cooldownSeconds: 1,
+    maxOpenPerUser: 1, askReason: 1, reasonPlaceholder: 1, welcomeMessage: 1,
+    closeButtonLabel: 1, closeButtonEmoji: 1, claimButtonLabel: 1,
+    claimButtonEmoji: 1, openNameTemplate: 1, claimedNameTemplate: 1,
+    closedNameTemplate: 1, enabled: 1, createdBy: 1,
+};
+
+async function _fetchTicketPanel(id) {
+    const res = await getTicketPool().query('SELECT * FROM ticket_panels WHERE id = $1', [id]);
+    if (res.rows.length === 0) return null;
+    return ticketRowToPanel(res.rows[0]);
+}
+
+async function getTicketPanels(guildId) {
+    await ensureTicketTables();
+    const res = await getTicketPool().query('SELECT * FROM ticket_panels WHERE guild_id = $1 ORDER BY id', [guildId]);
+    return res.rows.map(ticketRowToPanel);
+}
+
+async function createTicketPanel(guildId, data) {
+    await ensureTicketTables();
+    const p = normalizeTicketPanel(data);
+    const res = await getTicketPool().query(`
+        INSERT INTO ticket_panels (
+            guild_id, name, channel_id, message_id, message_type, title, description,
+            color, thumbnail_url, image_url, footer_text, content, button_label,
+            button_style, button_emoji, category, ticket_name, support_role_ids,
+            ping_role_ids, ticket_category_id, cooldown_seconds, max_open_per_user,
+            ask_reason, reason_placeholder, welcome_message, close_button_label,
+            close_button_emoji, claim_button_label, claim_button_emoji,
+            open_name_template, claimed_name_template, closed_name_template,
+            enabled, created_by, created_at, updated_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,NOW(),NOW())
+        RETURNING id
+    `, [
+        guildId, p.name, p.channelId || null, p.messageId || null, p.messageType,
+        p.title, p.description, p.color, p.thumbnailUrl, p.imageUrl, p.footerText,
+        p.content, p.buttonLabel, p.buttonStyle, p.buttonEmoji, p.category,
+        p.ticketName, JSON.stringify(p.supportRoleIds), JSON.stringify(p.pingRoleIds),
+        p.ticketCategoryId, p.cooldownSeconds, p.maxOpenPerUser, p.askReason,
+        p.reasonPlaceholder, p.welcomeMessage, p.closeButtonLabel,
+        p.closeButtonEmoji, p.claimButtonLabel, p.claimButtonEmoji,
+        p.openNameTemplate, p.claimedNameTemplate, p.closedNameTemplate,
+        p.enabled, p.createdBy || null,
+    ]);
+    return _fetchTicketPanel(res.rows[0].id);
+}
+
+async function updateTicketPanel(id, patch) {
+    await ensureTicketTables();
+    const current = await _fetchTicketPanel(id);
+    if (!current) throw new Error('Ticket panel not found.');
+    const next = { ...current };
+    for (const key of Object.keys(TICKET_PANEL_FIELDS)) {
+        if (key in patch) next[key] = patch[key];
+    }
+    const p = normalizeTicketPanel(next, true);
+    await getTicketPool().query(`
+        UPDATE ticket_panels SET
+            name = $2, channel_id = $3, message_id = $4, message_type = $5,
+            title = $6, description = $7, color = $8, thumbnail_url = $9,
+            image_url = $10, footer_text = $11, content = $12, button_label = $13,
+            button_style = $14, button_emoji = $15, category = $16, ticket_name = $17,
+            support_role_ids = $18, ping_role_ids = $19, ticket_category_id = $20,
+            cooldown_seconds = $21, max_open_per_user = $22, ask_reason = $23,
+            reason_placeholder = $24, welcome_message = $25, close_button_label = $26,
+            close_button_emoji = $27, claim_button_label = $28, claim_button_emoji = $29,
+            open_name_template = $30, claimed_name_template = $31, closed_name_template = $32,
+            enabled = $33, updated_at = NOW()
+        WHERE id = $1
+    `, [
+        id, p.name, p.channelId || null, p.messageId || null, p.messageType,
+        p.title, p.description, p.color, p.thumbnailUrl, p.imageUrl, p.footerText,
+        p.content, p.buttonLabel, p.buttonStyle, p.buttonEmoji, p.category,
+        p.ticketName, JSON.stringify(p.supportRoleIds), JSON.stringify(p.pingRoleIds),
+        p.ticketCategoryId, p.cooldownSeconds, p.maxOpenPerUser, p.askReason,
+        p.reasonPlaceholder, p.welcomeMessage, p.closeButtonLabel,
+        p.closeButtonEmoji, p.claimButtonLabel, p.claimButtonEmoji,
+        p.openNameTemplate, p.claimedNameTemplate, p.closedNameTemplate,
+        p.enabled,
+    ]);
+    return _fetchTicketPanel(id);
+}
+
+async function deleteTicketPanel(id) {
+    await ensureTicketTables();
+    await getTicketPool().query('DELETE FROM ticket_panels WHERE id = $1', [id]);
+    return true;
+}
+
+async function cloneTicketPanel(id, newName) {
+    await ensureTicketTables();
+    const src = await _fetchTicketPanel(id);
+    if (!src) throw new Error('Ticket panel not found.');
+    const data = { ...src };
+    delete data.id;
+    data.name = (newName && String(newName).trim()) || `${src.name} (copy)`;
+    data.channelId = null;
+    data.messageId = null;
+    return createTicketPanel(src.guildId, data);
+}
+
+async function renameTicketPanel(id, newName) {
+    const name = newName && String(newName).trim();
+    if (!name) throw new Error('A name is required.');
+    await ensureTicketTables();
+    await getTicketPool().query('UPDATE ticket_panels SET name = $2, updated_at = NOW() WHERE id = $1', [id, name]);
+    return _fetchTicketPanel(id);
 }
 
 module.exports = {
@@ -959,6 +1253,12 @@ module.exports = {
     submitAutomodAppeal,
     getAutomodAppeals,
     decideAutomodAppeal,
+    getTicketPanels,
+    createTicketPanel,
+    updateTicketPanel,
+    deleteTicketPanel,
+    cloneTicketPanel,
+    renameTicketPanel,
     getGuildConfig,
     getPlatformStats,
 };

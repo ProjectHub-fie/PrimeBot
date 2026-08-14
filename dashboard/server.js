@@ -784,6 +784,191 @@ function parseEmojiForDiscord(emoji) {
     return emoji;
 }
 
+// ── API: ticket panels ──────────────────────────────────────────────────────
+//
+// Ticket panels are configurable ONLY from the dashboard (slash/prefix commands
+// are disabled). The dashboard writes the DB row directly; the bot's
+// TicketPanelManager picks it up on its cache reload.
+//
+//   GET    .../tickets                         list panels
+//   POST   .../tickets                         create a panel
+//   PATCH  .../tickets/:id                     edit a panel
+//   DELETE .../tickets/:id                      delete a panel
+//   POST   .../tickets/:id/clone               clone a panel under a new name
+//   POST   .../tickets/:id/rename              rename a panel
+//   POST   .../tickets/:id/send                send panel to a channel (capturing message id)
+//   POST   .../tickets/:id/update              re-render an existing message by id ("update panel")
+
+// Build the panel message payload (embed or plain) + the open-ticket button
+// row, matching the bot's TicketPanelManager.buildPanelMessage so the dashboard
+// posts exactly what the bot would.
+function ticketPanelMessagePayload(panel) {
+    const color = parseInt((panel.color || '#5865F2').replace('#', ''), 16);
+    const buttonEmoji = panel.buttonEmoji || undefined;
+    const styleMap = { Primary: 1, Secondary: 2, Success: 3, Danger: 4 };
+    const buttonStyle = styleMap[panel.buttonStyle] || 1;
+    const components = [{
+        type: 1, // ActionRow
+        components: [{
+            type: 2, // Button
+            style: buttonStyle,
+            custom_id: `ticketpanel:open:${panel.id}`,
+            label: panel.buttonLabel || 'Open Ticket',
+            ...(buttonEmoji ? { emoji: { name: buttonEmoji } } : {}),
+        }],
+    }];
+    if (panel.messageType === 'plain') {
+        return {
+            content: panel.content || panel.description || 'Click the button below to open a support ticket.',
+            components,
+        };
+    }
+    const embed = {
+        title: panel.title || '🎫 Support Tickets',
+        description: panel.description || 'Click the button below to open a support ticket.',
+        color,
+        ...(panel.footerText ? { footer: { text: panel.footerText } } : {}),
+        ...(panel.thumbnailUrl ? { thumbnail: { url: panel.thumbnailUrl } } : {}),
+        ...(panel.imageUrl ? { image: { url: panel.imageUrl } } : {}),
+        timestamp: new Date().toISOString(),
+    };
+    return { content: panel.content || null, embeds: [embed], components };
+}
+
+app.get('/api/guilds/:guildId/tickets', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const panels = await dashboardDb.getTicketPanels(req.guild.id);
+        res.json({ ticketPanels: panels });
+    } catch (err) {
+        console.error('[API] get ticket panels error:', err.message);
+        res.status(500).json({ error: 'Failed to load ticket panels.' });
+    }
+});
+
+app.post('/api/guilds/:guildId/tickets', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const body = req.body || {};
+        if (!body.name || !String(body.name).trim()) {
+            return res.status(400).json({ error: 'A panel name is required.' });
+        }
+        const panel = await dashboardDb.createTicketPanel(req.guild.id, { ...body, createdBy: req.user.id });
+        res.json({ ticketPanel: panel });
+    } catch (err) {
+        console.error('[API] create ticket panel error:', err.message);
+        res.status(500).json({ error: 'Failed to create ticket panel: ' + err.message });
+    }
+});
+
+app.patch('/api/guilds/:guildId/tickets/:id', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const id = parseInt(req.params.id, 10);
+        if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid panel id.' });
+        const panel = await dashboardDb.updateTicketPanel(id, req.body || {});
+        // If the panel was already sent and embed-visible fields changed,
+        // re-render the live message so it stays in sync.
+        if (panel && panel.messageId && panel.channelId) {
+            try {
+                await discord.editChannelMessage(panel.channelId, panel.messageId, ticketPanelMessagePayload(panel));
+            } catch (err) {
+                console.error('[API] edit ticket panel message failed:', err.message);
+            }
+        }
+        res.json({ ticketPanel: panel });
+    } catch (err) {
+        console.error('[API] update ticket panel error:', err.message);
+        res.status(500).json({ error: 'Failed to update ticket panel: ' + err.message });
+    }
+});
+
+app.delete('/api/guilds/:guildId/tickets/:id', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const id = parseInt(req.params.id, 10);
+        if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid panel id.' });
+        const panels = await dashboardDb.getTicketPanels(req.guild.id);
+        const panel = panels.find(p => p.id === id);
+        await dashboardDb.deleteTicketPanel(id);
+        if (panel && panel.messageId && panel.channelId) {
+            await discord.deleteChannelMessage(panel.channelId, panel.messageId).catch(() => {});
+        }
+        res.json({ ok: true });
+    } catch (err) {
+        console.error('[API] delete ticket panel error:', err.message);
+        res.status(500).json({ error: 'Failed to delete ticket panel.' });
+    }
+});
+
+app.post('/api/guilds/:guildId/tickets/:id/clone', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const id = parseInt(req.params.id, 10);
+        if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid panel id.' });
+        const name = (req.body && req.body.name) || null;
+        const panel = await dashboardDb.cloneTicketPanel(id, name);
+        res.json({ ticketPanel: panel });
+    } catch (err) {
+        console.error('[API] clone ticket panel error:', err.message);
+        res.status(500).json({ error: 'Failed to clone ticket panel: ' + err.message });
+    }
+});
+
+app.post('/api/guilds/:guildId/tickets/:id/rename', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const id = parseInt(req.params.id, 10);
+        if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid panel id.' });
+        const name = req.body && req.body.name;
+        const panel = await dashboardDb.renameTicketPanel(id, name);
+        res.json({ ticketPanel: panel });
+    } catch (err) {
+        console.error('[API] rename ticket panel error:', err.message);
+        res.status(500).json({ error: 'Failed to rename ticket panel: ' + err.message });
+    }
+});
+
+// Send the panel to a channel: post the panel message via REST and store the
+// resulting channel/message id on the panel so the bot can later "update" it.
+app.post('/api/guilds/:guildId/tickets/:id/send', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const id = parseInt(req.params.id, 10);
+        if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid panel id.' });
+        const channelId = req.body && req.body.channelId;
+        if (!channelId) return res.status(400).json({ error: 'A channel is required.' });
+        const panel = await dashboardDb.updateTicketPanel(id, { channelId, enabled: true });
+        const sent = await discord.sendChannelMessage(channelId, ticketPanelMessagePayload(panel));
+        const updated = await dashboardDb.updateTicketPanel(id, { channelId, messageId: sent.id });
+        res.json({ ticketPanel: updated });
+    } catch (err) {
+        console.error('[API] send ticket panel error:', err.message);
+        res.status(500).json({ error: 'Failed to send ticket panel: ' + err.message });
+    }
+});
+
+// Re-render an existing panel message by id (the "update panel" button). The
+// messageId may be the panel's stored one or a new one supplied in the body.
+app.post('/api/guilds/:guildId/tickets/:id/update', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const id = parseInt(req.params.id, 10);
+        if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid panel id.' });
+        const panels = await dashboardDb.getTicketPanels(req.guild.id);
+        const panel = panels.find(p => p.id === id);
+        if (!panel) return res.status(404).json({ error: 'Ticket panel not found.' });
+        const messageId = (req.body && req.body.messageId) || panel.messageId;
+        const channelId = (req.body && req.body.channelId) || panel.channelId;
+        if (!messageId) return res.status(400).json({ error: 'No message id. Send the panel to a channel first, or provide a message id.' });
+        if (!channelId) return res.status(400).json({ error: 'No channel bound to this panel.' });
+        // Validate the message exists.
+        try {
+            await discord.getChannelMessage(channelId, messageId);
+        } catch (err) {
+            return res.status(400).json({ error: 'Could not find that message. Make sure the bot can see the channel and message.' });
+        }
+        await discord.editChannelMessage(channelId, messageId, ticketPanelMessagePayload(panel));
+        const updated = await dashboardDb.updateTicketPanel(id, { channelId, messageId });
+        res.json({ ticketPanel: updated });
+    } catch (err) {
+        console.error('[API] update ticket panel message error:', err.message);
+        res.status(500).json({ error: 'Failed to update ticket panel message: ' + err.message });
+    }
+});
+
 // ── Page routes (SPA-style: serve index.html for everything) ────────────────
 
 app.get(['/', '/dashboard', '/docs', '/guild/:guildId'], (req, res) => {

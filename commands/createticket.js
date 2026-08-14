@@ -1,31 +1,19 @@
-const { SlashCommandBuilder , PermissionFlagsBits} = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const config = require('../config');
+
+const TICKET_DASHBOARD_NOTICE = '🎫 Ticket feature can only be used by dashboard. Configure ticket panels from the PrimeBot dashboard (🎫 Tickets tab).';
 
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('createticket')
-        .setDescription('Create a ticket with a custom name')
-		.setDefaultMemberPermissions('0')
-        
-        .addStringOption(option => 
-            option.setName('name')
-                .setDescription('Custom name for the ticket')
-                .setRequired(true)),
-    
+        .setDescription('Create a ticket with a custom name'),
+
     async execute(interaction) {
-        // Command version: 2.5.0
-        try {
-            const ticketName = interaction.options.getString('name');
-            
-            // Create the ticket
-            await interaction.client.ticketManager.handleTicketCreation(interaction, ticketName);
-            
-        } catch (error) {
-            console.error('Error creating ticket:', error);
-            await interaction.reply({ 
-                content: 'There was an error creating your ticket! Please try again later.', 
-                ephemeral: false 
-            });
-        }
+        const embed = new EmbedBuilder()
+            .setColor(config.colors.warning)
+            .setTitle('🎫 Ticket System')
+            .setDescription(TICKET_DASHBOARD_NOTICE)
+            .setFooter({ text: `PrimeBot v${config.version}` });
+        return interaction.reply({ embeds: [embed], ephemeral: true });
     },
 };

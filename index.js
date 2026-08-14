@@ -82,6 +82,15 @@ client.betaManager = betaManager;
     const noopAsync = async () => {};
     client.giveawayManager  = { giveaways: new Map(), startGiveaway: noopAsync, endGiveaway: noopAsync };
     client.ticketManager    = { tickets: new Map() };
+    client.ticketPanelManager = {
+        getPanelById: () => null, getGuildPanels: () => [], getPanelForMessage: () => null,
+        getInstanceByChannel: () => null, countOpenTickets: () => 0,
+        handleOpen: async () => {}, handleClose: async () => {}, handleReopen: async () => {},
+        handleClaim: async () => {}, createPanel: async () => null, updatePanel: async () => null,
+        deletePanel: async () => false, clonePanel: async () => null, renamePanel: async () => null,
+        sendPanelToChannel: async () => null, updatePanelMessage: async () => null,
+        restorePanels: async () => {}, getTicketHistory: () => [],
+    };
     client.ticTacToeManager = { games: new Map() };
     client.pollManager      = { polls: new Map() };
     client.livePollManager  = { polls: new Map() };
@@ -124,7 +133,7 @@ async function initializeManagers() {
     console.log('[MANAGERS] Initializing all managers...');
 
     const GiveawayManager   = require('./utils/giveawayManager');
-    const TicketManager     = require('./utils/ticketManager');
+    const { TicketPanelManager } = require('./utils/ticketManager');
     const TicTacToeManager  = require('./utils/ticTacToeManager');
     const PollManager       = require('./utils/pollManager');
     const LivePollManager   = require('./utils/livePollManager');
@@ -140,7 +149,9 @@ async function initializeManagers() {
     const SnipeManager = require('./utils/snipeManager');
 
     client.giveawayManager  = new GiveawayManager(client);
-    client.ticketManager    = new TicketManager(client);
+    const ticketPanelManager = new TicketPanelManager(client);
+    client.ticketManager    = ticketPanelManager; // legacy alias
+    client.ticketPanelManager = ticketPanelManager;
     client.ticTacToeManager = new TicTacToeManager(client);
     client.pollManager      = new PollManager(client);
     client.livePollManager  = new LivePollManager(client);
