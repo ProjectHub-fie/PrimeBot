@@ -9,6 +9,7 @@
 const discord = require('./discord');
 const pages = require('./render/pages');
 const L = require('./render/layout');
+const dashboardDb = require('./db');
 
 function requireAuth(req, res, next) {
     if (req.session && req.session.user) {
