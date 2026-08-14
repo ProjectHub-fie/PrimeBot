@@ -73,6 +73,24 @@ module.exports = {
             }, 60000); // Check every minute
         }
 
+        // Start live giveaway checking system
+        if (client.liveGiveawayManager) {
+            console.log('Live giveaway checking system started.');
+            setInterval(() => {
+                client.liveGiveawayManager.checkExpiredGiveaways().catch(() => {});
+            }, 60000); // Check every minute
+        }
+
+        // Event scheduler is self-driving (its own exec loop); just restore
+        // schedules from the database on startup.
+        if (client.eventManager && typeof client.eventManager.restore === 'function') {
+            setTimeout(() => {
+                client.eventManager.restore().catch(err =>
+                    console.error('[EVENTS] Restore failed:', err.message)
+                );
+            }, 7000);
+        }
+
         // Re-apply roles for persistent reaction-role menus so they survive
         // bot restarts and Discord reaction-cache evictions.
         if (client.reactionRoleManager && typeof client.reactionRoleManager.restorePersistentMenus === 'function') {

@@ -502,6 +502,109 @@ const ticketInstancesRelations = relations(ticketInstances, ({ one }) => ({
   }),
 }));
 
+// ── Live giveaways ──────────────────────────────────────────────────────────
+// Cross-server giveaways created with $lgiveway / /lgiveway. Mirrors the live
+// polls system (shareable via giveaway ID + pass code, joinable from any
+// server), but lives in the dedicated LIVE_DATABASE_URL pool (falling back to
+// DATABASE_URL). A live giveaway has participants and, when ended, winners.
+const liveGiveaways = pgTable('live_giveaways', {
+  id: serial('id').primaryKey(),
+  giveawayId: varchar('giveaway_id', { length: 100 }).notNull().unique(),
+  passCode: varchar('pass_code', { length: 20 }).notNull(),
+  prize: text('prize').notNull(),
+  description: text('description'),
+  creatorId: varchar('creator_id', { length: 50 }).notNull(),
+  winnerCount: integer('winner_count').default(1),
+  isActive: boolean('is_active').default(true),
+  ended: boolean('ended').default(false),
+  createdAt: timestamp('created_at').defaultNow(),
+  endsAt: timestamp('ends_at'),
+  messageId: varchar('message_id', { length: 50 }),
+  channelId: varchar('channel_id', { length: 50 }),
+});
+
+const liveGiveawayParticipants = pgTable('live_giveaway_participants', {
+  id: serial('id').primaryKey(),
+  giveawayId: varchar('giveaway_id', { length: 100 }).notNull(),
+  userId: varchar('user_id', { length: 50 }).notNull(),
+  joinedAt: timestamp('joined_at').defaultNow(),
+});
+
+const liveGiveawayWinners = pgTable('live_giveaway_winners', {
+  id: serial('id').primaryKey(),
+  giveawayId: varchar('giveaway_id', { length: 100 }).notNull(),
+  userId: varchar('user_id', { length: 50 }).notNull(),
+  selectedAt: timestamp('selected_at').defaultNow(),
+});
+
+const liveGiveawaysRelations = relations(liveGiveaways, ({ many }) => ({
+  participants: many(liveGiveawayParticipants),
+  winners: many(liveGiveawayWinners),
+}));
+
+const liveGiveawayParticipantsRelations = relations(liveGiveawayParticipants, ({ one }) => ({
+  giveaway: one(liveGiveaways, {
+    fields: [liveGiveawayParticipants.giveawayId],
+    references: [liveGiveaways.giveawayId],
+  }),
+}));
+
+const liveGiveawayWinnersRelations = relations(liveGiveawayWinners, ({ one }) => ({
+  giveaway: one(liveGiveaways, {
+    fields: [liveGiveawayWinners.giveawayId],
+    references: [liveGiveaways.giveawayId],
+  }),
+}));
+
+// ── Event management ────────────────────────────────────────────────────────
+// Per-guild event schedules. Each schedule has an optional start countdown; a
+// list of tasks (actions) to run at relative offsets (in seconds) from the
+// event start — lock/unlock/hide/unhide channels, add/remove roles, or send a
+// text/embed message. Lives in the dedicated EVENT_DATABASE_URL pool (falling
+// back to DATABASE_URL). Configured from the dashboard's 📅 Events tab.
+const eventSchedules = pgTable('event_schedules', {
+  id: serial('id').primaryKey(),
+  guildId: varchar('guild_id', { length: 50 }).notNull(),
+  name: varchar('name', { length: 100 }).notNull(),
+  description: text('description'),
+  status: varchar('status', { length: 20 }).notNull().default('scheduled'),
+  countdownSeconds: integer('countdown_seconds').default(0),
+  startAt: timestamp('start_at'),
+  triggered: boolean('triggered').default(false),
+  enabled: boolean('enabled').default(true),
+  createdById: varchar('created_by_id', { length: 50 }),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+const eventTasks = pgTable('event_tasks', {
+  id: serial('id').primaryKey(),
+  scheduleId: integer('schedule_id').notNull(),
+  offsetSeconds: integer('offset_seconds').notNull().default(0),
+  action: varchar('action', { length: 30 }).notNull(),
+  targetType: varchar('target_type', { length: 20 }).default('channel'),
+  targetIds: jsonb('target_ids').notNull().default([]),
+  messageContent: text('message_content'),
+  embedTitle: varchar('embed_title', { length: 255 }),
+  embedDescription: text('embed_description'),
+  embedColor: varchar('embed_color', { length: 20 }).default('#5865F2'),
+  embedImageUrl: text('embed_image_url'),
+  channelId: varchar('channel_id', { length: 50 }),
+  executedAt: timestamp('executed_at'),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+const eventSchedulesRelations = relations(eventSchedules, ({ many }) => ({
+  tasks: many(eventTasks),
+}));
+
+const eventTasksRelations = relations(eventTasks, ({ one }) => ({
+  schedule: one(eventSchedules, {
+    fields: [eventTasks.scheduleId],
+    references: [eventSchedules.id],
+  }),
+}));
+
 // Exports
 module.exports = {
   livePolls,
@@ -547,4 +650,14 @@ module.exports = {
   ticketInstances,
   ticketPanelsRelations,
   ticketInstancesRelations,
+  liveGiveaways,
+  liveGiveawayParticipants,
+  liveGiveawayWinners,
+  liveGiveawaysRelations,
+  liveGiveawayParticipantsRelations,
+  liveGiveawayWinnersRelations,
+  eventSchedules,
+  eventTasks,
+  eventSchedulesRelations,
+  eventTasksRelations,
 };
