@@ -1099,6 +1099,21 @@ function ticketsPanelHTML(panels = []) {
         <input type="text" id="tk-ticket-name" maxlength="100" placeholder="Defaults to ticket-username" />
       </div>
       <div class="field">
+        <label class="field-label" for="tk-open-name">Channel name when OPEN</label>
+        <input type="text" id="tk-open-name" maxlength="100" placeholder="(open) {name}" />
+        <div class="field-hint">Template applied when a ticket opens/reopens. Placeholders: {name} (ticket name or username), {username}, {id}, {panel}. Blank = no rename.</div>
+      </div>
+      <div class="field">
+        <label class="field-label" for="tk-claimed-name">Channel name when CLAIMED</label>
+        <input type="text" id="tk-claimed-name" maxlength="100" placeholder="(solved) {name}" />
+        <div class="field-hint">Template applied when support claims the ticket. Same placeholders. Blank = no rename.</div>
+      </div>
+      <div class="field">
+        <label class="field-label" for="tk-closed-name">Channel name when CLOSED</label>
+        <input type="text" id="tk-closed-name" maxlength="100" placeholder="(closed) {name}" />
+        <div class="field-hint">Template applied when the ticket is closed (visible for archived threads). Same placeholders. Blank = no rename.</div>
+      </div>
+      <div class="field">
         <label class="field-label">Support roles (can see tickets)</label>
         <div class="reactions-list" id="tk-support-list">${ticketRoleRowHTML({}, 'tk-support')}</div>
         <button class="btn btn-secondary" id="tk-support-add">+ Add role</button>
@@ -1179,6 +1194,9 @@ function readTicketForm() {
     buttonStyle: app.querySelector('#tk-button-style').value || 'Primary',
     category: app.querySelector('#tk-category').value.trim() || 'general',
     ticketName: app.querySelector('#tk-ticket-name').value.trim() || null,
+    openNameTemplate: app.querySelector('#tk-open-name').value.trim() || null,
+    claimedNameTemplate: app.querySelector('#tk-claimed-name').value.trim() || null,
+    closedNameTemplate: app.querySelector('#tk-closed-name').value.trim() || null,
     supportRoleIds: collectTicketRoles('#tk-support-list', 'tk-support-role'),
     pingRoleIds: collectTicketRoles('#tk-ping-list', 'tk-ping-role'),
     ticketCategoryId: app.querySelector('#tk-ticket-category-id').value.trim() || null,
@@ -1210,6 +1228,9 @@ function fillTicketForm(panel) {
   app.querySelector('#tk-button-style').value = panel.buttonStyle || 'Primary';
   app.querySelector('#tk-category').value = panel.category || 'general';
   app.querySelector('#tk-ticket-name').value = panel.ticketName || '';
+  app.querySelector('#tk-open-name').value = panel.openNameTemplate || '';
+  app.querySelector('#tk-claimed-name').value = panel.claimedNameTemplate || '';
+  app.querySelector('#tk-closed-name').value = panel.closedNameTemplate || '';
   app.querySelector('#tk-ticket-category-id').value = panel.ticketCategoryId || '';
   app.querySelector('#tk-max-open').value = panel.maxOpenPerUser != null ? panel.maxOpenPerUser : 1;
   app.querySelector('#tk-ask-reason').checked = !!panel.askReason;

@@ -96,7 +96,7 @@ test('buildPanelMessage builds a plain message with the open button for plain ty
     assert.equal(btn.label, 'Open');
 });
 
-test('buildControlMessage includes a close button and a claim button when configured', () => {
+test('buildControlMessage includes a close button, a claim button, and a rename button when configured', () => {
     const mgr = new TicketPanelManager({});
     const panel = mgr._normalizePanel({
         name: 'Support', claimButtonLabel: 'Claim', claimButtonEmoji: '✋',
@@ -108,14 +108,54 @@ test('buildControlMessage includes a close button and a claim button when config
     const claimBtn = payload.components[1].components[0];
     assert.equal(claimBtn.custom_id, 'ticketpanel:claim');
     assert.equal(claimBtn.label, 'Claim');
+    // Rename button is in the second extra row alongside claim.
+    const renameBtn = payload.components[1].components[1];
+    assert.equal(renameBtn.custom_id, 'ticketpanel:rename');
 });
 
-test('buildControlMessage omits the claim button when not configured', () => {
+test('buildControlMessage includes a rename button (with close) when no claim button is configured', () => {
     const mgr = new TicketPanelManager({});
     const panel = mgr._normalizePanel({ name: 'Support' });
     const payload = mgr.buildControlMessage(panel, '<@123>');
-    assert.equal(payload.components.length, 1);
+    assert.equal(payload.components.length, 2);
     assert.equal(payload.components[0].components[0].custom_id, 'ticketpanel:close');
+    assert.equal(payload.components[1].components[0].custom_id, 'ticketpanel:rename');
+});
+
+test('_normalizePanel applies default status name templates and trims to null when empty', () => {
+    const mgr = new TicketPanelManager({});
+    const p = mgr._normalizePanel({ name: 'Support' });
+    assert.equal(p.openNameTemplate, '(open) {name}');
+    assert.equal(p.claimedNameTemplate, '(solved) {name}');
+    assert.equal(p.closedNameTemplate, '(closed) {name}');
+    const blank = mgr._normalizePanel({
+        openNameTemplate: '   ', claimedNameTemplate: '', closedNameTemplate: '   ',
+    });
+    assert.equal(blank.openNameTemplate, null);
+    assert.equal(blank.claimedNameTemplate, null);
+    assert.equal(blank.closedNameTemplate, null);
+});
+
+test('_renderTicketName substitutes placeholders and sanitizes to Discord channel rules', () => {
+    const mgr = new TicketPanelManager({});
+    const panel = { name: 'Support Panel', ticketName: 'billing' };
+    const opener = { id: '42', username: 'Alice' };
+    assert.equal(mgr._renderTicketName('(open) {name}', panel, opener), 'open-billing');
+    assert.equal(mgr._renderTicketName('(solved) {username}', panel, opener), 'solved-alice');
+    assert.equal(mgr._renderTicketName('{panel} - {id}', panel, opener), 'support-panel---42');
+    // Empty/null template → no rename.
+    assert.equal(mgr._renderTicketName('', panel, opener), null);
+    assert.equal(mgr._renderTicketName(null, panel, opener), null);
+    // Falls back to username when ticketName is unset.
+    const noName = mgr._renderTicketName('(open) {name}', { name: 'P', ticketName: null }, opener);
+    assert.equal(noName, 'open-alice');
+});
+
+test('_renderTicketName trims to 100 chars', () => {
+    const mgr = new TicketPanelManager({});
+    const long = 'x'.repeat(150);
+    const out = mgr._renderTicketName(`(open) ${long}`, { ticketName: 'n' }, { username: 'u' });
+    assert.ok(out.length <= 100);
 });
 
 test('countOpenTickets counts only open tickets for the guild+user', () => {

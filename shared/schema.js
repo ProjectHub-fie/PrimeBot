@@ -460,6 +460,10 @@ const ticketPanels = pgTable('ticket_panels', {
   closeButtonEmoji: varchar('close_button_emoji', { length: 100 }),
   claimButtonLabel: varchar('claim_button_label', { length: 80 }),
   claimButtonEmoji: varchar('claim_button_emoji', { length: 100 }),
+  // Ticket channel name templates per status (open/claimed/closed).
+  openNameTemplate: varchar('open_name_template', { length: 100 }),
+  claimedNameTemplate: varchar('claimed_name_template', { length: 100 }),
+  closedNameTemplate: varchar('closed_name_template', { length: 100 }),
   enabled: boolean('enabled').default(true).notNull(),
   createdBy: varchar('created_by', { length: 50 }),
   createdAt: timestamp('created_at').defaultNow(),

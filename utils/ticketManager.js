@@ -1,6 +1,7 @@
 const {
     EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder,
     ChannelType, PermissionFlagsBits,
+    ModalBuilder, TextInputBuilder, TextInputStyle,
 } = require('discord.js');
 const { ticketPool } = require('../server/ticketDb');
 
@@ -90,6 +91,13 @@ const CREATE_TABLE_SQL = `
 const VALID_BUTTON_STYLES = new Set(['Primary', 'Secondary', 'Success', 'Danger']);
 const VALID_MESSAGE_TYPES = new Set(['embed', 'plain']);
 
+// Placeholders available in ticket channel name templates.
+//   {name}     → panel.ticketName (or the opener's username if unset)
+//   {username} → opener's username
+//   {id}       → opener's user id
+//   {panel}    → panel.name
+const NAME_PLACEHOLDERS = ['{name}', '{username}', '{id}', '{panel}'];
+
 const DEFAULT_PANEL = {
     name: 'Support Ticket',
     messageType: 'embed',
@@ -112,6 +120,10 @@ const DEFAULT_PANEL = {
     closeButtonEmoji: '🔒',
     claimButtonLabel: '',
     claimButtonEmoji: '',
+    // Status-based channel name templates. Empty/null → no rename for that state.
+    openNameTemplate: '(open) {name}',
+    claimedNameTemplate: '(solved) {name}',
+    closedNameTemplate: '(closed) {name}',
     enabled: true,
 };
 
@@ -293,6 +305,9 @@ class TicketPanelManager {
             closeButtonEmoji: row.close_button_emoji || null,
             claimButtonLabel: row.claim_button_label || null,
             claimButtonEmoji: row.claim_button_emoji || null,
+            openNameTemplate: row.open_name_template != null ? row.open_name_template : null,
+            claimedNameTemplate: row.claimed_name_template != null ? row.claimed_name_template : null,
+            closedNameTemplate: row.closed_name_template != null ? row.closed_name_template : null,
             enabled: row.enabled !== false,
             createdBy: row.created_by || null,
             createdAt: row.created_at,
@@ -362,9 +377,10 @@ class TicketPanelManager {
                 button_style, button_emoji, category, ticket_name, support_role_ids,
                 ping_role_ids, ticket_category_id, cooldown_seconds, max_open_per_user,
                 ask_reason, reason_placeholder, welcome_message, close_button_label,
-                close_button_emoji, claim_button_label, claim_button_emoji, enabled,
-                created_by, created_at, updated_at
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,NOW(),NOW())
+                close_button_emoji, claim_button_label, claim_button_emoji,
+                open_name_template, claimed_name_template, closed_name_template,
+                enabled, created_by, created_at, updated_at
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,NOW(),NOW())
             RETURNING id
         `, [
             guildId, panel.name, panel.channelId || null, panel.messageId || null,
@@ -376,8 +392,9 @@ class TicketPanelManager {
             panel.cooldownSeconds, panel.maxOpenPerUser,
             panel.askReason, panel.reasonPlaceholder, panel.welcomeMessage,
             panel.closeButtonLabel, panel.closeButtonEmoji,
-            panel.claimButtonLabel, panel.claimButtonEmoji, panel.enabled,
-            panel.createdBy || null,
+            panel.claimButtonLabel, panel.claimButtonEmoji,
+            panel.openNameTemplate, panel.claimedNameTemplate, panel.closedNameTemplate,
+            panel.enabled, panel.createdBy || null,
         ]);
         const id = res.rows[0].id;
         const fetched = await this._fetchPanel(id);
@@ -404,7 +421,8 @@ class TicketPanelManager {
                 cooldown_seconds = $21, max_open_per_user = $22, ask_reason = $23,
                 reason_placeholder = $24, welcome_message = $25, close_button_label = $26,
                 close_button_emoji = $27, claim_button_label = $28, claim_button_emoji = $29,
-                enabled = $30, updated_at = NOW()
+                open_name_template = $30, claimed_name_template = $31, closed_name_template = $32,
+                enabled = $33, updated_at = NOW()
             WHERE id = $1
         `, [
             id, norm.name, norm.channelId || null, norm.messageId || null, norm.messageType,
@@ -415,7 +433,9 @@ class TicketPanelManager {
             norm.cooldownSeconds, norm.maxOpenPerUser, norm.askReason,
             norm.reasonPlaceholder, norm.welcomeMessage,
             norm.closeButtonLabel, norm.closeButtonEmoji,
-            norm.claimButtonLabel, norm.claimButtonEmoji, norm.enabled,
+            norm.claimButtonLabel, norm.claimButtonEmoji,
+            norm.openNameTemplate, norm.claimedNameTemplate, norm.closedNameTemplate,
+            norm.enabled,
         ]);
         const fetched = await this._fetchPanel(id);
         if (fetched) this._indexPanel(fetched);
@@ -468,7 +488,8 @@ class TicketPanelManager {
             supportRoleIds: 1, pingRoleIds: 1, ticketCategoryId: 1, cooldownSeconds: 1,
             maxOpenPerUser: 1, askReason: 1, reasonPlaceholder: 1, welcomeMessage: 1,
             closeButtonLabel: 1, closeButtonEmoji: 1, claimButtonLabel: 1,
-            claimButtonEmoji: 1, enabled: 1, createdBy: 1,
+            claimButtonEmoji: 1, openNameTemplate: 1, claimedNameTemplate: 1,
+            closedNameTemplate: 1, enabled: 1, createdBy: 1,
         };
     }
 
@@ -487,6 +508,11 @@ class TicketPanelManager {
         out.enabled = out.enabled !== false;
         for (const f of ['buttonEmoji', 'closeButtonEmoji', 'claimButtonEmoji', 'thumbnailUrl', 'imageUrl']) {
             if (out[f] != null) out[f] = String(out[f]).trim() || null;
+        }
+        // Name templates: keepUndefined=false applies DEFAULT_PANEL defaults; trim
+        // to null (null = no rename for that state). Only coerce when present.
+        for (const f of ['openNameTemplate', 'claimedNameTemplate', 'closedNameTemplate']) {
+            if (out[f] != null) out[f] = String(out[f]).trim().slice(0, 100) || null;
         }
         return out;
     }
@@ -519,7 +545,7 @@ class TicketPanelManager {
         return { content: panel.content || null, embeds: [embed], components: [row] };
     }
 
-    /** Build the in-ticket control message (close/claim buttons). */
+    /** Build the in-ticket control message (close/claim/rename buttons). */
     buildControlMessage(panel, opener) {
         const closeBtn = new ButtonBuilder()
             .setCustomId('ticketpanel:close')
@@ -527,14 +553,23 @@ class TicketPanelManager {
             .setStyle(ButtonStyle.Danger);
         if (panel.closeButtonEmoji) closeBtn.setEmoji(panel.closeButtonEmoji);
         const rows = [new ActionRowBuilder().addComponents(closeBtn)];
+        // Claim + Rename go in a second row (or first row if no claim button).
+        const extra = [];
         if (panel.claimButtonLabel) {
             const claimBtn = new ButtonBuilder()
                 .setCustomId('ticketpanel:claim')
                 .setLabel(panel.claimButtonLabel)
                 .setStyle(ButtonStyle.Secondary);
             if (panel.claimButtonEmoji) claimBtn.setEmoji(panel.claimButtonEmoji);
-            rows.push(new ActionRowBuilder().addComponents(claimBtn));
+            extra.push(claimBtn);
         }
+        const renameBtn = new ButtonBuilder()
+            .setCustomId('ticketpanel:rename')
+            .setLabel('Rename')
+            .setStyle(ButtonStyle.Secondary)
+            .setEmoji('✏️');
+        extra.push(renameBtn);
+        if (extra.length) rows.push(new ActionRowBuilder().addComponents(...extra));
         const embed = new EmbedBuilder()
             .setColor(panel.color || '#5865F2')
             .setTitle(`🎫 ${panel.name}`)
@@ -549,6 +584,39 @@ class TicketPanelManager {
     }
 
     // ── Sending / updating panel messages ───────────────────────────────────
+
+    /**
+     * Render a ticket channel name from a status template.
+     * Placeholders: {name} (panel.ticketName or opener username), {username},
+     * {id} (opener id), {panel} (panel.name). Returns null when the template
+     * is empty/null (= "don't rename for this state").
+     */
+    _renderTicketName(template, panel, opener) {
+        if (!template) return null;
+        const username = opener?.username || opener?.displayName || 'user';
+        const nameBase = panel?.ticketName || username;
+        let out = String(template)
+            .replace(/\{name\}/g, nameBase)
+            .replace(/\{username\}/g, username)
+            .replace(/\{id\}/g, opener?.id || '')
+            .replace(/\{panel\}/g, panel?.name || '');
+        // Discord channel names: lowercase, no spaces, max 100 chars.
+        out = out.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-_]/g, '').slice(0, 100);
+        return out || null;
+    }
+
+    /** Apply a status name template to a ticket channel (fire-and-forget). */
+    async _setTicketName(channel, template, panel, opener) {
+        const name = this._renderTicketName(template, panel, opener);
+        if (!name || !channel) return;
+        try {
+            const current = channel.name;
+            if (current === name) return;
+            await channel.setName(name);
+        } catch (err) {
+            console.error('[TICKETS] Failed to rename ticket channel:', err.message);
+        }
+    }
 
     /** Post the panel to a channel. */
     async sendPanelToChannel(panelId, channelId) {
@@ -593,13 +661,17 @@ class TicketPanelManager {
         const baseName = panel.ticketName
             ? panel.ticketName
             : `ticket-${interaction.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 40);
+        // Status-based channel name: prefer the panel's open template, falling back
+        // to the legacy "🎫 <baseName>" form when no template is configured.
+        const openName = this._renderTicketName(panel.openNameTemplate, panel, interaction.user)
+            || `🎫 ${baseName}`.slice(0, 100);
 
         try {
             let ticketChannel;
             // Prefer a private channel under the configured category.
             try {
                 ticketChannel = await guild.channels.create({
-                    name: `🎫 ${baseName}`.slice(0, 100),
+                    name: openName.slice(0, 100),
                     type: ChannelType.GuildText,
                     parent: panel.ticketCategoryId || undefined,
                     permissionOverwrites: this._channelPerms(guild, member, panel),
@@ -609,7 +681,7 @@ class TicketPanelManager {
                 // Fallback to a private thread on the interaction channel.
                 const parent = interaction.channel;
                 ticketChannel = await parent.threads.create({
-                    name: `🎫 ${baseName}`.slice(0, 100),
+                    name: openName.slice(0, 100),
                     autoArchiveDuration: 1440,
                     type: ChannelType.PrivateThread,
                     reason: `Ticket opened via panel "${panel.name}" by ${interaction.user.tag}`,
@@ -733,6 +805,14 @@ class TicketPanelManager {
             this._byChannel.delete(channelId);
             await this._saveInstance(instance);
 
+            // Apply the closed-status channel name template (mainly visible for
+            // archived threads; regular channels are deleted shortly after).
+            if (panel) {
+                const openerMember = await interaction.guild.members.fetch(instance.userId).catch(() => null);
+                const opener = openerMember?.user || { id: instance.userId, username: openerMember?.displayName };
+                await this._setTicketName(interaction.channel, panel.closedNameTemplate, panel, opener);
+            }
+
             // After a delay, delete channel-type tickets (threads just stay archived).
             if (!interaction.channel.isThread?.()) {
                 setTimeout(() => {
@@ -791,6 +871,12 @@ class TicketPanelManager {
             );
             this._byChannel.set(channelId, instance);
             await this._saveInstance(instance);
+            // Re-apply the open-status channel name template.
+            if (panel) {
+                const openerMember = await interaction.guild.members.fetch(instance.userId).catch(() => null);
+                const opener = openerMember?.user || { id: instance.userId, username: openerMember?.displayName };
+                await this._setTicketName(interaction.channel, panel.openNameTemplate, panel, opener);
+            }
         } catch (err) {
             console.error('[TICKETS] Error reopening ticket:', err);
             return interaction.reply({ content: 'There was an error reopening this ticket.', ephemeral: true });
@@ -811,6 +897,13 @@ class TicketPanelManager {
         try {
             instance.claimedBy = interaction.user.id;
             await this._saveInstance(instance);
+            // Apply the claimed-status channel name template.
+            const panel = instance.panelId ? this.getPanelById(instance.panelId) : null;
+            if (panel) {
+                const openerMember = await interaction.guild.members.fetch(instance.userId).catch(() => null);
+                const opener = openerMember?.user || { id: instance.userId, username: openerMember?.displayName };
+                await this._setTicketName(interaction.channel, panel.claimedNameTemplate, panel, opener);
+            }
             const embed = new EmbedBuilder()
                 .setColor('#5865F2')
                 .setDescription(`This ticket has been claimed by ${interaction.user}.`)
@@ -819,6 +912,74 @@ class TicketPanelManager {
         } catch (err) {
             console.error('[TICKETS] Error claiming ticket:', err);
             return interaction.reply({ content: 'There was an error claiming this ticket.', ephemeral: true });
+        }
+    }
+
+    /** Show a modal letting staff/owner edit this ticket channel's name. */
+    async handleRename(interaction) {
+        const channelId = interaction.channel.id;
+        const instance = this.getInstanceByChannel(channelId) || await this._fetchInstanceByChannel(channelId);
+        if (!instance) {
+            return interaction.reply({ content: 'This is not a valid ticket channel.', ephemeral: true });
+        }
+        const isOwner = interaction.user.id === instance.userId;
+        const isAdmin = interaction.member?.permissions?.has(PermissionFlagsBits.Administrator);
+        const isSupport = await this._isSupportMember(interaction, instance);
+        if (!isOwner && !isAdmin && !isSupport) {
+            return interaction.reply({ content: 'Only the ticket owner, support staff, or administrators can rename this ticket.', ephemeral: true });
+        }
+        const modal = new ModalBuilder()
+            .setCustomId('ticketpanel:rename')
+            .setTitle('Rename Ticket');
+        const input = new TextInputBuilder()
+            .setCustomId('ticket-name')
+            .setLabel('New channel name')
+            .setStyle(TextInputStyle.Short)
+            .setPlaceholder('e.g. (open) ticket-alice')
+            .setValue((interaction.channel.name || '').slice(0, 100))
+            .setRequired(true)
+            .setMaxLength(100);
+        modal.addComponents(new ActionRowBuilder().addComponents(input));
+        try {
+            await interaction.showModal(modal);
+        } catch (err) {
+            console.error('[TICKETS] Error showing rename modal:', err);
+            return interaction.reply({ content: 'There was an error opening the rename form.', ephemeral: true });
+        }
+    }
+
+    /** Process the rename modal submission. */
+    async handleRenameSubmit(interaction) {
+        const channelId = interaction.channel.id;
+        const instance = this.getInstanceByChannel(channelId) || await this._fetchInstanceByChannel(channelId);
+        if (!instance) {
+            return interaction.reply({ content: 'This is not a valid ticket channel.', ephemeral: true });
+        }
+        const isOwner = interaction.user.id === instance.userId;
+        const isAdmin = interaction.member?.permissions?.has(PermissionFlagsBits.Administrator);
+        const isSupport = await this._isSupportMember(interaction, instance);
+        if (!isOwner && !isAdmin && !isSupport) {
+            return interaction.reply({ content: 'You are not allowed to rename this ticket.', ephemeral: true });
+        }
+        let name = interaction.fields?.getTextInputValue('ticket-name');
+        if (name == null) name = interaction.fields?.get('ticket-name')?.value;
+        name = name && String(name).trim();
+        if (!name) {
+            return interaction.reply({ content: 'A name is required.', ephemeral: true });
+        }
+        // Sanitize to Discord channel naming rules.
+        name = name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-_]/g, '').slice(0, 100);
+        if (!name) {
+            return interaction.reply({ content: 'That name is not valid for a channel.', ephemeral: true });
+        }
+        try {
+            if (interaction.channel.name !== name) {
+                await interaction.channel.setName(name);
+            }
+            await interaction.reply({ content: `✏️ Ticket renamed to **${name}**.`, ephemeral: true });
+        } catch (err) {
+            console.error('[TICKETS] Error renaming ticket:', err);
+            return interaction.reply({ content: 'There was an error renaming this ticket.', ephemeral: true });
         }
     }
 

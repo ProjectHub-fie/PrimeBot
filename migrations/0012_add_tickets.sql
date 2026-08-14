@@ -113,3 +113,11 @@ ALTER TABLE ticket_instances ADD COLUMN IF NOT EXISTS panel_id     INTEGER REFER
 ALTER TABLE ticket_instances ADD COLUMN IF NOT EXISTS reason       TEXT;
 ALTER TABLE ticket_instances ADD COLUMN IF NOT EXISTS status       VARCHAR(20) NOT NULL DEFAULT 'open';
 ALTER TABLE ticket_instances ADD COLUMN IF NOT EXISTS claimed_by   VARCHAR(50);
+
+-- Ticket channel name templates per status. When a ticket is opened/claimed/
+-- closed/reopened the bot renames the channel using the matching template.
+-- Placeholders: {name} (panel.ticketName or the opener username), {username},
+-- {id} (opener id), {panel} (panel.name). NULL/empty → no rename for that state.
+ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS open_name_template     VARCHAR(100);
+ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS claimed_name_template  VARCHAR(100);
+ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS closed_name_template   VARCHAR(100);

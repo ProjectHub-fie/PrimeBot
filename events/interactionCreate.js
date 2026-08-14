@@ -377,7 +377,7 @@ module.exports = {
                     // Route to the appropriate handler based on customId or action
                     if (action === 'ticketpanel') {
                         // Premium ticket panels (configured from the dashboard).
-                        // customId forms: ticketpanel:open:<panelId> | ticketpanel:close | ticketpanel:reopen | ticketpanel:claim
+                        // customId forms: ticketpanel:open:<panelId> | ticketpanel:close | ticketpanel:reopen | ticketpanel:claim | ticketpanel:rename
                         const sub = params[0];
                         const mgr = client.ticketPanelManager || client.ticketManager;
                         if (sub === 'open') {
@@ -394,6 +394,8 @@ module.exports = {
                             await safeExecute(mgr.handleReopen.bind(mgr), [interaction], null, 'Ticket panel reopen');
                         } else if (sub === 'claim') {
                             await safeExecute(mgr.handleClaim.bind(mgr), [interaction], null, 'Ticket panel claim');
+                        } else if (sub === 'rename') {
+                            await safeExecute(mgr.handleRename.bind(mgr), [interaction], null, 'Ticket panel rename');
                         } else {
                             await safeReply(interaction, { content: 'Unknown ticket action.', ephemeral: true });
                         }
@@ -697,6 +699,14 @@ module.exports = {
                         [interaction],
                         null,
                         'Truth or Dare modal submission'
+                    );
+                } else if (interaction.customId === 'ticketpanel:rename') {
+                    const mgr = client.ticketPanelManager || client.ticketManager;
+                    await safeExecute(
+                        mgr.handleRenameSubmit.bind(mgr),
+                        [interaction],
+                        null,
+                        'Ticket panel rename modal'
                     );
                 }
                 return;
