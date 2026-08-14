@@ -171,7 +171,10 @@ async function requireGuildAdminPage(req, res, next) {
             discord.getGuildChannels(req.guild.id)
                 .then(cs => cs.map(c => ({ id: c.id, name: c.name })))
                 .catch(err => { console.error('[AUTH] getGuildChannels failed:', err.message); return []; }),
-            discord.getGuildRoles(req.guild.id)
+            // Only show roles the bot can actually assign (below its highest
+            // role, not integration-managed) so reaction-role / leveling
+            // selectors never offer a role that fails with a 50007 error.
+            discord.getGuildRoles(req.guild.id, { excludeUnassignable: true })
                 .then(rs => rs.map(r => ({ id: r.id, name: r.name, position: r.position })))
                 .catch(err => { console.error('[AUTH] getGuildRoles failed:', err.message); return []; }),
             dashboardDb.getGuildConfig(req.guild.id).catch(err => {

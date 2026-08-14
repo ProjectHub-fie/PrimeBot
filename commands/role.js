@@ -56,7 +56,18 @@ module.exports = {
                     }
 
                     if (targetRole.position >= botMember.roles.highest.position) {
-                        return interaction.reply({ content: 'I cannot assign a role that is at or above my highest role.', ephemeral: true });
+                        const warningEmbed = new EmbedBuilder()
+                            .setColor(config.colors.error)
+                            .setTitle('⚠️ Cannot Add Higher Role')
+                            .setDescription(`I cannot assign the role **${targetRole.name}** because it is at or above my highest role (**${botMember.roles.highest.name}**).`)
+                            .addFields(
+                                { name: '🎯 Target role', value: `${targetRole} (position ${targetRole.position})`, inline: true },
+                                { name: '🤖 My highest role', value: `${botMember.roles.highest} (position ${botMember.roles.highest.position})`, inline: true },
+                                { name: '🛠️ How to fix', value: 'Move PrimeBot\'s role **above** the role you want to assign in Server Settings → Roles, then try again.', inline: false }
+                            )
+                            .setFooter({ text: `Version ${config.version}` })
+                            .setTimestamp();
+                        return interaction.reply({ embeds: [warningEmbed], ephemeral: true });
                     }
 
                     if (member.roles.cache.has(targetRole.id)) {

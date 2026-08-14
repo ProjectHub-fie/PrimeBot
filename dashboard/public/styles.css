@@ -263,6 +263,13 @@ a:hover { text-decoration: underline; }
   max-width: 520px;
   margin: 0 0 28px;
 }
+.login-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: center;
+  margin-bottom: 12px;
+}
 .feature-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));

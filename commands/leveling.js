@@ -281,7 +281,7 @@ async function handleAddRoleCommand(interaction, client) {
     }
     
     // Add the role reward
-    const success = client.levelingManager.addRoleReward(interaction.guild.id, level, role.id);
+    const success = await client.levelingManager.addRoleReward(interaction.guild.id, level, role.id);
     
     if (success) {
         const embed = new EmbedBuilder()
@@ -312,7 +312,7 @@ async function handleRemoveRoleCommand(interaction, client) {
     const level = interaction.options.getInteger('level');
     
     // Remove the role reward
-    const success = client.levelingManager.removeRoleReward(interaction.guild.id, level);
+    const success = await client.levelingManager.removeRoleReward(interaction.guild.id, level);
     
     if (success) {
         const embed = new EmbedBuilder()

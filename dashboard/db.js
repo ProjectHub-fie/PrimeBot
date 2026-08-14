@@ -77,6 +77,61 @@ function getEventPool() {
     return eventPool;
 }
 
+let levelingPool = null;
+function getLevelingPool() {
+    if (levelingPool) return levelingPool;
+    try {
+        levelingPool = require('../server/levelingDb').levelingPool;
+    } catch (err) {
+        console.error('[DASHBOARD DB] levelingDb unavailable:', err.message);
+        levelingPool = { query: async () => { throw new Error('Leveling database not configured'); } };
+    }
+    return levelingPool;
+}
+
+async function ensureLevelingRoleRewardsTable() {
+    await getLevelingPool().query(`
+        CREATE TABLE IF NOT EXISTS leveling_role_rewards (
+            id          SERIAL PRIMARY KEY,
+            guild_id    VARCHAR(50) NOT NULL,
+            level       INTEGER NOT NULL,
+            role_id     VARCHAR(50) NOT NULL,
+            created_at  TIMESTAMP DEFAULT NOW(),
+            UNIQUE (guild_id, level)
+        );
+        CREATE INDEX IF NOT EXISTS leveling_role_rewards_guild_idx
+            ON leveling_role_rewards (guild_id);
+    `);
+}
+
+async function getLevelingRoleRewards(guildId) {
+    await ensureLevelingRoleRewardsTable();
+    const res = await getLevelingPool().query(
+        'SELECT level, role_id FROM leveling_role_rewards WHERE guild_id = $1 ORDER BY level',
+        [guildId]
+    );
+    return res.rows.map(r => ({ level: Number(r.level), roleId: String(r.role_id) }));
+}
+
+async function setLevelingRoleRewards(guildId, rewards) {
+    await ensureLevelingRoleRewardsTable();
+    const pool = getLevelingPool();
+    await pool.query('DELETE FROM leveling_role_rewards WHERE guild_id = $1', [guildId]);
+    for (const r of Array.isArray(rewards) ? rewards : []) {
+        const level = parseInt(r.level, 10);
+        const roleId = String(r.roleId || r.role_id || '');
+        if (Number.isFinite(level) && roleId) {
+            await pool.query(
+                `INSERT INTO leveling_role_rewards (guild_id, level, role_id, created_at)
+                 VALUES ($1, $2, $3, NOW())
+                 ON CONFLICT (guild_id, level) DO UPDATE SET role_id = EXCLUDED.role_id`,
+                [guildId, level, roleId]
+            );
+        }
+    }
+    return getLevelingRoleRewards(guildId);
+}
+
 const config = require('../config');
 const constants = require('./constants');
 const { normalizeGuildPrefix } = require('../utils/prefixHelper');
@@ -869,7 +924,7 @@ function rowToAutomodAppeal(row) {
 // ── Combined view (one fetch per guild for the settings page) ───────────────
 
 async function getGuildConfig(guildId) {
-    const [server, welcome, logging, reactionRoles, automod, ticketPanels] = await Promise.all([
+    const [server, welcome, logging, reactionRoles, automod, ticketPanels, levelingRoleRewards] = await Promise.all([
         getServerSettings(guildId).catch(err => {
             console.error('[DASHBOARD DB] server_settings read failed:', err.message);
             return defaultServerSettings();
@@ -894,7 +949,16 @@ async function getGuildConfig(guildId) {
             console.error('[DASHBOARD DB] ticket_panels read failed:', err.message);
             return [];
         }),
+        getLevelingRoleRewards(guildId).catch(err => {
+            console.error('[DASHBOARD DB] leveling_role_rewards read failed:', err.message);
+            return [];
+        }),
     ]);
+    // Attach durable role rewards onto the leveling settings (kept in a separate
+    // pool so they survive restarts and reach the bot via its cache reload).
+    if (server && server.leveling) {
+        server.leveling.roleRewards = levelingRoleRewards || [];
+    }
     return { server, welcome, logging, reactionRoles, automod, ticketPanels };
 }
 

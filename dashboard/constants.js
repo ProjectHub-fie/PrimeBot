@@ -22,6 +22,10 @@ module.exports = {
     BOT_VERSION: config.version,
     BOT_WEBSITE: config.website,
     BOT_SUPPORT: config.supportServer,
+    // Bot invite link (administrator scope + application commands). Used by the
+    // "Invite" button on the dashboard login screen and the /invite command.
+    BOT_INVITE_URL: 'https://discord.com/oauth2/authorize?client_id=1356575287151951943&permissions=8&integration_type=0&scope=bot%20applications.commands',
+    BOT_CLIENT_ID: '1356575287151951943',
 
     // Default welcome message templates (kept in sync with config.welcome).
     DEFAULT_WELCOME_MESSAGE: config.welcome.serverMessage,

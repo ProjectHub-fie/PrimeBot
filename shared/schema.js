@@ -199,6 +199,15 @@ const userBadgesRelations = relations(userBadges, ({ one }) => ({
   }),
 }));
 
+// Leveling role rewards — durable per-guild level→role mappings (LEVELING_DATABASE_URL)
+const levelingRoleRewards = pgTable('leveling_role_rewards', {
+  id: serial('id').primaryKey(),
+  guildId: varchar('guild_id', { length: 50 }).notNull(),
+  level: integer('level').notNull(),
+  roleId: varchar('role_id', { length: 50 }).notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
 // Session storage table (for Replit Auth)
 const sessions = pgTable('sessions', {
   sid: varchar('sid', { length: 255 }).primaryKey(),
@@ -629,6 +638,7 @@ module.exports = {
   userBadges,
   userLevelsRelations,
   userBadgesRelations,
+  levelingRoleRewards,
   sessions,
   users
   ,

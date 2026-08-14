@@ -50,6 +50,18 @@ const CREATE_TABLES_SQL = `
         earned_at TIMESTAMP NOT NULL,
         created_at TIMESTAMP DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS leveling_role_rewards (
+        id          SERIAL PRIMARY KEY,
+        guild_id    VARCHAR(50) NOT NULL,
+        level       INTEGER NOT NULL,
+        role_id     VARCHAR(50) NOT NULL,
+        created_at  TIMESTAMP DEFAULT NOW(),
+        UNIQUE (guild_id, level)
+    );
+
+    CREATE INDEX IF NOT EXISTS leveling_role_rewards_guild_idx
+        ON leveling_role_rewards (guild_id);
 `;
 
 async function initLevelingTables() {
@@ -77,4 +89,50 @@ async function testLevelingConnection() {
     }
 }
 
-module.exports = { levelingPool, levelingDb, levelingSchema, testLevelingConnection };
+// ── Leveling role-rewards persistence (caching pattern like welcome) ───────
+// roleRewards used to live only in the bot's in-memory cache; these helpers
+// make them durable so the bot re-reads them on a periodic cache reload and a
+// dashboard save can reach the bot without a restart.
+
+async function getLevelingRoleRewards(guildId) {
+    const res = await levelingPool.query(
+        'SELECT level, role_id FROM leveling_role_rewards WHERE guild_id = $1 ORDER BY level',
+        [guildId]
+    );
+    return res.rows.map(r => ({ level: Number(r.level), roleId: String(r.role_id) }));
+}
+
+async function upsertLevelingRoleReward(guildId, level, roleId) {
+    await levelingPool.query(
+        `INSERT INTO leveling_role_rewards (guild_id, level, role_id, created_at)
+         VALUES ($1, $2, $3, NOW())
+         ON CONFLICT (guild_id, level) DO UPDATE SET role_id = EXCLUDED.role_id`,
+        [guildId, level, String(roleId)]
+    );
+}
+
+async function deleteLevelingRoleReward(guildId, level) {
+    await levelingPool.query(
+        'DELETE FROM leveling_role_rewards WHERE guild_id = $1 AND level = $2',
+        [guildId, level]
+    );
+}
+
+async function getAllLevelingRoleRewards() {
+    const res = await levelingPool.query(
+        'SELECT guild_id, level, role_id FROM leveling_role_rewards ORDER BY guild_id, level'
+    );
+    const out = new Map();
+    for (const r of res.rows) {
+        const gid = String(r.guild_id);
+        if (!out.has(gid)) out.set(gid, []);
+        out.get(gid).push({ level: Number(r.level), roleId: String(r.role_id) });
+    }
+    return out;
+}
+
+module.exports = {
+    levelingPool, levelingDb, levelingSchema, testLevelingConnection,
+    getLevelingRoleRewards, upsertLevelingRoleReward, deleteLevelingRoleReward,
+    getAllLevelingRoleRewards,
+};

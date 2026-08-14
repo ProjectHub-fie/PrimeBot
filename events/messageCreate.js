@@ -580,7 +580,18 @@ module.exports = {
                             }
 
                             if (targetRole.position >= botMember.roles.highest.position) {
-                                return message.reply('I cannot assign a role that is at or above my highest role.');
+                                const warningEmbed = new EmbedBuilder()
+                                    .setColor(config.colors.error)
+                                    .setTitle('⚠️ Cannot Add Higher Role')
+                                    .setDescription(`I cannot assign the role **${targetRole.name}** because it is at or above my highest role (**${botMember.roles.highest.name}**).`)
+                                    .addFields(
+                                        { name: '🎯 Target role', value: `${targetRole} (position ${targetRole.position})`, inline: true },
+                                        { name: '🤖 My highest role', value: `${botMember.roles.highest} (position ${botMember.roles.highest.position})`, inline: true },
+                                        { name: '🛠️ How to fix', value: 'Move PrimeBot\'s role **above** the role you want to assign in Server Settings → Roles, then try again.', inline: false }
+                                    )
+                                    .setFooter({ text: `Version ${config.version}` })
+                                    .setTimestamp();
+                                return message.reply({ embeds: [warningEmbed] });
                             }
 
                             if (member.roles.cache.has(targetRole.id)) {
@@ -3674,13 +3685,51 @@ module.exports = {
                         return message.reply('This command can only be used in a text channel.');
                     }
 
-                    const purgeSubCommand = (args[0] || 'messages').toLowerCase();
+                    const purgeSubCommand = (args[0] || '').toLowerCase();
 
                     if (!message.channel.permissionsFor(message.client.user).has(PermissionFlagsBits.ManageMessages)) {
                         return message.reply(`I need Manage Messages permission in ${message.channel}.`);
                     }
 
                     try {
+                        // Shorthand forms (no explicit subcommand):
+                        //   $purge <count>            → delete recent <count> messages
+                        //   $purge @member <count>    → delete <count> messages by @member
+                        // Explicit subcommands (messages/user/between) still work too.
+                        const firstIsMember = message.mentions.users.size && purgeSubCommand !== 'between';
+                        const firstIsNumber = /^\d+$/.test(args[0] || '');
+
+                        if (firstIsNumber && !firstIsMember) {
+                            // $purge <count>
+                            const count = parseInt(args[0], 10);
+                            if (!Number.isInteger(count) || count < 1 || count > 100) {
+                                return message.reply('Usage: `$purge <count>` where count is between 1 and 100.');
+                            }
+                            // Delete the invoking message first so it counts cleanly.
+                            await message.delete().catch(() => {});
+                            const deleted = await message.channel.bulkDelete(count, true);
+                            return message.channel.send(`🧹 Deleted ${deleted.size || count} message${count === 1 ? '' : 's'}.`).then(m => setTimeout(() => m.delete().catch(() => {}), 4000));
+                        }
+
+                        if (firstIsMember) {
+                            // $purge @member <count>
+                            const targetUser = message.mentions.users.first();
+                            const rawCount = args.find((a, i) => i > 0 && /^\d+$/.test(a));
+                            const count = Math.min(parseInt(rawCount || '50', 10) || 50, 100);
+
+                            const fetched = await message.channel.messages.fetch({ limit: Math.min(count, 100) });
+                            const ids = [...fetched.values()]
+                                .filter(msg => msg.author.id === targetUser.id)
+                                .map(msg => msg.id);
+
+                            if (ids.length === 0) {
+                                return message.reply(`No recent messages from ${targetUser} were found in ${message.channel}.`);
+                            }
+
+                            const deleted = await message.channel.bulkDelete(ids, true);
+                            return message.channel.send(`🧹 Removed ${deleted.size || ids.length} message${ids.length === 1 ? '' : 's'} from ${targetUser}.`).then(m => setTimeout(() => m.delete().catch(() => {}), 4000));
+                        }
+
                         if (purgeSubCommand === 'messages' || purgeSubCommand === 'msg' || purgeSubCommand === 'batch') {
                             const count = parseInt(args[1] || '10');
                             if (!Number.isInteger(count) || count < 1 || count > 100) {
@@ -3732,7 +3781,7 @@ module.exports = {
                             return message.reply(`Removed ${deleted.size || ids.length} message${ids.length === 1 ? '' : 's'} in ${message.channel}.`);
                         }
 
-                        return message.reply('Unknown purge subcommand. Try `messages`, `user`, or `between`.');
+                        return message.reply('Unknown purge usage. Try `$purge <count>`, `$purge @member <count>`, or `$purge between <startId> <endId>`.');
                     } catch (purgeError) {
                         console.error('[PURGE] Error:', purgeError);
                         return message.reply('I could not complete that purge request.');
@@ -4754,9 +4803,35 @@ async function processCommand(message, client, commandName, args, prefix) {
         case "help":
             // Check if user wants a specific category
             const category = args[0]?.toLowerCase();
-            
+
+            // Loading animation: Discord embeds can't truly animate, so we
+            // edit through a short sequence of frames before showing the menu.
+            const HELP_ANIM = [
+                { emoji: '🌌', text: 'Summoning the command menu' },
+                { emoji: '✨', text: 'Gathering all PrimeBot commands' },
+                { emoji: '📚', text: 'Almost there — organizing categories' },
+            ];
+            const animMsg = await message.channel.send({
+                embeds: [new EmbedBuilder()
+                    .setColor(config.colors.primary)
+                    .setTitle(`${HELP_ANIM[0].emoji} Loading`)
+                    .setDescription(`${HELP_ANIM[0].text} ·`)
+                    .setFooter({ text: `PrimeBot • Version ${config.version}` })]
+            }).catch(() => null);
+            for (let i = 1; i < HELP_ANIM.length; i++) {
+                await new Promise(r => setTimeout(r, 450));
+                await animMsg?.edit({
+                    embeds: [new EmbedBuilder()
+                        .setColor(config.colors.primary)
+                        .setTitle(`${HELP_ANIM[i].emoji} Loading`)
+                        .setDescription(`${HELP_ANIM[i].text} ${'·'.repeat(i + 1)}`)
+                        .setFooter({ text: `PrimeBot • Version ${config.version}` })]
+                }).catch(() => {});
+            }
+
             // If category is provided, show category-specific help
             if (category && ['general', 'leveling', 'games', 'moderation', 'community', 'admin'].includes(category)) {
+                await animMsg?.delete().catch(() => {});
                 return showPrefixCategoryHelp(message, category, prefix);
             }
             
@@ -4776,8 +4851,12 @@ async function processCommand(message, client, commandName, args, prefix) {
                 .setFooter({ text: `Total Commands: 30+ • Version: ${config.version}` })
                 .setTimestamp();
 
+            if (animMsg) {
+                await animMsg.edit({ embeds: [categoryEmbed] }).catch(() => {});
+                return;
+            }
             return message.reply({ embeds: [categoryEmbed] });
-            
+
         case "ping":
             try {
                 const loadingEmbed = new EmbedBuilder()

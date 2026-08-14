@@ -301,6 +301,17 @@ class ReactionRoleManager {
         const me = guild.members.me;
         if (me && role.position >= me.roles.highest.position) {
             console.warn(`[REACTION ROLES] Cannot assign role "${role.name}" — it is at/above the bot's highest role in guild ${guild.id}. Move the bot role above it.`);
+            // Warn the user so they know why nothing happened.
+            try {
+                const { EmbedBuilder } = require('discord.js');
+                const warn = new EmbedBuilder()
+                    .setColor(0xED4245)
+                    .setTitle('⚠️ Cannot grant this role')
+                    .setDescription(`The role **${role.name}** is at or above PrimeBot's highest role, so I can't assign it. Ask a server admin to move PrimeBot's role above it.`)
+                    .setTimestamp();
+                await user.send({ embeds: [warn] }).catch(() => {});
+            } catch (_) {}
+            await reaction.users.remove(user.id).catch(() => {});
             return false;
         }
 
