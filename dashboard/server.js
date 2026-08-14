@@ -24,9 +24,11 @@ const cookieParser = require('cookie-parser');
 const PgSession = require('connect-pg-simple')(session);
 
 const discord = require('./discord');
-const { requireAuth, requireGuildAdmin } = require('./auth');
+const { requireAuth, requireGuildAdmin, requireGuildAdminPage } = require('./auth');
 const dashboardDb = require('./db');
 const constants = require('./constants');
+const pages = require('./render/pages');
+const guildPages = require('./render/guild-pages');
 
 // Allow a dedicated token for dashboard REST calls; fall back to DISCORD_TOKEN.
 if (!process.env.DASHBOARD_BOT_TOKEN && process.env.DISCORD_TOKEN) {
@@ -164,12 +166,16 @@ if (process.env.DASHBOARD_LOG_REQUESTS === 'true') {
 
 app.get('/login', (req, res) => {
     if (req.session && req.session.user) return res.redirect('/');
-    // If we were sent back here with an error (e.g. session persistence
-    // failed after a successful Discord auth), render the SPA so it can
-    // surface the message instead of silently bouncing back to Discord.
-    if (req.query.error) {
-        return res.sendFile(path.join(__dirname, 'public', 'index.html'));
-    }
+    // Render the server-side login page; if ?error=... is present it shows a
+    // human-readable reason (e.g. session persistence failed after Discord auth)
+    // instead of silently bouncing back to Discord.
+    res.type('html').send(pages.loginPage({ errorKey: req.query.error }));
+});
+
+// Starts the Discord OAuth2 flow. The login page's "Login with Discord" button
+// points here (separate from /login, which now renders the page).
+app.get('/auth/discord', (req, res) => {
+    if (req.session && req.session.user) return res.redirect('/');
     const params = new URLSearchParams({
         client_id: process.env.DISCORD_CLIENT_ID,
         redirect_uri: REDIRECT_URI,
@@ -1068,11 +1074,122 @@ app.post('/api/guilds/:guildId/events/:id/cancel', requireAuth, requireGuildAdmi
     }
 });
 
-// ── Page routes (SPA-style: serve index.html for everything) ────────────────
+// ── Page routes (server-rendered multi-page app) ────────────────────────────
+//
+// Each route renders its own real HTML page. The old SPA's single index.html +
+// client-side pushState router is gone; /api/* JSON routes remain for the
+// per-page client scripts to save settings.
 
-app.get(['/', '/dashboard', '/docs', '/live', '/guild/:guildId'], (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+// Build the manageable-guild list for the servers overview. Shared with the
+// /api/guilds handler so the page and API stay consistent.
+async function loadManageableGuilds(req) {
+    const accessToken = req.session.accessToken;
+    let guilds = req.session.guilds;
+    const fetchedAt = req.session.guildsFetchedAt || 0;
+    const cacheFresh = Array.isArray(guilds) && Date.now() - fetchedAt <= 5 * 60 * 1000;
+    if (!cacheFresh) {
+        if (!accessToken) {
+            if (!Array.isArray(guilds)) guilds = [];
+        } else {
+            try {
+                guilds = await discord.getUserGuilds(accessToken);
+            } catch (err) {
+                if (req.session.refreshToken) {
+                    try {
+                        const tokens = await discord.refreshToken(req.session.refreshToken);
+                        req.session.accessToken = tokens.access_token;
+                        req.session.refreshToken = tokens.refresh_token || req.session.refreshToken;
+                        req.session.tokenExpiresAt = Date.now() + (tokens.expires_in * 1000);
+                        guilds = await discord.getUserGuilds(tokens.access_token);
+                    } catch (refreshErr) {
+                        console.warn('[PAGE] token refresh failed:', refreshErr.message);
+                        if (!Array.isArray(guilds)) guilds = [];
+                    }
+                } else {
+                    console.warn('[PAGE] getUserGuilds failed and no refresh token:', err.message);
+                    if (!Array.isArray(guilds)) guilds = [];
+                }
+            }
+            req.session.guilds = guilds;
+            req.session.guildsFetchedAt = Date.now();
+        }
+    }
+    const manageable = guilds.filter(g => discord.canManageGuild(g.permissions));
+    const result = await Promise.all(manageable.slice(0, 50).map(async (g) => {
+        let botInGuild = false;
+        let config = null;
+        try {
+            await discord.getBotGuild(g.id);
+            botInGuild = true;
+            config = await dashboardDb.getGuildConfig(g.id).catch(() => null);
+        } catch (err) {
+            botInGuild = false;
+        }
+        return {
+            id: g.id,
+            name: g.name,
+            icon: g.icon,
+            owner: g.owner,
+            approximate_member_count: g.approximate_member_count,
+            permissions: g.permissions,
+            botPresent: botInGuild,
+            welcomeEnabled: config?.welcome?.enabled ?? false,
+            levelingEnabled: config?.server?.leveling?.enabled ?? true,
+            prefix: config?.server?.prefix ?? constants.DEFAULT_PREFIX,
+        };
+    }));
+    return result;
+}
+
+// Login route is handled above (renders the login page). The root and /dashboard
+// both render the servers overview (requires a session; otherwise redirect to
+// the login page).
+app.get(['/', '/dashboard'], requireAuth, async (req, res) => {
+    try {
+        const guilds = await loadManageableGuilds(req);
+        res.type('html').send(pages.overviewPage({
+            guilds,
+            clientId: process.env.DISCORD_CLIENT_ID,
+        }));
+    } catch (err) {
+        console.error('[PAGE] overview error:', err.message);
+        res.type('html').send(pages.notFoundPage());
+    }
 });
+
+app.get('/docs', (req, res) => {
+    res.type('html').send(pages.docsPage({ clientId: process.env.DISCORD_CLIENT_ID }));
+});
+
+app.get('/live', requireAuth, (req, res) => {
+    res.type('html').send(pages.livePage());
+});
+
+// Guild settings: each tab is its own page. requireGuildAdminPage fetches
+// channels/roles/config so the page is pre-populated server-side. Redirect
+// bare /guild/:id to the welcome tab.
+app.get('/guild/:guildId', (req, res) => res.redirect(`/guild/${req.params.guildId}/welcome`));
+
+app.get('/guild/:guildId/welcome', requireAuth, requireGuildAdminPage, (req, res) =>
+    res.type('html').send(guildPages.welcomePage({ guild: req.guild })));
+app.get('/guild/:guildId/leveling', requireAuth, requireGuildAdminPage, (req, res) =>
+    res.type('html').send(guildPages.levelingPage({ guild: req.guild })));
+app.get('/guild/:guildId/prefix', requireAuth, requireGuildAdminPage, (req, res) =>
+    res.type('html').send(guildPages.prefixPage({ guild: req.guild })));
+app.get('/guild/:guildId/reactions', requireAuth, requireGuildAdminPage, (req, res) =>
+    res.type('html').send(guildPages.reactionsPage({ guild: req.guild })));
+app.get('/guild/:guildId/reactionroles', requireAuth, requireGuildAdminPage, (req, res) =>
+    res.type('html').send(guildPages.reactionRolesPage({ guild: req.guild })));
+app.get('/guild/:guildId/broadcast', requireAuth, requireGuildAdminPage, (req, res) =>
+    res.type('html').send(guildPages.broadcastPage({ guild: req.guild })));
+app.get('/guild/:guildId/logging', requireAuth, requireGuildAdminPage, (req, res) =>
+    res.type('html').send(guildPages.loggingPage({ guild: req.guild })));
+app.get('/guild/:guildId/automod', requireAuth, requireGuildAdminPage, (req, res) =>
+    res.type('html').send(guildPages.automodPage({ guild: req.guild })));
+app.get('/guild/:guildId/tickets', requireAuth, requireGuildAdminPage, (req, res) =>
+    res.type('html').send(guildPages.ticketsPage({ guild: req.guild })));
+app.get('/guild/:guildId/events', requireAuth, requireGuildAdminPage, (req, res) =>
+    res.type('html').send(guildPages.eventsPage({ guild: req.guild })));
 
 // ── Health check ────────────────────────────────────────────────────────────
 
@@ -1083,7 +1200,7 @@ app.get('/health', (req, res) => {
 // ── 404 / error handlers ────────────────────────────────────────────────────
 
 app.use((req, res) => {
-    if (req.accepts('html')) return res.status(404).sendFile(path.join(__dirname, 'public', 'index.html'));
+    if (req.accepts('html')) return res.status(404).type('html').send(pages.notFoundPage());
     res.status(404).json({ error: 'Not found' });
 });
 
