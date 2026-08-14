@@ -449,9 +449,18 @@ module.exports = {
                     // Create a simulated prefixed message for the command handler
                     const simulatedContent = `${prefix}${commandName}${args.length > 0 ? ' ' + args.join(' ') : ''}`;
                     
-                    // Create a new message object to avoid reference issues
+                    // Create a new message object to avoid reference issues.
+                    // discord.js stores `client` as a non-enumerable own property
+                    // (set via Object.defineProperty in Base), so Object.assign
+                    // does NOT copy it — a shallow clone would lose its client
+                    // reference and crash any getter that reads this.client
+                    // (e.g. Message.guild → this.client.guilds). Copy client
+                    // explicitly to keep the clone fully functional.
                     const simulatedMessage = Object.create(Object.getPrototypeOf(message));
                     Object.assign(simulatedMessage, message);
+                    Object.defineProperty(simulatedMessage, 'client', {
+                        value: message.client, writable: true, configurable: true, enumerable: false,
+                    });
                     simulatedMessage.content = simulatedContent;
                     console.log(`[NO-PREFIX] Simulated content: "${simulatedContent}"`);
                     

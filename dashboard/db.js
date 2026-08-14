@@ -1062,6 +1062,9 @@ async function ensureTicketTables() {
         CREATE INDEX IF NOT EXISTS ticket_instances_guild_idx ON ticket_instances (guild_id);
         CREATE INDEX IF NOT EXISTS ticket_instances_panel_idx ON ticket_instances (panel_id);
         CREATE INDEX IF NOT EXISTS ticket_instances_guild_user_idx ON ticket_instances (guild_id, user_id);
+        ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS open_name_template     VARCHAR(100);
+        ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS claimed_name_template VARCHAR(100);
+        ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS closed_name_template   VARCHAR(100);
     `);
 }
 
