@@ -284,6 +284,7 @@ function overviewPage({ guilds = [], clientId, user } = {}) {
     <div class="page-head">
       <h1>Your servers</h1>
       <p>Pick a server to configure PrimeBot. Only servers where you have <strong>Manage Server</strong> permission are shown.</p>
+      <p style="margin-top:10px"><span class="beta-badge">BETA</span> <span style="color:var(--text-dim);font-size:13px">Event Management is now in beta — try it from a server's menu.</span></p>
     </div>
     ${statsHTML}
     ${listHTML}`;

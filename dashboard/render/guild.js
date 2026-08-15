@@ -10,6 +10,8 @@
 
 const { esc, guildIconHTML } = require('./layout');
 
+// Each settings tab is a sidebar menu entry. `beta` flags the feature as a
+// beta release — the menu + page render a "BETA" badge next to its label.
 const TABS = [
   { key: 'welcome',        label: '👋 Welcome' },
   { key: 'leveling',       label: '📈 Leveling' },
@@ -20,7 +22,7 @@ const TABS = [
   { key: 'logging',        label: '📜 Logging' },
   { key: 'automod',        label: '🛡️ Automod' },
   { key: 'tickets',        label: '🎫 Tickets' },
-  { key: 'events',         label: '📅 Events' },
+  { key: 'events',         label: '📅 Events', beta: true },
 ];
 
 // The inlined channel/role <option> data + guild id. Pages embed this so the
@@ -47,11 +49,30 @@ function guildHeaderHTML(guild) {
     </div>`;
 }
 
+// Sidebar menu ("turn left" slide-in). A button toggles a drawer that slides in
+// from the left edge. Each tab is a real link; the active one is highlighted.
 function tabNavHTML(guildId, active) {
-  const links = TABS.map(t =>
-    `<a class="tab${t.key === active ? ' active' : ''}" href="/guild/${esc(guildId)}/${t.key}">${esc(t.label)}</a>`
-  ).join('');
-  return `<div class="tabs">${links}</div>`;
+  const links = TABS.map(t => {
+    const badge = t.beta ? ' <span class="beta-badge">BETA</span>' : '';
+    return `<a class="menu-item${t.key === active ? ' active' : ''}" href="/guild/${esc(guildId)}/${t.key}">${esc(t.label)}${badge}</a>`;
+  }).join('');
+  const activeTab = TABS.find(t => t.key === active);
+  const activeLabel = activeTab ? activeTab.label : 'Menu';
+  return `
+    <div class="menu-bar">
+      <button class="menu-toggle" id="menu-toggle" aria-label="Open menu" aria-expanded="false">
+        <span class="menu-hamburger"><span></span><span></span><span></span></span>
+        <span class="menu-bar-label">${esc(activeLabel)}</span>
+      </button>
+    </div>
+    <div class="menu-backdrop" id="menu-backdrop"></div>
+    <aside class="side-menu" id="side-menu" aria-hidden="true">
+      <div class="side-menu-head">
+        <span class="side-menu-title">Server features</span>
+        <button class="side-menu-close" id="side-menu-close" aria-label="Close menu">✕</button>
+      </div>
+      <nav class="side-menu-nav">${links}</nav>
+    </aside>`;
 }
 
 module.exports = { TABS, guildDataScript, guildHeaderHTML, tabNavHTML };

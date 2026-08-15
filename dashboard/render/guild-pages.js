@@ -807,7 +807,7 @@ function automodPage({ guild, user }) {
     ${panelHTML}
     ${guildDataScript({ guildId: guild.id, channels: guild._channels, roles: guild._roles, extra: { _automodSettings: s } })}
     <script>window.__AUTOMOD_RULES=${JSON.stringify(AUTOMOD_RULES)};window.__AUTOMOD_ACTIONS=${JSON.stringify(AUTOMOD_ACTIONS)};window.__AUTOMOD_SETTINGS=${JSON.stringify(s)};</script>`;
-    return render({ title: `PrimeBot · ${guild.name} · Automod`, body, active: 'servers', scripts: ['/js/guild-common.js', '/js/automod.js'] });
+    return render({ title: `PrimeBot · ${guild.name} · Automod`, body, active: 'servers', scripts: ['/js/guild-common.js', '/js/automod.js'], user });
 }
 
 // ── Events ──────────────────────────────────────────────────────────────────
@@ -815,7 +815,8 @@ function automodPage({ guild, user }) {
 function eventsPage({ guild, user }) {
     const panelHTML = `
     <div class="card">
-      <h2>📅 Event Management</h2>
+      <div class="card-title"><span><span class="icon">📅</span> Event Management <span class="beta-badge">BETA</span></span></div>
+      <div class="beta-banner">🧪 This feature is in beta — expect changes. Please report any issues.</div>
       <p>Schedule an event with a countdown and a list of timed tasks. The bot will lock/unlock or hide/unhide the channel(s) you choose (pick one, or hold Ctrl/Cmd to select several), add/remove roles, or send a text/embed message at the offsets you set (seconds from the event start).</p>
       <div class="ev-form" id="ev-form">
         <div class="form-row">
