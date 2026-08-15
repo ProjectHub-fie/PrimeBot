@@ -308,7 +308,12 @@ class EventManager {
     }
 
     async _applyChannelPerm(guild, task) {
-        const channels = this._resolveChannels(guild, task.targetIds);
+        // Support both the multi-select `targetIds` and the legacy single
+        // `channelId` field so a single selected channel is always targeted
+        // (and never all channels).
+        const ids = (task.targetIds && task.targetIds.length) ? task.targetIds
+            : (task.channelId ? [task.channelId] : []);
+        const channels = this._resolveChannels(guild, ids);
         const lock = task.action === 'lock';
         const hide = task.action === 'hide';
         const unlock = task.action === 'unlock';

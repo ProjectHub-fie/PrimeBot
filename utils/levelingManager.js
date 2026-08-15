@@ -20,6 +20,13 @@ class LevelingManager {
         this.dbReady = false;
         this.migrationComplete = false;
 
+        // roleRewards cache: guildId -> [{ level, roleId }]. Persisted to the
+        // leveling DB and re-read periodically (caching pattern like welcome
+        // settings) so a bot restart or dashboard save is reflected.
+        this._roleRewards = new Map();
+        this._roleRewardsTimer = null;
+        this._roleRewardsReloadTimer = null;
+
         // Purge expired cooldown entries every 5 minutes to prevent unbounded Map growth
         this.cooldownCleanupInterval = setInterval(() => {
             const now = Date.now();
@@ -49,6 +56,11 @@ class LevelingManager {
             // Perform migration from JSON to database
             await this.migrateFromJSON();
 
+            // Load role rewards from the DB into the in-memory cache and start
+            // the periodic re-read so dashboard saves / restarts are reflected.
+            await this._loadRoleRewards();
+            this._startRoleRewardsReload();
+
             console.log('✅ LevelingManager fully initialized and ready');
         } catch (error) {
             console.error('❌ LevelingManager database initialization failed:', error);
@@ -56,6 +68,43 @@ class LevelingManager {
             // Retry after a delay
             setTimeout(() => this.initializeDatabase(), 5000);
         }
+    }
+
+    // ── Role rewards caching (DB-backed, re-read like welcome settings) ──────
+
+    async _loadRoleRewards() {
+        if (!this.dbReady) return;
+        try {
+            const { getAllLevelingRoleRewards } = require('../server/levelingDb');
+            const all = await getAllLevelingRoleRewards();
+            // Preserve in-memory-only rows for guilds that have no DB rows yet
+            // (avoids wiping rewards added before the table existed) — merge.
+            for (const [gid, rows] of all.entries()) {
+                this._roleRewards.set(gid, rows);
+            }
+        } catch (err) {
+            console.error('[LEVELING] Failed to load role rewards:', err.message);
+        }
+    }
+
+    _startRoleRewardsReload() {
+        if (this._roleRewardsTimer) return;
+        // 5s refresh + ~30s full re-read, mirroring the welcome settings pattern,
+        // so dashboard-created rewards reach the bot without a restart.
+        this._roleRewardsTimer = setInterval(() => {
+            this._loadRoleRewards().catch(err =>
+                console.error('[LEVELING] Role rewards refresh failed:', err.message)
+            );
+        }, 5000);
+        this._roleRewardsTimer.unref?.();
+
+        const ms = parseInt(process.env.SETTINGS_RELOAD_INTERVAL_MS, 10) || 30000;
+        this._roleRewardsReloadTimer = setInterval(() => {
+            this._loadRoleRewards().catch(err =>
+                console.error('[LEVELING] Role rewards background reload failed:', err.message)
+            );
+        }, ms);
+        this._roleRewardsReloadTimer.unref?.();
     }
 
     /**
@@ -582,31 +631,37 @@ class LevelingManager {
     }
 
     /**
-     * Add a role reward for a specific level
+     * Add a role reward for a specific level (persists to the leveling DB).
      * @param {string} guildId - Guild ID
      * @param {number} level - Level requirement
      * @param {string} roleId - Role ID to award
      * @returns {boolean} Success status
      */
-    addRoleReward(guildId, level, roleId) {
+    async addRoleReward(guildId, level, roleId) {
         try {
+            // Keep the in-memory cache on ServerSettingsManager in sync (some
+            // code paths read roleRewards from there) AND persist to the
+            // leveling DB so rewards survive restarts and reach the dashboard.
             const serverSettings = this.client.serverSettingsManager.getGuildSettings(guildId);
-            if (!serverSettings.leveling) {
-                serverSettings.leveling = { enabled: true, roleRewards: [] };
+            if (!serverSettings.leveling) serverSettings.leveling = { enabled: true, roleRewards: [] };
+            if (!serverSettings.leveling.roleRewards) serverSettings.leveling.roleRewards = [];
+            const existing = serverSettings.leveling.roleRewards.find(r => r.level === level);
+            if (existing) existing.roleId = roleId;
+            else serverSettings.leveling.roleRewards.push({ level, roleId });
+
+            // Update the dedicated role-rewards cache.
+            const rows = this._roleRewards.get(guildId) || [];
+            const idx = rows.findIndex(r => r.level === level);
+            if (idx !== -1) rows[idx] = { level, roleId };
+            else rows.push({ level, roleId });
+            this._roleRewards.set(guildId, rows);
+
+            if (this.dbReady) {
+                const { upsertLevelingRoleReward } = require('../server/levelingDb');
+                await upsertLevelingRoleReward(guildId, level, roleId).catch(err =>
+                    console.error('[LEVELING] Failed to persist role reward (add):', err.message)
+                );
             }
-            if (!serverSettings.leveling.roleRewards) {
-                serverSettings.leveling.roleRewards = [];
-            }
-            
-            // Check if role reward already exists for this level
-            const existingReward = serverSettings.leveling.roleRewards.find(reward => reward.level === level);
-            if (existingReward) {
-                existingReward.roleId = roleId;
-            } else {
-                serverSettings.leveling.roleRewards.push({ level, roleId });
-            }
-            
-            this.client.serverSettingsManager.saveSettings();
             return true;
         } catch (error) {
             console.error('[LEVELING] Error adding role reward:', error);
@@ -615,26 +670,34 @@ class LevelingManager {
     }
 
     /**
-     * Remove a role reward for a specific level
+     * Remove a role reward for a specific level (persists to the leveling DB).
      * @param {string} guildId - Guild ID
      * @param {number} level - Level requirement
      * @returns {boolean} Success status
      */
-    removeRoleReward(guildId, level) {
+    async removeRoleReward(guildId, level) {
         try {
             const serverSettings = this.client.serverSettingsManager.getGuildSettings(guildId);
-            if (!serverSettings.leveling || !serverSettings.leveling.roleRewards) {
-                return false;
+            let removed = false;
+            if (serverSettings.leveling?.roleRewards) {
+                const index = serverSettings.leveling.roleRewards.findIndex(r => r.level === level);
+                if (index !== -1) {
+                    serverSettings.leveling.roleRewards.splice(index, 1);
+                    removed = true;
+                }
             }
-            
-            const index = serverSettings.leveling.roleRewards.findIndex(reward => reward.level === level);
-            if (index !== -1) {
-                serverSettings.leveling.roleRewards.splice(index, 1);
-                this.client.serverSettingsManager.saveSettings();
-                return true;
+
+            const rows = this._roleRewards.get(guildId) || [];
+            const idx = rows.findIndex(r => r.level === level);
+            if (idx !== -1) { rows.splice(idx, 1); this._roleRewards.set(guildId, rows); removed = true; }
+
+            if (this.dbReady) {
+                const { deleteLevelingRoleReward } = require('../server/levelingDb');
+                await deleteLevelingRoleReward(guildId, level).catch(err =>
+                    console.error('[LEVELING] Failed to persist role reward (remove):', err.message)
+                );
             }
-            
-            return false;
+            return removed;
         } catch (error) {
             console.error('[LEVELING] Error removing role reward:', error);
             return false;
@@ -642,11 +705,14 @@ class LevelingManager {
     }
 
     /**
-     * Get all role rewards for a guild
+     * Get all role rewards for a guild (from the DB-backed cache, falling back
+     * to the in-memory ServerSettingsManager copy).
      * @param {string} guildId - Guild ID
      * @returns {Array} Array of role rewards
      */
     getRoleRewards(guildId) {
+        const cached = this._roleRewards.get(guildId);
+        if (cached && cached.length) return cached;
         const serverSettings = this.client.serverSettingsManager.getGuildSettings(guildId);
         return serverSettings.leveling?.roleRewards || [];
     }

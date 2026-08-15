@@ -1,6 +1,36 @@
 const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionFlagsBits } = require('discord.js');
 const config = require('../config');
 
+// ── Help menu "animation" ───────────────────────────────────────────────────
+// Discord embeds can't truly animate, so we simulate a loading animation by
+// editing the reply through a short sequence of frames before revealing the
+// final menu. This gives the help menu a lively feel.
+const HELP_ANIMATION_FRAMES = [
+    { emoji: '🌌', text: 'Summoning the command menu' },
+    { emoji: '✨', text: 'Gathering all PrimeBot commands' },
+    { emoji: '📚', text: 'Almost there — organizing categories' },
+];
+
+async function playHelpAnimation(replyTarget) {
+    // replyTarget is the interaction (already replied) — edit through frames.
+    for (let i = 0; i < HELP_ANIMATION_FRAMES.length; i++) {
+        const frame = HELP_ANIMATION_FRAMES[i];
+        const spinner = '·'.repeat(i + 1);
+        const embed = new EmbedBuilder()
+            .setColor(config.colors.primary)
+            .setTitle(`${frame.emoji} Loading`)
+            .setDescription(`${frame.text} ${spinner}`)
+            .setFooter({ text: `PrimeBot • Version ${config.version}` });
+        try {
+            await replyTarget.editReply({ embeds: [embed], components: [] });
+        } catch (_) {
+            break; // reply target may no longer be editable
+        }
+        // Small delay between frames (~450ms) for a visible animation.
+        await new Promise(r => setTimeout(r, 450));
+    }
+}
+
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('help')
@@ -22,7 +52,11 @@ module.exports = {
     async execute(interaction) {
         try {
             const category = interaction.options.getString('category');
-            
+
+            // Defer so we can play the loading animation before the menu appears.
+            await interaction.deferReply();
+            await playHelpAnimation(interaction);
+
             if (category) {
                 await showCategoryHelp(interaction, category);
             } else {
@@ -108,7 +142,7 @@ async function showMainHelp(interaction) {
                 .setEmoji('🆘')
         );
 
-    await interaction.reply({
+    await interaction.editReply({
         embeds: [mainEmbed],
         components: [categoryButtons, adminButton]
     });
@@ -233,7 +267,7 @@ async function showCategoryHelp(interaction, category) {
     categoryEmbed.setFooter({ text: `Version: ${config.version}` })
                 .setTimestamp();
     
-    await interaction.reply({
+    await interaction.editReply({
         embeds: [categoryEmbed],
         components: [backButton]
     });

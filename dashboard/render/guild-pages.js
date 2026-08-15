@@ -126,6 +126,8 @@ function welcomePage({ guild, user }) {
 
 function levelingPage({ guild, user }) {
     const lev = guild._config.server?.leveling || {};
+    const roleRewards = (lev.roleRewards || []).slice().sort((a, b) => a.level - b.level);
+    const rewardRows = roleRewards.map(r => levelingRewardRowHTML(r, guild._roles)).join('');
     const panelHTML = `
     <div class="card">
       <div class="card-title"><span><span class="icon">📈</span> Leveling &amp; XP</span></div>
@@ -160,8 +162,28 @@ function levelingPage({ guild, user }) {
       <div class="form-actions">
         <button class="btn btn-primary" data-save="leveling">Save leveling settings</button>
       </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title"><span><span class="icon">🎭</span> Role rewards</span></div>
+      <p class="card-desc">Automatically grant a role when a member reaches a level. Roles are saved to the database and persist across bot restarts.</p>
+      <div id="lev-rewards-list">${rewardRows}</div>
+      <button class="btn btn-secondary" id="lev-reward-add" type="button">+ Add reward</button>
+      <div class="form-actions">
+        <button class="btn btn-primary" id="lev-rewards-save">Save role rewards</button>
+      </div>
     </div>`;
-    return guildTab({ guild, user, active: 'leveling', panelHTML, scripts: ['/js/guild-common.js', '/js/settings-basic.js'] });
+    return guildTab({ guild, user, active: 'leveling', panelHTML, scripts: ['/js/guild-common.js', '/js/settings-basic.js', '/js/leveling.js'] });
+}
+
+function levelingRewardRowHTML(r = {}, roles = []) {
+    const opts = (roles || []).map(role => `<option value="${esc(role.id)}"${String(role.id) === String(r.roleId) ? ' selected' : ''}>${esc(role.name)}</option>`).join('');
+    return `
+    <div class="reaction-row lev-reward-row">
+      <label style="display:flex;align-items:center;gap:6px">Level <input type="number" class="lev-reward-level" min="1" max="200" value="${esc(r.level ?? '')}" style="width:80px" /></label>
+      <select class="lev-reward-role" data-role-select data-placeholder="— Role —">${opts ? `<option value="">— Role —</option>${opts}` : '<option value="">No assignable roles</option>'}</select>
+      <button class="reaction-remove lev-reward-remove" type="button">✕</button>
+    </div>`;
 }
 
 // ── Prefix ──────────────────────────────────────────────────────────────────
@@ -794,7 +816,7 @@ function eventsPage({ guild, user }) {
     const panelHTML = `
     <div class="card">
       <h2>📅 Event Management</h2>
-      <p>Schedule an event with a countdown and a list of timed tasks. The bot will lock/unlock or hide/unhide channels, add/remove roles, or send a text/embed message at the offsets you set (seconds from the event start).</p>
+      <p>Schedule an event with a countdown and a list of timed tasks. The bot will lock/unlock or hide/unhide the channel(s) you choose (pick one, or hold Ctrl/Cmd to select several), add/remove roles, or send a text/embed message at the offsets you set (seconds from the event start).</p>
       <div class="ev-form" id="ev-form">
         <div class="form-row">
           <label>Event name<input type="text" id="ev-name" placeholder="e.g. Game Night" /></label>

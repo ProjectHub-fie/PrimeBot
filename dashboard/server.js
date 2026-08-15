@@ -462,6 +462,30 @@ app.patch('/api/guilds/:guildId/server', requireAuth, requireGuildAdmin, async (
     }
 });
 
+// ── API: leveling role rewards (durable, separate LEVELING_DATABASE_URL pool)
+// The bot re-reads these on its cache reload so dashboard changes take effect
+// without a bot restart. Slash (/leveling addrole|removerole|listroles) writes
+// to the same table.
+app.get('/api/guilds/:guildId/leveling/rolerewards', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const rewards = await dashboardDb.getLevelingRoleRewards(req.guild.id);
+        res.json({ roleRewards: rewards });
+    } catch (err) {
+        console.error('[API] get leveling role rewards error:', err.message);
+        res.status(500).json({ error: 'Failed to load leveling role rewards.' });
+    }
+});
+
+app.put('/api/guilds/:guildId/leveling/rolerewards', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const rewards = await dashboardDb.setLevelingRoleRewards(req.guild.id, req.body?.roleRewards || []);
+        res.json({ roleRewards: rewards });
+    } catch (err) {
+        console.error('[API] set leveling role rewards error:', err.message);
+        res.status(500).json({ error: 'Failed to save leveling role rewards.' });
+    }
+});
+
 // ── API: update logging settings (channel, webhook, events) ─────────────────
 
 app.patch('/api/guilds/:guildId/logging', requireAuth, requireGuildAdmin, async (req, res) => {
@@ -603,10 +627,10 @@ app.patch('/api/guilds/:guildId/automod/appeals/:id', requireAuth, requireGuildA
 
 app.get('/api/guilds/:guildId/roles', requireAuth, requireGuildAdmin, async (req, res) => {
     try {
-        const roles = await discord.getGuildRoles(req.guild.id);
-        // Only return roles the bot can assign (below its highest role) and
-        // integrations-managed roles can't be assigned by bots anyway — we
-        // surface position + color so the SPA can render.
+        // Exclude roles the bot can't assign (at/above its highest role, or
+        // integration-managed) so reaction-role / leveling selectors never offer
+        // a role that would fail with a 50007 "Missing Access" error.
+        const roles = await discord.getGuildRoles(req.guild.id, { excludeUnassignable: true });
         res.json({ roles: roles.map(r => ({
             id: r.id, name: r.name, position: r.position, color: r.color,
             mentionable: r.mentionable, hoist: r.hoist,

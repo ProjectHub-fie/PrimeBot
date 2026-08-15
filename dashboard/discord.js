@@ -158,16 +158,66 @@ async function getBotMember(guildId, botUserId) {
     return fetchJson(`${API_BASE}/guilds/${guildId}/members/${uid}`, { headers: botHeaders() });
 }
 
-/** Get text channels of a guild for channel selectors. */
+/**
+ * Get the position of the bot's highest role in a guild. Roles the bot cannot
+ * assign (at/above this position, or integration-managed) are hidden from the
+ * dashboard's reaction-role / leveling selectors to prevent 50007 "Missing
+ * Access" errors when the bot tries to add them.
+ */
+async function getBotHighestRolePosition(guildId) {
+    try {
+        const botUserId = process.env.DISCORD_CLIENT_ID;
+        const member = await getBotMember(guildId, botUserId);
+        const botRoleIds = Array.isArray(member?.roles) ? member.roles : [];
+        if (botRoleIds.length === 0) return -1;
+        const roles = await getGuildRoles(guildId);
+        // The @everyone role is filtered out of getGuildRoles; include it so the
+        // lookup never misses a role the bot holds.
+        let highest = -1;
+        const byId = new Map(roles.map(r => [r.id, r]));
+        for (const id of botRoleIds) {
+            const r = byId.get(id);
+            if (r && r.position > highest) highest = r.position;
+        }
+        // Fallback: fetch the raw guild roles (includes @everyone) if none matched.
+        if (highest < 0) {
+            const all = await fetchJson(`${API_BASE}/guilds/${guildId}/roles`, { headers: botHeaders() });
+            for (const r of (all || [])) {
+                if (botRoleIds.includes(r.id) && r.position > highest) highest = r.position;
+            }
+        }
+        return highest;
+    } catch (err) {
+        console.warn('[DASHBOARD] getBotHighestRolePosition failed:', err.message);
+        return -1;
+    }
+}
+
+/**
+ * Get text channels of a guild for channel selectors.
+ */
 async function getGuildChannels(guildId) {
     const channels = await fetchJson(`${API_BASE}/guilds/${guildId}/channels`, { headers: botHeaders() });
     return (channels || []).filter(c => c.type === 0); // type 0 = guild text
 }
 
-/** Get roles of a guild. */
-async function getGuildRoles(guildId) {
+/**
+ * Get roles of a guild, optionally excluding roles the bot cannot assign
+ * (those at/above the bot's highest role, and integration-managed roles).
+ * `excludeUnassignable=true` is used by reaction-role / leveling selectors.
+ */
+async function getGuildRoles(guildId, { excludeUnassignable = false } = {}) {
     const roles = await fetchJson(`${API_BASE}/guilds/${guildId}/roles`, { headers: botHeaders() });
-    return (roles || []).filter(r => r.name !== '@everyone');
+    let list = (roles || []).filter(r => r.name !== '@everyone');
+    if (excludeUnassignable) {
+        const highest = await getBotHighestRolePosition(guildId);
+        list = list.filter(r =>
+            // integration-managed roles (bot/boost) can't be assigned by bots
+            !r.managed &&
+            r.position < highest
+        );
+    }
+    return list;
 }
 
 // ── Message helpers (used by the reaction-role dashboard flows) ─────────────

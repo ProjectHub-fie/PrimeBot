@@ -5,10 +5,10 @@
 const GUILD_ID = window.guildData?.guildId;
 
 const EVENT_ACTIONS = [
-  { key: 'lock',      label: 'Lock channels',        icon: '🔒', needs: 'channels' },
-  { key: 'unlock',    label: 'Unlock channels',      icon: '🔓', needs: 'channels' },
-  { key: 'hide',      label: 'Hide channels',        icon: '🙈', needs: 'channels' },
-  { key: 'unhide',    label: 'Unhide channels',      icon: '👀', needs: 'channels' },
+  { key: 'lock',      label: 'Lock channel(s)',        icon: '🔒', needs: 'channels' },
+  { key: 'unlock',    label: 'Unlock channel(s)',      icon: '🔓', needs: 'channels' },
+  { key: 'hide',      label: 'Hide channel(s)',        icon: '🙈', needs: 'channels' },
+  { key: 'unhide',    label: 'Unhide channel(s)',      icon: '👀', needs: 'channels' },
   { key: 'addrole',   label: 'Add role to members',  icon: '➕', needs: 'roles' },
   { key: 'removerole',label: 'Remove role from members', icon: '➖', needs: 'roles' },
   { key: 'sendtext',  label: 'Send text message',    icon: '💬', needs: 'message' },
@@ -17,22 +17,23 @@ const EVENT_ACTIONS = [
 
 function evTaskRowHTML(task = {}) {
   const actionOpts = EVENT_ACTIONS.map(x => `<option value="${x.key}" ${x.key === (task.action || 'sendtext') ? 'selected' : ''}>${x.icon} ${esc(x.label)}</option>`).join('');
-  const channelOpts = (window.guildData.channels || []).map(c => `<option value="${esc(c.id)}" ${String(c.id) === String(task.channelId) ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
-  const roleOpts = (window.guildData.roles || []).map(r => `<option value="${esc(r.id)}">${esc(r.name)}</option>`).join('');
+  const selectedIds = Array.isArray(task.targetIds) ? task.targetIds.map(String) : [];
+  const channelOpts = (window.guildData.channels || []).map(c => `<option value="${esc(c.id)}"${selectedIds.includes(String(c.id)) || String(c.id) === String(task.channelId) ? ' selected' : ''}>${esc(c.name)}</option>`).join('');
+  const roleOpts = (window.guildData.roles || []).map(r => `<option value="${esc(r.id)}"${selectedIds.includes(String(r.id)) ? ' selected' : ''}>${esc(r.name)}</option>`).join('');
   return `
     <div class="ev-task-row" data-ev-task>
       <label>Offset (s)<input type="number" min="0" class="ev-offset" value="${task.offsetSeconds ?? 0}" /></label>
       <label>Action<select class="ev-action">${actionOpts}</select></label>
       <div class="ev-target">
-        <label class="ev-tg-channels">Target channels<select class="ev-target-channels" multiple>${channelOpts}</select></label>
-        <label class="ev-tg-roles hidden">Target roles<select class="ev-target-roles" multiple>${roleOpts}</select></label>
+        <label class="ev-tg-channels">Target channel(s) — pick one, or hold Ctrl/Cmd to select multiple<select class="ev-target-channels" multiple size="4">${channelOpts}</select></label>
+        <label class="ev-tg-roles hidden">Target role(s) — hold Ctrl/Cmd to select multiple<select class="ev-target-roles" multiple size="4">${roleOpts}</select></label>
         <label class="ev-tg-message hidden">Message text <textarea class="ev-message" rows="2">${esc(task.messageContent || '')}</textarea></label>
         <div class="ev-tg-embed hidden">
           <label>Embed title <input type="text" class="ev-embed-title" value="${esc(task.embedTitle || '')}" /></label>
           <label>Embed description <textarea class="ev-embed-desc" rows="2">${esc(task.embedDescription || '')}</textarea></label>
           <label>Embed color <input type="color" class="ev-embed-color" value="${task.embedColor || '#5865F2'}" /></label>
           <label>Embed image URL <input type="text" class="ev-embed-image" value="${esc(task.embedImageUrl || '')}" /></label>
-          <label class="ev-tg-channels">Send to channel(s)<select class="ev-target-embed-channels" multiple>${channelOpts}</select></label>
+          <label class="ev-tg-channels">Send to channel(s)<select class="ev-target-embed-channels" multiple size="4">${channelOpts}</select></label>
         </div>
       </div>
       <button class="btn btn-secondary ev-remove-task" title="Remove task">✕</button>

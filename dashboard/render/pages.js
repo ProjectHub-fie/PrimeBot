@@ -27,7 +27,10 @@ function loginPage({ errorKey } = {}) {
       <h3>Premium features in free </h3>
       ${errorHTML}
       <p class="login-sub">Sign in with Discord to configure PrimeBot for the servers you manage — welcome messages, leveling, prefixes, auto-reactions and more, all in one place.</p>
-      <a href="/auth/discord" class="btn btn-discord">🚪 Login with Discord</a>
+      <div class="login-actions">
+        <a href="/auth/discord" class="btn btn-discord">🚪 Login with Discord</a>
+        <a href="${esc(constants.BOT_INVITE_URL)}" class="btn btn-secondary" target="_blank" rel="noopener">➕ Invite PrimeBot</a>
+      </div>
       <a href="/docs" class="btn btn-secondary">📖 Documentation</a>
 
       <div class="stats-band" id="stats-band" aria-live="polite">
