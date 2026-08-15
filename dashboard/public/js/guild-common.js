@@ -39,6 +39,38 @@ function populateRoleSelects() {
 populateChannelSelects();
 populateRoleSelects();
 
+// ── Slide-in sidebar menu ("turn left" animation) ─────────────────────────
+// The menu bar button opens a drawer that slides in from the left; the
+// backdrop + close button (and Escape) close it again.
+(function setupSideMenu() {
+  const menu = document.getElementById('side-menu');
+  const toggle = document.getElementById('menu-toggle');
+  const backdrop = document.getElementById('menu-backdrop');
+  const closeBtn = document.getElementById('side-menu-close');
+  if (!menu || !toggle) return;
+
+  function open() {
+    menu.classList.add('open');
+    menu.setAttribute('aria-hidden', 'false');
+    toggle.setAttribute('aria-expanded', 'true');
+    if (backdrop) backdrop.classList.add('show');
+  }
+  function close() {
+    menu.classList.remove('open');
+    menu.setAttribute('aria-hidden', 'true');
+    toggle.setAttribute('aria-expanded', 'false');
+    if (backdrop) backdrop.classList.remove('show');
+  }
+  toggle.addEventListener('click', () => {
+    menu.classList.contains('open') ? close() : open();
+  });
+  closeBtn?.addEventListener('click', close);
+  backdrop?.addEventListener('click', close);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') close();
+  });
+})();
+
 window.guildData = guildData;
 window.populateChannelSelects = populateChannelSelects;
 window.populateRoleSelects = populateRoleSelects;

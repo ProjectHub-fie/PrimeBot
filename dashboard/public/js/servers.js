@@ -3,6 +3,6 @@
  */
 document.querySelectorAll('.guild-card[data-guild]').forEach(card => {
   card.addEventListener('click', () => {
-    window.location.href = `/guild/${card.dataset.guild}/welcome`;
+    window.location.href = `/guild/${card.dataset.guild}/prefix`;
   });
 });

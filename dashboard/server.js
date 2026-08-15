@@ -1191,9 +1191,10 @@ app.get('/live', requireAuth, (req, res) => {
 });
 
 // Guild settings: each tab is its own page. requireGuildAdminPage fetches
-// channels/roles/config so the page is pre-populated server-side. Redirect
-// bare /guild/:id to the welcome tab.
-app.get('/guild/:guildId', (req, res) => res.redirect(`/guild/${req.params.guildId}/welcome`));
+// channels/roles/config so the page is pre-populated server-side. Selecting a
+// server lands on the prefix page; the rest of the features live behind the
+// slide-in sidebar menu.
+app.get('/guild/:guildId', (req, res) => res.redirect(`/guild/${req.params.guildId}/prefix`));
 
 app.get('/guild/:guildId/welcome', requireAuth, requireGuildAdminPage, (req, res) =>
     res.type('html').send(guildPages.welcomePage({ guild: req.guild, user: req.user })));
