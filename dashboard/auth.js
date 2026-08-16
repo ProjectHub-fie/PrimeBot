@@ -11,9 +11,58 @@ const pages = require('./render/pages');
 const L = require('./render/layout');
 const dashboardDb = require('./db');
 const betaManager = require('../utils/betaManager');
+const constants = require('./constants');
+
+// Idle auto-logout window (server-side safety net). Single source of truth in
+// dashboard/constants.js (SESSION_IDLE_TIMEOUT_MS env, default 120000ms).
+const IDLE_TIMEOUT_MS = constants.SESSION_IDLE_TIMEOUT_MS;
+
+// Refresh the session's idle deadline to "now + IDLE_TIMEOUT_MS". Called on
+// every successful authenticated request (see requireAuth) and by the
+// /api/session/heartbeat endpoint while the dashboard tab is visible. Writing
+// the deadline onto the session (rather than just touching resave) makes the
+// timeout survive serverless instance churn: the deadline lives in the
+// Postgres-backed session row, not in process memory.
+function touchIdleDeadline(req) {
+    if (!req.session) return;
+    req.session.idleExpiresAt = Date.now() + IDLE_TIMEOUT_MS;
+}
+
+// Returns true if the session's idle deadline has lapsed. A session without a
+// deadline (e.g. created before this feature shipped, or a debug session) is
+// treated as not-yet-idle so we don't surprise-logout legacy sessions.
+function isIdleExpired(req) {
+    if (!req.session) return false;
+    const exp = req.session.idleExpiresAt;
+    if (!exp || typeof exp !== 'number') return false;
+    return Date.now() >= exp;
+}
+
+// Destroy the session and send the user back to the login page with an
+// idle_timeout reason. HTML requests redirect; JSON requests get 401 so the
+// SPA-style fetch callers (api()) can react. Mirrors requireAuth's 401 path.
+function expireForIdle(req, res) {
+    req.session.destroy(() => {});
+    if (req.accepts('html')) {
+        return res.redirect('/login?error=idle_timeout');
+    }
+    return res.status(401).json({ error: 'Your session expired due to inactivity. Please log in again.', reason: 'idle_timeout' });
+}
 
 function requireAuth(req, res, next) {
     if (req.session && req.session.user) {
+        // Idle safety net: if the heartbeat deadline lapsed (tab was hidden/
+        // closed longer than the idle window), end the session now instead of
+        // serving the request. The client also enforces this on visibility
+        // change, but the server check covers throttled/closed tabs.
+        if (isIdleExpired(req)) {
+            return expireForIdle(req, res);
+        }
+        // Activity refreshes the idle deadline so the session stays alive while
+        // the user is genuinely using the dashboard (page navigations, API
+        // calls). The client's periodic heartbeat keeps it alive between
+        // navigations while the tab is visible.
+        touchIdleDeadline(req);
         req.user = req.session.user;
         return next();
     }
@@ -219,4 +268,4 @@ async function requireBeta(req, res, next) {
     }
 }
 
-module.exports = { requireAuth, requireGuildAdmin, requireGuildAdminPage, requireBeta };
+module.exports = { requireAuth, requireGuildAdmin, requireGuildAdminPage, requireBeta, touchIdleDeadline, isIdleExpired, IDLE_TIMEOUT_MS };
