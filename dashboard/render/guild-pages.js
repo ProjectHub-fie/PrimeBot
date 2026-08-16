@@ -122,12 +122,10 @@ function welcomePage({ guild, user }) {
 
 function levelingPage({ guild, user }) {
     const lev = guild._config.server?.leveling || {};
-    const roleRewards = (lev.roleRewards || []).slice().sort((a, b) => a.level - b.level);
-    const rewardRows = roleRewards.map(r => levelingRewardRowHTML(r, guild._roles)).join('');
     const panelHTML = `
     <div class="card">
       <div class="card-title"><span><span class="icon">📈</span> Leveling &amp; XP</span></div>
-      <p class="card-desc">Reward members with XP for chatting and earn badges as they level up.</p>
+      <p class="card-desc">Reward members with XP for chatting and earn badges as they level up. Role rewards now have their own <a href="/guild/${esc(guild.id)}/rolerewards">🎁 Role Rewards</a> tab.</p>
 
       <div class="switch-row">
         <div class="switch-label">
@@ -154,15 +152,8 @@ function levelingPage({ guild, user }) {
         <input type="number" id="leveling-cooldown" min="5" max="300" step="1" value="${esc(lev.xpCooldown ? lev.xpCooldown / 1000 : 60)}" />
         <div class="field-hint">Time between XP gains per user (5 – 300 seconds).</div>
       </div>
-    </div>
-
-    <div class="card">
-      <div class="card-title"><span><span class="icon">🎭</span> Role rewards</span></div>
-      <p class="card-desc">Automatically grant a role when a member reaches a level. Roles are saved to the database and persist across bot restarts.</p>
-      <div id="lev-rewards-list">${rewardRows}</div>
-      <button class="btn btn-secondary" id="lev-reward-add" type="button">+ Add reward</button>
     </div>`;
-    return guildTab({ guild, user, active: 'leveling', panelHTML, scripts: ['/js/guild-common.js', '/js/settings-basic.js', '/js/leveling.js'] });
+    return guildTab({ guild, user, active: 'leveling', panelHTML, scripts: ['/js/guild-common.js', '/js/settings-basic.js'] });
 }
 
 function levelingRewardRowHTML(r = {}, roles = []) {
@@ -175,21 +166,74 @@ function levelingRewardRowHTML(r = {}, roles = []) {
     </div>`;
 }
 
-// ── Prefix ──────────────────────────────────────────────────────────────────
+// ── Prefix / General ────────────────────────────────────────────────────────
+//
+// The "General" tab (top of the server features menu) hosts the command prefix
+// editor and the website log table side by side. The website log is an
+// audit trail of dashboard admin actions for this server (sl no, admin
+// username, content, time) fetched from /api/guilds/:id/logs/website.
 
 function prefixPage({ guild, user }) {
     const prefix = guild._config.server?.prefix || '$';
     const panelHTML = `
-    <div class="card">
-      <div class="card-title"><span><span class="icon">⚡</span> Command prefix</span></div>
-      <p class="card-desc">Set a custom prefix for text commands in this server (max 3 characters, no spaces).</p>
-      <div class="field">
-        <label class="field-label" for="prefix-value">Prefix</label>
-        <input type="text" id="prefix-value" maxlength="3" value="${esc(prefix)}" style="max-width:120px" />
-        <div class="field-hint">Members will type this before text commands, e.g. <code>${esc(prefix)}help</code></div>
+    <div class="general-grid">
+      <div class="card">
+        <div class="card-title"><span><span class="icon">⚡</span> Command prefix</span></div>
+        <p class="card-desc">Set a custom prefix for text commands in this server (max 3 characters, no spaces).</p>
+        <div class="field">
+          <label class="field-label" for="prefix-value">Prefix</label>
+          <input type="text" id="prefix-value" maxlength="3" value="${esc(prefix)}" style="max-width:120px" />
+          <div class="field-hint">Members will type this before text commands, e.g. <code>${esc(prefix)}help</code></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title"><span><span class="icon">🧾</span> Website log</span></div>
+        <p class="card-desc">Dashboard actions performed for this server.</p>
+        <div class="wlog-wrap">
+          <table class="wlog-table">
+            <thead>
+              <tr><th>#</th><th>Admin</th><th>Content</th><th>Time</th></tr>
+            </thead>
+            <tbody id="wlog-body"><tr><td colspan="4" class="wlog-empty">Loading…</td></tr></tbody>
+          </table>
+        </div>
       </div>
     </div>`;
-    return guildTab({ guild, user, active: 'prefix', panelHTML, scripts: ['/js/guild-common.js', '/js/settings-basic.js'] });
+    return guildTab({ guild, user, active: 'prefix', panelHTML, scripts: ['/js/guild-common.js', '/js/settings-basic.js', '/js/general.js'] });
+}
+
+// ── Role Rewards (beta) ─────────────────────────────────────────────────────
+//
+// A dedicated beta-gated page for the leveling role-rewards editor (the same
+// editor that used to live inside the Leveling page). Non-beta servers see the
+// standard locked overlay so they can discover the feature but can't use it.
+
+const ROLE_REWARDS_BETA_MSG = 'This server isn’t a beta server yet. Join support server to gain beta access';
+
+function roleRewardsPage({ guild, user }) {
+    const lev = guild._config.server?.leveling || {};
+    const roleRewards = (lev.roleRewards || []).slice().sort((a, b) => a.level - b.level);
+    const rewardRows = roleRewards.map(r => levelingRewardRowHTML(r, guild._roles)).join('');
+    const panelHTML = `
+    <div class="card${guild._beta ? '' : ' beta-locked-card'}">
+      <div class="card-title"><span><span class="icon">🎁</span> Role Rewards <span class="beta-badge">BETA</span></span></div>
+      <div class="beta-banner">🧪 This feature is in beta — expect changes. Please report any issues.</div>
+      <div class="beta-locked-wrap${guild._beta ? '' : ' locked'}">
+        <p class="card-desc">Automatically grant a role when a member reaches a level. Roles are saved to the database and persist across bot restarts.</p>
+        <div id="lev-rewards-list">${rewardRows}</div>
+        <button class="btn btn-secondary" id="lev-reward-add" type="button">+ Add reward</button>
+      </div>
+      ${guild._beta ? '' : `
+        <div class="beta-locked-overlay">
+          <div class="beta-locked-box">
+            <div class="beta-locked-icon">🔒</div>
+            <div class="beta-locked-text">${esc(ROLE_REWARDS_BETA_MSG)}</div>
+            <a class="btn btn-discord" href="https://discord.gg/gd7UNSfX86" target="_blank" rel="noopener">Join support server</a>
+          </div>
+        </div>`}
+    </div>`;
+    return guildTab({ guild, user, active: 'rolerewards', panelHTML, scripts: ['/js/guild-common.js', '/js/settings-basic.js', '/js/leveling.js'] });
 }
 
 // ── Auto-reactions ──────────────────────────────────────────────────────────
@@ -861,7 +905,7 @@ function liveGiveawaysPage({ guild, user }) {
 }
 
 module.exports = {
-    welcomePage, levelingPage, prefixPage, reactionsPage, broadcastPage,
+    welcomePage, levelingPage, prefixPage, roleRewardsPage, reactionsPage, broadcastPage,
     loggingPage, reactionRolesPage, ticketsPage, automodPage, eventsPage,
     livePollsPage, liveGiveawaysPage,
     TABS,

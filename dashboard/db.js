@@ -89,6 +89,20 @@ function getLevelingPool() {
     return levelingPool;
 }
 
+// logging_settings + website_logs live in the dedicated LOG_DATABASE_URL pool
+// (falling back to DATABASE_URL), same multi-pool pattern as the other features.
+let logPool = null;
+function getLogPool() {
+    if (logPool) return logPool;
+    try {
+        logPool = require('../server/logDb').logPool;
+    } catch (err) {
+        console.error('[DASHBOARD DB] logDb unavailable:', err.message);
+        logPool = { query: async () => { throw new Error('Log database not configured'); } };
+    }
+    return logPool;
+}
+
 async function ensureLevelingRoleRewardsTable() {
     await getLevelingPool().query(`
         CREATE TABLE IF NOT EXISTS leveling_role_rewards (
@@ -373,7 +387,7 @@ function rowToWelcomeSettings(row) {
 // ── logging_settings ───────────────────────────────────────────────────────
 
 async function ensureLoggingTable() {
-    await pool.query(`
+    await getLogPool().query(`
         CREATE TABLE IF NOT EXISTS logging_settings (
             guild_id              VARCHAR(50) PRIMARY KEY,
             enabled               BOOLEAN NOT NULL DEFAULT false,
@@ -386,15 +400,15 @@ async function ensureLoggingTable() {
             updated_at            TIMESTAMP DEFAULT NOW()
         )
     `);
-    await pool.query(`ALTER TABLE logging_settings ADD COLUMN IF NOT EXISTS webhook_name  VARCHAR(100) DEFAULT 'PrimeBot Logs'`);
-    await pool.query(`ALTER TABLE logging_settings ADD COLUMN IF NOT EXISTS events        JSONB NOT NULL DEFAULT '[]'`);
-    await pool.query(`ALTER TABLE logging_settings ADD COLUMN IF NOT EXISTS include_bots  BOOLEAN NOT NULL DEFAULT false`);
-    await pool.query(`ALTER TABLE logging_settings ADD COLUMN IF NOT EXISTS color         VARCHAR(20) DEFAULT '#5865F2'`);
+    await getLogPool().query(`ALTER TABLE logging_settings ADD COLUMN IF NOT EXISTS webhook_name  VARCHAR(100) DEFAULT 'PrimeBot Logs'`);
+    await getLogPool().query(`ALTER TABLE logging_settings ADD COLUMN IF NOT EXISTS events        JSONB NOT NULL DEFAULT '[]'`);
+    await getLogPool().query(`ALTER TABLE logging_settings ADD COLUMN IF NOT EXISTS include_bots  BOOLEAN NOT NULL DEFAULT false`);
+    await getLogPool().query(`ALTER TABLE logging_settings ADD COLUMN IF NOT EXISTS color         VARCHAR(20) DEFAULT '#5865F2'`);
 }
 
 async function getLoggingSettings(guildId) {
     await ensureLoggingTable();
-    const res = await pool.query(`SELECT * FROM logging_settings WHERE guild_id = $1`, [guildId]);
+    const res = await getLogPool().query(`SELECT * FROM logging_settings WHERE guild_id = $1`, [guildId]);
     if (res.rows.length === 0) return defaultLoggingSettings();
     return rowToLoggingSettings(res.rows[0]);
 }
@@ -404,7 +418,7 @@ async function upsertLoggingSettings(guildId, patch) {
     const current = await getLoggingSettings(guildId);
     const merged = { ...current, ...patch };
 
-    await pool.query(`
+    await getLogPool().query(`
         INSERT INTO logging_settings (
             guild_id, enabled, channel_id, webhook_url, webhook_name,
             events, include_bots, color, updated_at
@@ -454,6 +468,57 @@ function rowToLoggingSettings(row) {
         includeBots: row.include_bots,
         color: row.color || '#5865F2',
     };
+}
+
+// ── website_logs (dashboard admin-action audit trail, shown on General page) ─
+//
+// Each dashboard settings save records a row here (admin username + a short
+// human-readable content summary + timestamp). Lives in the LOG_DATABASE_URL
+// pool alongside logging_settings so a single connection string covers both the
+// bot's server logging and the dashboard's website log.
+
+async function ensureWebsiteLogsTable() {
+    await getLogPool().query(`
+        CREATE TABLE IF NOT EXISTS website_logs (
+            id              SERIAL PRIMARY KEY,
+            guild_id        VARCHAR(50) NOT NULL,
+            admin_user_id   VARCHAR(50) NOT NULL,
+            admin_username  VARCHAR(100) NOT NULL,
+            content         TEXT NOT NULL,
+            created_at      TIMESTAMP DEFAULT NOW()
+        )
+    `);
+    await getLogPool().query(
+        `CREATE INDEX IF NOT EXISTS website_logs_guild_idx ON website_logs (guild_id, created_at DESC)`
+    );
+}
+
+async function addWebsiteLog(guildId, { adminUserId, adminUsername, content }) {
+    await ensureWebsiteLogsTable();
+    await getLogPool().query(
+        `INSERT INTO website_logs (guild_id, admin_user_id, admin_username, content, created_at)
+         VALUES ($1, $2, $3, $4, NOW())`,
+        [String(guildId), String(adminUserId || ''), String(adminUsername || ''), String(content || '')]
+    );
+}
+
+async function getWebsiteLogs(guildId, limit = 100) {
+    await ensureWebsiteLogsTable();
+    const res = await getLogPool().query(
+        `SELECT id, admin_user_id, admin_username, content, created_at
+         FROM website_logs
+         WHERE guild_id = $1
+         ORDER BY created_at DESC
+         LIMIT $2`,
+        [String(guildId), Math.min(Math.max(Number(limit) || 100, 1), 500)]
+    );
+    return res.rows.map(r => ({
+        id: r.id,
+        adminUserId: r.admin_user_id,
+        adminUsername: r.admin_username,
+        content: r.content,
+        createdAt: r.created_at ? new Date(r.created_at).toISOString() : null,
+    }));
 }
 
 // ── reaction_roles + reaction_role_mappings ─────────────────────────────────
@@ -1778,4 +1843,6 @@ module.exports = {
     startEventSchedule,
     cancelEventSchedule,
     getNodeStats,
+    addWebsiteLog,
+    getWebsiteLogs,
 };

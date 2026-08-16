@@ -1,4 +1,4 @@
-const { pool } = require('../server/db');
+const { logPool } = require('../server/logDb');
 const { DEFAULT_ENABLED_EVENTS, normalizeEvents } = require('./logEvents');
 
 const CREATE_TABLE_SQL = `
@@ -43,8 +43,8 @@ class LoggingSettingsManager {
 
     async _ensureTable() {
         if (this._tableReady) return;
-        await pool.query(CREATE_TABLE_SQL);
-        await pool.query(ENSURE_COLUMNS_SQL);
+        await logPool.query(CREATE_TABLE_SQL);
+        await logPool.query(ENSURE_COLUMNS_SQL);
         this._tableReady = true;
     }
 
@@ -78,7 +78,7 @@ class LoggingSettingsManager {
 
     async _refreshFromDatabase() {
         await this._ensureTable();
-        const res = await pool.query('SELECT * FROM logging_settings');
+        const res = await logPool.query('SELECT * FROM logging_settings');
         for (const row of res.rows) {
             const next = this._rowToSettings(row);
             const previous = this._cache.get(row.guild_id);
@@ -93,7 +93,7 @@ class LoggingSettingsManager {
 
     async _loadAll() {
         try {
-            const res = await pool.query('SELECT * FROM logging_settings');
+            const res = await logPool.query('SELECT * FROM logging_settings');
             for (const row of res.rows) {
                 this._cache.set(row.guild_id, this._rowToSettings(row));
             }
@@ -147,7 +147,7 @@ class LoggingSettingsManager {
     async _saveAsync(guildId) {
         const s = this.getSettings(guildId);
         await this._ensureTable();
-        await pool.query(`
+        await logPool.query(`
             INSERT INTO logging_settings (
                 guild_id, enabled, channel_id, webhook_url, webhook_name,
                 events, include_bots, color, updated_at
