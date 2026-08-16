@@ -1650,6 +1650,89 @@ async function cancelEventSchedule(id) {
     return true;
 }
 
+// ── Shardnode / failover status (bot_node_status + bot_failover_lock) ─────────
+//
+// The bot's nodeFailover module writes a heartbeat row per shard node (sn1/sn2/
+// sn3) every 15s and maintains a single-row lease lock. The dashboard reads
+// these tables directly so the Stats page can show live node health without any
+// bot↔dashboard IPC. Both tables live in the main DATABASE_URL pool.
+
+const FAILOVER_THRESHOLD_MS = 45000; // mirrors utils/nodeFailover.js
+const NODE_ROLES = ['sn1', 'sn2', 'sn3'];
+
+async function ensureNodeStatusTables() {
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS bot_node_status (
+            role VARCHAR(20) PRIMARY KEY,
+            node_name VARCHAR(255) NOT NULL,
+            last_heartbeat TIMESTAMP NOT NULL DEFAULT NOW(),
+            active BOOLEAN NOT NULL DEFAULT false
+        )
+    `);
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS bot_failover_lock (
+            id INTEGER PRIMARY KEY DEFAULT 1,
+            owner_node_name VARCHAR(255) NOT NULL,
+            owner_role VARCHAR(20) NOT NULL,
+            acquired_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            last_seen TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+    `);
+}
+
+async function getNodeStats() {
+    await ensureNodeStatusTables();
+    const [statusRes, leaseRes] = await Promise.all([
+        pool.query(`
+            SELECT role, node_name, last_heartbeat, active,
+                   EXTRACT(EPOCH FROM (NOW() - last_heartbeat)) * 1000 AS age_ms
+            FROM bot_node_status
+        `).catch(() => ({ rows: [] })),
+        pool.query(`
+            SELECT owner_node_name, owner_role, acquired_at, last_seen,
+                   EXTRACT(EPOCH FROM (NOW() - last_seen)) * 1000 AS age_ms
+            FROM bot_failover_lock WHERE id = 1
+        `).catch(() => ({ rows: [] })),
+    ]);
+
+    const byRole = {};
+    for (const row of statusRes.rows || []) {
+        byRole[row.role] = {
+            role: row.role,
+            nodeName: row.node_name,
+            active: !!row.active,
+            lastHeartbeat: row.last_heartbeat,
+            ageMs: Math.round(Number(row.age_ms) || 0),
+        };
+    }
+    // Always surface all three roles so the UI renders a stable grid, even when
+    // a node has never reported (no row yet). A node is "online" if it has a
+    // fresh heartbeat regardless of the active flag (standby nodes are alive
+    // too); "offline" once the heartbeat is older than the failover threshold.
+    const nodes = NODE_ROLES.map(role => byRole[role] || {
+        role,
+        nodeName: null,
+        active: false,
+        lastHeartbeat: null,
+        ageMs: null,
+    }).map(n => ({
+        ...n,
+        status: n.ageMs == null ? 'never' : (n.ageMs > FAILOVER_THRESHOLD_MS ? 'offline' : 'online'),
+    }));
+
+    const leaseRow = (leaseRes.rows || [])[0];
+    const lease = leaseRow ? {
+        ownerNodeName: leaseRow.owner_node_name,
+        ownerRole: leaseRow.owner_role,
+        acquiredAt: leaseRow.acquired_at,
+        lastSeen: leaseRow.last_seen,
+        ageMs: Math.round(Number(leaseRow.age_ms) || 0),
+        stale: Number(leaseRow.age_ms || Infinity) > FAILOVER_THRESHOLD_MS,
+    } : null;
+
+    return { nodes, lease, thresholdMs: FAILOVER_THRESHOLD_MS };
+}
+
 module.exports = {
     getServerSettings,
     upsertServerSettings,
@@ -1690,4 +1773,5 @@ module.exports = {
     deleteEventSchedule,
     startEventSchedule,
     cancelEventSchedule,
+    getNodeStats,
 };

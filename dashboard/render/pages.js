@@ -207,17 +207,64 @@ function docsPage({ clientId, user } = {}) {
 
 // ── Live ────────────────────────────────────────────────────────────────────
 
-function livePage({ user } = {}) {
+// ── Stats (bot + shardnode node status) ──────────────────────────────────────
+//
+// The dashboard process can't read the bot's in-memory runtime stats (ping,
+// uptime, guilds.cache) because it runs separately from the bot. It can,
+// however, read the bot's authoritative server count (Discord REST) and the
+// shardnode/failover status tables the bot's nodeFailover module writes. The
+// page boots with a shell and the client fetches /api/stats/bot + /api/stats/nodes
+// so the numbers stay live without a full reload.
+
+function statsPage({ user } = {}) {
     const body = `
     <div class="page-head">
-      <h1>Live</h1>
-      <p>Cross-server live polls and live giveaways — running and recently ended, across all of PrimeBot.</p>
+      <h1>Stats</h1>
+      <p>Live bot statistics and shardnode health across the PrimeBot cluster.</p>
+    </div>
+
+    <div id="stats-bot" class="stats-band">
+      <div class="splash"><div class="spinner"></div><p>Loading bot stats…</p></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title"><span><span class="icon">🌐</span> Shardnode status</span></div>
+      <p class="card-desc">Per-node heartbeats and the active failover lease across the sn1 / sn2 / sn3 shard nodes.</p>
+      <div id="stats-nodes">
+        <div class="splash"><div class="spinner"></div><p>Loading node stats…</p></div>
+      </div>
+    </div>`;
+    return render({ title: 'PrimeBot · Stats', body, active: 'stats', scripts: ['/js/stats.js'], user });
+}
+
+// ── Live (split into Polls and Giveaways) ────────────────────────────────────
+
+function livePollsPage({ user } = {}) {
+    const body = `
+    <div class="page-head">
+      <h1>Live Polls</h1>
+      <p>Cross-server live polls — running and recently ended, across all of PrimeBot.</p>
     </div>
     <div id="live-content">
-      <div class="splash"><div class="spinner"></div><p>Loading live data…</p></div>
+      <div class="splash"><div class="spinner"></div><p>Loading live polls…</p></div>
     </div>
-    <div id="live-join-modal" class="modal-overlay hidden"></div>`;
-    return render({ title: 'PrimeBot · Live', body, active: 'live', scripts: ['/js/live.js'], user });
+    <div id="live-join-modal" class="modal-overlay hidden"></div>
+    <script>window.liveKind = 'poll';</script>`;
+    return render({ title: 'PrimeBot · Live Polls', body, active: 'live-polls', scripts: ['/js/live.js'], user });
+}
+
+function liveGiveawaysPage({ user } = {}) {
+    const body = `
+    <div class="page-head">
+      <h1>Live Giveaways</h1>
+      <p>Cross-server live giveaways — running and recently ended, across all of PrimeBot.</p>
+    </div>
+    <div id="live-content">
+      <div class="splash"><div class="spinner"></div><p>Loading live giveaways…</p></div>
+    </div>
+    <div id="live-join-modal" class="modal-overlay hidden"></div>
+    <script>window.liveKind = 'giveaway';</script>`;
+    return render({ title: 'PrimeBot · Live Giveaways', body, active: 'live-giveaways', scripts: ['/js/live.js'], user });
 }
 
 // ── Overview (servers) ──────────────────────────────────────────────────────
@@ -303,4 +350,4 @@ function notFoundPage({ user } = {}) {
     return render({ title: 'PrimeBot · Not found', body, user });
 }
 
-module.exports = { loginPage, docsPage, livePage, overviewPage, notFoundPage, guildCardHTML };
+module.exports = { loginPage, docsPage, statsPage, livePollsPage, liveGiveawaysPage, overviewPage, notFoundPage, guildCardHTML };

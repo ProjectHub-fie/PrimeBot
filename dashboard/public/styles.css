@@ -1178,6 +1178,43 @@ input[type="color"] {
 .command-box code { font-size: 14px; word-break: break-all; }
 .btn-copy { padding: 4px 10px; }
 .live-modal-note { font-size: 13px; color: var(--text-dim); }
+
+/* ── Stats page: shardnode node list ──────────────────────────────────────── */
+
+.node-summary {
+  display: flex; flex-wrap: wrap; gap: 18px;
+  font-size: 13px; color: var(--text-dim);
+  margin-bottom: 14px;
+}
+.node-summary strong { color: var(--text); }
+.node-list { display: flex; flex-direction: column; gap: 10px; }
+.node-row {
+  display: flex; align-items: center; gap: 12px;
+  background: var(--bg); border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm); padding: 12px 14px;
+}
+.node-row.node-online { border-left: 3px solid var(--green); }
+.node-row.node-offline { border-left: 3px solid var(--red); }
+.node-row.node-never { border-left: 3px solid var(--border); }
+.node-icon { font-size: 18px; }
+.node-main { flex: 1; min-width: 0; }
+.node-name { font-weight: 700; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.node-meta { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+.node-meta code { background: rgba(0,0,0,0.06); padding: 1px 6px; border-radius: 6px; }
+.node-status-label { font-size: 12px; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; }
+.node-badge { font-size: 10px; font-weight: 800; padding: 2px 7px; border-radius: 999px; letter-spacing: 0.04em; text-transform: uppercase; }
+.node-badge.node-active { background: rgba(67,181,129,0.16); color: var(--green); }
+.node-badge.node-standby { background: rgba(0,0,0,0.08); color: var(--text-dim); }
+.node-lease {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px;
+  margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border-soft);
+  font-size: 13px;
+}
+.node-lease-label { font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; font-size: 12px; }
+.node-lease-owner code { background: rgba(0,0,0,0.06); padding: 1px 6px; border-radius: 6px; }
+.node-lease-meta { color: var(--text-dim); }
+.node-lease-meta.node-lease-stale { color: var(--red); font-weight: 700; }
+.node-note { font-size: 12px; color: var(--text-faint); margin-top: 12px; }
 .live-join-actions { display: flex; gap: 10px; }
 
 /* Events tab */

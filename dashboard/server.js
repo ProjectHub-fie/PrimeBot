@@ -283,6 +283,39 @@ app.get('/api/stats', async (req, res) => {
 
 // ── API: list manageable guilds (admin's guilds where the bot is present) ───
 
+// Detailed bot stats for the Stats page. The dashboard process can't see the
+// bot's in-memory runtime (ping/uptime/guilds.cache), so this returns what the
+// dashboard CAN measure: the authoritative server count (Discord REST), the bot
+// identity, version, and platform feature adoption.
+app.get('/api/stats/bot', requireAuth, async (req, res) => {
+    try {
+        await resolveBotSelf();
+        const restCount = await discord.getBotGuildCount();
+        const stats = await dashboardDb.getPlatformStats(restCount);
+        res.json({
+            ...stats,
+            bot: botSelf,
+            clientId: process.env.DISCORD_CLIENT_ID,
+            version: constants.BOT_VERSION,
+        });
+    } catch (err) {
+        console.error('[API] /api/stats/bot error:', err.message);
+        res.status(500).json({ error: 'Failed to load bot stats.' });
+    }
+});
+
+// Shardnode + failover status for the Stats page. Reads the heartbeat/lease
+// tables the bot's nodeFailover module writes.
+app.get('/api/stats/nodes', requireAuth, async (req, res) => {
+    try {
+        const nodes = await dashboardDb.getNodeStats();
+        res.json(nodes);
+    } catch (err) {
+        console.error('[API] /api/stats/nodes error:', err.message);
+        res.status(500).json({ error: 'Failed to load node stats.' });
+    }
+});
+
 app.get('/api/guilds', requireAuth, async (req, res) => {
     try {
         const accessToken = req.session.accessToken;
@@ -1028,6 +1061,40 @@ app.get('/api/live', requireAuth, async (req, res) => {
     }
 });
 
+// Split endpoints — one per live page. Each returns only the kind that page
+// shows, so the polls page doesn't fetch giveaway rows (and vice versa).
+app.get('/api/live/polls', requireAuth, async (req, res) => {
+    try {
+        const [polls, endedPolls] = await Promise.all([
+            dashboardDb.getLivePolls(),
+            dashboardDb.getEndedLivePolls(),
+        ]);
+        res.json({
+            running: polls.filter(p => p.isActive),
+            ended: endedPolls,
+        });
+    } catch (err) {
+        console.error('[API] /api/live/polls error:', err.message);
+        res.status(500).json({ error: 'Failed to load live polls.' });
+    }
+});
+
+app.get('/api/live/giveaways', requireAuth, async (req, res) => {
+    try {
+        const [giveaways, endedGiveaways] = await Promise.all([
+            dashboardDb.getLiveGiveaways(),
+            dashboardDb.getEndedLiveGiveaways(),
+        ]);
+        res.json({
+            running: giveaways.filter(g => g.isActive && !g.ended),
+            ended: endedGiveaways,
+        });
+    } catch (err) {
+        console.error('[API] /api/live/giveaways error:', err.message);
+        res.status(500).json({ error: 'Failed to load live giveaways.' });
+    }
+});
+
 // ── API: Event management (📅 Events tab) ────────────────────────────────────
 
 app.get('/api/guilds/:guildId/events', requireAuth, requireGuildAdmin, async (req, res) => {
@@ -1186,8 +1253,18 @@ app.get('/docs', requireAuth, (req, res) => {
     res.type('html').send(pages.docsPage({ clientId: process.env.DISCORD_CLIENT_ID, user: req.user }));
 });
 
-app.get('/live', requireAuth, (req, res) => {
-    res.type('html').send(pages.livePage({ user: req.user }));
+app.get('/stats', requireAuth, (req, res) => {
+    res.type('html').send(pages.statsPage({ user: req.user }));
+});
+
+// Live is split into two separate pages. The old /live redirects to the polls
+// page so any existing bookmarks keep working.
+app.get('/live', (req, res) => res.redirect('/live/polls'));
+app.get('/live/polls', requireAuth, (req, res) => {
+    res.type('html').send(pages.livePollsPage({ user: req.user }));
+});
+app.get('/live/giveaways', requireAuth, (req, res) => {
+    res.type('html').send(pages.liveGiveawaysPage({ user: req.user }));
 });
 
 // Guild settings: each tab is its own page. requireGuildAdminPage fetches
