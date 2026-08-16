@@ -352,7 +352,14 @@ class ServerSettingsManager {
 
     // ── No-prefix mode ────────────────────────────────────────────────────────
 
+    // Sentinel stored in noPrefixUsers[userId] to mark a lifetime grant — one
+    // that never expires and is never auto-disabled. Any other value is a
+    // numeric expiration timestamp (ms since epoch).
+    static NO_PREFIX_LIFETIME = 'lifetime';
+
     _normalizeNoPrefixExpiration(value) {
+        if (value === ServerSettingsManager.NO_PREFIX_LIFETIME) return ServerSettingsManager.NO_PREFIX_LIFETIME;
+
         const numericValue = Number(value);
         if (!Number.isFinite(numericValue) || numericValue <= 0) return null;
 
@@ -363,18 +370,32 @@ class ServerSettingsManager {
             : numericValue;
     }
 
-    enableNoPrefixMode(guildId, userId, minutes = 10) {
+    // Enable no-prefix mode. `minutes` is OPTIONAL: when omitted (null/undefined)
+    // the grant is for the user's lifetime — it never expires and is not
+    // auto-disabled. When provided, it must be a positive number of minutes.
+    enableNoPrefixMode(guildId, userId, minutes = null) {
         if (!userId) return { success: false, message: 'Invalid user' };
-        if (minutes <= 0 || minutes > 60) return { success: false, message: 'Duration must be between 1 and 60 minutes' };
+
+        const isLifetime = minutes === null || minutes === undefined;
+        if (!isLifetime) {
+            const mins = Number(minutes);
+            if (!Number.isFinite(mins) || mins <= 0) return { success: false, message: 'Duration must be a positive number of minutes' };
+        }
 
         try {
             const s = this.getGuildSettings(guildId);
             if (!s.noPrefixUsers) s.noPrefixUsers = {};
+            if (isLifetime) {
+                s.noPrefixUsers[userId] = ServerSettingsManager.NO_PREFIX_LIFETIME;
+                this.serverSettings.set(guildId, s);
+                this._saveGuildSettings(guildId);
+                return { success: true, message: 'No-prefix mode enabled for a lifetime (never expires)', expiresAt: ServerSettingsManager.NO_PREFIX_LIFETIME, lifetime: true };
+            }
             const expirationTime = Date.now() + minutes * 60 * 1000;
             s.noPrefixUsers[userId] = expirationTime;
             this.serverSettings.set(guildId, s);
             this._saveGuildSettings(guildId);
-            return { success: true, message: `No-prefix mode enabled for ${minutes} minute${minutes !== 1 ? 's' : ''}`, expiresAt: expirationTime };
+            return { success: true, message: `No-prefix mode enabled for ${minutes} minute${minutes !== 1 ? 's' : ''}`, expiresAt: expirationTime, lifetime: false };
         } catch (err) {
             console.error(`[SERVER SETTINGS] Error enabling no-prefix mode:`, err);
             return { success: false, message: 'An error occurred.' };
@@ -397,6 +418,8 @@ class ServerSettingsManager {
             const s = this.getGuildSettings(guildId);
             const expirationTime = this._normalizeNoPrefixExpiration(s.noPrefixUsers?.[userId]);
             if (!expirationTime) return false;
+            // Lifetime grants never expire and are never auto-removed.
+            if (expirationTime === ServerSettingsManager.NO_PREFIX_LIFETIME) return true;
             if (Date.now() >= expirationTime) {
                 delete s.noPrefixUsers[userId];
                 this._saveGuildSettings(guildId);
@@ -410,12 +433,18 @@ class ServerSettingsManager {
         }
     }
 
+    // Returns the expiration value: null (not enabled), the NO_PREFIX_LIFETIME
+    // sentinel (lifetime grant), or a numeric ms timestamp (timed grant).
     getNoPrefixExpiration(guildId, userId) {
         if (!userId) return null;
         const s = this.getGuildSettings(guildId);
         if (!s.noPrefixUsers) return null;
         const exp = this._normalizeNoPrefixExpiration(s.noPrefixUsers[userId]);
         if (!exp) return null;
+        if (exp === ServerSettingsManager.NO_PREFIX_LIFETIME) {
+            s.noPrefixUsers[userId] = ServerSettingsManager.NO_PREFIX_LIFETIME;
+            return ServerSettingsManager.NO_PREFIX_LIFETIME;
+        }
         if (Date.now() >= exp) {
             delete s.noPrefixUsers[userId];
             this.serverSettings.set(guildId, s);
@@ -424,6 +453,10 @@ class ServerSettingsManager {
         }
         s.noPrefixUsers[userId] = exp;
         return exp;
+    }
+
+    isNoPrefixLifetime(guildId, userId) {
+        return this.getNoPrefixExpiration(guildId, userId) === ServerSettingsManager.NO_PREFIX_LIFETIME;
     }
 
     // ── Welcome ───────────────────────────────────────────────────────────────

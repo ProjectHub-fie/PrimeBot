@@ -3526,10 +3526,10 @@ module.exports = {
                             .setTitle("🪄 No-Prefix Mode")
                             .setDescription("Developer-only no-prefix mode management. Add/remove a target user and let them use commands without the prefix.")
                             .addFields(
-                                { name: `${prefix}np add @user [minutes]`, value: "Add/enable a selected user for no-prefix command access" },
+                                { name: `${prefix}np add @user [minutes]`, value: "Add/enable a selected user for no-prefix command access. Omit minutes for a lifetime grant." },
                                 { name: `${prefix}np remove @user`, value: "Remove/disable a selected user's no-prefix command access" },
                                 { name: `${prefix}np status @user`, value: "Check a user's current no-prefix status" },
-                                { name: `${prefix}np enable [minutes]`, value: "Enable no-prefix mode for yourself (legacy alias)" },
+                                { name: `${prefix}np enable [minutes]`, value: "Enable no-prefix mode for yourself (omit minutes for lifetime)" },
                                 { name: `${prefix}np disable`, value: "Disable no-prefix mode for yourself (legacy alias)" }
                             )
                             .setFooter({ text: "Developer command • Main database-backed no-prefix mode", iconURL: client.user.displayAvatarURL() });
@@ -3538,17 +3538,18 @@ module.exports = {
                     }
                     
                     const npSubCommand = args[0].toLowerCase();
-                    
+
                     switch(npSubCommand) {
                         case "add":
                         case "enable":
                         case "on": {
                             const target = message.mentions.users.first() || message.author;
-                            let duration = 10;
+                            // Duration is OPTIONAL: omit it for a lifetime grant.
                             const requestedPosition = args[1]?.match(/^<@!?\d+>$/) ? 2 : 1;
+                            let duration = null; // null => lifetime
                             if (args.length > requestedPosition) {
                                 const requestedDuration = parseInt(args[requestedPosition]);
-                                if (!isNaN(requestedDuration) && requestedDuration > 0 && requestedDuration <= 60) {
+                                if (!isNaN(requestedDuration) && requestedDuration > 0) {
                                     duration = requestedDuration;
                                 }
                             }
@@ -3565,13 +3566,17 @@ module.exports = {
                                     .setTitle("🪄 No-Prefix Mode Added")
                                     .setDescription(`No-prefix command access has been added for ${target}.`)
                                     .addFields(
-                                        { name: "Duration", value: `${duration} minute${duration !== 1 ? 's' : ''}` },
-                                        { name: "Expires", value: `<t:${Math.floor(result.expiresAt / 1000)}:R>` },
+                                        result.lifetime
+                                            ? { name: "Duration", value: "Lifetime (never expires)" }
+                                            : { name: "Duration", value: `${duration} minute${duration !== 1 ? 's' : ''}` },
+                                        result.lifetime
+                                            ? { name: "Expires", value: "Never" }
+                                            : { name: "Expires", value: `<t:${Math.floor(result.expiresAt / 1000)}:R>` },
                                         { name: "How to use", value: "The selected user can now type command names without the prefix." }
                                     )
                                     .setFooter({ text: "Developer command • Main database", iconURL: client.user.displayAvatarURL() })
                                     .setTimestamp();
-                                    
+
                                 return message.reply({ embeds: [enableEmbed] });
                             } else {
                                 return message.reply(result.message || "Failed to enable no-prefix mode.");
@@ -3608,24 +3613,28 @@ module.exports = {
                                 message.guild.id,
                                 target.id
                             );
-                            
+
                             if (expirationTime) {
+                                const ServerSettingsManager = client.serverSettingsManager.constructor;
+                                const isLifetime = expirationTime === ServerSettingsManager.NO_PREFIX_LIFETIME;
                                 const statusEmbed = new EmbedBuilder()
                                     .setColor(config.colors.primary)
                                     .setTitle("🪄 No-Prefix Mode Status")
                                     .setDescription(`${target} has no-prefix mode enabled.`)
                                     .addFields(
-                                        { name: "Expires", value: `<t:${Math.floor(expirationTime / 1000)}:R>` }
+                                        isLifetime
+                                            ? { name: "Duration", value: "Lifetime (never expires)" }
+                                            : { name: "Expires", value: `<t:${Math.floor(expirationTime / 1000)}:R>` }
                                     )
                                     .setFooter({ text: "Developer command • Main database", iconURL: client.user.displayAvatarURL() })
                                     .setTimestamp();
-                                    
+
                                 return message.reply({ embeds: [statusEmbed] });
                             } else {
                                 return message.reply(`${target} does not have no-prefix mode enabled.`);
                             }
                         }
-                            
+
                         case "user": {
                             // Legacy compatibility path — map to add semantics.
                             if (message.mentions.users.size === 0) {
@@ -3634,10 +3643,11 @@ module.exports = {
                             }
 
                             const targetUser = message.mentions.users.first();
-                            let userDuration = 10;
+                            // Duration is OPTIONAL: omit it for a lifetime grant.
+                            let userDuration = null;
                             if (args.length > 2) {
                                 const requestedDuration = parseInt(args[2]);
-                                if (!isNaN(requestedDuration) && requestedDuration > 0 && requestedDuration <= 60) {
+                                if (!isNaN(requestedDuration) && requestedDuration > 0) {
                                     userDuration = requestedDuration;
                                 }
                             }
@@ -3654,12 +3664,16 @@ module.exports = {
                                     .setTitle("🪄 No-Prefix Mode Enabled")
                                     .setDescription(`No-prefix mode has been enabled for ${targetUser}.`)
                                     .addFields(
-                                        { name: "Duration", value: `${userDuration} minute${userDuration !== 1 ? 's' : ''}` },
-                                        { name: "Expires", value: `<t:${Math.floor(userResult.expiresAt / 1000)}:R>` }
+                                        userResult.lifetime
+                                            ? { name: "Duration", value: "Lifetime (never expires)" }
+                                            : { name: "Duration", value: `${userDuration} minute${userDuration !== 1 ? 's' : ''}` },
+                                        userResult.lifetime
+                                            ? { name: "Expires", value: "Never" }
+                                            : { name: "Expires", value: `<t:${Math.floor(userResult.expiresAt / 1000)}:R>` }
                                     )
                                     .setFooter({ text: `Enabled by ${message.author.tag}`, iconURL: message.author.displayAvatarURL() })
                                     .setTimestamp();
-                                    
+
                                 return message.reply({ embeds: [userEnableEmbed] });
                             } else {
                                 return message.reply(userResult.message || "Failed to enable no-prefix mode for the user.");
@@ -5013,7 +5027,7 @@ async function showPrefixCategoryHelp(message, category, prefix) {
                     { name: `${prefix}updates`, value: 'Latest bot updates and features', inline: true },
                     { name: `${prefix}ses`, value: 'Bot session and status information', inline: true },
                     { name: `${prefix}ping`, value: 'Check bot latency and response time', inline: true },
-                    { name: `${prefix}np [duration]`, value: 'Enable no-prefix mode for easier commands', inline: true }
+                    { name: `${prefix}np [duration]`, value: 'Enable no-prefix mode (omit duration for lifetime)', inline: true }
                 );
             break;
             
@@ -5816,7 +5830,7 @@ async function showDetailedCategoryHelp(message, category, prefix) {
                     { name: `${prefix}about`, value: '**Displays bot information and statistics**\nView bot uptime, server count, and version details', inline: false },
                     { name: `${prefix}updates`, value: '**Shows latest bot updates and features**\nStay informed about new features and improvements', inline: false },
                     { name: `${prefix}ses`, value: '**Bot session and status information**\nDetailed technical information about bot performance', inline: false },
-                    { name: `${prefix}np [duration]`, value: '**Enable no-prefix mode temporarily**\nUse commands without prefix for specified minutes', inline: false }
+                    { name: `${prefix}np [duration]`, value: '**Enable no-prefix mode**\nUse commands without prefix. Specify minutes or omit for a lifetime grant.', inline: false }
                 );
             break;
             
