@@ -13,9 +13,10 @@ const { esc, guildIconHTML } = require('./layout');
 // Each settings tab is a sidebar menu entry. `beta` flags the feature as a
 // beta release — the menu + page render a "BETA" badge next to its label.
 const TABS = [
+  { key: 'prefix',         label: '⚙️ General' },
   { key: 'welcome',        label: '👋 Welcome' },
   { key: 'leveling',       label: '📈 Leveling' },
-  { key: 'prefix',         label: '⚡ Prefix' },
+  { key: 'rolerewards',    label: '🎁 Role Rewards', beta: true },
   { key: 'reactions',      label: '🔁 Auto-Reactions' },
   { key: 'reactionroles',  label: '🎭 Reaction Roles' },
   { key: 'broadcast',      label: '📢 Broadcasts' },

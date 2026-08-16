@@ -388,6 +388,18 @@ const loggingSettings = pgTable('logging_settings', {
   updatedAt: timestamp('updated_at').defaultNow(),
 });
 
+// Dashboard admin-action audit trail (shown on the General settings page).
+// Lives in the dedicated LOG_DATABASE_URL pool (falling back to DATABASE_URL)
+// alongside logging_settings.
+const websiteLogs = pgTable('website_logs', {
+  id: serial('id').primaryKey(),
+  guildId: varchar('guild_id', { length: 50 }).notNull(),
+  adminUserId: varchar('admin_user_id', { length: 50 }).notNull(),
+  adminUsername: varchar('admin_username', { length: 100 }).notNull(),
+  content: text('content').notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
 // Automod settings table (per-guild premium automod config)
 const automodSettings = pgTable('automod_settings', {
   guildId: varchar('guild_id', { length: 50 }).primaryKey(),
@@ -653,6 +665,7 @@ module.exports = {
   reactionRolesRelations,
   reactionRoleMappingsRelations,
   loggingSettings,
+  websiteLogs,
   automodSettings,
   automodWarnings,
   automodAppeals,

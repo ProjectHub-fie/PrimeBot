@@ -434,6 +434,7 @@ app.patch('/api/guilds/:guildId/welcome', requireAuth, requireGuildAdmin, async 
         // Null out empty channel id.
         if ('channelId' in patch && !patch.channelId) patch.channelId = null;
         const updated = await dashboardDb.upsertWelcomeSettings(req.guild.id, patch);
+        recordWebsiteLog(req, 'Updated welcome message settings');
         res.json({ welcome: updated });
     } catch (err) {
         console.error('[API] update welcome error:', err.message);
@@ -488,6 +489,10 @@ app.patch('/api/guilds/:guildId/server', requireAuth, requireGuildAdmin, async (
         }
 
         const updated = await dashboardDb.upsertServerSettings(req.guild.id, patch);
+        if ('prefix' in patch) recordWebsiteLog(req, `Updated command prefix to "${patch.prefix}"`);
+        if (body.leveling) recordWebsiteLog(req, 'Updated leveling settings');
+        if (body.autoReactions) recordWebsiteLog(req, 'Updated auto-reactions settings');
+        if ('receiveBroadcasts' in body) recordWebsiteLog(req, `Updated broadcast settings (receive: ${body.receiveBroadcasts ? 'on' : 'off'})`);
         res.json({ server: updated });
     } catch (err) {
         console.error('[API] update server error:', err.message);
@@ -509,9 +514,10 @@ app.get('/api/guilds/:guildId/leveling/rolerewards', requireAuth, requireGuildAd
     }
 });
 
-app.put('/api/guilds/:guildId/leveling/rolerewards', requireAuth, requireGuildAdmin, async (req, res) => {
+app.put('/api/guilds/:guildId/leveling/rolerewards', requireAuth, requireGuildAdmin, requireBeta, async (req, res) => {
     try {
         const rewards = await dashboardDb.setLevelingRoleRewards(req.guild.id, req.body?.roleRewards || []);
+        recordWebsiteLog(req, 'Updated leveling role rewards');
         res.json({ roleRewards: rewards });
     } catch (err) {
         console.error('[API] set leveling role rewards error:', err.message);
@@ -543,12 +549,41 @@ app.patch('/api/guilds/:guildId/logging', requireAuth, requireGuildAdmin, async 
             return res.status(400).json({ error: 'Color must be a hex color like #5865F2.' });
         }
         const updated = await dashboardDb.upsertLoggingSettings(req.guild.id, patch);
+        recordWebsiteLog(req, 'Updated server logging settings');
         res.json({ logging: updated });
     } catch (err) {
         console.error('[API] update logging error:', err.message);
         res.status(500).json({ error: 'Failed to update logging settings.' });
     }
 });
+
+// ── API: website logs (dashboard admin-action audit trail) ──────────────────
+//
+// Each settings save records a row in website_logs (LOG_DATABASE_URL pool). The
+// General settings page fetches the most recent entries and renders them in a
+// table (sl no, admin username, content, time) beside the prefix card.
+
+app.get('/api/guilds/:guildId/logs/website', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const limit = parseInt(req.query.limit, 10) || 100;
+        const logs = await dashboardDb.getWebsiteLogs(req.guild.id, limit);
+        res.json({ logs });
+    } catch (err) {
+        console.error('[API] get website logs error:', err.message);
+        res.status(500).json({ error: 'Failed to load website logs.' });
+    }
+});
+
+// Record a website log entry for the current admin (fire-and-forget). Never
+// throws — a logging failure must not break the settings save it accompanies.
+function recordWebsiteLog(req, content) {
+    const user = req.session && req.session.user;
+    dashboardDb.addWebsiteLog(req.guild.id, {
+        adminUserId: user && user.id || '',
+        adminUsername: (user && (user.globalName || user.username)) || 'Unknown',
+        content,
+    }).catch(err => console.error('[API] website log write failed:', err.message));
+}
 
 // ── API: Premium Automod settings + warnings ─────────────────────────────────
 
@@ -582,6 +617,7 @@ app.patch('/api/guilds/:guildId/automod', requireAuth, requireGuildAdmin, async 
         if ('dmEnabled' in patch) patch.dmEnabled = patch.dmEnabled !== false;
         if ('appealChannelId' in patch) patch.appealChannelId = patch.appealChannelId || null;
         const updated = await dashboardDb.upsertAutomodSettings(req.guild.id, patch);
+        recordWebsiteLog(req, 'Updated automod settings');
         res.json({ automod: updated });
     } catch (err) {
         console.error('[API] update automod error:', err.message);
@@ -1319,6 +1355,8 @@ app.get('/guild/:guildId/welcome', requireAuth, requireGuildAdminPage, (req, res
     res.type('html').send(guildPages.welcomePage({ guild: req.guild, user: req.user })));
 app.get('/guild/:guildId/leveling', requireAuth, requireGuildAdminPage, (req, res) =>
     res.type('html').send(guildPages.levelingPage({ guild: req.guild, user: req.user })));
+app.get('/guild/:guildId/rolerewards', requireAuth, requireGuildAdminPage, (req, res) =>
+    res.type('html').send(guildPages.roleRewardsPage({ guild: req.guild, user: req.user })));
 app.get('/guild/:guildId/prefix', requireAuth, requireGuildAdminPage, (req, res) =>
     res.type('html').send(guildPages.prefixPage({ guild: req.guild, user: req.user })));
 app.get('/guild/:guildId/reactions', requireAuth, requireGuildAdminPage, (req, res) =>

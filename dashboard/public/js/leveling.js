@@ -1,8 +1,18 @@
-/* Leveling page — role rewards editor.
+/* Role Rewards page — role rewards editor (beta-gated).
  * Role rewards are persisted to the leveling database (LEVELING_DATABASE_URL)
  * and the bot re-reads them on its cache reload, so dashboard changes take
  * effect without a bot restart.
+ *
+ * When the guild is not a beta server, the page renders a blurred, locked view
+ * (see roleRewardsPage beta-locked-wrap). In that case this script exits early
+ * — no API calls, no bindings — so the overlay message is the only thing that
+ * works, mirroring events.js.
  */
+
+// Non-beta servers see a locked, read-only-blurred panel; do nothing.
+if (document.querySelector('.beta-locked-wrap.locked')) {
+  // Nothing to wire — the overlay covers the form.
+} else {
 
 const GUILD_ID = window.guildData?.guildId;
 
@@ -68,3 +78,5 @@ saveBar.register(saveRoleRewards);
 saveBar.track(document.body);
 
 bindLevRewardRemovals();
+
+} // end else (not beta-locked)
