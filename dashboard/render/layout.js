@@ -132,6 +132,12 @@ function render(opts) {
         .map((s) => `<script src="${esc(s)}"></script>`)
         .join('\n  ');
     const logoutScript = login ? '' : `<script>document.getElementById('logout-btn')?.addEventListener('click',()=>{window.location.href='/logout'});</script>`;
+    // Idle auto-logout: only on authenticated pages (the login page has no
+    // session). Injects the configured window (SESSION_IDLE_TIMEOUT_MS) and
+    // loads session-timeout.js, which drives the Page-Visibility countdown +
+    // heartbeat. See dashboard/public/js/session-timeout.js.
+    const idleTimeoutMs = parseInt(locals.idleTimeoutMs, 10) || constants.SESSION_IDLE_TIMEOUT_MS;
+    const idleScript = login ? '' : `<script>window.__PRIMEBOT_IDLE_TIMEOUT_MS__=${idleTimeoutMs};</script>\n  <script src="/js/session-timeout.js"></script>`;
 
     return `<!DOCTYPE html>
 <html lang="en">
@@ -153,6 +159,7 @@ function render(opts) {
   <div id="toast" class="toast toast-hidden"></div>
   <script src="/js/common.js"></script>
   ${scriptTags}
+  ${idleScript}
   ${logoutScript}
 </body>
 </html>`;
