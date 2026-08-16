@@ -1,7 +1,34 @@
 const config = require('../config');
-const { db } = require('../server/db');
+const { betaDb, betaPool } = require('../server/betaDb');
 const { betaSettings } = require('../shared/schema');
 const { eq } = require('drizzle-orm');
+
+// Self-create the beta_settings table on the beta pool (mirrors every other
+// settings manager — automod/events/live giveaways self-create their tables).
+// drizzle never runs DDL, so without this the table only exists if migration
+// 0002 + 0003 were applied manually to the BETA_DATABASE_URL. If the table is
+// missing, isAllowed/isEnabled throw and return false, so an approved+enabled
+// beta server gets treated as non-beta (locked overlay / 403 beta_required)
+// on the dashboard.
+const ENSURE_BETA_TABLE_SQL = `
+    CREATE TABLE IF NOT EXISTS beta_settings (
+        guild_id   VARCHAR(50) PRIMARY KEY,
+        enabled    BOOLEAN NOT NULL DEFAULT FALSE,
+        allowed    BOOLEAN NOT NULL DEFAULT FALSE,
+        updated_at TIMESTAMP DEFAULT NOW()
+    );
+`;
+
+let _tableEnsured = false;
+async function ensureBetaTable() {
+    if (_tableEnsured) return;
+    try {
+        await betaPool.query(ENSURE_BETA_TABLE_SQL);
+        _tableEnsured = true;
+    } catch (err) {
+        console.error('[BETA] ensureBetaTable failed:', err.message);
+    }
+}
 
 /**
  * Is this guild on the developer-approved beta access list? (async — DB)
@@ -10,8 +37,9 @@ const { eq } = require('drizzle-orm');
 async function isAllowed(guildId) {
     // Always allow servers listed in config as a hard-coded fallback
     if (Array.isArray(config.betaServers) && config.betaServers.includes(guildId)) return true;
+    await ensureBetaTable();
     try {
-        const rows = await db
+        const rows = await betaDb
             .select()
             .from(betaSettings)
             .where(eq(betaSettings.guildId, guildId))
@@ -31,8 +59,9 @@ async function isAllowed(guildId) {
  * Has this guild's owner opted in to beta? (async — DB)
  */
 async function isEnabled(guildId) {
+    await ensureBetaTable();
     try {
-        const rows = await db
+        const rows = await betaDb
             .select()
             .from(betaSettings)
             .where(eq(betaSettings.guildId, guildId))
@@ -51,7 +80,7 @@ async function isEnabled(guildId) {
  */
 async function allowServer(guildId) {
     try {
-        await db
+        await betaDb
             .insert(betaSettings)
             .values({ guildId, allowed: true, enabled: false, updatedAt: new Date() })
             .onConflictDoUpdate({
@@ -70,7 +99,7 @@ async function allowServer(guildId) {
  */
 async function denyServer(guildId) {
     try {
-        await db
+        await betaDb
             .insert(betaSettings)
             .values({ guildId, allowed: false, enabled: false, updatedAt: new Date() })
             .onConflictDoUpdate({
@@ -89,7 +118,7 @@ async function denyServer(guildId) {
  */
 async function listAllowedServers() {
     try {
-        const rows = await db
+        const rows = await betaDb
             .select()
             .from(betaSettings)
             .where(eq(betaSettings.allowed, true));
@@ -106,7 +135,7 @@ async function listAllowedServers() {
 async function enable(guildId) {
     if (!(await isAllowed(guildId))) return false;
     try {
-        await db
+        await betaDb
             .insert(betaSettings)
             .values({ guildId, enabled: true, allowed: true, updatedAt: new Date() })
             .onConflictDoUpdate({
@@ -125,7 +154,7 @@ async function enable(guildId) {
  */
 async function disable(guildId) {
     try {
-        await db
+        await betaDb
             .insert(betaSettings)
             .values({ guildId, enabled: false, updatedAt: new Date() })
             .onConflictDoUpdate({
