@@ -1390,7 +1390,7 @@ async function getEndedLiveGiveaways() {
     try {
         const p = getLivePool();
         const res = await p.query(`
-            SELECT g.giveaway_id, g.pass_code, g.prize, g.created_at, g.ends_at,
+            SELECT g.giveaway_id, g.pass_code, g.prize, g.created_at, g.ends_at, g.channel_id,
                    COALESCE(json_agg(w.user_id) FILTER (WHERE w.user_id IS NOT NULL), '[]') AS winners
             FROM live_giveaways g
             LEFT JOIN live_giveaway_winners w ON w.giveaway_id = g.giveaway_id
@@ -1404,6 +1404,7 @@ async function getEndedLiveGiveaways() {
             prize: r.prize,
             createdAt: r.created_at,
             endsAt: r.ends_at,
+            channelId: r.channel_id,
             winners: Array.isArray(r.winners) ? r.winners : [],
         }));
     } catch (err) {
@@ -1417,7 +1418,7 @@ async function getEndedLiveGiveaways() {
 async function getEndedLivePolls() {
     try {
         const res = await pool.query(`
-            SELECT p.poll_id, p.pass_code, p.question, p.created_at, p.expires_at,
+            SELECT p.poll_id, p.pass_code, p.question, p.created_at, p.expires_at, p.channel_id,
                    o.option_text, o.vote_count
             FROM live_polls p
             JOIN live_poll_options o ON o.poll_id = p.poll_id
@@ -1433,6 +1434,7 @@ async function getEndedLivePolls() {
                     question: r.question,
                     createdAt: r.created_at,
                     expiresAt: r.expires_at,
+                    channelId: r.channel_id,
                     options: [],
                 });
             }

@@ -47,6 +47,50 @@ async function initializeDatabase() {
 
 // db stays undefined until initializeDatabase() resolves — callers always check this.dbReady first
 
+// Self-create the live poll tables if they don't exist. drizzle (used for poll
+// CRUD) never runs DDL, so without this the tables only exist if the 0000
+// migration was applied. Matches LiveGiveawayManager's self-creating pattern.
+const LIVE_POLL_TABLES_SQL = `
+    CREATE TABLE IF NOT EXISTS "live_polls" (
+        id SERIAL PRIMARY KEY,
+        poll_id VARCHAR(100) NOT NULL UNIQUE,
+        pass_code VARCHAR(20) NOT NULL,
+        question TEXT NOT NULL,
+        creator_id VARCHAR(50) NOT NULL,
+        is_active BOOLEAN DEFAULT true,
+        allow_multiple_votes BOOLEAN DEFAULT false,
+        created_at TIMESTAMP DEFAULT NOW(),
+        expires_at TIMESTAMP,
+        message_id VARCHAR(50),
+        channel_id VARCHAR(50)
+    );
+    CREATE TABLE IF NOT EXISTS "live_poll_options" (
+        id SERIAL PRIMARY KEY,
+        poll_id VARCHAR(100) NOT NULL,
+        option_text TEXT NOT NULL,
+        option_index INTEGER NOT NULL,
+        vote_count INTEGER DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS "live_poll_votes" (
+        id SERIAL PRIMARY KEY,
+        poll_id VARCHAR(100) NOT NULL,
+        user_id VARCHAR(50) NOT NULL,
+        option_index INTEGER NOT NULL,
+        voted_at TIMESTAMP DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS "live_poll_options_poll_id_idx" ON "live_poll_options" ("poll_id");
+    CREATE INDEX IF NOT EXISTS "live_poll_votes_poll_id_idx" ON "live_poll_votes" ("poll_id");
+`;
+
+async function ensureLivePollTables(poolInstance) {
+    if (!poolInstance) return;
+    try {
+        await poolInstance.query(LIVE_POLL_TABLES_SQL);
+    } catch (err) {
+        console.error('[LIVE POLLS] ensureLivePollTables failed:', err.message);
+    }
+}
+
 class LivePollManager {
     constructor(client = null) {
         this.client = client;
@@ -81,6 +125,12 @@ class LivePollManager {
                     // Keep module-level db in sync for createLivePoll / vote helpers
                     if (!db) db = dbModule.db;
                     if (!global.livePollDb) global.livePollDb = dbModule.db;
+                    // Self-create the live poll tables (mirrors LiveGiveawayManager's
+                    // CREATE TABLE IF NOT EXISTS). drizzle never runs DDL, so if the
+                    // 0000 migration was never applied to this database the poll tables
+                    // would be absent — every poll query would fail and the dashboard
+                    // (which reads these same tables) would show no live polls.
+                    await ensureLivePollTables(this.db);
                     console.log('✅ Live poll database connection established');
                 } else {
                     console.log('⚠️ Live polls will use fallback mode (memory only)');

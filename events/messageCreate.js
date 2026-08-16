@@ -5673,7 +5673,7 @@ async function handleLiveGiveawayCreate(message, args, prefix, client) {
         if (giveaway) {
             const votingEmbed = client.liveGiveawayManager.createGiveawayEmbed(giveaway, 0);
             const buttons = client.liveGiveawayManager.createJoinButton(result.giveawayId);
-            const votingMessage = await message.channel.send({ embeds: [votingEmbed], components: buttons });
+            const votingMessage = await message.channel.send({ embeds: [votingEmbed], components: [buttons] });
             await client.liveGiveawayManager.updateGiveawayMessage(result.giveawayId, votingMessage.id, message.channel.id);
         }
     } catch (error) {
@@ -5703,7 +5703,7 @@ async function handleLiveGiveawayJoin(message, args, prefix, client) {
         }
         const embed = client.liveGiveawayManager.createGiveawayEmbed(giveaway, giveaway.participants.size);
         const buttons = client.liveGiveawayManager.createJoinButton(giveaway.giveawayId);
-        await message.reply({ embeds: [embed], components: buttons });
+        await message.reply({ embeds: [embed], components: [buttons] });
     } catch (error) {
         console.error('Error joining live giveaway:', error);
         return message.reply('There was an error accessing the giveaway. Please try again later.');

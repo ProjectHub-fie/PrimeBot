@@ -38,6 +38,7 @@ module.exports = {
     // Colors for embeds
     colors: {
         primary: '#5865F2', // Discord blurple color
+        secondary: '#4752C4', // Discord dark blurple (moderation/secondary)
         success: '#57F287', // Green color for success messages
         error: '#ED4245',   // Red color for error messages
         warning: '#FEE75C',  // Yellow color for warning messages

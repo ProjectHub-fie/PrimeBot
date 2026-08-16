@@ -384,7 +384,7 @@ module.exports = {
                             if (giveaway) {
                                 const embed = client.liveGiveawayManager.createGiveawayEmbed(giveaway, giveaway.participants.size);
                                 const buttons = client.liveGiveawayManager.createJoinButton(giveaway.giveawayId);
-                                await interaction.editReply({ embeds: [embed], components: buttons });
+                                await interaction.editReply({ embeds: [embed], components: [buttons] });
                             }
                             await interaction.followUp({ content: result.message, ephemeral: true }).catch(() => {});
                         } else {
