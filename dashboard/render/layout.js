@@ -89,6 +89,7 @@ function navHTML({ active, user, login }) {
     return `
     <header class="topbar">
       <div class="topbar-inner">
+        <a href="javascript:history.back()" class="back-btn" aria-label="Go back to previous page" title="Go back to previous page"><span class="back-symbol">←</span></a>
         <a href="/" class="brand">
           <span class="brand-mark">⚡</span>
           <span class="brand-name">PrimeBot</span>
