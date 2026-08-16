@@ -1,8 +1,17 @@
 /* Events page — create event schedules with timed tasks, list/start/cancel/delete.
  * Mirrors the old SPA bindEventsTab + bindEventCardActions + loadEventSchedules.
+ *
+ * When the guild is not a beta server, the page renders a blurred, locked view
+ * (see eventsPage beta-locked-wrap). In that case this script exits early — no
+ * API calls, no bindings — so the overlay message is the only thing that works.
  */
 
 const GUILD_ID = window.guildData?.guildId;
+
+// Non-beta servers see a locked, read-only-blurred panel; do nothing.
+if (document.querySelector('.beta-locked-wrap.locked')) {
+  // Nothing to wire — the overlay covers the form.
+} else {
 
 const EVENT_ACTIONS = [
   { key: 'lock',      label: 'Lock channel(s)',        icon: '🔒', needs: 'channels' },
@@ -177,3 +186,5 @@ document.getElementById('ev-save')?.addEventListener('click', async () => {
 });
 
 loadEventSchedules();
+
+} // end beta-gated else block

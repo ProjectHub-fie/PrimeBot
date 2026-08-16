@@ -24,7 +24,7 @@ const cookieParser = require('cookie-parser');
 const PgSession = require('connect-pg-simple')(session);
 
 const discord = require('./discord');
-const { requireAuth, requireGuildAdmin, requireGuildAdminPage } = require('./auth');
+const { requireAuth, requireGuildAdmin, requireGuildAdminPage, requireBeta } = require('./auth');
 const dashboardDb = require('./db');
 const constants = require('./constants');
 const pages = require('./render/pages');
@@ -1149,7 +1149,7 @@ app.get('/api/guilds/:guildId/events', requireAuth, requireGuildAdmin, async (re
     }
 });
 
-app.post('/api/guilds/:guildId/events', requireAuth, requireGuildAdmin, async (req, res) => {
+app.post('/api/guilds/:guildId/events', requireAuth, requireGuildAdmin, requireBeta, async (req, res) => {
     try {
         const schedule = await dashboardDb.createEventSchedule(req.guild.id, req.body || {}, req.user.id);
         res.json({ schedule });
@@ -1159,7 +1159,7 @@ app.post('/api/guilds/:guildId/events', requireAuth, requireGuildAdmin, async (r
     }
 });
 
-app.patch('/api/guilds/:guildId/events/:id', requireAuth, requireGuildAdmin, async (req, res) => {
+app.patch('/api/guilds/:guildId/events/:id', requireAuth, requireGuildAdmin, requireBeta, async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);
         if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid event id.' });
@@ -1171,7 +1171,7 @@ app.patch('/api/guilds/:guildId/events/:id', requireAuth, requireGuildAdmin, asy
     }
 });
 
-app.delete('/api/guilds/:guildId/events/:id', requireAuth, requireGuildAdmin, async (req, res) => {
+app.delete('/api/guilds/:guildId/events/:id', requireAuth, requireGuildAdmin, requireBeta, async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);
         if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid event id.' });
@@ -1183,7 +1183,7 @@ app.delete('/api/guilds/:guildId/events/:id', requireAuth, requireGuildAdmin, as
     }
 });
 
-app.post('/api/guilds/:guildId/events/:id/start', requireAuth, requireGuildAdmin, async (req, res) => {
+app.post('/api/guilds/:guildId/events/:id/start', requireAuth, requireGuildAdmin, requireBeta, async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);
         if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid event id.' });
@@ -1195,7 +1195,7 @@ app.post('/api/guilds/:guildId/events/:id/start', requireAuth, requireGuildAdmin
     }
 });
 
-app.post('/api/guilds/:guildId/events/:id/cancel', requireAuth, requireGuildAdmin, async (req, res) => {
+app.post('/api/guilds/:guildId/events/:id/cancel', requireAuth, requireGuildAdmin, requireBeta, async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);
         if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid event id.' });
