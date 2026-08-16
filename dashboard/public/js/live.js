@@ -93,23 +93,22 @@ function openJoinModal(key, kind) {
 }
 
 async function loadLive() {
+  // Each live page sets window.liveKind ('poll' | 'giveaway') via an inline
+  // script so this one script serves both the polls and giveaways pages.
+  const kind = window.liveKind === 'giveaway' ? 'giveaway' : 'poll';
+  const wrap = document.getElementById('live-content');
+  if (!wrap) return;
   try {
-    const data = await api('/api/live');
-    const wrap = document.getElementById('live-content');
-    if (!wrap) return;
-    const polls = data.runningPolls || [];
-    const giveaways = data.runningGiveaways || [];
-    const endedPolls = data.endedPolls || [];
-    const endedGiveaways = data.endedGiveaways || [];
-    wrap.innerHTML = `
-      ${livePanelHTML('📊 Live Polls', polls, endedPolls, 'poll')}
-      ${livePanelHTML('🎉 Live Giveaways', giveaways, endedGiveaways, 'giveaway')}`;
+    const data = await api(kind === 'poll' ? '/api/live/polls' : '/api/live/giveaways');
+    const items = data.running || [];
+    const ended = data.ended || [];
+    const title = kind === 'poll' ? '📊 Live Polls' : '🎉 Live Giveaways';
+    wrap.innerHTML = livePanelHTML(title, items, ended, kind);
     wrap.querySelectorAll('.live-join-btn').forEach(btn => {
       btn.addEventListener('click', () => openJoinModal(btn.dataset.key, btn.dataset.kind));
     });
   } catch (err) {
-    const wrap = document.getElementById('live-content');
-    if (wrap) wrap.innerHTML = `<div class="card"><div class="alert alert-error">${esc(err.message || 'Failed to load live data.')}</div></div>`;
+    wrap.innerHTML = `<div class="card"><div class="alert alert-error">${esc(err.message || 'Failed to load live data.')}</div></div>`;
   }
 }
 

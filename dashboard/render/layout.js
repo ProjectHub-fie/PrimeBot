@@ -97,7 +97,9 @@ function navHTML({ active, user, login }) {
         <nav class="topnav">
           ${link('/', 'Servers', 'servers')}
           ${link('/dashboard', 'Overview', 'overview')}
-          ${link('/live', 'Live', 'live')}
+          ${link('/stats', 'Stats', 'stats')}
+          ${link('/live/polls', 'Live Polls', 'live-polls')}
+          ${link('/live/giveaways', 'Live Giveaways', 'live-giveaways')}
           ${link('/docs', 'Docs', 'docs')}
           ${userMenu}
         </nav>
