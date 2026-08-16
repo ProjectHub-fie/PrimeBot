@@ -150,7 +150,7 @@ function render(opts) {
   <footer class="footer">
     <span>PrimeBot <span id="bot-version">${esc(version)}</span> · Control panel for server admins</span>
   </footer>
-  <div id="toast" class="toast hidden"></div>
+  <div id="toast" class="toast toast-hidden"></div>
   <script src="/js/common.js"></script>
   ${scriptTags}
   ${logoutScript}
