@@ -10,6 +10,7 @@ const discord = require('./discord');
 const pages = require('./render/pages');
 const L = require('./render/layout');
 const dashboardDb = require('./db');
+const betaManager = require('../utils/betaManager');
 
 function requireAuth(req, res, next) {
     if (req.session && req.session.user) {
@@ -185,6 +186,9 @@ async function requireGuildAdminPage(req, res, next) {
         req.guild._channels = channels;
         req.guild._roles = roles;
         req.guild._config = config;
+        // Beta access flag (allowed && enabled). Used to gate the Events tab/page/API.
+        // Degrades to false on any DB error so non-beta servers see the locked state.
+        req.guild._beta = await betaManager.canAccess(req.guild.id).catch(() => false);
         next();
     } catch (err) {
         console.error('[AUTH] requireGuildAdminPage error:', err.message);
@@ -197,4 +201,22 @@ async function requireGuildAdminPage(req, res, next) {
     }
 }
 
-module.exports = { requireAuth, requireGuildAdmin, requireGuildAdminPage };
+/**
+ * Guard for beta-only guild features (e.g. Events). Verifies the guild has beta
+ * access (allowed && enabled). Must run AFTER requireGuildAdmin so req.guild is
+ * set. Returns 403 JSON for API routes; for page routes use the locked render.
+ */
+async function requireBeta(req, res, next) {
+    try {
+        const allowed = await betaManager.canAccess(req.guild.id).catch(() => false);
+        if (!allowed) {
+            return res.status(403).json({ error: 'This feature is in beta and not enabled for this server.', reason: 'beta_required' });
+        }
+        next();
+    } catch (err) {
+        console.error('[AUTH] requireBeta error:', err.message);
+        return res.status(403).json({ error: 'Beta access could not be verified.', reason: 'beta_required' });
+    }
+}
+
+module.exports = { requireAuth, requireGuildAdmin, requireGuildAdminPage, requireBeta };

@@ -45,9 +45,10 @@ const mockAuth = {
         next();
     },
     requireGuildAdminPage: (req, res, next) => {
-        req.guild = { id: req.params.guildId, name:'Test Guild', approximate_member_count: 42, _channels:[{id:'111-ch1',name:'general',type:0}], _roles:[], _config:{ server:{}, welcome:{}, leveling:{} } };
+        req.guild = { id: req.params.guildId, name:'Test Guild', approximate_member_count: 42, _channels:[{id:'111-ch1',name:'general',type:0}], _roles:[], _config:{ server:{}, welcome:{}, leveling:{} }, _beta: true };
         next();
     },
+    requireBeta: (req, res, next) => next(),
 };
 
 const origResolve = Module._resolveFilename;

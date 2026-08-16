@@ -572,6 +572,70 @@ input[type="color"] {
   border-top: 1px solid var(--border-soft);
 }
 
+/* ── Discord-style floating "Save changes" bar ─────────────────────────── */
+/* Slides up from the bottom when the user edits a settings field. Mirrors
+   Discord's settings footer: a label + a green "Save" box and a borderless
+   red "Reset" text link. */
+.save-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 12px 16px 12px 20px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
+  transition: transform 0.18s ease, opacity 0.18s ease;
+}
+.save-bar.hidden {
+  transform: translate(-50%, 140%);
+  opacity: 0;
+  pointer-events: none;
+}
+.save-bar-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+.save-bar-actions { display: flex; align-items: center; gap: 14px; }
+.save-bar-save {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 20px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: var(--green);
+  color: #0b0d12;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: filter 0.15s, transform 0.05s;
+}
+.save-bar-save:hover { filter: brightness(0.95); }
+.save-bar-save:active { transform: translateY(1px); }
+.save-bar-save:disabled { opacity: 0.6; cursor: not-allowed; }
+.save-bar-reset {
+  background: none;
+  border: none;
+  padding: 8px 4px;
+  color: var(--red);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.save-bar-reset:hover { text-decoration: underline; }
+@media (max-width: 600px) {
+  .save-bar { gap: 12px; padding: 10px 12px; bottom: 12px; max-width: calc(100vw - 24px); }
+  .save-bar-label { font-size: 13px; }
+}
+
 /* Reactions list */
 .reactions-list {
   display: flex;
@@ -819,6 +883,47 @@ input[type="color"] {
 
 .tab-panel { display: none; }
 .tab-panel.active { display: block; }
+
+/* ── Beta-locked panel (e.g. Events for non-beta servers) ────────────────── */
+/* The feature content is blurred and an overlay with a "join support server"
+   message covers it, so the tab is visible but unusable until beta is enabled. */
+.beta-locked-card { position: relative; overflow: hidden; }
+.beta-locked-wrap.locked {
+  filter: blur(4px);
+  opacity: 0.45;
+  pointer-events: none;
+  user-select: none;
+}
+.beta-locked-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 5;
+  background: rgba(11, 13, 18, 0.35);
+}
+.beta-locked-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 28px 32px;
+  max-width: 440px;
+  text-align: center;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.beta-locked-icon { font-size: 34px; }
+.beta-locked-text {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.5;
+}
 
 /* Alert / banner */
 .alert {

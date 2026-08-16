@@ -107,10 +107,6 @@ function welcomePanelHTML(w, channels) {
         <label class="field-label" for="welcome-footer">Custom footer (optional)</label>
         <input type="text" id="welcome-footer" value="${esc(s.customFooter || '')}" placeholder="Powered by PrimeBot" />
       </div>
-
-      <div class="form-actions">
-        <button class="btn btn-primary" data-save="welcome">Save welcome settings</button>
-      </div>
     </div>`;
 }
 
@@ -158,10 +154,6 @@ function levelingPage({ guild, user }) {
         <input type="number" id="leveling-cooldown" min="5" max="300" step="1" value="${esc(lev.xpCooldown ? lev.xpCooldown / 1000 : 60)}" />
         <div class="field-hint">Time between XP gains per user (5 – 300 seconds).</div>
       </div>
-
-      <div class="form-actions">
-        <button class="btn btn-primary" data-save="leveling">Save leveling settings</button>
-      </div>
     </div>
 
     <div class="card">
@@ -169,9 +161,6 @@ function levelingPage({ guild, user }) {
       <p class="card-desc">Automatically grant a role when a member reaches a level. Roles are saved to the database and persist across bot restarts.</p>
       <div id="lev-rewards-list">${rewardRows}</div>
       <button class="btn btn-secondary" id="lev-reward-add" type="button">+ Add reward</button>
-      <div class="form-actions">
-        <button class="btn btn-primary" id="lev-rewards-save">Save role rewards</button>
-      </div>
     </div>`;
     return guildTab({ guild, user, active: 'leveling', panelHTML, scripts: ['/js/guild-common.js', '/js/settings-basic.js', '/js/leveling.js'] });
 }
@@ -198,9 +187,6 @@ function prefixPage({ guild, user }) {
         <label class="field-label" for="prefix-value">Prefix</label>
         <input type="text" id="prefix-value" maxlength="3" value="${esc(prefix)}" style="max-width:120px" />
         <div class="field-hint">Members will type this before text commands, e.g. <code>${esc(prefix)}help</code></div>
-      </div>
-      <div class="form-actions">
-        <button class="btn btn-primary" data-save="prefix">Save prefix</button>
       </div>
     </div>`;
     return guildTab({ guild, user, active: 'prefix', panelHTML, scripts: ['/js/guild-common.js', '/js/settings-basic.js'] });
@@ -239,10 +225,6 @@ function reactionsPage({ guild, user }) {
         <button class="btn btn-secondary" id="reaction-add">+ Add rule</button>
         <div class="field-hint">Trigger is matched as a substring of the message.</div>
       </div>
-
-      <div class="form-actions">
-        <button class="btn btn-primary" data-save="reactions">Save auto-reactions</button>
-      </div>
     </div>`;
     return guildTab({ guild, user, active: 'reactions', panelHTML, scripts: ['/js/guild-common.js', '/js/settings-basic.js'] });
 }
@@ -268,10 +250,6 @@ function broadcastPage({ guild, user }) {
         <label class="field-label" for="broadcast-channel">Broadcast channel</label>
         <select id="broadcast-channel" data-channel-select>${channelOptions(guild._channels, server?.broadcastChannelId)}</select>
         <div class="field-hint">Where broadcast messages are posted.</div>
-      </div>
-
-      <div class="form-actions">
-        <button class="btn btn-primary" data-save="broadcast">Save broadcast settings</button>
       </div>
     </div>`;
     return guildTab({ guild, user, active: 'broadcast', panelHTML, scripts: ['/js/guild-common.js', '/js/settings-basic.js'] });
@@ -345,10 +323,6 @@ function loggingPanelHTML(logging, channels) {
         <label class="field-label">Logged events</label>
         <div class="event-grid">${eventToggles}</div>
         <div class="field-hint">Choose which event types generate a log embed.</div>
-      </div>
-
-      <div class="form-actions">
-        <button class="btn btn-primary" data-save="logging">Save logging settings</button>
       </div>
     </div>`;
 }
@@ -781,10 +755,6 @@ function automodPage({ guild, user }) {
         <select id="am-appeal-channel" data-channel-select>${channelOptions(guild._channels, s.appealChannelId)}</select>
         <div class="field-hint">New appeals filed via <code>/appeal</code> are posted here for moderators to review.</div>
       </div>
-
-      <div class="form-actions">
-        <button class="btn btn-primary" data-save="automod">Save automod settings</button>
-      </div>
     </div>
 
     <div class="card">
@@ -812,28 +782,40 @@ function automodPage({ guild, user }) {
 
 // ── Events ──────────────────────────────────────────────────────────────────
 
+const EVENTS_BETA_MSG = 'This server isn’t a beta server yet. Join support server to gain beta access';
+
 function eventsPage({ guild, user }) {
     const panelHTML = `
-    <div class="card">
+    <div class="card${guild._beta ? '' : ' beta-locked-card'}">
       <div class="card-title"><span><span class="icon">📅</span> Event Management <span class="beta-badge">BETA</span></span></div>
       <div class="beta-banner">🧪 This feature is in beta — expect changes. Please report any issues.</div>
-      <p>Schedule an event with a countdown and a list of timed tasks. The bot will lock/unlock or hide/unhide the channel(s) you choose (pick one, or hold Ctrl/Cmd to select several), add/remove roles, or send a text/embed message at the offsets you set (seconds from the event start).</p>
-      <div class="ev-form" id="ev-form">
-        <div class="form-row">
-          <label>Event name<input type="text" id="ev-name" placeholder="e.g. Game Night" /></label>
-          <label>Countdown (seconds)<input type="number" id="ev-countdown" min="0" value="0" /></label>
+      <div class="beta-locked-wrap${guild._beta ? '' : ' locked'}">
+        <p>Schedule an event with a countdown and a list of timed tasks. The bot will lock/unlock or hide/unhide the channel(s) you choose (pick one, or hold Ctrl/Cmd to select several), add/remove roles, or send a text/embed message at the offsets you set (seconds from the event start).</p>
+        <div class="ev-form" id="ev-form">
+          <div class="form-row">
+            <label>Event name<input type="text" id="ev-name" placeholder="e.g. Game Night" /></label>
+            <label>Countdown (seconds)<input type="number" id="ev-countdown" min="0" value="0" /></label>
+          </div>
+          <label>Description <textarea id="ev-description" rows="2" placeholder="Optional description"></textarea></label>
+          <h4 class="ev-tasks-head">Tasks</h4>
+          <div id="ev-tasks-list"></div>
+          <button class="btn btn-secondary" id="ev-add-task">+ Add task</button>
+          <div class="form-actions">
+            <button class="btn btn-primary" id="ev-save">Create event</button>
+            <button class="btn btn-secondary" id="ev-clear">Clear</button>
+          </div>
         </div>
-        <label>Description <textarea id="ev-description" rows="2" placeholder="Optional description"></textarea></label>
-        <h4 class="ev-tasks-head">Tasks</h4>
-        <div id="ev-tasks-list"></div>
-        <button class="btn btn-secondary" id="ev-add-task">+ Add task</button>
-        <div class="form-actions">
-          <button class="btn btn-primary" id="ev-save">Create event</button>
-          <button class="btn btn-secondary" id="ev-clear">Clear</button>
-        </div>
+        <h3 class="ev-list-head">Scheduled events</h3>
+        <div id="ev-list"><p class="live-empty">Loading…</p></div>
       </div>
-      <h3 class="ev-list-head">Scheduled events</h3>
-      <div id="ev-list"><p class="live-empty">Loading…</p></div>
+      ${guild._beta ? '' : `
+        <div class="beta-locked-overlay">
+          <div class="beta-locked-box">
+            <div class="beta-locked-icon">🔒</div>
+            <div class="beta-locked-text">${esc(EVENTS_BETA_MSG)}</div>
+            <a class="btn btn-discord" href="https://discord.gg/gd7UNSfX86" target="_blank" rel="noopener">Join support server</a>
+          </div>
+        </div>`}
     </div>
     <div id="ev-modal" class="modal-overlay hidden"></div>`;
     return guildTab({ guild, user, active: 'events', panelHTML, scripts: ['/js/guild-common.js', '/js/events.js'] });

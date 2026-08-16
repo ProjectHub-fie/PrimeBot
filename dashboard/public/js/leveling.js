@@ -32,10 +32,11 @@ document.getElementById('lev-reward-add')?.addEventListener('click', () => {
   list.appendChild(tpl.firstElementChild);
   window.populateRoleSelects?.();
   bindLevRewardRemovals();
+  saveBar.markDirty();
 });
 
-document.getElementById('lev-rewards-save')?.addEventListener('click', async (e) => {
-  const btn = e.currentTarget;
+// Collect the current role-reward rows into a deduped, ordered list.
+function readRoleRewards() {
   const rewards = [];
   const seen = new Set();
   document.querySelectorAll('#lev-rewards-list .lev-reward-row').forEach(row => {
@@ -46,25 +47,24 @@ document.getElementById('lev-rewards-save')?.addEventListener('click', async (e)
       rewards.push({ level, roleId });
     }
   });
-  btn.disabled = true;
-  const orig = btn.textContent;
-  btn.textContent = 'Saving…';
-  try {
-    await api(`/api/guilds/${GUILD_ID}/leveling/rolerewards`, { method: 'PUT', body: JSON.stringify({ roleRewards: rewards }) });
-    toast('Role rewards saved', 'success');
-    // Re-render from the server response so the list reflects dedupe + order.
-    const list = document.getElementById('lev-rewards-list');
-    if (list) {
-      list.innerHTML = rewards.slice().sort((a, b) => a.level - b.level).map(levRewardRowHTML).join('');
-      window.populateRoleSelects?.();
-      bindLevRewardRemovals();
-    }
-  } catch (err) {
-    toast(err.message || 'Failed to save role rewards', 'error');
-  } finally {
-    btn.disabled = false;
-    btn.textContent = orig;
+  return rewards;
+}
+
+async function saveRoleRewards() {
+  const rewards = readRoleRewards();
+  await api(`/api/guilds/${GUILD_ID}/leveling/rolerewards`, { method: 'PUT', body: JSON.stringify({ roleRewards: rewards }) });
+  // Re-render from the collected values so the list reflects dedupe + order.
+  const list = document.getElementById('lev-rewards-list');
+  if (list) {
+    list.innerHTML = rewards.slice().sort((a, b) => a.level - b.level).map(levRewardRowHTML).join('');
+    window.populateRoleSelects?.();
+    bindLevRewardRemovals();
   }
-});
+}
+
+// Register with the floating save bar (the leveling page also registers the
+// main leveling-settings saver via settings-basic.js).
+saveBar.register(saveRoleRewards);
+saveBar.track(document.body);
 
 bindLevRewardRemovals();

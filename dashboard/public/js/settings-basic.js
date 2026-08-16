@@ -1,5 +1,8 @@
 /* Welcome / leveling / prefix / reactions / broadcast settings pages.
- * Wires the [data-save] buttons to PATCH the right /api endpoint.
+ * Wires the floating "Save changes" bar (window.saveBar) to PATCH the right
+ * /api endpoint for whichever section is on this page. The page tracks the
+ * whole document for edits; when a field changes the bar appears, and Save
+ * runs every registered saver.
  */
 
 bindColorSync('welcome-color', 'welcome-color-text');
@@ -18,6 +21,7 @@ document.getElementById('reaction-add')?.addEventListener('click', () => {
        <button class="reaction-remove" type="button">✕</button>
      </div>`);
   bindReactionRemovals();
+  saveBar.markDirty();
 });
 
 const GUILD_ID = window.guildData?.guildId;
@@ -93,4 +97,26 @@ async function saveSettings(kind) {
   }
 }
 
-bindSaveButtons(document, saveSettings);
+// Register the saver(s) for whichever section is present on this page. Each
+// page only renders one section's form, so we detect by element presence.
+if (document.getElementById('welcome-enabled')) {
+  saveBar.register(() => saveSettings('welcome'));
+}
+if (document.getElementById('leveling-enabled')) {
+  saveBar.register(() => saveSettings('leveling'));
+}
+if (document.getElementById('prefix-value')) {
+  saveBar.register(() => saveSettings('prefix'));
+}
+if (document.getElementById('reactions-enabled')) {
+  saveBar.register(() => saveSettings('reactions'));
+}
+if (document.getElementById('broadcast-enabled')) {
+  saveBar.register(() => saveSettings('broadcast'));
+}
+if (document.getElementById('logging-enabled')) {
+  saveBar.register(() => saveSettings('logging'));
+}
+
+// Track the whole settings area for edits so the floating bar appears.
+saveBar.track(document.body);

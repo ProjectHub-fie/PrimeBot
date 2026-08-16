@@ -162,6 +162,9 @@ document.getElementById('am-add-rule')?.addEventListener('click', () => {
 document.getElementById('am-refresh-warnings')?.addEventListener('click', (e) => { e.preventDefault(); refreshAmWarnings(); });
 document.getElementById('am-refresh-appeals')?.addEventListener('click', (e) => { e.preventDefault(); refreshAmAppeals(); });
 
+// Adding a rule is an edit — surface the floating save bar.
+document.getElementById('am-add-rule')?.addEventListener('click', () => saveBar.markDirty());
+
 async function saveSettings(kind) {
   if (kind !== 'automod') return;
   const exemptRoleIds = [];
@@ -192,6 +195,7 @@ async function saveSettings(kind) {
   await api(`/api/guilds/${GUILD_ID}/automod`, { method: 'PATCH', body: JSON.stringify(body) });
 }
 
-bindSaveButtons(document, saveSettings);
+saveBar.register(() => saveSettings('automod'));
+saveBar.track(document.body);
 refreshAmWarnings();
 refreshAmAppeals();
