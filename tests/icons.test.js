@@ -34,6 +34,62 @@ test('ICONS catalog has every name referenced by the dashboard tabs', () => {
     }
 });
 
+test('ICONS catalog has every iconName referenced by the automod rule/action catalogs', () => {
+    const { RULES, ACTIONS } = require('../utils/automodRules');
+    for (const r of RULES) {
+        assert.ok(r.iconName, `rule ${r.key} missing iconName`);
+        assert.ok(ICONS[r.iconName], `rule ${r.key} references missing SVG icon "${r.iconName}"`);
+    }
+    for (const a of ACTIONS) {
+        assert.ok(a.iconName, `action ${a.key} missing iconName`);
+        assert.ok(ICONS[a.iconName], `action ${a.key} references missing SVG icon "${a.iconName}"`);
+    }
+});
+
+test('ICONS catalog has every iconName referenced by the logging event catalog', () => {
+    const { LOG_EVENTS } = require('../utils/logEvents');
+    for (const e of LOG_EVENTS) {
+        assert.ok(e.iconName, `log event ${e.key} missing iconName`);
+        assert.ok(ICONS[e.iconName], `log event ${e.key} references missing SVG icon "${e.iconName}"`);
+    }
+});
+
+test('automod + logging pages render rule/event toggles with SVG icons (not emoji)', () => {
+    const guildPages = require('../dashboard/render/guild-pages');
+    const guild = {
+        id: '1', name: 'Test', icon: null,
+        _config: {
+            server: {}, welcome: {},
+            logging: { enabled: false, events: ['memberJoin', 'messageDelete'] },
+            automod: {
+                enabled: true,
+                rules: [
+                    { type: 'blockedWords', enabled: true, actions: ['delete', 'warn'], words: ['bad'] },
+                    { type: 'mentions', enabled: true, actions: ['warn'], threshold: 5 },
+                ],
+                warnActions: ['timeout'],
+                dmMessages: { warn: 'custom' },
+            },
+        },
+        _channels: [], _roles: [],
+    };
+    const amHTML = guildPages.automodPage({ guild, user: { username: 'u' } });
+    // Rule labels, action checkboxes, add-rule options, warn-actions, DM rows,
+    // and the remove buttons are all SVG now — no catalog emoji leaked.
+    assert.match(amHTML, /am-rule-label">\s*<svg class="ico"/);
+    assert.match(amHTML, /am-action-label[\s\S]*?<svg class="ico"/);
+    assert.match(amHTML, /am-warn-action[\s\S]*?<svg class="ico"/);
+    assert.match(amHTML, /am-remove[\s\S]*?<svg class="ico"/);
+    assert.match(amHTML, /id="am-add-rule">[\s\S]*?<svg class="ico"/);
+    assert.doesNotMatch(amHTML, /am-rule-label">🚫/);
+    assert.doesNotMatch(amHTML, /switch-text">🗑️/);
+
+    const logHTML = guildPages.loggingPage({ guild, user: { username: 'u' } });
+    assert.match(logHTML, /class="log-event"[\s\S]*?<svg class="ico"/);
+    assert.doesNotMatch(logHTML, /switch-text">🟢/);
+    assert.doesNotMatch(logHTML, /switch-text">🗑️/);
+});
+
 test('server-rendered login page contains SVG icons (not emoji)', () => {
     const { loginPage } = require('../dashboard/render/pages');
     const html = loginPage({});

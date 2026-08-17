@@ -45,7 +45,7 @@ module.exports = {
     COLORS: config.colors,
 
     // Loggable event types shared with the bot (utils/logEvents.js).
-    // Each entry: { key, label, icon, color, category }.
+    // Each entry: { key, label, icon (emoji, for bot embeds), iconName (SVG, for the dashboard), color, category }.
     LOG_EVENTS,
 
     // Automod rule types + actions shared with the bot (utils/automodRules.js).

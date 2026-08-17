@@ -471,7 +471,7 @@ function loggingPanelHTML(logging, channels) {
         <label class="switch mini">
           <input type="checkbox" class="log-event" data-event="${esc(e.key)}" ${enabled.has(e.key) ? 'checked' : ''}/>
           <span class="slider"></span>
-          <span class="switch-text">${e.icon} ${esc(e.label)}</span>
+          <span class="switch-text">${svgIcon(e.iconName)} ${esc(e.label)}</span>
         </label>`).join('');
         return `<div class="event-group"><div class="event-group-title">${esc(cat)}</div>${items}</div>`;
     }).join('');
@@ -946,7 +946,7 @@ function automodPage({ guild, user }) {
         const meta = AUTOMOD_RULES.find(r => r.key === rule.type) || AUTOMOD_RULES[0];
         const selected = Array.isArray(rule.actions) && rule.actions.length ? rule.actions : (rule.action ? [rule.action] : ['delete']);
         const actionChecks = AUTOMOD_ACTIONS.map(a =>
-            `<label class="switch mini am-action-label"><input type="checkbox" class="am-action" value="${a.key}" ${selected.includes(a.key) ? 'checked' : ''}/><span class="switch-text">${a.icon} ${esc(a.label)}</span></label>`
+            `<label class="switch mini am-action-label"><input type="checkbox" class="am-action" value="${a.key}" ${selected.includes(a.key) ? 'checked' : ''}/><span class="switch-text">${svgIcon(a.iconName)} ${esc(a.label)}</span></label>`
         ).join('');
         let extra = '';
         if (meta.params.includes('words')) extra = `<input type="text" class="am-words" value="${esc((rule.words || []).join(', '))}" placeholder="extra domains/terms (comma-separated)" />`;
@@ -955,19 +955,19 @@ function automodPage({ guild, user }) {
         return `
       <div class="reaction-row am-rule-row" data-type="${esc(meta.key)}">
         <label class="switch mini"><input type="checkbox" class="am-enabled" ${rule.enabled !== false ? 'checked' : ''}/><span class="slider"></span></label>
-        <span class="am-rule-label">${meta.icon} ${esc(meta.label)}</span>
+        <span class="am-rule-label">${svgIcon(meta.iconName)} ${esc(meta.label)}</span>
         <div class="am-actions-group">${actionChecks}</div>
         ${extra}
-        <button class="reaction-remove am-remove" type="button">✕</button>
+        <button class="reaction-remove am-remove" type="button">${svgIcon('x')}</button>
       </div>`;
     }).join('');
-    const addTypeOpts = AUTOMOD_RULES.map(r => `<option value="${r.key}">${r.icon} ${esc(r.label)}</option>`).join('');
+    const addTypeOpts = AUTOMOD_RULES.map(r => `<option value="${r.key}">${svgIcon(r.iconName, 'am-opt-ico')} ${esc(r.label)}</option>`).join('');
     const warnActionChecks = warnActions.map(a =>
-        `<label class="switch mini am-action-label"><input type="checkbox" class="am-warn-action" value="${a.key}" ${(s.warnActions || [s.warnAction || 'timeout']).includes(a.key) ? 'checked' : ''}/><span class="switch-text">${a.icon} ${esc(a.label)}</span></label>`
+        `<label class="switch mini am-action-label"><input type="checkbox" class="am-warn-action" value="${a.key}" ${(s.warnActions || [s.warnAction || 'timeout']).includes(a.key) ? 'checked' : ''}/><span class="switch-text">${svgIcon(a.iconName)} ${esc(a.label)}</span></label>`
     ).join('');
     const dmRows = dmKeys.map(k => {
         const a = AUTOMOD_ACTIONS.find(x => x.key === k);
-        const label = a ? `${a.icon} ${a.label}` : (k === 'escalation' ? '🚫 Escalation' : k);
+        const label = a ? `${svgIcon(a.iconName)} ${a.label}` : (k === 'escalation' ? `${svgIcon('octagonX')} Escalation` : k);
         return `<div class="field-row"><label class="field-label" style="min-width:120px">${label}</label><input type="text" class="am-dm-message" data-key="${k}" value="${esc(dmMessages[k] || '')}" placeholder="(use default)" style="flex:1"/></div>`;
     }).join('');
 
@@ -1010,7 +1010,7 @@ function automodPage({ guild, user }) {
         <div class="reactions-list" id="am-rules-list">${ruleRows}</div>
         <div style="display:flex; gap:8px; align-items:center; margin-top:8px">
           <select id="am-add-type">${addTypeOpts}</select>
-          <button class="btn btn-secondary" id="am-add-rule">+ Add rule</button>
+          <button class="btn btn-secondary" id="am-add-rule">${svgIcon('plus')} Add rule</button>
         </div>
         <div class="field-hint">Select one or more actions per rule. "Delete" is always applied first when chosen.</div>
       </div>
