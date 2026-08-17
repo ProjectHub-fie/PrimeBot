@@ -6,7 +6,7 @@ const {
 const { ticketPool } = require('../server/ticketDb');
 
 /**
- * Premium ticket panels — configurable ONLY from the dashboard.
+ * Premium ticket panels ŌĆö configurable ONLY from the dashboard.
  *
  * A "panel" is a message (embed or plain text) the bot posts to a channel,
  * carrying an "Open Ticket" button. When a member clicks it the bot opens a
@@ -19,7 +19,7 @@ const { ticketPool } = require('../server/ticketDb');
  * DB, and a setInterval re-read (~30s + 5s) so dashboard saves take effect
  * without a bot restart.
  *
- * Commands are intentionally disabled from creating/configuring panels — the
+ * Commands are intentionally disabled from creating/configuring panels ŌĆö the
  * only way to build a panel is the dashboard's 🎫 Tickets tab. The slash/prefix
  * ticket commands reply with a fixed notice (see commands/ticket.js etc.).
  */
@@ -54,8 +54,10 @@ const CREATE_TABLE_SQL = `
         welcome_message        TEXT,
         close_button_label     VARCHAR(80) DEFAULT 'Close Ticket',
         close_button_emoji     VARCHAR(100),
+        close_button_style     VARCHAR(20) DEFAULT 'Danger',
         claim_button_label     VARCHAR(80),
         claim_button_emoji     VARCHAR(100),
+        close_flow             JSONB,
         enabled             BOOLEAN NOT NULL DEFAULT true,
         created_by          VARCHAR(50),
         created_at          TIMESTAMP DEFAULT NOW(),
@@ -92,11 +94,108 @@ const VALID_BUTTON_STYLES = new Set(['Primary', 'Secondary', 'Success', 'Danger'
 const VALID_MESSAGE_TYPES = new Set(['embed', 'plain']);
 
 // Placeholders available in ticket channel name templates.
-//   {name}     → panel.ticketName (or the opener's username if unset)
-//   {username} → opener's username
-//   {id}       → opener's user id
-//   {panel}    → panel.name
+//   {name}     ŌåÆ panel.ticketName (or the opener's username if unset)
+//   {username} ŌåÆ opener's username
+//   {id}       ŌåÆ opener's user id
+//   {panel}    ŌåÆ panel.name
 const NAME_PLACEHOLDERS = ['{name}', '{username}', '{id}', '{panel}'];
+
+// Placeholders available in the close embed text (title / description / footer).
+//   {time}      ŌåÆ "Mon Aug 17 2026 15:17 +00:00" (human-readable close time)
+//   {timestamp} ŌåÆ <t:...:R> Discord relative-time tag
+//   {author}    ŌåÆ ticket opener mention
+//   {moderator} ŌåÆ the user who closed the ticket (mention)
+//   {panel}    ŌåÆ panel.name
+//   {reason}   ŌåÆ ticket open reason (or "ŌĆö")
+const CLOSE_PLACEHOLDERS = ['{time}', '{timestamp}', '{author}', '{moderator}', '{panel}', '{reason}'];
+
+// Default close-flow config. All sub-objects are optional; missing pieces
+// fall back to these values. Stored as the `close_flow` JSONB column.
+const DEFAULT_CLOSE_FLOW = {
+    confirmYes: { label: 'Yes', emoji: 'Ō£ģ', style: 'Success' },
+    confirmNo: { label: 'No', emoji: 'Ō£¢’ĖÅ', style: 'Danger' },
+    closeEmbed: {
+        enabled: false,
+        title: '­¤öÆ Ticket Closed',
+        description: 'This ticket was closed by {moderator} at {time}.\nOpened by {author}.',
+        color: '#ED4245',
+        footer: '{panel} ┬Ę PrimeBot',
+    },
+    transcript: { enabled: false, channelId: null },
+    buttons: {
+        transcript: { label: 'Transcript', emoji: '­¤ōØ', style: 'Primary' },
+        reopen: { label: 'Reopen', emoji: '­¤öō', style: 'Success' },
+        delete: { label: 'Delete', emoji: '­¤Śæ’ĖÅ', style: 'Danger' },
+    },
+};
+
+const CLOSE_BTN_KEYS = ['transcript', 'reopen', 'delete'];
+
+/** Coerce a value to one of the valid button styles. */
+function _coerceStyle(v, fallback = 'Primary') {
+    return VALID_BUTTON_STYLES.has(v) ? v : fallback;
+}
+
+/** Normalize a single button spec { label, emoji, style }. */
+function _normalizeBtnSpec(spec, fallback) {
+    const s = (spec && typeof spec === 'object') ? spec : {};
+    const label = (s.label == null ? '' : String(s.label)).trim();
+    const emoji = (s.emoji == null ? '' : String(s.emoji)).trim() || null;
+    return {
+        label: label || fallback.label,
+        emoji: emoji || fallback.emoji,
+        style: _coerceStyle(s.style, fallback.style),
+    };
+}
+
+/**
+ * Normalize the close-flow JSONB config. Missing keys inherit defaults so the
+ * bot and dashboard always see a complete object. Returns a plain object.
+ */
+function normalizeCloseFlow(raw) {
+    const src = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
+    const out = {
+        confirmYes: _normalizeBtnSpec(src.confirmYes, DEFAULT_CLOSE_FLOW.confirmYes),
+        confirmNo: _normalizeBtnSpec(src.confirmNo, DEFAULT_CLOSE_FLOW.confirmNo),
+        closeEmbed: {
+            enabled: src.closeEmbed && src.closeEmbed.enabled === true ? true : false,
+            title: (src.closeEmbed && src.closeEmbed.title != null ? String(src.closeEmbed.title) : DEFAULT_CLOSE_FLOW.closeEmbed.title).trim() || DEFAULT_CLOSE_FLOW.closeEmbed.title,
+            description: (src.closeEmbed && src.closeEmbed.description != null ? String(src.closeEmbed.description) : DEFAULT_CLOSE_FLOW.closeEmbed.description),
+            color: /^#[0-9a-fA-F]{6}$/.test(src.closeEmbed && src.closeEmbed.color) ? src.closeEmbed.color : DEFAULT_CLOSE_FLOW.closeEmbed.color,
+            footer: (src.closeEmbed && src.closeEmbed.footer != null ? String(src.closeEmbed.footer) : DEFAULT_CLOSE_FLOW.closeEmbed.footer),
+        },
+        transcript: {
+            enabled: src.transcript && src.transcript.enabled === true ? true : false,
+            channelId: (src.transcript && src.transcript.channelId != null ? String(src.transcript.channelId).trim() : null) || null,
+        },
+        buttons: {},
+    };
+    for (const k of CLOSE_BTN_KEYS) {
+        out.buttons[k] = _normalizeBtnSpec(src.buttons && src.buttons[k], DEFAULT_CLOSE_FLOW.buttons[k]);
+    }
+    return out;
+}
+
+/**
+ * Render close-embed placeholders against a context. Used for the title,
+ * description, and footer of the (optional) close embed.
+ */
+function renderCloseText(text, ctx) {
+    if (!text) return '';
+    const mod = ctx.moderator != null ? String(ctx.moderator) : 'ŌĆö';
+    const author = ctx.author != null ? String(ctx.author) : 'ŌĆö';
+    const panel = ctx.panel != null ? String(ctx.panel) : '';
+    const reason = ctx.reason != null ? String(ctx.reason) : 'ŌĆö';
+    const ts = ctx.timestamp != null ? Math.floor(Number(ctx.timestamp) / 1000) : Math.floor(Date.now() / 1000);
+    const timeStr = new Date(ts * 1000).toLocaleString();
+    return String(text)
+        .replace(/\{time\}/g, timeStr)
+        .replace(/\{timestamp\}/g, `<t:${ts}:R>`)
+        .replace(/\{author\}/g, author)
+        .replace(/\{moderator\}/g, mod)
+        .replace(/\{panel\}/g, panel)
+        .replace(/\{reason\}/g, reason);
+}
 
 const DEFAULT_PANEL = {
     name: 'Support Ticket',
@@ -118,12 +217,14 @@ const DEFAULT_PANEL = {
     welcomeMessage: 'Welcome to your support ticket! Please describe your issue and our staff will assist you shortly.',
     closeButtonLabel: 'Close Ticket',
     closeButtonEmoji: '🔒',
+    closeButtonStyle: 'Danger',
     claimButtonLabel: '',
     claimButtonEmoji: '',
     // Status-based channel name templates. Empty/null → no rename for that state.
     openNameTemplate: '(open) {name}',
     claimedNameTemplate: '(solved) {name}',
     closedNameTemplate: '(closed) {name}',
+    closeFlow: null,
     enabled: true,
 };
 
@@ -161,11 +262,13 @@ class TicketPanelManager {
             `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS welcome_message    TEXT`,
             `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS close_button_label VARCHAR(80) DEFAULT 'Close Ticket'`,
             `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS close_button_emoji VARCHAR(100)`,
+            `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS close_button_style VARCHAR(20) DEFAULT 'Danger'`,
             `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS claim_button_label VARCHAR(80)`,
             `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS claim_button_emoji VARCHAR(100)`,
             `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS open_name_template   VARCHAR(100)`,
             `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS claimed_name_template VARCHAR(100)`,
             `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS closed_name_template  VARCHAR(100)`,
+            `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS close_flow            JSONB`,
             `ALTER TABLE ticket_instances ADD COLUMN IF NOT EXISTS panel_id     INTEGER REFERENCES ticket_panels(id) ON DELETE SET NULL`,
             `ALTER TABLE ticket_instances ADD COLUMN IF NOT EXISTS reason       TEXT`,
             `ALTER TABLE ticket_instances ADD COLUMN IF NOT EXISTS status       VARCHAR(20) NOT NULL DEFAULT 'open'`,
@@ -306,11 +409,13 @@ class TicketPanelManager {
             welcomeMessage: row.welcome_message || null,
             closeButtonLabel: row.close_button_label || 'Close Ticket',
             closeButtonEmoji: row.close_button_emoji || null,
+            closeButtonStyle: row.close_button_style || 'Danger',
             claimButtonLabel: row.claim_button_label || null,
             claimButtonEmoji: row.claim_button_emoji || null,
             openNameTemplate: row.open_name_template != null ? row.open_name_template : null,
             claimedNameTemplate: row.claimed_name_template != null ? row.claimed_name_template : null,
             closedNameTemplate: row.closed_name_template != null ? row.closed_name_template : null,
+            closeFlow: row.close_flow != null ? normalizeCloseFlow(row.close_flow) : normalizeCloseFlow({}),
             enabled: row.enabled !== false,
             createdBy: row.created_by || null,
             createdAt: row.created_at,
@@ -380,10 +485,10 @@ class TicketPanelManager {
                 button_style, button_emoji, category, ticket_name, support_role_ids,
                 ping_role_ids, ticket_category_id, cooldown_seconds, max_open_per_user,
                 ask_reason, reason_placeholder, welcome_message, close_button_label,
-                close_button_emoji, claim_button_label, claim_button_emoji,
+                close_button_emoji, close_button_style, claim_button_label, claim_button_emoji,
                 open_name_template, claimed_name_template, closed_name_template,
-                enabled, created_by, created_at, updated_at
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,NOW(),NOW())
+                close_flow, enabled, created_by, created_at, updated_at
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,NOW(),NOW())
             RETURNING id
         `, [
             guildId, panel.name, panel.channelId || null, panel.messageId || null,
@@ -394,9 +499,10 @@ class TicketPanelManager {
             JSON.stringify(panel.pingRoleIds), panel.ticketCategoryId,
             panel.cooldownSeconds, panel.maxOpenPerUser,
             panel.askReason, panel.reasonPlaceholder, panel.welcomeMessage,
-            panel.closeButtonLabel, panel.closeButtonEmoji,
+            panel.closeButtonLabel, panel.closeButtonEmoji, panel.closeButtonStyle,
             panel.claimButtonLabel, panel.claimButtonEmoji,
             panel.openNameTemplate, panel.claimedNameTemplate, panel.closedNameTemplate,
+            JSON.stringify(panel.closeFlow || {}),
             panel.enabled, panel.createdBy || null,
         ]);
         const id = res.rows[0].id;
@@ -423,9 +529,9 @@ class TicketPanelManager {
                 support_role_ids = $18, ping_role_ids = $19, ticket_category_id = $20,
                 cooldown_seconds = $21, max_open_per_user = $22, ask_reason = $23,
                 reason_placeholder = $24, welcome_message = $25, close_button_label = $26,
-                close_button_emoji = $27, claim_button_label = $28, claim_button_emoji = $29,
-                open_name_template = $30, claimed_name_template = $31, closed_name_template = $32,
-                enabled = $33, updated_at = NOW()
+                close_button_emoji = $27, close_button_style = $28, claim_button_label = $29, claim_button_emoji = $30,
+                open_name_template = $31, claimed_name_template = $32, closed_name_template = $33,
+                close_flow = $34, enabled = $35, updated_at = NOW()
             WHERE id = $1
         `, [
             id, norm.name, norm.channelId || null, norm.messageId || null, norm.messageType,
@@ -435,9 +541,10 @@ class TicketPanelManager {
             JSON.stringify(norm.pingRoleIds), norm.ticketCategoryId,
             norm.cooldownSeconds, norm.maxOpenPerUser, norm.askReason,
             norm.reasonPlaceholder, norm.welcomeMessage,
-            norm.closeButtonLabel, norm.closeButtonEmoji,
+            norm.closeButtonLabel, norm.closeButtonEmoji, norm.closeButtonStyle,
             norm.claimButtonLabel, norm.claimButtonEmoji,
             norm.openNameTemplate, norm.claimedNameTemplate, norm.closedNameTemplate,
+            JSON.stringify(norm.closeFlow || {}),
             norm.enabled,
         ]);
         const fetched = await this._fetchPanel(id);
@@ -490,9 +597,10 @@ class TicketPanelManager {
             buttonLabel: 1, buttonStyle: 1, buttonEmoji: 1, category: 1, ticketName: 1,
             supportRoleIds: 1, pingRoleIds: 1, ticketCategoryId: 1, cooldownSeconds: 1,
             maxOpenPerUser: 1, askReason: 1, reasonPlaceholder: 1, welcomeMessage: 1,
-            closeButtonLabel: 1, closeButtonEmoji: 1, claimButtonLabel: 1,
+            closeButtonLabel: 1, closeButtonEmoji: 1, closeButtonStyle: 1,
+            claimButtonLabel: 1,
             claimButtonEmoji: 1, openNameTemplate: 1, claimedNameTemplate: 1,
-            closedNameTemplate: 1, enabled: 1, createdBy: 1,
+            closedNameTemplate: 1, closeFlow: 1, enabled: 1, createdBy: 1,
         };
     }
 
@@ -502,6 +610,7 @@ class TicketPanelManager {
         out.name = (out.name == null ? '' : String(out.name)).trim() || 'Support Ticket';
         out.messageType = VALID_MESSAGE_TYPES.has(out.messageType) ? out.messageType : 'embed';
         out.buttonStyle = VALID_BUTTON_STYLES.has(out.buttonStyle) ? out.buttonStyle : 'Primary';
+        out.closeButtonStyle = VALID_BUTTON_STYLES.has(out.closeButtonStyle) ? out.closeButtonStyle : 'Danger';
         out.color = /^#[0-9a-fA-F]{6}$/.test(out.color) ? out.color : '#5865F2';
         out.supportRoleIds = Array.isArray(out.supportRoleIds) ? out.supportRoleIds.map(String) : [];
         out.pingRoleIds = Array.isArray(out.pingRoleIds) ? out.pingRoleIds.map(String) : [];
@@ -512,11 +621,19 @@ class TicketPanelManager {
         for (const f of ['buttonEmoji', 'closeButtonEmoji', 'claimButtonEmoji', 'thumbnailUrl', 'imageUrl']) {
             if (out[f] != null) out[f] = String(out[f]).trim() || null;
         }
+        // Button labels: trim to null when empty/whitespace. An empty label
+        // means "no label" — claimButtonLabel null => no claim button rendered.
+        // Non-empty labels (incl. DEFAULT_PANEL's 'Open Ticket'/'Close Ticket')
+        // are preserved; the builders fall back to defaults when null.
+        for (const f of ['buttonLabel', 'closeButtonLabel', 'claimButtonLabel']) {
+            if (out[f] != null) out[f] = String(out[f]).trim() || null;
+        }
         // Name templates: keepUndefined=false applies DEFAULT_PANEL defaults; trim
         // to null (null = no rename for that state). Only coerce when present.
         for (const f of ['openNameTemplate', 'claimedNameTemplate', 'closedNameTemplate']) {
             if (out[f] != null) out[f] = String(out[f]).trim().slice(0, 100) || null;
         }
+        out.closeFlow = normalizeCloseFlow(out.closeFlow);
         return out;
     }
 
@@ -553,7 +670,7 @@ class TicketPanelManager {
         const closeBtn = new ButtonBuilder()
             .setCustomId('ticketpanel:close')
             .setLabel(panel.closeButtonLabel || 'Close Ticket')
-            .setStyle(ButtonStyle.Danger);
+            .setStyle(ButtonStyle[panel.closeButtonStyle] || ButtonStyle.Danger);
         if (panel.closeButtonEmoji) closeBtn.setEmoji(panel.closeButtonEmoji);
         const rows = [new ActionRowBuilder().addComponents(closeBtn)];
         // Claim + Rename go in a second row (or first row if no claim button).
@@ -584,6 +701,63 @@ class TicketPanelManager {
             )
             .setTimestamp();
         return { embeds: [embed], components: rows };
+    }
+
+    /**
+     * Build the Yes/No confirmation row shown when "Close" is pressed.
+     * Replaces the control message's components so the user must confirm
+     * before the ticket is actually closed.
+     */
+    buildCloseConfirmComponents(panel) {
+        const cf = panel.closeFlow || normalizeCloseFlow({});
+        const yes = new ButtonBuilder()
+            .setCustomId('ticketpanel:closeconfirm:yes')
+            .setLabel(cf.confirmYes.label)
+            .setStyle(ButtonStyle[cf.confirmYes.style] || ButtonStyle.Success);
+        if (cf.confirmYes.emoji) yes.setEmoji(cf.confirmYes.emoji);
+        const no = new ButtonBuilder()
+            .setCustomId('ticketpanel:closeconfirm:no')
+            .setLabel(cf.confirmNo.label)
+            .setStyle(ButtonStyle[cf.confirmNo.style] || ButtonStyle.Danger);
+        if (cf.confirmNo.emoji) no.setEmoji(cf.confirmNo.emoji);
+        return [new ActionRowBuilder().addComponents(yes, no)];
+    }
+
+    /**
+     * Build the closed-ticket control message: the (optional, red) close
+     * embed + the 3 post-close action buttons (Transcript / Reopen / Delete).
+     * All button labels, emojis, and colours come from the panel's closeFlow.
+     */
+    buildClosedControlMessage(panel, ctx = {}) {
+        const cf = panel.closeFlow || normalizeCloseFlow({});
+        const buttons = cf.buttons || normalizeCloseFlow({}).buttons;
+        const mk = (key, customId) => {
+            const b = buttons[key];
+            const btn = new ButtonBuilder()
+                .setCustomId(customId)
+                .setLabel(b.label)
+                .setStyle(ButtonStyle[b.style] || ButtonStyle.Secondary);
+            if (b.emoji) btn.setEmoji(b.emoji);
+            return btn;
+        };
+        const row = new ActionRowBuilder().addComponents(
+            mk('transcript', 'ticketpanel:transcript'),
+            mk('reopen', 'ticketpanel:reopen'),
+            mk('delete', 'ticketpanel:delete'),
+        );
+        const embed = new EmbedBuilder()
+            .setColor(cf.closeEmbed.color || '#ED4245')
+            .setTitle(renderCloseText(cf.closeEmbed.title, ctx) || 'Ticket Closed')
+            .setDescription(renderCloseText(cf.closeEmbed.description, ctx))
+            .setTimestamp();
+        const footerText = renderCloseText(cf.closeEmbed.footer, ctx);
+        if (footerText) embed.setFooter({ text: footerText });
+        return { embeds: [embed], components: [row] };
+    }
+
+    /** Resolve a panel for an instance (with fallback for missing panel). */
+    _panelForInstance(instance) {
+        return instance && instance.panelId ? this.getPanelById(instance.panelId) : null;
     }
 
     // ── Sending / updating panel messages ───────────────────────────────────
@@ -765,6 +939,11 @@ class TicketPanelManager {
         return `${opener} ${ping} ${support}`.trim();
     }
 
+    /**
+     * Close button: instead of closing immediately, swap the control
+     * message for a Yes/No confirmation row. The actual close happens in
+     * handleCloseConfirm (yes). 'No' restores the open control message.
+     */
     async handleClose(interaction) {
         const channelId = interaction.channel.id;
         const instance = this.getInstanceByChannel(channelId);
@@ -777,54 +956,186 @@ class TicketPanelManager {
         if (!isOwner && !isAdmin && !isSupport) {
             return interaction.reply({ content: 'Only the ticket owner, support staff, or administrators can close this ticket.', ephemeral: true });
         }
+        const panel = this._panelForInstance(instance);
+        try {
+            const components = this.buildCloseConfirmComponents(panel || {});
+            const embed = new EmbedBuilder()
+                .setColor('#ED4245')
+                .setTitle('Close this ticket?')
+                .setDescription('Are you sure you want to close this ticket? Choose an option below.')
+                .setTimestamp();
+            await interaction.update({ embeds: [embed], components }).catch(() =>
+                interaction.reply({ embeds: [embed], components })
+            );
+        } catch (err) {
+            console.error('[TICKETS] Error prompting close confirm:', err);
+            return interaction.reply({ content: 'There was an error. Please try again.', ephemeral: true });
+        }
+    }
 
+    /** Build the open-state control payload for restore-after-cancel/reopen. */
+    _openControlPayload(panel, opener) {
+        const base = this.buildControlMessage(panel || {}, opener);
+        return base;
+    }
+
+    async _resolveOpener(interaction, instance) {
+        const openerMember = await interaction.guild.members.fetch(instance.userId).catch(() => null);
+        return openerMember?.user || { id: instance.userId, username: openerMember?.displayName || 'user' };
+    }
+
+    /** Yes → actually close: mark closed, show the (optional) close embed + 3 buttons. */
+    async handleCloseConfirm(interaction, choice) {
+        const channelId = interaction.channel.id;
+        const instance = this.getInstanceByChannel(channelId) || await this._fetchInstanceByChannel(channelId);
+        if (!instance) {
+            return interaction.reply({ content: 'This is not a valid ticket channel.', ephemeral: true });
+        }
+        const panel = this._panelForInstance(instance);
+        // 'No' → restore the open control message and stop.
+        if (choice !== 'yes') {
+            try {
+                const opener = await this._resolveOpener(interaction, instance);
+                const payload = this._openControlPayload(panel, opener);
+                await interaction.update(payload).catch(() =>
+                    interaction.reply(payload)
+                );
+            } catch (err) {
+                console.error('[TICKETS] Error restoring open control message:', err);
+                return interaction.reply({ content: 'There was an error. Please try again.', ephemeral: true });
+            }
+            return;
+        }
+        // 'Yes' → close the ticket.
+        const isOwner = interaction.user.id === instance.userId;
+        const isAdmin = interaction.member?.permissions?.has(PermissionFlagsBits.Administrator);
+        const isSupport = await this._isSupportMember(interaction, instance);
+        if (!isOwner && !isAdmin && !isSupport) {
+            return interaction.reply({ content: 'Only the ticket owner, support staff, or administrators can close this ticket.', ephemeral: true });
+        }
         try {
             instance.status = 'closed';
             instance.closedAt = Date.now();
             instance.closedBy = interaction.user.id;
-            if (interaction.channel.isThread?.()) {
-                await interaction.channel.setArchived(false).catch(() => {});
-                await interaction.channel.setLocked(true).catch(() => {});
-            }
-            const panel = instance.panelId ? this.getPanelById(instance.panelId) : null;
-            const reopenBtn = new ButtonBuilder()
-                .setCustomId('ticketpanel:reopen')
-                .setLabel('Reopen Ticket')
-                .setStyle(ButtonStyle.Success)
-                .setEmoji('🔓');
-            const row = new ActionRowBuilder().addComponents(reopenBtn);
-            const embed = new EmbedBuilder()
-                .setColor('#ED4245')
-                .setTitle('🔒 Ticket Closed')
-                .setDescription('This ticket has been closed and archived.\n\nYou or an administrator can reopen it using the button below.')
-                .addFields(
-                    { name: '👤 Closed by', value: `${interaction.user}`, inline: true },
-                    { name: '🕐 Closed at', value: `<t:${Math.floor(Date.now() / 1000)}:R>`, inline: true },
-                )
-                .setTimestamp();
-            await interaction.update({ embeds: [embed], components: [row] }).catch(() =>
-                interaction.reply({ embeds: [embed], components: [row] })
+            const opener = await this._resolveOpener(interaction, instance);
+            const ctx = {
+                moderator: interaction.user.toString(),
+                author: opener.toString(),
+                panel: panel ? panel.name : '',
+                reason: instance.reason || '—',
+                timestamp: instance.closedAt,
+            };
+            const closedPayload = this.buildClosedControlMessage(panel || {}, ctx);
+            await interaction.update(closedPayload).catch(() =>
+                interaction.reply(closedPayload)
             );
             this._byChannel.delete(channelId);
             await this._saveInstance(instance);
-
-            // Apply the closed-status channel name template (mainly visible for
-            // archived threads; regular channels are deleted shortly after).
+            // Apply the closed-status channel name template.
             if (panel) {
-                const openerMember = await interaction.guild.members.fetch(instance.userId).catch(() => null);
-                const opener = openerMember?.user || { id: instance.userId, username: openerMember?.displayName };
                 await this._setTicketName(interaction.channel, panel.closedNameTemplate, panel, opener);
-            }
-
-            // After a delay, delete channel-type tickets (threads just stay archived).
-            if (!interaction.channel.isThread?.()) {
-                setTimeout(() => {
-                    interaction.channel.delete('Ticket closed').catch(() => {});
-                }, 5000);
             }
         } catch (err) {
             console.error('[TICKETS] Error closing ticket:', err);
             return interaction.reply({ content: 'There was an error closing this ticket.', ephemeral: true });
+        }
+    }
+
+    /** Generate a text transcript of the ticket channel's messages and post it
+     *  to the panel's configured transcript channel (dashboard-only). */
+    async handleTranscript(interaction) {
+        const channelId = interaction.channel.id;
+        const instance = this.getInstanceByChannel(channelId) || await this._fetchInstanceByChannel(channelId);
+        if (!instance) {
+            return interaction.reply({ content: 'This is not a valid ticket channel.', ephemeral: true });
+        }
+        const isAdmin = interaction.member?.permissions?.has(PermissionFlagsBits.Administrator);
+        const isSupport = await this._isSupportMember(interaction, instance);
+        const isOwner = interaction.user.id === instance.userId;
+        if (!isOwner && !isAdmin && !isSupport) {
+            return interaction.reply({ content: 'You do not have permission to create a transcript.', ephemeral: true });
+        }
+        const panel = this._panelForInstance(instance);
+        const cf = (panel && panel.closeFlow) || normalizeCloseFlow({});
+        const transcriptChannelId = cf.transcript && cf.transcript.enabled ? cf.transcript.channelId : null;
+        if (!transcriptChannelId) {
+            return interaction.reply({ content: 'No transcript channel is configured for this panel. Set one in the dashboard (Tickets tab → Transcript settings).', ephemeral: true });
+        }
+        await interaction.deferReply({ ephemeral: true }).catch(() => {});
+        try {
+            const channel = interaction.channel;
+            // Fetch up to ~1000 most recent messages (paginate 100 at a time).
+            let all = [];
+            let before = undefined;
+            for (let i = 0; i < 10; i++) {
+                const batch = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) }).catch(() => null);
+                if (!batch || batch.size === 0) break;
+                all = all.concat([...batch.values()]);
+                before = batch.last().id;
+                if (batch.size < 100) break;
+            }
+            // Oldest first.
+            all.reverse();
+            const opener = await this._resolveOpener(interaction, instance);
+            const header = [
+                `── Ticket Transcript ──`,
+                `Panel: ${panel ? panel.name : 'Unknown'}`,
+                `Ticket author: ${opener} (${instance.userId})`,
+                `Opened: <t:${Math.floor(Number(instance.createdAt) / 1000)}:F>`,
+                instance.closedAt ? `Closed: <t:${Math.floor(Number(instance.closedAt) / 1000)}:F>` : null,
+                instance.closedBy ? `Closed by: <@${instance.closedBy}>` : null,
+                `Messages: ${all.length}`,
+                `────────`,
+            ].filter(Boolean).join('\n');
+            const lines = all.map(m => {
+                const ts = new Date(m.createdTimestamp).toISOString();
+                const author = m.author ? `${m.author.tag} (${m.author.id})` : 'Unknown';
+                const body = m.content || (m.attachments && m.attachments.size ? `[${m.attachments.size} attachment(s)]` : '');
+                return `[${ts}] ${author}: ${body}`;
+            });
+            const fullText = `${header}\n\n${lines.join('\n')}`.slice(0, 1800);
+            const targetChannel = await this.client.channels.fetch(transcriptChannelId).catch(() => null);
+            if (!targetChannel) {
+                return interaction.editReply({ content: 'The configured transcript channel is no longer available.' });
+            }
+            const tEmbed = new EmbedBuilder()
+                .setColor(cf.closeEmbed.color || '#5865F2')
+                .setTitle(`📝 Transcript: ${panel ? panel.name : 'Ticket'}`)
+                .setDescription(`Ticket author: ${opener}\nChannel: ${channel}\nMessages: ${all.length}\nClosed by: ${instance.closedBy ? `<@${instance.closedBy}>` : '—'}`)
+                .setTimestamp();
+            await targetChannel.send({ embeds: [tEmbed] }).catch(() => {});
+            // Post the transcript text in chunks (Discord 2000-char limit).
+            const chunkSize = 1900;
+            for (let i = 0; i < fullText.length; i += chunkSize) {
+                await targetChannel.send({ content: '\u0060\u0060\u0060' + fullText.slice(i, i + chunkSize) + '\u0060\u0060\u0060' }).catch(() => {});
+            }
+            return interaction.editReply({ content: `✅ Transcript posted to <#${transcriptChannelId}> (${all.length} messages).` });
+        } catch (err) {
+            console.error('[TICKETS] Error generating transcript:', err);
+            return interaction.editReply({ content: 'There was an error generating the transcript: ' + (err.message || err) });
+        }
+    }
+
+    /** Delete the ticket channel immediately (after confirmation prompt). */
+    async handleDelete(interaction) {
+        const channelId = interaction.channel.id;
+        const instance = this.getInstanceByChannel(channelId) || await this._fetchInstanceByChannel(channelId);
+        if (!instance) {
+            return interaction.reply({ content: 'This is not a valid ticket channel.', ephemeral: true });
+        }
+        const isAdmin = interaction.member?.permissions?.has(PermissionFlagsBits.Administrator);
+        const isSupport = await this._isSupportMember(interaction, instance);
+        if (!isAdmin && !isSupport) {
+            return interaction.reply({ content: 'Only support staff or administrators can delete this ticket.', ephemeral: true });
+        }
+        try {
+            await interaction.reply({ content: '🗑️ Deleting this ticket channel…', ephemeral: true }).catch(() => {});
+            await this._saveInstance({ ...instance, status: 'deleted' });
+            this._byChannel.delete(channelId);
+            await interaction.channel.delete('Ticket deleted via panel button').catch(() => {});
+        } catch (err) {
+            console.error('[TICKETS] Error deleting ticket:', err);
+            return interaction.reply({ content: 'There was an error deleting this ticket.', ephemeral: true }).catch(() => {});
         }
     }
 
@@ -853,31 +1164,17 @@ class TicketPanelManager {
                 await interaction.channel.setArchived(false).catch(() => {});
                 await interaction.channel.setLocked(false).catch(() => {});
             }
-            const panel = instance.panelId ? this.getPanelById(instance.panelId) : null;
-            const closeBtn = new ButtonBuilder()
-                .setCustomId('ticketpanel:close')
-                .setLabel(panel?.closeButtonLabel || 'Close Ticket')
-                .setStyle(ButtonStyle.Danger)
-                .setEmoji(panel?.closeButtonEmoji || '🔒');
-            const row = new ActionRowBuilder().addComponents(closeBtn);
-            const embed = new EmbedBuilder()
-                .setColor('#57F287')
-                .setTitle('🔓 Ticket Reopened')
-                .setDescription('This ticket has been reopened and is now active again.')
-                .addFields(
-                    { name: '👤 Reopened by', value: `${interaction.user}`, inline: true },
-                    { name: '🕐 Reopened at', value: `<t:${Math.floor(Date.now() / 1000)}:R>`, inline: true },
-                )
-                .setTimestamp();
-            await interaction.update({ embeds: [embed], components: [row] }).catch(() =>
-                interaction.reply({ embeds: [embed], components: [row] })
+            const panel = this._panelForInstance(instance);
+            const opener = await this._resolveOpener(interaction, instance);
+            // Restore the full open-state control message (close + claim + rename).
+            const payload = this._openControlPayload(panel, opener);
+            await interaction.update(payload).catch(() =>
+                interaction.reply(payload)
             );
             this._byChannel.set(channelId, instance);
             await this._saveInstance(instance);
             // Re-apply the open-status channel name template.
             if (panel) {
-                const openerMember = await interaction.guild.members.fetch(instance.userId).catch(() => null);
-                const opener = openerMember?.user || { id: instance.userId, username: openerMember?.displayName };
                 await this._setTicketName(interaction.channel, panel.openNameTemplate, panel, opener);
             }
         } catch (err) {
@@ -979,7 +1276,7 @@ class TicketPanelManager {
             if (interaction.channel.name !== name) {
                 await interaction.channel.setName(name);
             }
-            await interaction.reply({ content: `✏️ Ticket renamed to **${name}**.`, ephemeral: true });
+            await interaction.reply({ content: `Ō£Å’ĖÅ Ticket renamed to **${name}**.`, ephemeral: true });
         } catch (err) {
             console.error('[TICKETS] Error renaming ticket:', err);
             return interaction.reply({ content: 'There was an error renaming this ticket.', ephemeral: true });
@@ -1030,13 +1327,41 @@ class TicketPanelManager {
             .sort((a, b) => b.createdAt - a.createdAt);
     }
 
-    // ── Startup ──────────────────────────────────────────────────────────────
+    // ── Startup ──────────────────────────────────────────────
 
+    /**
+     * Re-bind live panel messages + open tickets after a bot restart.
+     * Crucially, a panel whose Discord message can no longer be fetched
+     * (deleted by a moderator, channel removed) is NOT deleted: its config
+     * is preserved so the dashboard can Resend it. We only log + leave it.
+     */
     async restorePanels() {
         if (!this.client || !this.client.guilds) return;
+        try {
+            // Ensure the in-memory maps reflect the DB (panels + open tickets).
+            await this._refreshFromDatabase();
+        } catch (err) {
+            console.error('[TICKETS] restorePanels refresh failed:', err.message);
+        }
         const panels = [...this._byPanel.values()].filter(p => p.enabled && p.channelId && p.messageId);
-        console.log(`[TICKETS] Restored ${panels.length} ticket panels.`);
+        let missing = 0;
+        for (const panel of panels) {
+            try {
+                const guild = this.client.guilds.cache.get(panel.guildId)
+                    || await this.client.guilds.fetch(panel.guildId).catch(() => null);
+                if (!guild) continue;
+                const channel = guild.channels.cache.get(panel.channelId)
+                    || await guild.channels.fetch(panel.channelId).catch(() => null);
+                if (!channel) { missing++; continue; }
+                // Verify the panel message still exists. If not, keep the config
+                // (do NOT delete) so the dashboard can Resend.
+                await channel.messages.fetch(panel.messageId).catch(() => { missing++; });
+            } catch {
+                missing++;
+            }
+        }
+        console.log(`[TICKETS] Restored ${panels.length} ticket panels${missing ? ` (${missing} message(s) missing — configs preserved)` : ''}.`);
     }
 }
 
-module.exports = { TicketPanelManager, ticketPool };
+module.exports = { TicketPanelManager, ticketPool, normalizeCloseFlow, renderCloseText, DEFAULT_CLOSE_FLOW };

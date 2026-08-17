@@ -22,8 +22,8 @@ CREATE TABLE IF NOT EXISTS live_giveaways (
     winner_count    INTEGER NOT NULL DEFAULT 1,
     is_active       BOOLEAN NOT NULL DEFAULT true,
     ended           BOOLEAN NOT NULL DEFAULT false,
-    created_at      TIMESTAMP DEFAULT NOW(),
-    ends_at         TIMESTAMP,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    ends_at         TIMESTAMPTZ,
     message_id      VARCHAR(50),
     channel_id      VARCHAR(50)
 );
@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS live_giveaway_participants (
     id          SERIAL PRIMARY KEY,
     giveaway_id VARCHAR(100) NOT NULL,
     user_id     VARCHAR(50) NOT NULL,
-    joined_at   TIMESTAMP DEFAULT NOW(),
+    joined_at   TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE (giveaway_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS live_giveaway_participants_giveaway_idx ON live_giveaway_participants (giveaway_id);
@@ -43,6 +43,6 @@ CREATE TABLE IF NOT EXISTS live_giveaway_winners (
     id          SERIAL PRIMARY KEY,
     giveaway_id VARCHAR(100) NOT NULL,
     user_id     VARCHAR(50) NOT NULL,
-    selected_at TIMESTAMP DEFAULT NOW()
+    selected_at TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS live_giveaway_winners_giveaway_idx ON live_giveaway_winners (giveaway_id);

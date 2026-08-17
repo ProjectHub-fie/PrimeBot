@@ -1510,18 +1510,20 @@ input[type="color"] {
 }
 .modal-overlay.hidden { display: none !important; }
 .modal.floating-window {
-  background: var(--card, #fff); color: var(--text, #111);
+  background: #000; color: #fff;
   border-radius: 16px; width: min(520px, 92vw); max-height: 86vh; overflow: auto;
   box-shadow: 0 20px 60px rgba(0,0,0,0.35); padding: 0;
 }
 .modal-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--border, #e3e3e8); }
-.modal-head h3 { margin: 0; font-size: 17px; }
-.modal-close { background: none; border: none; font-size: 24px; line-height: 1; cursor: pointer; color: var(--text-dim); }
+.modal-head h3 { margin: 0; font-size: 17px; color: #fff; }
+.modal-close { background: none; border: none; font-size: 24px; line-height: 1; cursor: pointer; color: #fff; }
 .modal-body { padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; }
-.command-box { display: flex; align-items: center; gap: 10px; justify-content: space-between; background: rgba(0,0,0,0.05); border-radius: 10px; padding: 10px 12px; }
-.command-box code { font-size: 14px; word-break: break-all; }
+.modal-body p { color: #fff; }
+.command-box { display: flex; align-items: center; gap: 10px; justify-content: space-between; background: rgba(255,255,255,0.08); border-radius: 10px; padding: 10px 12px; }
+.command-box code { font-size: 14px; word-break: break-all; color: #fff; }
 .btn-copy { padding: 4px 10px; }
-.live-modal-note { font-size: 13px; color: var(--text-dim); }
+.live-modal-note { font-size: 13px; color: #fff; }
+.live-modal-note code { color: #fff; }
 
 /* ── Stats page: shardnode node list ──────────────────────────────────────── */
 

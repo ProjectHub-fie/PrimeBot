@@ -411,7 +411,11 @@ module.exports = {
                     // Route to the appropriate handler based on customId or action
                     if (action === 'ticketpanel') {
                         // Premium ticket panels (configured from the dashboard).
-                        // customId forms: ticketpanel:open:<panelId> | ticketpanel:close | ticketpanel:reopen | ticketpanel:claim | ticketpanel:rename
+                        // customId forms:
+                        //   ticketpanel:open:<panelId> | ticketpanel:close
+                        //   ticketpanel:closeconfirm:yes|no  (close confirmation)
+                        //   ticketpanel:transcript | ticketpanel:delete
+                        //   ticketpanel:reopen | ticketpanel:claim | ticketpanel:rename
                         const sub = params[0];
                         const mgr = client.ticketPanelManager || client.ticketManager;
                         if (sub === 'open') {
@@ -423,7 +427,13 @@ module.exports = {
                                 await safeExecute(mgr.handleOpen.bind(mgr), [interaction, panel], null, 'Ticket panel open');
                             }
                         } else if (sub === 'close') {
-                            await safeExecute(mgr.handleClose.bind(mgr), [interaction], null, 'Ticket panel close');
+                            await safeExecute(mgr.handleClose.bind(mgr), [interaction], null, 'Ticket panel close prompt');
+                        } else if (sub === 'closeconfirm') {
+                            await safeExecute(mgr.handleCloseConfirm.bind(mgr), [interaction, params[1] || 'no'], null, 'Ticket panel close confirm');
+                        } else if (sub === 'transcript') {
+                            await safeExecute(mgr.handleTranscript.bind(mgr), [interaction], null, 'Ticket panel transcript');
+                        } else if (sub === 'delete') {
+                            await safeExecute(mgr.handleDelete.bind(mgr), [interaction], null, 'Ticket panel delete');
                         } else if (sub === 'reopen') {
                             await safeExecute(mgr.handleReopen.bind(mgr), [interaction], null, 'Ticket panel reopen');
                         } else if (sub === 'claim') {

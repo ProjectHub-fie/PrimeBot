@@ -245,6 +245,7 @@ function livePollsPage({ user } = {}) {
     <div class="page-head">
       <h1>Live Polls</h1>
       <p>Cross-server live polls — running and recently ended, across all of PrimeBot.</p>
+      <button class="btn btn-secondary live-refresh-btn" id="live-refresh">🔄 Refresh</button>
     </div>
     <div id="live-content">
       <div class="splash"><div class="spinner"></div><p>Loading live polls…</p></div>
@@ -259,6 +260,7 @@ function liveGiveawaysPage({ user } = {}) {
     <div class="page-head">
       <h1>Live Giveaways</h1>
       <p>Cross-server live giveaways — running and recently ended, across all of PrimeBot.</p>
+      <button class="btn btn-secondary live-refresh-btn" id="live-refresh">🔄 Refresh</button>
     </div>
     <div id="live-content">
       <div class="splash"><div class="spinner"></div><p>Loading live giveaways…</p></div>

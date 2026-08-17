@@ -81,7 +81,7 @@ function readTicketForm() {
     buttonLabel: q('#tk-button-label') || 'Open Ticket',
     buttonEmoji: q('#tk-button-emoji') || null,
     buttonStyle: q('#tk-button-style') || 'Primary',
-    categoryId: q('#tk-category') || 'general',
+    category: q('#tk-category') || 'general',
     ticketName: q('#tk-ticket-name') || null,
     openNameTemplate: q('#tk-open-name') || null,
     claimedNameTemplate: q('#tk-claimed-name') || null,
@@ -90,14 +90,78 @@ function readTicketForm() {
     pingRoleIds: collectTicketRoles('#tk-ping-list', 'tk-ping-role'),
     ticketCategoryId: q('#tk-ticket-category-id') || null,
     maxOpenPerUser: parseInt(q('#tk-max-open'), 10) || 1,
-    askForReason: document.querySelector('#tk-ask-reason')?.checked ?? false,
+    askReason: document.querySelector('#tk-ask-reason')?.checked ?? false,
     welcomeMessage: q('#tk-welcome') || null,
     closeButtonLabel: q('#tk-close-label') || 'Close Ticket',
     closeButtonEmoji: q('#tk-close-emoji') || '🔒',
+    closeButtonStyle: q('#tk-close-style') || 'Danger',
     claimButtonLabel: q('#tk-claim-label') || null,
     claimButtonEmoji: q('#tk-claim-emoji') || null,
+    closeFlow: readCloseFlowForm(),
     enabled: document.querySelector('#tk-enabled')?.checked ?? true,
   };
+}
+
+function readCloseFlowForm() {
+  const q = id => document.querySelector(id)?.value ?? '';
+  const chk = id => document.querySelector(id)?.checked ?? false;
+  const btn = (key) => ({
+    label: q(`#tk-cf-btn-${key}-label`) || key.charAt(0).toUpperCase() + key.slice(1),
+    emoji: q(`#tk-cf-btn-${key}-emoji`) || null,
+    style: q(`#tk-cf-btn-${key}-style`) || 'Primary',
+  });
+  return {
+    confirmYes: {
+      label: q('#tk-cf-yes-label') || 'Yes',
+      emoji: q('#tk-cf-yes-emoji') || null,
+      style: q('#tk-cf-yes-style') || 'Success',
+    },
+    confirmNo: {
+      label: q('#tk-cf-no-label') || 'No',
+      emoji: q('#tk-cf-no-emoji') || null,
+      style: q('#tk-cf-no-style') || 'Danger',
+    },
+    closeEmbed: {
+      enabled: chk('#tk-cf-embed-enabled'),
+      title: q('#tk-cf-embed-title') || 'Ticket Closed',
+      description: q('#tk-cf-embed-desc') || null,
+      color: q('#tk-cf-embed-color') || '#ED4245',
+      footer: q('#tk-cf-embed-footer') || null,
+    },
+    transcript: {
+      enabled: chk('#tk-cf-transcript-enabled'),
+      channelId: q('#tk-cf-transcript-channel') || null,
+    },
+    buttons: {
+      transcript: btn('transcript'),
+      reopen: btn('reopen'),
+      delete: btn('delete'),
+    },
+  };
+}
+
+function fillCloseFlowForm(cf) {
+  const set = (id, val) => { const el = document.querySelector(id); if (el) el.value = val ?? ''; };
+  const chk = (id, v) => { const el = document.querySelector(id); if (el) el.checked = !!v; };
+  set('#tk-cf-yes-label', cf.confirmYes?.label);
+  set('#tk-cf-yes-emoji', cf.confirmYes?.emoji);
+  set('#tk-cf-yes-style', cf.confirmYes?.style);
+  set('#tk-cf-no-label', cf.confirmNo?.label);
+  set('#tk-cf-no-emoji', cf.confirmNo?.emoji);
+  set('#tk-cf-no-style', cf.confirmNo?.style);
+  chk('#tk-cf-embed-enabled', cf.closeEmbed?.enabled);
+  set('#tk-cf-embed-title', cf.closeEmbed?.title);
+  set('#tk-cf-embed-desc', cf.closeEmbed?.description);
+  set('#tk-cf-embed-color', cf.closeEmbed?.color || '#ED4245');
+  set('#tk-cf-embed-color-text', cf.closeEmbed?.color || '#ED4245');
+  set('#tk-cf-embed-footer', cf.closeEmbed?.footer);
+  chk('#tk-cf-transcript-enabled', cf.transcript?.enabled);
+  set('#tk-cf-transcript-channel', cf.transcript?.channelId);
+  for (const k of ['transcript', 'reopen', 'delete']) {
+    set(`#tk-cf-btn-${k}-label`, cf.buttons?.[k]?.label);
+    set(`#tk-cf-btn-${k}-emoji`, cf.buttons?.[k]?.emoji);
+    set(`#tk-cf-btn-${k}-style`, cf.buttons?.[k]?.style);
+  }
 }
 
 function fillTicketForm(panel) {
@@ -116,7 +180,7 @@ function fillTicketForm(panel) {
   set('#tk-button-label', panel.buttonLabel);
   set('#tk-button-emoji', panel.buttonEmoji);
   set('#tk-button-style', panel.buttonStyle);
-  set('#tk-category', panel.categoryId);
+  set('#tk-category', panel.category);
   set('#tk-ticket-name', panel.ticketName);
   set('#tk-open-name', panel.openNameTemplate);
   set('#tk-claimed-name', panel.claimedNameTemplate);
@@ -126,9 +190,11 @@ function fillTicketForm(panel) {
   set('#tk-welcome', panel.welcomeMessage);
   set('#tk-close-label', panel.closeButtonLabel);
   set('#tk-close-emoji', panel.closeButtonEmoji);
+  set('#tk-close-style', panel.closeButtonStyle || 'Danger');
   set('#tk-claim-label', panel.claimButtonLabel);
   set('#tk-claim-emoji', panel.claimButtonEmoji);
-  document.querySelector('#tk-ask-reason').checked = !!panel.askForReason;
+  fillCloseFlowForm(panel.closeFlow || {});
+  document.querySelector('#tk-ask-reason').checked = !!panel.askReason;
   document.querySelector('#tk-enabled').checked = panel.enabled !== false;
   const supportList = document.querySelector('#tk-support-list');
   supportList.innerHTML = (panel.supportRoleIds && panel.supportRoleIds.length
@@ -242,6 +308,7 @@ function bindTicketCardActions() {
 }
 
 bindColorSync('tk-color', 'tk-color-text');
+bindColorSync('tk-cf-embed-color', 'tk-cf-embed-color-text');
 
 document.getElementById('tk-support-add')?.addEventListener('click', () => {
   const ml = document.querySelector('#tk-support-list');
