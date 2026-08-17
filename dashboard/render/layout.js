@@ -13,6 +13,7 @@
  */
 
 const constants = require('../constants');
+const { svgIcon } = require('../public/js/icons');
 
 function esc(str) {
     if (str == null) return '';
@@ -88,13 +89,13 @@ function navHTML({ active, user, login, hideBack }) {
         <button class="logout-btn" id="logout-btn">Log out</button>
       </span>`;
     }
-    const backBtn = hideBack ? '' : `<a href="javascript:history.back()" class="back-btn" aria-label="Go back to previous page" title="Go back to previous page"><span class="back-symbol">←</span></a>`;
+    const backBtn = hideBack ? '' : `<a href="javascript:history.back()" class="back-btn" aria-label="Go back to previous page" title="Go back to previous page">${svgIcon('arrowLeft', 'back-symbol')}</a>`;
     return `
     <header class="topbar">
       <div class="topbar-inner">
         ${backBtn}
         <a href="/" class="brand">
-          <span class="brand-mark">⚡</span>
+          <span class="brand-mark">${svgIcon('zap')}</span>
           <span class="brand-name">PrimeBot</span>
           <span class="brand-sub">Dashboard</span>
         </a>
@@ -150,7 +151,10 @@ function render(opts) {
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>${esc(title)}</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9A%99%EF%B8%8F%3C/text%3E%3C/svg%3E" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%235865f2' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolygon points='13 2 3 14 12 14 11 22 21 10 12 10 13 2'/%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -162,6 +166,7 @@ function render(opts) {
     <span>PrimeBot <span id="bot-version">${esc(version)}</span> · Control panel for server admins</span>
   </footer>
   <div id="toast" class="toast toast-hidden"></div>
+  <script src="/js/icons.js"></script>
   <script src="/js/common.js"></script>
   ${scriptTags}
   ${idleScript}
@@ -180,4 +185,5 @@ module.exports = {
     roleOptions,
     navHTML,
     render,
+    svgIcon,
 };

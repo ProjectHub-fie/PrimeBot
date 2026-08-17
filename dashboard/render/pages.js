@@ -4,7 +4,7 @@
  */
 
 const constants = require('../constants');
-const { esc, guildIconHTML, render } = require('./layout');
+const { esc, guildIconHTML, render, svgIcon } = require('./layout');
 const { LOG_EVENTS } = constants;
 
 // ── Login ──────────────────────────────────────────────────────────────────
@@ -23,16 +23,16 @@ function loginPage({ errorKey } = {}) {
         : '';
     const body = `
     <div class="login-wrap">
-      <div class="login-hero">⚡</div>
+      <div class="login-hero">${svgIcon('zap')}</div>
       <h1 class="login-title">PrimeBot Dashboard</h1>
       <h3>Premium features in free </h3>
       ${errorHTML}
       <p class="login-sub">Sign in with Discord to configure PrimeBot for the servers you manage — welcome messages, leveling, prefixes, auto-reactions and more, all in one place.</p>
       <div class="login-actions">
-        <a href="/auth/discord" class="btn btn-discord">🚪 Login with Discord</a>
-        <a href="${esc(constants.BOT_INVITE_URL)}" class="btn btn-secondary" target="_blank" rel="noopener">➕ Invite PrimeBot</a>
+        <a href="/auth/discord" class="btn btn-discord">${svgIcon('logIn')} Login with Discord</a>
+        <a href="${esc(constants.BOT_INVITE_URL)}" class="btn btn-secondary" target="_blank" rel="noopener">${svgIcon('plus')} Invite PrimeBot</a>
       </div>
-      <a href="/docs" class="btn btn-secondary">📖 Documentation</a>
+      <a href="/docs" class="btn btn-secondary">${svgIcon('book')} Documentation</a>
 
       <div class="stats-band" id="stats-band" aria-live="polite">
         <div class="stats-band-head">
@@ -41,17 +41,17 @@ function loginPage({ errorKey } = {}) {
         </div>
         <div class="stats-cards" id="stats-cards">
           <div class="stat-card stat-primary">
-            <div class="stat-icon">🏰</div>
+            <div class="stat-icon">${svgIcon('server')}</div>
             <div class="stat-value" id="stat-servers" data-target="0">0</div>
             <div class="stat-label">Servers configured</div>
           </div>
           <div class="stat-card">
-            <div class="stat-icon">🖼️</div>
+            <div class="stat-icon">${svgIcon('image')}</div>
             <div class="stat-value" id="stat-banners" data-target="0">0</div>
             <div class="stat-label">Custom welcome banners</div>
           </div>
           <div class="stat-card">
-            <div class="stat-icon">🤖</div>
+            <div class="stat-icon">${svgIcon('robot')}</div>
             <div class="stat-value" id="stat-version">—</div>
             <div class="stat-label">Bot version</div>
           </div>
@@ -59,22 +59,22 @@ function loginPage({ errorKey } = {}) {
         <div class="stats-chart-wrap">
           <div class="stats-chart-head">Feature adoption</div>
           <div class="donut-grid">
-            <div class="donut-item"><div class="donut" id="donut-leveling"><span class="donut-pct">0%</span></div><div class="donut-label">📈 Leveling</div></div>
-            <div class="donut-item"><div class="donut" id="donut-welcome"><span class="donut-pct">0%</span></div><div class="donut-label">👋 Welcome</div></div>
-            <div class="donut-item"><div class="donut" id="donut-reactions"><span class="donut-pct">0%</span></div><div class="donut-label">🔁 Auto-reactions</div></div>
-            <div class="donut-item"><div class="donut" id="donut-broadcasts"><span class="donut-pct">0%</span></div><div class="donut-label">📢 Broadcasts</div></div>
-            <div class="donut-item"><div class="donut" id="donut-automod"><span class="donut-pct">0%</span></div><div class="donut-label">🛡️ Automod</div></div>
-            <div class="donut-item"><div class="donut" id="donut-tickets"><span class="donut-pct">0%</span></div><div class="donut-label">🎫 Tickets</div></div>
+            <div class="donut-item"><div class="donut" id="donut-leveling"><span class="donut-pct">0%</span></div><div class="donut-label">${svgIcon('trendingUp')} Leveling</div></div>
+            <div class="donut-item"><div class="donut" id="donut-welcome"><span class="donut-pct">0%</span></div><div class="donut-label">${svgIcon('hand')} Welcome</div></div>
+            <div class="donut-item"><div class="donut" id="donut-reactions"><span class="donut-pct">0%</span></div><div class="donut-label">${svgIcon('repeat')} Auto-reactions</div></div>
+            <div class="donut-item"><div class="donut" id="donut-broadcasts"><span class="donut-pct">0%</span></div><div class="donut-label">${svgIcon('megaphone')} Broadcasts</div></div>
+            <div class="donut-item"><div class="donut" id="donut-automod"><span class="donut-pct">0%</span></div><div class="donut-label">${svgIcon('shield')} Automod</div></div>
+            <div class="donut-item"><div class="donut" id="donut-tickets"><span class="donut-pct">0%</span></div><div class="donut-label">${svgIcon('ticket')} Tickets</div></div>
           </div>
         </div>
       </div>
 
       <div class="feature-grid">
-        <div class="feature"><div class="fi">👋</div><div class="ft">Welcome system</div><div class="fd">Custom messages, banners, DMs and channel routing.</div></div>
-        <div class="feature"><div class="fi">📈</div><div class="ft">Leveling &amp; XP</div><div class="fd">Tune multipliers, cooldowns and level-up channels.</div></div>
-        <div class="feature"><div class="fi">⚡</div><div class="ft">Command prefix</div><div class="fd">Set a per-server prefix instead of the default.</div></div>
-        <div class="feature"><div class="fi">🔁</div><div class="ft">Auto-reactions</div><div class="fd">Trigger emojis on matching messages automatically.</div></div>
-        <div class="feature"><div class="fi">🛡️</div><div class="ft">Premium Automod</div><div class="fd">Auto-mod with warnings, escalation, spam &amp; word filters — free.</div></div>
+        <div class="feature"><div class="fi">${svgIcon('hand')}</div><div class="ft">Welcome system</div><div class="fd">Custom messages, banners, DMs and channel routing.</div></div>
+        <div class="feature"><div class="fi">${svgIcon('trendingUp')}</div><div class="ft">Leveling &amp; XP</div><div class="fd">Tune multipliers, cooldowns and level-up channels.</div></div>
+        <div class="feature"><div class="fi">${svgIcon('zap')}</div><div class="ft">Command prefix</div><div class="fd">Set a per-server prefix instead of the default.</div></div>
+        <div class="feature"><div class="fi">${svgIcon('repeat')}</div><div class="ft">Auto-reactions</div><div class="fd">Trigger emojis on matching messages automatically.</div></div>
+        <div class="feature"><div class="fi">${svgIcon('shield')}</div><div class="ft">Premium Automod</div><div class="fd">Auto-mod with warnings, escalation, spam &amp; word filters — free.</div></div>
       </div>
     </div>`;
     return render({ title: 'PrimeBot Dashboard — Login', body, login: true, scripts: ['/js/login.js'] });
@@ -89,7 +89,7 @@ function docsPage({ clientId, user } = {}) {
     const body = `
     <div class="docs">
       <div class="docs-hero">
-        <div class="docs-hero-icon">📖</div>
+        <div class="docs-hero-icon">${svgIcon('book')}</div>
         <h1 class="docs-title">PrimeBot Documentation</h1>
         <p class="docs-lead">Everything you need to set up, configure and manage PrimeBot for your Discord server — from inviting the bot to tuning welcome messages, leveling and auto-reactions.</p>
       </div>
@@ -183,15 +183,15 @@ function docsPage({ clientId, user } = {}) {
         <p>PrimeBot ships with 40+ commands. Here are the main categories. Slash commands use <code>/</code>; prefix commands use your server's prefix (default <code>$</code>).</p>
         <div class="docs-cmd-grid">
           <div class="docs-cmd-card">
-            <h4>🛡️ Moderation</h4>
+            <h4>${svgIcon('shield')} Moderation</h4>
             <ul><li><code>ban</code> / <code>kick</code> — remove members</li><li><code>purge</code> — bulk-delete messages</li><li><code>lock</code> / <code>unlock</code> — lock channels</li><li><code>nuke</code> — clear &amp; recreate a channel</li><li><code>hide</code> / <code>unhide</code> — hide channels</li><li><code>move</code> — move members</li><li><code>role</code> — assign roles</li></ul>
           </div>
           <div class="docs-cmd-card">
-            <h4>🎉 Engagement</h4>
+            <h4>${svgIcon('star')} Engagement</h4>
             <ul><li><code>poll</code> / <code>endpoll</code> — simple polls</li><li><code>lpoll</code> / <code>endgame</code> — live polls</li><li><code>giveaway</code> / <code>reroll</code> / <code>end</code> — giveaways</li><li><code>counting</code> — counting game</li><li><code>tictactoe</code> — play tic-tac-toe</li><li><code>truthdare</code> — truth or dare</li></ul>
           </div>
           <div class="docs-cmd-card">
-            <h4>🎫 Tickets &amp; Support</h4>
+            <h4>${svgIcon('ticket')} Tickets &amp; Support</h4>
             <ul><li><code>createticket</code> / <code>ticket</code> — open tickets</li><li><code>tickethistory</code> — view past tickets</li></ul>
           </div>
         </div>
@@ -229,7 +229,7 @@ function statsPage({ user } = {}) {
     </div>
 
     <div class="card">
-      <div class="card-title"><span><span class="icon">🌐</span> Shardnode status</span></div>
+      <div class="card-title"><span><span class="icon">${svgIcon('globe')}</span> Shardnode status</span></div>
       <p class="card-desc">Per-node heartbeats and the active failover lease across the sn1 / sn2 / sn3 shard nodes.</p>
       <div id="stats-nodes">
         <div class="splash"><div class="spinner"></div><p>Loading node stats…</p></div>
@@ -245,7 +245,7 @@ function livePollsPage({ user } = {}) {
     <div class="page-head">
       <h1>Live Polls</h1>
       <p>Cross-server live polls — running and recently ended, across all of PrimeBot.</p>
-      <button class="btn btn-secondary live-refresh-btn" id="live-refresh">🔄 Refresh</button>
+      <button class="btn btn-secondary live-refresh-btn" id="live-refresh">${svgIcon("refresh")} Refresh</button>
     </div>
     <div id="live-content">
       <div class="splash"><div class="spinner"></div><p>Loading live polls…</p></div>
@@ -260,7 +260,7 @@ function liveGiveawaysPage({ user } = {}) {
     <div class="page-head">
       <h1>Live Giveaways</h1>
       <p>Cross-server live giveaways — running and recently ended, across all of PrimeBot.</p>
-      <button class="btn btn-secondary live-refresh-btn" id="live-refresh">🔄 Refresh</button>
+      <button class="btn btn-secondary live-refresh-btn" id="live-refresh">${svgIcon("refresh")} Refresh</button>
     </div>
     <div id="live-content">
       <div class="splash"><div class="spinner"></div><p>Loading live giveaways…</p></div>
@@ -276,8 +276,8 @@ function guildCardHTML(g, present) {
     const tags = [];
     tags.push(`<span class="tag prefix">${esc(g.prefix || '$')} prefix</span>`);
     if (present) {
-        tags.push(g.welcomeEnabled ? `<span class="tag on">👋 Welcome</span>` : `<span class="tag off">Welcome off</span>`);
-        tags.push(g.levelingEnabled ? `<span class="tag on">📈 Leveling</span>` : `<span class="tag off">Leveling off</span>`);
+        tags.push(g.welcomeEnabled ? `<span class="tag on">${svgIcon('hand')} Welcome</span>` : `<span class="tag off">Welcome off</span>`);
+        tags.push(g.levelingEnabled ? `<span class="tag on">${svgIcon('trendingUp')} Leveling</span>` : `<span class="tag off">Leveling off</span>`);
     } else {
         tags.push(`<span class="tag absent">Bot not added</span>`);
     }
@@ -315,9 +315,9 @@ function overviewPage({ guilds = [], clientId, user } = {}) {
         const invite = `https://discord.com/oauth2/authorize?client_id=${esc(clientId || '')}&permissions=8&integration_type=0&scope=bot%20applications.commands`;
         listHTML = `
       <div class="guild-empty">
-        <p style="font-size:40px;margin:0 0 8px">🔍</p>
+        <p class="empty-ico">${svgIcon('search')}</p>
         <p>You don't manage any servers yet, or PrimeBot isn't in any of them.</p>
-        <p style="margin-top:12px"><a class="btn btn-secondary" href="${invite}" target="_blank" rel="noopener">Invite PrimeBot to a server</a></p>
+        <p style="margin-top:12px"><a class="btn btn-secondary" href="${invite}" target="_blank" rel="noopener">${svgIcon('plus')} Invite PrimeBot to a server</a></p>
       </div>`;
     } else {
         if (manageable.length) {
@@ -360,8 +360,8 @@ function notFoundPage({ user } = {}) {
       <h1 class="notfound-title">Page not found</h1>
       <p class="notfound-text">Oops — the page you're looking for doesn't exist or may have moved. The link might be broken or outdated.</p>
       <div class="notfound-actions">
-        <a class="btn btn-primary" href="/">← Back to dashboard</a>
-        <a class="btn btn-secondary" href="/docs">Read the docs</a>
+        <a class="btn btn-primary" href="/">${svgIcon('arrowLeft')} Back to dashboard</a>
+        <a class="btn btn-secondary" href="/docs">${svgIcon('book')} Read the docs</a>
       </div>
       <p class="notfound-hint">If you think this is a mistake, let us know in our <a href="https://discord.gg/gd7UNSfX86" target="_blank" rel="noopener">support server</a>.</p>
     </div>`;
