@@ -830,12 +830,94 @@ function ticketsPage({ guild, user }) {
         <input type="text" id="tk-close-emoji" maxlength="100" value="🔒" />
       </div>
       <div class="field">
+        <label class="field-label" for="tk-close-style">Close button colour</label>
+        <select id="tk-close-style">${styleOpts}</select>
+      </div>
+      <div class="field">
         <label class="field-label" for="tk-claim-label">Claim button label (optional — leave blank for no claim button)</label>
         <input type="text" id="tk-claim-label" maxlength="80" placeholder="Claim" />
       </div>
       <div class="field">
         <label class="field-label" for="tk-claim-emoji">Claim button emoji (optional)</label>
         <input type="text" id="tk-claim-emoji" maxlength="100" placeholder="✋" />
+      </div>
+
+      <div class="card-title" style="margin-top:8px"><span>Close flow — confirmation, close embed &amp; post-close buttons</span></div>
+      <p class="card-hint">When a member presses <strong>Close</strong>, a <strong>Yes / No</strong> confirmation row is shown. <strong>Yes</strong> closes the ticket and (optionally) posts an editable red embed, then reveals <strong>Transcript / Reopen / Delete</strong> buttons. Every button below has a configurable label, emoji, and colour.</p>
+      <div class="field">
+        <label class="field-label">Yes (confirm) button</label>
+        <div class="reaction-row" style="display:flex;gap:6px;flex-wrap:wrap">
+          <input type="text" id="tk-cf-yes-label" maxlength="80" value="Yes" placeholder="Yes" style="flex:2" />
+          <input type="text" id="tk-cf-yes-emoji" maxlength="100" value="✅" placeholder="✅" style="flex:1" />
+          <select id="tk-cf-yes-style" style="flex:1">${styleOpts}</select>
+        </div>
+      </div>
+      <div class="field">
+        <label class="field-label">No (cancel) button</label>
+        <div class="reaction-row" style="display:flex;gap:6px;flex-wrap:wrap">
+          <input type="text" id="tk-cf-no-label" maxlength="80" value="No" placeholder="No" style="flex:2" />
+          <input type="text" id="tk-cf-no-emoji" maxlength="100" value="✖️" placeholder="✖️" style="flex:1" />
+          <select id="tk-cf-no-style" style="flex:1">${styleOpts}</select>
+        </div>
+      </div>
+      <div class="switch-row">
+        <div class="switch-label"><div class="sl-title">Show a close embed</div><div class="sl-desc">Optional red embed shown after the ticket is closed (before the action buttons). Edit its text below.</div></div>
+        <label class="switch"><input type="checkbox" id="tk-cf-embed-enabled"/><span class="slider"></span></label>
+      </div>
+      <div class="field">
+        <label class="field-label" for="tk-cf-embed-title">Close embed title</label>
+        <input type="text" id="tk-cf-embed-title" maxlength="255" value="🔒 Ticket Closed" />
+      </div>
+      <div class="field">
+        <label class="field-label" for="tk-cf-embed-desc">Close embed description</label>
+        <textarea id="tk-cf-embed-desc" placeholder="This ticket was closed by {moderator} at {time}."></textarea>
+        <div class="field-hint">Placeholders: {time} {timestamp} {author} {moderator} {panel} {reason}. {timestamp} renders as a Discord relative-time tag.</div>
+      </div>
+      <div class="field">
+        <label class="field-label" for="tk-cf-embed-footer">Close embed footer text</label>
+        <input type="text" id="tk-cf-embed-footer" maxlength="255" value="{panel} · PrimeBot" />
+      </div>
+      <div class="field">
+        <label class="field-label">Close embed colour (default red)</label>
+        <div class="color-field">
+          <input type="color" id="tk-cf-embed-color" value="#ED4245" />
+          <input type="text" id="tk-cf-embed-color-text" value="#ED4245" style="flex:1" />
+        </div>
+      </div>
+
+      <div class="switch-row">
+        <div class="switch-label"><div class="sl-title">Save transcripts to a channel</div><div class="sl-desc">Optional. When the Transcript button is pressed, the ticket's messages are saved to this channel.</div></div>
+        <label class="switch"><input type="checkbox" id="tk-cf-transcript-enabled"/><span class="slider"></span></label>
+      </div>
+      <div class="field">
+        <label class="field-label" for="tk-cf-transcript-channel">Transcript channel ID</label>
+        <input type="text" id="tk-cf-transcript-channel" placeholder="123456789012345678" />
+        <div class="field-hint">Dashboard-only. The channel PrimeBot posts ticket transcripts to.</div>
+      </div>
+
+      <div class="field">
+        <label class="field-label">Transcript button</label>
+        <div class="reaction-row" style="display:flex;gap:6px;flex-wrap:wrap">
+          <input type="text" id="tk-cf-btn-transcript-label" maxlength="80" value="Transcript" placeholder="Transcript" style="flex:2" />
+          <input type="text" id="tk-cf-btn-transcript-emoji" maxlength="100" value="📝" placeholder="📝" style="flex:1" />
+          <select id="tk-cf-btn-transcript-style" style="flex:1">${styleOpts}</select>
+        </div>
+      </div>
+      <div class="field">
+        <label class="field-label">Reopen button</label>
+        <div class="reaction-row" style="display:flex;gap:6px;flex-wrap:wrap">
+          <input type="text" id="tk-cf-btn-reopen-label" maxlength="80" value="Reopen" placeholder="Reopen" style="flex:2" />
+          <input type="text" id="tk-cf-btn-reopen-emoji" maxlength="100" value="🔓" placeholder="🔓" style="flex:1" />
+          <select id="tk-cf-btn-reopen-style" style="flex:1">${styleOpts}</select>
+        </div>
+      </div>
+      <div class="field">
+        <label class="field-label">Delete button</label>
+        <div class="reaction-row" style="display:flex;gap:6px;flex-wrap:wrap">
+          <input type="text" id="tk-cf-btn-delete-label" maxlength="80" value="Delete" placeholder="Delete" style="flex:2" />
+          <input type="text" id="tk-cf-btn-delete-emoji" maxlength="100" value="🗑️" placeholder="🗑️" style="flex:1" />
+          <select id="tk-cf-btn-delete-style" style="flex:1">${styleOpts}</select>
+        </div>
       </div>
       <div class="switch-row">
         <div class="switch-label"><div class="sl-title">Enabled</div><div class="sl-desc">When off, the open button is disabled.</div></div>
@@ -1025,7 +1107,7 @@ function eventsPage({ guild, user }) {
 function livePollsPage({ guild, user }) {
     const panelHTML = `
     <div class="card">
-      <div class="card-title"><span><span class="icon">📊</span> Live Polls</span></div>
+      <div class="card-title"><span><span class="icon">📊</span> Live Polls</span><button class="btn btn-secondary live-refresh-btn" id="live-refresh">🔄 Refresh</button></div>
       <p class="card-desc">Live polls created in <strong>${esc(guild.name)}</strong> — running and recently ended. Live polls are cross-server: anyone can join with the pass code from any server where PrimeBot is present.</p>
       <p class="card-hint">Create one in Discord with <code>$lpoll</code>. See <a href="/live/polls">all live polls across PrimeBot →</a></p>
       <div id="live-content"><p class="live-empty">Loading live polls…</p></div>
@@ -1041,7 +1123,7 @@ function livePollsPage({ guild, user }) {
 function liveGiveawaysPage({ guild, user }) {
     const panelHTML = `
     <div class="card">
-      <div class="card-title"><span><span class="icon">🎉</span> Live Giveaways</span></div>
+      <div class="card-title"><span><span class="icon">🎉</span> Live Giveaways</span><button class="btn btn-secondary live-refresh-btn" id="live-refresh">🔄 Refresh</button></div>
       <p class="card-desc">Live giveaways created in <strong>${esc(guild.name)}</strong> — running and recently ended. Live giveaways are cross-server: anyone can join with the pass code from any server where PrimeBot is present.</p>
       <p class="card-hint">Create one in Discord with <code>$lgiveway</code>. See <a href="/live/giveaways">all live giveaways across PrimeBot →</a></p>
       <div id="live-content"><p class="live-empty">Loading live giveaways…</p></div>

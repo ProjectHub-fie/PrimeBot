@@ -15,6 +15,13 @@ ticketPool.query = async () => ({ rows: [] });
 
 const { TicketPanelManager } = require('../utils/ticketManager');
 
+// The builders return discord.js ButtonBuilder/ActionRowBuilder objects; tests
+// need the serialized form (custom_id, label, ...) to assert against.
+function btnOf(payload, rowIdx = 0, colIdx = 0) {
+    const comp = payload.components[rowIdx].components[colIdx];
+    return comp && comp.toJSON ? comp.toJSON() : comp;
+}
+
 test('_normalizePanel fills defaults and validates enum fields', () => {
     const mgr = new TicketPanelManager({}); // _init is async + stubbed
     const p = mgr._normalizePanel({ name: '  Support  ', buttonStyle: 'bogus', messageType: 'weird', color: 'nope' });
@@ -77,7 +84,7 @@ test('buildPanelMessage builds an embed with the open button for embed type', ()
     assert.equal(e.title, 'Need help?');
     assert.equal(e.color, 0x57F287);
     assert.ok(payload.components.length >= 1);
-    const btn = payload.components[0].components[0];
+    const btn = btnOf(payload);
     assert.equal(btn.custom_id, 'ticketpanel:open:42');
     assert.equal(btn.label, 'Open Ticket');
 });
@@ -91,7 +98,7 @@ test('buildPanelMessage builds a plain message with the open button for plain ty
     const payload = mgr.buildPanelMessage(panel);
     assert.equal(payload.content, 'Press to open a ticket');
     assert.ok(!payload.embeds);
-    const btn = payload.components[0].components[0];
+    const btn = btnOf(payload);
     assert.equal(btn.custom_id, 'ticketpanel:open:7');
     assert.equal(btn.label, 'Open');
 });
@@ -103,13 +110,13 @@ test('buildControlMessage includes a close button, a claim button, and a rename 
     });
     const payload = mgr.buildControlMessage(panel, '<@123>');
     assert.equal(payload.components.length, 2);
-    const closeBtn = payload.components[0].components[0];
+    const closeBtn = btnOf(payload, 0, 0);
     assert.equal(closeBtn.custom_id, 'ticketpanel:close');
-    const claimBtn = payload.components[1].components[0];
+    const claimBtn = btnOf(payload, 1, 0);
     assert.equal(claimBtn.custom_id, 'ticketpanel:claim');
     assert.equal(claimBtn.label, 'Claim');
     // Rename button is in the second extra row alongside claim.
-    const renameBtn = payload.components[1].components[1];
+    const renameBtn = btnOf(payload, 1, 1);
     assert.equal(renameBtn.custom_id, 'ticketpanel:rename');
 });
 
@@ -118,8 +125,8 @@ test('buildControlMessage includes a rename button (with close) when no claim bu
     const panel = mgr._normalizePanel({ name: 'Support' });
     const payload = mgr.buildControlMessage(panel, '<@123>');
     assert.equal(payload.components.length, 2);
-    assert.equal(payload.components[0].components[0].custom_id, 'ticketpanel:close');
-    assert.equal(payload.components[1].components[0].custom_id, 'ticketpanel:rename');
+    assert.equal(btnOf(payload, 0, 0).custom_id, 'ticketpanel:close');
+    assert.equal(btnOf(payload, 1, 0).custom_id, 'ticketpanel:rename');
 });
 
 test('_normalizePanel applies default status name templates and trims to null when empty', () => {

@@ -100,6 +100,8 @@ async function loadGuildLive() {
   const kind = window.location.pathname.endsWith('/live/giveaways') ? 'giveaway' : 'poll';
   const wrap = document.getElementById('live-content');
   if (!wrap || !guildId) return;
+  const refreshBtn = document.getElementById('live-refresh');
+  if (refreshBtn) { refreshBtn.disabled = true; refreshBtn.textContent = '🔄 Refreshing…'; }
   try {
     const data = await api(`/api/guilds/${encodeURIComponent(guildId)}/live/${kind === 'poll' ? 'polls' : 'giveaways'}`);
     const items = data.running || [];
@@ -110,7 +112,11 @@ async function loadGuildLive() {
     });
   } catch (err) {
     wrap.innerHTML = `<div class="alert alert-error">${esc(err.message || 'Failed to load live data.')}</div>`;
+  } finally {
+    if (refreshBtn) { refreshBtn.disabled = false; refreshBtn.textContent = '🔄 Refresh'; }
   }
 }
+
+document.getElementById('live-refresh')?.addEventListener('click', () => loadGuildLive());
 
 loadGuildLive();

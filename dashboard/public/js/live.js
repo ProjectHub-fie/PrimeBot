@@ -98,6 +98,9 @@ async function loadLive() {
   const kind = window.liveKind === 'giveaway' ? 'giveaway' : 'poll';
   const wrap = document.getElementById('live-content');
   if (!wrap) return;
+  // Keep the refresh button label stable across reloads.
+  const refreshBtn = document.getElementById('live-refresh');
+  if (refreshBtn) { refreshBtn.disabled = true; refreshBtn.textContent = '🔄 Refreshing…'; }
   try {
     const data = await api(kind === 'poll' ? '/api/live/polls' : '/api/live/giveaways');
     const items = data.running || [];
@@ -109,7 +112,11 @@ async function loadLive() {
     });
   } catch (err) {
     wrap.innerHTML = `<div class="card"><div class="alert alert-error">${esc(err.message || 'Failed to load live data.')}</div></div>`;
+  } finally {
+    if (refreshBtn) { refreshBtn.disabled = false; refreshBtn.textContent = '🔄 Refresh'; }
   }
 }
+
+document.getElementById('live-refresh')?.addEventListener('click', () => loadLive());
 
 loadLive();
