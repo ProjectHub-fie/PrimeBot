@@ -544,6 +544,25 @@ module.exports = {
                             ephemeral: true
                         });
                         return;
+                    } else if (interaction.customId === 'categories_prefix_refresh'
+                            || interaction.customId === 'categories_prefix_back') {
+                        // Prefix help menu: refresh / back-to-categories → re-render the
+                        // main prefix category menu (embed + dropdown + nav buttons).
+                        const { mainMenuEmbed, categorySelectRow, navigationButtonsRow } = require('../utils/prefixHelp');
+                        const pfx = (interaction.client.serverSettingsManager?.getGuildPrefix?.(interaction.guild?.id)) || '$';
+                        try {
+                            await interaction.update({
+                                embeds: [mainMenuEmbed(pfx, interaction.client)],
+                                components: [categorySelectRow(), navigationButtonsRow()],
+                            });
+                        } catch (_) {}
+                        return;
+                    } else if (interaction.customId === 'categories_prefix_help') {
+                        await interaction.reply({
+                            content: 'Use the dropdown menu to browse different command categories. Each category contains specialized commands for different server needs.\n\n**Available Categories:**\n• General - Basic bot commands and info\n• Leveling - XP, ranks, and badges (🧪 beta)\n• Games & Activities - Games, polls, and giveaways\n• Community - Cross-server live polls & giveaways\n• Tickets - Ticket support system\n• Welcome - Welcome system configuration\n• Moderation - Server management, roles, and tickets\n• Administration - Feature configuration',
+                            ephemeral: true
+                        });
+                        return;
                     } else if (interaction.customId === 'broadcast_confirm') {
                         console.log('[BROADCAST] Broadcast confirmation button clicked');
                         // Handle broadcast confirmation - this now directly processes the broadcast
@@ -766,9 +785,12 @@ module.exports = {
                         const selectedCategory = interaction.values[0];
                         console.log(`[CATEGORIES] User selected category: ${selectedCategory}`);
 
-                        // Import the functions from the categories module
-                        const { showDetailedCategoryMenuHelp } = require('../utils/categoryHelpers');
-                        await showDetailedCategoryMenuHelp(interaction, selectedCategory);
+                        // Prefix-command dropdown → render the prefix category help
+                        // (the old code routed to the slash-command catalog, which
+                        // showed `/help` etc. — wrong for the prefix help menu).
+                        const { showPrefixCategoryMenuHelp } = require('../utils/prefixHelp');
+                        const prefix = (interaction.client.serverSettingsManager?.getGuildPrefix?.(interaction.guild?.id)) || '$';
+                        await showPrefixCategoryMenuHelp(interaction, selectedCategory, prefix);
                         return;
                     }
                     if (interaction.customId === 'category_select') {
