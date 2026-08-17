@@ -511,7 +511,29 @@ module.exports = {
                         });
                     }
                 }
-                
+
+                // Auto-responder: reply with configured text responses when a
+                // message matches a trigger. Runs only for non-command messages
+                // (this block) so prefix commands aren't double-answered.
+                try {
+                    const triggeredResponses = client.serverSettingsManager?.getTriggeredResponses?.(
+                        message.guild.id,
+                        message.content
+                    );
+                    if (triggeredResponses && triggeredResponses.length > 0) {
+                        console.log(`[AUTO-RESPOND] Sending ${triggeredResponses.length} response(s) in ${message.guild.name}`);
+                        for (const response of triggeredResponses) {
+                            message.reply(typeof response === 'string' && response.trim()
+                                ? response
+                                : '…').catch(err => {
+                                console.error('[AUTO-RESPOND] Failed to send response:', err);
+                            });
+                        }
+                    }
+                } catch (err) {
+                    console.error('[AUTO-RESPOND] Error processing auto-responder:', err);
+                }
+
                 return; // Not a command or counting-related message
             }
 
@@ -4163,6 +4185,148 @@ module.exports = {
                             
                         default:
                             message.reply(`Unknown auto-reaction command: ${arSubCommand}. Use \`${prefix}autoreact\` to see available commands.`);
+                    }
+                    break;
+
+                // Auto-Responder Commands (prefix)
+                case "autoresponder":
+                case "auto-responder":
+                case "aresponder":
+                case "ar":
+                    if (args.length === 0) {
+                        const arHelpEmbed = new EmbedBuilder()
+                            .setColor(config.colors.primary)
+                            .setTitle("💬 Auto-Responder System")
+                            .setDescription("Set up automatic text replies to trigger words in messages.")
+                            .addFields(
+                                { name: `${prefix}autoresponder enable`, value: "Enable auto-responder" },
+                                { name: `${prefix}autoresponder disable`, value: "Disable auto-responder" },
+                                { name: `${prefix}autoresponder add [trigger] | [response]`, value: "Add a response. Use `|` to separate trigger and response." },
+                                { name: `${prefix}autoresponder exact [trigger] | [response]`, value: "Add a response that only fires on an EXACT message match" },
+                                { name: `${prefix}autoresponder remove [trigger]`, value: "Remove an auto-response" },
+                                { name: `${prefix}autoresponder list`, value: "List all auto-responses" }
+                            )
+                            .setFooter({ text: "Responses are sent when a message contains the trigger word", iconURL: client.user.displayAvatarURL() });
+                        message.reply({ embeds: [arHelpEmbed] });
+                        return;
+                    }
+
+                    const arespSub = args[0].toLowerCase();
+                    switch (arespSub) {
+                        case "enable":
+                        case "on": {
+                            if (!message.member.permissions.has(PermissionFlagsBits.ManageGuild)) {
+                                message.reply("You don't have permission to configure the auto-responder.");
+                                return;
+                            }
+                            const state = client.serverSettingsManager.toggleAutoResponder(message.guild.id);
+                            if (!state) client.serverSettingsManager.toggleAutoResponder(message.guild.id);
+                            message.reply({
+                                embeds: [new EmbedBuilder()
+                                    .setColor(config.colors.success)
+                                    .setTitle("✅ Auto-Responder Enabled")
+                                    .setDescription("Messages containing trigger words will now receive automatic replies.")
+                                    .setTimestamp()]
+                            });
+                            break;
+                        }
+                        case "disable":
+                        case "off": {
+                            if (!message.member.permissions.has(PermissionFlagsBits.ManageGuild)) {
+                                message.reply("You don't have permission to configure the auto-responder.");
+                                return;
+                            }
+                            const state = client.serverSettingsManager.toggleAutoResponder(message.guild.id);
+                            if (state) client.serverSettingsManager.toggleAutoResponder(message.guild.id);
+                            message.reply({
+                                embeds: [new EmbedBuilder()
+                                    .setColor(config.colors.error)
+                                    .setTitle("❌ Auto-Responder Disabled")
+                                    .setDescription("Automatic replies to trigger words have been disabled.")
+                                    .setTimestamp()]
+                            });
+                            break;
+                        }
+                        case "add":
+                        case "exact": {
+                            if (!message.member.permissions.has(PermissionFlagsBits.ManageGuild)) {
+                                message.reply("You don't have permission to configure the auto-responder.");
+                                return;
+                            }
+                            const exact = arespSub === "exact";
+                            // Everything after the subcommand, split on the first "|"
+                            const rest = args.slice(exact ? 1 : 1).join(' ');
+                            const pipeIdx = rest.indexOf('|');
+                            if (pipeIdx === -1) {
+                                message.reply(`Please separate the trigger and response with \`|\`. Example: \`${prefix}autoresponder add hello | Hi there!\``);
+                                return;
+                            }
+                            const arespTrigger = rest.slice(0, pipeIdx).trim();
+                            const arespResponse = rest.slice(pipeIdx + 1).trim();
+                            if (!arespTrigger || !arespResponse) {
+                                message.reply("Both a trigger and a response are required.");
+                                return;
+                            }
+                            client.serverSettingsManager.addAutoResponse(message.guild.id, arespTrigger, arespResponse, { exactMatch: exact });
+                            const arData = client.serverSettingsManager.getAutoResponder(message.guild.id);
+                            if (!arData.enabled) client.serverSettingsManager.toggleAutoResponder(message.guild.id);
+                            message.reply({
+                                embeds: [new EmbedBuilder()
+                                    .setColor(config.colors.success)
+                                    .setTitle("✅ Auto-Response Added")
+                                    .setDescription(`Trigger: **${arespTrigger}**\nResponse: ${arespResponse}\nMatch: **${exact ? 'exact' : 'contains'}**`)
+                                    .setTimestamp()]
+                            });
+                            break;
+                        }
+                        case "remove":
+                        case "delete": {
+                            if (!message.member.permissions.has(PermissionFlagsBits.ManageGuild)) {
+                                message.reply("You don't have permission to configure the auto-responder.");
+                                return;
+                            }
+                            const arespTriggerToRemove = args.slice(1).join(' ').trim();
+                            if (!arespTriggerToRemove) {
+                                message.reply(`Please provide the trigger to remove. Example: \`${prefix}autoresponder remove hello\``);
+                                return;
+                            }
+                            const removed = client.serverSettingsManager.removeAutoResponse(message.guild.id, arespTriggerToRemove);
+                            if (removed) {
+                                message.reply({
+                                    embeds: [new EmbedBuilder()
+                                        .setColor(config.colors.success)
+                                        .setTitle("✅ Auto-Response Removed")
+                                        .setDescription(`Removed auto-response for trigger: **${arespTriggerToRemove}**`)
+                                        .setTimestamp()]
+                                });
+                            } else {
+                                message.reply(`Couldn't find an auto-response with trigger: **${arespTriggerToRemove}**`);
+                            }
+                            break;
+                        }
+                        case "list": {
+                            const arespData = client.serverSettingsManager.getAutoResponder(message.guild.id);
+                            if (arespData.responses.length === 0) {
+                                message.reply("No auto-responses have been set up for this server yet.");
+                                return;
+                            }
+                            const arespFields = arespData.responses.slice(0, 25).map(r => ({
+                                name: `Trigger: ${r.trigger} (${r.exactMatch ? 'exact' : 'contains'})`,
+                                value: r.response.length > 200 ? r.response.slice(0, 200) + '…' : r.response,
+                                inline: false
+                            }));
+                            message.reply({
+                                embeds: [new EmbedBuilder()
+                                    .setColor(config.colors.primary)
+                                    .setTitle("💬 Auto-Responder List")
+                                    .setDescription(`Status: **${arespData.enabled ? 'Enabled' : 'Disabled'}**\nTotal auto-responses: ${arespData.responses.length}`)
+                                    .addFields(arespFields)
+                                    .setTimestamp()]
+                            });
+                            break;
+                        }
+                        default:
+                            message.reply(`Unknown auto-responder command: ${arespSub}. Use \`${prefix}autoresponder\` to see available commands.`);
                     }
                     break;
 

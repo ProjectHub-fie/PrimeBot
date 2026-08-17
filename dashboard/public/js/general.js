@@ -41,18 +41,15 @@ async function loadWebsiteLogs() {
 }
 
 // Refresh the table after a successful prefix save so the just-recorded entry
-// appears without a manual page reload. saveBar runs savers in order; we hook
-// the save-completed cycle by re-loading after a short delay.
-if (window.saveBar) {
-  const origMarkClean = window.saveBar.markClean?.bind(window.saveBar);
-  if (typeof origMarkClean === 'function') {
-    window.saveBar.markClean = function () {
-      origMarkClean();
-      // The save handler records the website log asynchronously (fire-and-
-      // forget), so give the write a moment to land before re-fetching.
-      setTimeout(loadWebsiteLogs, 400);
-    };
-  }
+// appears without a manual page reload. The save handler records the website
+// log asynchronously (fire-and-forget), so give the write a moment to land
+// before re-fetching. We use SaveBar's onSaved hook (fired after a successful
+// save) rather than overriding markClean — runSave uses internal closures, so
+// a markClean override on window.saveBar would never fire.
+if (window.saveBar && typeof window.saveBar.onSaved === 'function') {
+  window.saveBar.onSaved(() => {
+    setTimeout(loadWebsiteLogs, 400);
+  });
 }
 
 loadWebsiteLogs();

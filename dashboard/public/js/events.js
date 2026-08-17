@@ -1,15 +1,16 @@
 /* Events page — create event schedules with timed tasks, list/start/cancel/delete.
  * Mirrors the old SPA bindEventsTab + bindEventCardActions + loadEventSchedules.
  *
- * When the guild is not a beta server, the page renders a blurred, locked view
- * (see eventsPage beta-locked-wrap). In that case this script exits early — no
- * API calls, no bindings — so the overlay message is the only thing that works.
+ * Event Management is currently an "upcoming" feature (see eventsPage
+ * upcoming-locked-wrap) — the page renders a blurred "Coming Soon" overlay for
+ * ALL servers. In that case (or the legacy beta-locked state) this script exits
+ * early — no API calls, no bindings — so the overlay is the only thing that works.
  */
 
 const GUILD_ID = window.guildData?.guildId;
 
-// Non-beta servers see a locked, read-only-blurred panel; do nothing.
-if (document.querySelector('.beta-locked-wrap.locked')) {
+// Upcoming (Coming Soon) or non-beta servers see a locked, blurred panel; do nothing.
+if (document.querySelector('.upcoming-locked-wrap.locked, .beta-locked-wrap.locked')) {
   // Nothing to wire — the overlay covers the form.
 } else {
 

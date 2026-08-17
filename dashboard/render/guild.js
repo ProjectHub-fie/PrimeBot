@@ -12,11 +12,16 @@ const { esc, guildIconHTML } = require('./layout');
 
 // Each settings tab is a sidebar menu entry. `beta` flags the feature as a
 // beta release — the menu + page render a "BETA" badge next to its label.
+// `upcoming` flags a feature as not-yet-released — the menu renders a "SOON"
+// badge and the page renders a "Coming Soon" overlay (upcoming takes priority
+// over beta when both are set).
 const TABS = [
   { key: 'prefix',         label: '⚙️ General' },
   { key: 'welcome',        label: '👋 Welcome' },
   { key: 'leveling',       label: '📈 Leveling' },
+  { key: 'badges',         label: '🏅 Badges', beta: true },
   { key: 'rolerewards',    label: '🎁 Role Rewards', beta: true },
+  { key: 'autoresponder',  label: '💬 Auto-Responder' },
   { key: 'reactions',      label: '🔁 Auto-Reactions' },
   { key: 'reactionroles',  label: '🎭 Reaction Roles' },
   { key: 'broadcast',      label: '📢 Broadcasts' },
@@ -25,7 +30,7 @@ const TABS = [
   { key: 'tickets',        label: '🎫 Tickets' },
   { key: 'live/polls',     label: '📊 Live Polls' },
   { key: 'live/giveaways', label: '🎉 Live Giveaways' },
-  { key: 'events',         label: '📅 Events', beta: true },
+  { key: 'events',         label: '📅 Events', upcoming: true },
 ];
 
 // The inlined channel/role <option> data + guild id. Pages embed this so the
@@ -56,7 +61,10 @@ function guildHeaderHTML(guild) {
 // from the left edge. Each tab is a real link; the active one is highlighted.
 function tabNavHTML(guildId, active) {
   const links = TABS.map(t => {
-    const badge = t.beta ? ' <span class="beta-badge">BETA</span>' : '';
+    // Upcoming takes priority over beta when both are set.
+    const badge = t.upcoming
+      ? ' <span class="soon-badge">SOON</span>'
+      : (t.beta ? ' <span class="beta-badge">BETA</span>' : '');
     return `<a class="menu-item${t.key === active ? ' active' : ''}" href="/guild/${esc(guildId)}/${t.key}">${esc(t.label)}${badge}</a>`;
   }).join('');
   const activeTab = TABS.find(t => t.key === active);

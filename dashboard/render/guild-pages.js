@@ -12,7 +12,7 @@ const constants = require('../constants');
 const { esc, channelOptions, roleOptions, render } = require('./layout');
 const { guildDataScript, guildHeaderHTML, tabNavHTML, TABS } = require('./guild');
 
-const { LOG_EVENTS, AUTOMOD_RULES, AUTOMOD_ACTIONS } = constants;
+const { LOG_EVENTS, AUTOMOD_RULES, AUTOMOD_ACTIONS, BADGE_CATALOG } = constants;
 
 // Wrap guild-tab body in the shared shell (header + tabs + data blob + page JS).
 function guildTab({ guild, active, panelHTML, scripts, title, user }) {
@@ -28,6 +28,34 @@ function guildTab({ guild, active, panelHTML, scripts, title, user }) {
         scripts,
         user,
     });
+}
+
+// ── "Upcoming feature" overlay ─────────────────────────────────────────────
+// A page marked `upcoming: true` (in render/guild.js TABS) is not yet released.
+// The page body is blurred and a "Coming Soon......" overlay with a graphic
+// covers it, so the tab stays discoverable in the sidebar but is unusable.
+// Upcoming takes PRIORITY over beta: a tab with both flags shows the Coming
+// Soon overlay even for beta servers (the feature simply isn't shipped yet).
+const UPCOMING_SUPPORT_URL = 'https://discord.gg/gd7UNSfX86';
+function upcomingOverlayWrap(innerPanelHTML, { icon = '🚧', title = 'Coming Soon' } = {}) {
+    return `
+    <div class="card upcoming-locked-card">
+      <div class="upcoming-locked-wrap locked">
+        ${innerPanelHTML}
+      </div>
+      <div class="upcoming-locked-overlay">
+        <div class="upcoming-locked-box">
+          <div class="upcoming-graphic" aria-hidden="true">
+            <div class="upcoming-orb"></div>
+            <div class="upcoming-dots"><span></span><span></span><span></span></div>
+          </div>
+          <div class="upcoming-icon">${icon}</div>
+          <div class="upcoming-title">${esc(title)}……</div>
+          <div class="upcoming-text">This feature is still in the workshop. We're putting the finishing touches on it — check back soon!</div>
+          <a class="btn btn-discord" href="${UPCOMING_SUPPORT_URL}" target="_blank" rel="noopener">Follow updates on Discord</a>
+        </div>
+      </div>
+    </div>`;
 }
 
 // ── Welcome ─────────────────────────────────────────────────────────────────
@@ -166,6 +194,91 @@ function levelingRewardRowHTML(r = {}, roles = []) {
     </div>`;
 }
 
+// ── Badges (beta) ───────────────────────────────────────────────────────────
+//
+// A dedicated beta-gated page for the leveling badge system. The bot's
+// LevelingManager awards level badges automatically on level-up; achievement
+// and special badges are awardable here by server admins. The page shows the
+// badge catalog (level / achievement / special) and a live "awarded badges"
+// ledger fetched from /api/guilds/:id/badges. Non-beta servers see the
+// standard locked overlay.
+
+const BADGES_BETA_MSG = 'This server isn’t a beta server yet. Join support server to gain beta access';
+
+function badgeCardHTML(b, { awardable = false } = {}) {
+    const typeLabel = b.type === 'level'
+        ? `Level ${b.level} badge`
+        : (b.type === 'achievement' ? 'Achievement badge' : 'Special badge');
+    const awardAttr = awardable
+        ? `data-badge-id="${esc(b.id)}" data-badge-type="${esc(b.type)}"`
+        : '';
+    const awardBtn = awardable
+        ? `<button class="btn btn-secondary btn-sm badge-award-btn" ${awardAttr}>Award to member…</button>`
+        : `<span class="badge-locked-tag">Auto-awarded on level-up</span>`;
+    return `
+    <div class="badge-card badge-type-${esc(b.type)}">
+      <div class="badge-emoji">${esc(b.emoji)}</div>
+      <div class="badge-info">
+        <div class="badge-name">${esc(b.name)}</div>
+        <div class="badge-desc">${esc(b.description)}</div>
+        <div class="badge-meta">${esc(typeLabel)}</div>
+      </div>
+      <div class="badge-action">${awardBtn}</div>
+    </div>`;
+}
+
+function badgesPage({ guild, user }) {
+    const catalog = BADGE_CATALOG || { levelBadges: [], achievementBadges: [], specialBadges: [] };
+    const levelCards = (catalog.levelBadges || [])
+        .map(b => badgeCardHTML({ ...b, type: 'level' }, { awardable: false })).join('');
+    const achievementCards = (catalog.achievementBadges || [])
+        .map(b => badgeCardHTML({ ...b, type: 'achievement' }, { awardable: true })).join('');
+    const specialCards = (catalog.specialBadges || [])
+        .map(b => badgeCardHTML({ ...b, type: 'special' }, { awardable: true })).join('');
+
+    const innerPanelHTML = `
+      <div class="card-title"><span><span class="icon">🏅</span> Badges <span class="beta-badge">BETA</span></span></div>
+      <div class="beta-banner">🧪 This feature is in beta — expect changes. Please report any issues.</div>
+      <p class="card-desc">Members earn level badges automatically as they level up. Server admins can award achievement and special badges to recognize community contributions.</p>
+
+      <h3 class="badge-section-head">🏅 Level badges</h3>
+      <p class="card-hint">Awarded automatically when a member reaches the level.</p>
+      <div class="badge-grid">${levelCards || '<p class="live-empty">No level badges configured.</p>'}</div>
+
+      <h3 class="badge-section-head">🤝 Achievement badges</h3>
+      <p class="card-hint">Award these manually to recognize members.</p>
+      <div class="badge-grid">${achievementCards || '<p class="live-empty">No achievement badges configured.</p>'}</div>
+
+      <h3 class="badge-section-head">⭐ Special badges</h3>
+      <p class="card-hint">Rare, manually-awarded badges for exceptional members.</p>
+      <div class="badge-grid">${specialCards || '<p class="live-empty">No special badges configured.</p>'}</div>
+
+      <h3 class="badge-section-head">📋 Awarded badges</h3>
+      <p class="card-desc">Live ledger of badges awarded in this server. <a href="#" id="badges-refresh">Refresh</a></p>
+      <div id="badges-list"><p class="live-empty">Loading…</p></div>`;
+
+    const panelHTML = `
+    <div class="card${guild._beta ? '' : ' beta-locked-card'}">
+      <div class="beta-locked-wrap${guild._beta ? '' : ' locked'}">
+        ${innerPanelHTML}
+      </div>
+      ${guild._beta ? '' : `
+        <div class="beta-locked-overlay">
+          <div class="beta-locked-box">
+            <div class="beta-locked-icon">🔒</div>
+            <div class="beta-locked-text">${esc(BADGES_BETA_MSG)}</div>
+            <a class="btn btn-discord" href="https://discord.gg/gd7UNSfX86" target="_blank" rel="noopener">Join support server</a>
+          </div>
+        </div>`}
+    </div>
+    <div id="badge-modal" class="modal-overlay hidden"></div>`;
+
+    return guildTab({
+        guild, user, active: 'badges', panelHTML,
+        scripts: ['/js/guild-common.js', '/js/badges.js'],
+    });
+}
+
 // ── Prefix / General ────────────────────────────────────────────────────────
 //
 // The "General" tab (top of the server features menu) hosts the command prefix
@@ -234,6 +347,52 @@ function roleRewardsPage({ guild, user }) {
         </div>`}
     </div>`;
     return guildTab({ guild, user, active: 'rolerewards', panelHTML, scripts: ['/js/guild-common.js', '/js/settings-basic.js', '/js/leveling.js'] });
+}
+
+// ── Auto-responder ──────────────────────────────────────────────────────────
+//
+// Like auto-reactions, but replies with a configured text response instead of
+// reacting. Each rule: { trigger, response, exactMatch }. exactMatch (the
+// "Exact match" checkbox) makes the rule fire only when the message EQUALS the
+// trigger; otherwise it fires on a substring (contains) match. Saved as the
+// autoResponder sub-object via PATCH /api/guilds/:id/server.
+
+function autoResponderRowHTML(r) {
+    return `
+    <div class="reaction-row ar-row" data-index="">
+      <input type="text" class="ar-trigger" value="${esc(r.trigger || '')}" placeholder="trigger word or phrase" />
+      <input type="text" class="ar-response" value="${esc(r.response || '')}" placeholder="reply text" />
+      <label class="ar-exact-wrap" title="Only fire when the message exactly equals the trigger">
+        <input type="checkbox" class="ar-exact" ${r.exactMatch ? 'checked' : ''}/> Exact
+      </label>
+      <button class="reaction-remove ar-remove" type="button">✕</button>
+    </div>`;
+}
+
+function autoResponderPage({ guild, user }) {
+    const ar = guild._config.server?.autoResponder || { enabled: false, responses: [] };
+    const rows = (ar.responses || []).map(r => autoResponderRowHTML(r)).join('');
+    const panelHTML = `
+    <div class="card">
+      <div class="card-title"><span><span class="icon">💬</span> Auto-Responder</span></div>
+      <p class="card-desc">Automatically reply with a text response when a message contains (or exactly matches) a trigger. Also configurable with <code>/autoresponder</code> or <code>$autoresponder</code>.</p>
+
+      <div class="switch-row">
+        <div class="switch-label">
+          <div class="sl-title">Enable auto-responder</div>
+          <div class="sl-desc">Master switch for all response rules below.</div>
+        </div>
+        <label class="switch"><input type="checkbox" id="ar-enabled" ${ar.enabled ? 'checked' : ''}/><span class="slider"></span></label>
+      </div>
+
+      <div class="field">
+        <label class="field-label">Response rules</label>
+        <div class="reactions-list ar-list" id="ar-list">${rows}</div>
+        <button class="btn btn-secondary" id="ar-add">+ Add response</button>
+        <div class="field-hint">A rule fires when a message contains the trigger (unchecked) or exactly equals it (Exact checked). Replies are sent as a Discord reply to the triggering message.</div>
+      </div>
+    </div>`;
+    return guildTab({ guild, user, active: 'autoresponder', panelHTML, scripts: ['/js/guild-common.js', '/js/autoresponder.js'] });
 }
 
 // ── Auto-reactions ──────────────────────────────────────────────────────────
@@ -825,43 +984,34 @@ function automodPage({ guild, user }) {
 }
 
 // ── Events ──────────────────────────────────────────────────────────────────
-
-const EVENTS_BETA_MSG = 'This server isn’t a beta server yet. Join support server to gain beta access';
+//
+// Event Management is marked `upcoming: true` in render/guild.js TABS, so the
+// page renders the "Coming Soon......" overlay for ALL servers (upcoming takes
+// priority over beta). The underlying editor markup is kept (blurred) so the
+// tab remains discoverable and the feature can be re-enabled by flipping the
+// `upcoming` flag off — no markup rewrite needed when it ships.
 
 function eventsPage({ guild, user }) {
-    const panelHTML = `
-    <div class="card${guild._beta ? '' : ' beta-locked-card'}">
-      <div class="card-title"><span><span class="icon">📅</span> Event Management <span class="beta-badge">BETA</span></span></div>
-      <div class="beta-banner">🧪 This feature is in beta — expect changes. Please report any issues.</div>
-      <div class="beta-locked-wrap${guild._beta ? '' : ' locked'}">
-        <p>Schedule an event with a countdown and a list of timed tasks. The bot will lock/unlock or hide/unhide the channel(s) you choose (pick one, or hold Ctrl/Cmd to select several), add/remove roles, or send a text/embed message at the offsets you set (seconds from the event start).</p>
-        <div class="ev-form" id="ev-form">
-          <div class="form-row">
-            <label>Event name<input type="text" id="ev-name" placeholder="e.g. Game Night" /></label>
-            <label>Countdown (seconds)<input type="number" id="ev-countdown" min="0" value="0" /></label>
-          </div>
-          <label>Description <textarea id="ev-description" rows="2" placeholder="Optional description"></textarea></label>
-          <h4 class="ev-tasks-head">Tasks</h4>
-          <div id="ev-tasks-list"></div>
-          <button class="btn btn-secondary" id="ev-add-task">+ Add task</button>
-          <div class="form-actions">
-            <button class="btn btn-primary" id="ev-save">Create event</button>
-            <button class="btn btn-secondary" id="ev-clear">Clear</button>
-          </div>
+    const innerPanelHTML = `
+      <div class="card-title"><span><span class="icon">📅</span> Event Management <span class="soon-badge">SOON</span></span></div>
+      <p>Schedule an event with a countdown and a list of timed tasks. The bot will lock/unlock or hide/unhide the channel(s) you choose (pick one, or hold Ctrl/Cmd to select several), add/remove roles, or send a text/embed message at the offsets you set (seconds from the event start).</p>
+      <div class="ev-form" id="ev-form">
+        <div class="form-row">
+          <label>Event name<input type="text" id="ev-name" placeholder="e.g. Game Night" /></label>
+          <label>Countdown (seconds)<input type="number" id="ev-countdown" min="0" value="0" /></label>
         </div>
-        <h3 class="ev-list-head">Scheduled events</h3>
-        <div id="ev-list"><p class="live-empty">Loading…</p></div>
+        <label>Description <textarea id="ev-description" rows="2" placeholder="Optional description"></textarea></label>
+        <h4 class="ev-tasks-head">Tasks</h4>
+        <div id="ev-tasks-list"></div>
+        <button class="btn btn-secondary" id="ev-add-task">+ Add task</button>
+        <div class="form-actions">
+          <button class="btn btn-primary" id="ev-save">Create event</button>
+          <button class="btn btn-secondary" id="ev-clear">Clear</button>
+        </div>
       </div>
-      ${guild._beta ? '' : `
-        <div class="beta-locked-overlay">
-          <div class="beta-locked-box">
-            <div class="beta-locked-icon">🔒</div>
-            <div class="beta-locked-text">${esc(EVENTS_BETA_MSG)}</div>
-            <a class="btn btn-discord" href="https://discord.gg/gd7UNSfX86" target="_blank" rel="noopener">Join support server</a>
-          </div>
-        </div>`}
-    </div>
-    <div id="ev-modal" class="modal-overlay hidden"></div>`;
+      <h3 class="ev-list-head">Scheduled events</h3>
+      <div id="ev-list"><p class="live-empty">Loading…</p></div>`;
+    const panelHTML = upcomingOverlayWrap(innerPanelHTML, { icon: '📅', title: 'Event Management' });
     return guildTab({ guild, user, active: 'events', panelHTML, scripts: ['/js/guild-common.js', '/js/events.js'] });
 }
 
@@ -905,7 +1055,7 @@ function liveGiveawaysPage({ guild, user }) {
 }
 
 module.exports = {
-    welcomePage, levelingPage, prefixPage, roleRewardsPage, reactionsPage, broadcastPage,
+    welcomePage, levelingPage, badgesPage, prefixPage, roleRewardsPage, autoResponderPage, reactionsPage, broadcastPage,
     loggingPage, reactionRolesPage, ticketsPage, automodPage, eventsPage,
     livePollsPage, liveGiveawaysPage,
     TABS,

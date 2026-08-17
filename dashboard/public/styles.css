@@ -699,6 +699,25 @@ input[type="color"] {
 }
 .reaction-remove:hover { color: var(--red); border-color: var(--red); }
 
+/* Auto-responder rows have a 4th element (Exact checkbox) — widen the grid. */
+.reaction-row.ar-row {
+  grid-template-columns: 1fr 1.4fr auto auto;
+}
+.ar-exact-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+.ar-exact-wrap input { width: auto; }
+@media (max-width: 640px) {
+  .reaction-row.ar-row { grid-template-columns: 1fr; }
+}
+
 /* Automod multi-action rule rows + groups */
 .am-rule-row {
   display: flex;
@@ -963,6 +982,167 @@ input[type="color"] {
   color: var(--text);
   line-height: 1.5;
 }
+
+/* ── "Upcoming feature" (Coming Soon) overlay ────────────────────────────── */
+/* Like the beta-locked panel, but for not-yet-released features. The body is
+   blurred and a "Coming Soon……" overlay with a small animated graphic covers
+   it. Upcoming takes priority over beta. */
+.soon-badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(88, 101, 242, 0.16);
+  color: #a9b1ff;
+  border: 1px solid rgba(88, 101, 242, 0.45);
+  text-transform: uppercase;
+}
+.upcoming-locked-card { position: relative; overflow: hidden; }
+.upcoming-locked-wrap.locked {
+  filter: blur(5px);
+  opacity: 0.4;
+  pointer-events: none;
+  user-select: none;
+}
+.upcoming-locked-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 6;
+  background: rgba(11, 13, 18, 0.45);
+}
+.upcoming-locked-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 34px 38px;
+  max-width: 480px;
+  text-align: center;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.upcoming-graphic {
+  position: relative;
+  width: 96px;
+  height: 96px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.upcoming-orb {
+  position: absolute;
+  inset: 18px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, rgba(169,177,255,0.95), rgba(88,101,242,0.35) 60%, transparent 72%);
+  filter: blur(1px);
+  animation: upcoming-pulse 2.4s ease-in-out infinite;
+}
+.upcoming-dots {
+  position: absolute;
+  bottom: 6px;
+  display: flex;
+  gap: 6px;
+}
+.upcoming-dots span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #a9b1ff;
+  opacity: 0.4;
+  animation: upcoming-bounce 1.2s ease-in-out infinite;
+}
+.upcoming-dots span:nth-child(2) { animation-delay: 0.18s; }
+.upcoming-dots span:nth-child(3) { animation-delay: 0.36s; }
+@keyframes upcoming-pulse {
+  0%, 100% { transform: scale(0.92); opacity: 0.7; }
+  50% { transform: scale(1.08); opacity: 1; }
+}
+@keyframes upcoming-bounce {
+  0%, 100% { transform: translateY(0); opacity: 0.4; }
+  50% { transform: translateY(-7px); opacity: 1; }
+}
+.upcoming-icon { font-size: 32px; }
+.upcoming-title {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--text);
+  letter-spacing: 0.01em;
+}
+.upcoming-text {
+  font-size: 14px;
+  color: var(--text-dim);
+  line-height: 1.55;
+}
+
+/* ── Badges page ──────────────────────────────────────────────────────────── */
+.badge-section-head { margin: 22px 0 4px; font-size: 16px; }
+.badge-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+  margin: 10px 0 6px;
+}
+.badge-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border, #e3e3e8);
+  border-radius: var(--radius-sm);
+  background: rgba(0,0,0,0.02);
+}
+.badge-card .badge-emoji {
+  font-size: 30px;
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--blurple-soft);
+}
+.badge-card.badge-type-level .badge-emoji { background: rgba(205,127,50,0.14); }
+.badge-card.badge-type-achievement .badge-emoji { background: rgba(88,101,242,0.14); }
+.badge-card.badge-type-special .badge-emoji { background: rgba(255,215,0,0.14); }
+.badge-info { flex: 1; min-width: 0; }
+.badge-name { font-weight: 700; font-size: 14px; }
+.badge-desc { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+.badge-meta { font-size: 11px; color: var(--text-faint); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.04em; }
+.badge-action { flex-shrink: 0; }
+.badge-locked-tag {
+  font-size: 11px;
+  color: var(--text-faint);
+  font-style: italic;
+  white-space: nowrap;
+}
+.badge-table .bdg-emoji { font-size: 20px; width: 32px; text-align: center; }
+.badge-table .bdg-name { font-weight: 600; }
+.badge-table .bdg-user code { font-size: 12px; }
+.badge-table .bdg-time { color: var(--text-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.badge-table .tag.achievement { background: rgba(88,101,242,0.16); color: #a9b1ff; }
+.badge-table .tag.special { background: rgba(255,215,0,0.16); color: #f7d774; }
+.badge-table .tag.level { background: rgba(205,127,50,0.16); color: #e0a36a; }
+
+/* Modal tweaks for the Badges award flow (reuses the shared .modal-overlay /
+   .modal.floating-window / .modal-head / .modal-body from the live-join
+   modal). The award modal adds a footer with action buttons. */
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border-soft, #eee);
+}
+.modal-emoji { margin-right: 6px; }
+.modal-desc { font-size: 13px; color: var(--text-dim); margin: 0 0 12px; }
 
 /* Alert / banner */
 .alert {
@@ -1450,4 +1630,93 @@ input[type="color"] {
   color: var(--text-faint);
   padding: 18px 12px !important;
   font-style: italic;
+}
+
+/* ── 404 page ──────────────────────────────────────────────────────────────── */
+.notfound-card {
+  max-width: 560px;
+  margin: 48px auto;
+  padding: 40px 32px;
+  text-align: center;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.notfound-graphic {
+  position: relative;
+  height: 150px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 8px;
+}
+.notfound-404 {
+  font-size: 120px;
+  font-weight: 900;
+  line-height: 1;
+  letter-spacing: -0.04em;
+  display: flex;
+  gap: 2px;
+  z-index: 1;
+  background: linear-gradient(180deg, var(--text), var(--text-dim));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.notfound-zero {
+  position: relative;
+  display: inline-block;
+}
+.notfound-zero::after {
+  content: '';
+  position: absolute;
+  inset: 38% 28%;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(88,101,242,0.9), rgba(88,101,242,0) 70%);
+  z-index: -1;
+  animation: notfound-pulse 2.6s ease-in-out infinite;
+}
+.notfound-orb {
+  position: absolute;
+  width: 220px;
+  height: 220px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 50%, rgba(88,101,242,0.18), transparent 65%);
+  filter: blur(8px);
+  z-index: 0;
+}
+@keyframes notfound-pulse {
+  0%, 100% { transform: scale(0.7); opacity: 0.5; }
+  50% { transform: scale(1.15); opacity: 1; }
+}
+.notfound-title {
+  font-size: 26px;
+  font-weight: 800;
+  margin: 8px 0 6px;
+  color: var(--text);
+}
+.notfound-text {
+  font-size: 15px;
+  color: var(--text-dim);
+  line-height: 1.55;
+  margin: 0 0 24px;
+  max-width: 420px;
+  margin-left: auto;
+  margin-right: auto;
+}
+.notfound-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+.notfound-hint {
+  font-size: 13px;
+  color: var(--text-faint);
+}
+@media (max-width: 520px) {
+  .notfound-404 { font-size: 84px; }
+  .notfound-graphic { height: 110px; }
 }

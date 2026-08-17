@@ -336,19 +336,34 @@ function overviewPage({ guilds = [], clientId, user } = {}) {
     </div>
     ${statsHTML}
     ${listHTML}`;
-    return render({ title: 'PrimeBot · Servers', body, active: 'servers', scripts: ['/js/servers.js'], user });
+    return render({ title: 'PrimeBot · Servers', body, active: 'servers', hideBack: true, scripts: ['/js/servers.js'], user });
 }
 
 // ── 404 ────────────────────────────────────────────────────────────────────
+//
+// Catch-all for any unknown path. On Vercel every request is routed to the
+// serverless handler (vercel.json `routes` → /dashboard/server.js), so a broken
+// or mistyped link lands here. Renders a friendly graphical 404 with a link
+// back to the dashboard root.
 
 function notFoundPage({ user } = {}) {
     const body = `
-    <div class="card">
-      <h2>Page not found</h2>
-      <p>The page you requested does not exist.</p>
-      <p><a href="/">← Back to dashboard</a></p>
+    <div class="notfound-card">
+      <div class="notfound-graphic" aria-hidden="true">
+        <div class="notfound-404">
+          <span>4</span><span class="notfound-zero">0</span><span>4</span>
+        </div>
+        <div class="notfound-orb"></div>
+      </div>
+      <h1 class="notfound-title">Page not found</h1>
+      <p class="notfound-text">Oops — the page you're looking for doesn't exist or may have moved. The link might be broken or outdated.</p>
+      <div class="notfound-actions">
+        <a class="btn btn-primary" href="/">← Back to dashboard</a>
+        <a class="btn btn-secondary" href="/docs">Read the docs</a>
+      </div>
+      <p class="notfound-hint">If you think this is a mistake, let us know in our <a href="https://discord.gg/gd7UNSfX86" target="_blank" rel="noopener">support server</a>.</p>
     </div>`;
-    return render({ title: 'PrimeBot · Not found', body, user });
+    return render({ title: 'PrimeBot · 404 Not found', body, user });
 }
 
 module.exports = { loginPage, docsPage, statsPage, livePollsPage, liveGiveawaysPage, overviewPage, notFoundPage, guildCardHTML };

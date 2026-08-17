@@ -24,7 +24,7 @@ const cookieParser = require('cookie-parser');
 const PgSession = require('connect-pg-simple')(session);
 
 const discord = require('./discord');
-const { requireAuth, requireGuildAdmin, requireGuildAdminPage, requireBeta } = require('./auth');
+const { requireAuth, requireGuildAdmin, requireGuildAdminPage, requireBeta, requireUpcoming } = require('./auth');
 const dashboardDb = require('./db');
 const constants = require('./constants');
 const pages = require('./render/pages');
@@ -528,10 +528,32 @@ app.patch('/api/guilds/:guildId/server', requireAuth, requireGuildAdmin, async (
             if ('enabled' in body.autoReactions) patch.autoReactions.enabled = Boolean(body.autoReactions.enabled);
         }
 
+        // Auto-responder sub-object. Each response is normalized to
+        // { trigger, response, caseSensitive, exactMatch }.
+        if (body.autoResponder && typeof body.autoResponder === 'object') {
+            const current = await dashboardDb.getServerSettings(req.guild.id);
+            const responses = Array.isArray(body.autoResponder.responses)
+                ? body.autoResponder.responses
+                    .filter(r => r && typeof r === 'object' && r.trigger && r.response)
+                    .map(r => ({
+                        trigger: String(r.trigger),
+                        response: String(r.response),
+                        caseSensitive: Boolean(r.caseSensitive),
+                        exactMatch: Boolean(r.exactMatch),
+                    }))
+                : (current.autoResponder?.responses || []);
+            patch.autoResponder = {
+                enabled: body.autoResponder.enabled ?? current.autoResponder?.enabled ?? false,
+                responses,
+            };
+            if ('enabled' in body.autoResponder) patch.autoResponder.enabled = Boolean(body.autoResponder.enabled);
+        }
+
         const updated = await dashboardDb.upsertServerSettings(req.guild.id, patch);
         if ('prefix' in patch) recordWebsiteLog(req, `Updated command prefix to "${patch.prefix}"`);
         if (body.leveling) recordWebsiteLog(req, 'Updated leveling settings');
         if (body.autoReactions) recordWebsiteLog(req, 'Updated auto-reactions settings');
+        if (body.autoResponder) recordWebsiteLog(req, 'Updated auto-responder settings');
         if ('receiveBroadcasts' in body) recordWebsiteLog(req, `Updated broadcast settings (receive: ${body.receiveBroadcasts ? 'on' : 'off'})`);
         res.json({ server: updated });
     } catch (err) {
@@ -562,6 +584,61 @@ app.put('/api/guilds/:guildId/leveling/rolerewards', requireAuth, requireGuildAd
     } catch (err) {
         console.error('[API] set leveling role rewards error:', err.message);
         res.status(500).json({ error: 'Failed to save leveling role rewards.' });
+    }
+});
+
+// ── API: leveling badges (beta) ─────────────────────────────────────────────
+// Reads the user_badges table (LEVELING_DATABASE_URL pool) so the Badges tab
+// can show a live ledger, and lets beta-server admins award/revoke achievement
+// & special badges. Level badges are earned automatically on level-up and are
+// not awardable from the dashboard. The catalog comes from config.leveling.badges
+// (mirrored in constants.BADGE_CATALOG) — the API only stores awarded rows.
+
+app.get('/api/guilds/:guildId/badges', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const badges = await dashboardDb.getGuildBadges(req.guild.id, req.query.userId);
+        res.json({ badges });
+    } catch (err) {
+        console.error('[API] get badges error:', err.message);
+        res.status(500).json({ error: 'Failed to load badges.' });
+    }
+});
+
+app.post('/api/guilds/:guildId/badges/award', requireAuth, requireGuildAdmin, requireBeta, async (req, res) => {
+    try {
+        const { userId, badgeType, badgeId } = req.body || {};
+        if (!userId || !badgeType || !badgeId) {
+            return res.status(400).json({ error: 'userId, badgeType and badgeId are required.' });
+        }
+        if (!['achievement', 'special'].includes(badgeType)) {
+            return res.status(400).json({ error: 'Only achievement and special badges can be awarded from the dashboard.' });
+        }
+        const catalog = constants.BADGE_CATALOG || {};
+        const list = badgeType === 'achievement' ? catalog.achievementBadges : catalog.specialBadges;
+        const badge = (list || []).find(b => b.id === badgeId);
+        if (!badge) return res.status(400).json({ error: 'Badge not found in catalog.' });
+        const badges = await dashboardDb.awardDashboardBadge(req.guild.id, { userId, badgeType, badge });
+        recordWebsiteLog(req, `Awarded ${badgeType} badge "${badge.name}" to <@${userId}>`);
+        res.json({ badges });
+    } catch (err) {
+        if (err.code === 'already_has_badge') {
+            return res.status(409).json({ error: 'That member already has this badge.', reason: 'already_has_badge' });
+        }
+        console.error('[API] award badge error:', err.message);
+        res.status(500).json({ error: 'Failed to award badge.' });
+    }
+});
+
+app.delete('/api/guilds/:guildId/badges/:rowId', requireAuth, requireGuildAdmin, requireBeta, async (req, res) => {
+    try {
+        const rowId = parseInt(req.params.rowId, 10);
+        if (!Number.isFinite(rowId)) return res.status(400).json({ error: 'Invalid badge row id.' });
+        await dashboardDb.revokeDashboardBadge(req.guild.id, rowId);
+        recordWebsiteLog(req, `Revoked badge row #${rowId}`);
+        res.json({ ok: true });
+    } catch (err) {
+        console.error('[API] revoke badge error:', err.message);
+        res.status(500).json({ error: 'Failed to revoke badge.' });
     }
 });
 
@@ -1225,7 +1302,7 @@ app.get('/api/guilds/:guildId/events', requireAuth, requireGuildAdmin, async (re
     }
 });
 
-app.post('/api/guilds/:guildId/events', requireAuth, requireGuildAdmin, requireBeta, async (req, res) => {
+app.post('/api/guilds/:guildId/events', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
     try {
         const schedule = await dashboardDb.createEventSchedule(req.guild.id, req.body || {}, req.user.id);
         res.json({ schedule });
@@ -1235,7 +1312,7 @@ app.post('/api/guilds/:guildId/events', requireAuth, requireGuildAdmin, requireB
     }
 });
 
-app.patch('/api/guilds/:guildId/events/:id', requireAuth, requireGuildAdmin, requireBeta, async (req, res) => {
+app.patch('/api/guilds/:guildId/events/:id', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);
         if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid event id.' });
@@ -1247,7 +1324,7 @@ app.patch('/api/guilds/:guildId/events/:id', requireAuth, requireGuildAdmin, req
     }
 });
 
-app.delete('/api/guilds/:guildId/events/:id', requireAuth, requireGuildAdmin, requireBeta, async (req, res) => {
+app.delete('/api/guilds/:guildId/events/:id', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);
         if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid event id.' });
@@ -1259,7 +1336,7 @@ app.delete('/api/guilds/:guildId/events/:id', requireAuth, requireGuildAdmin, re
     }
 });
 
-app.post('/api/guilds/:guildId/events/:id/start', requireAuth, requireGuildAdmin, requireBeta, async (req, res) => {
+app.post('/api/guilds/:guildId/events/:id/start', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);
         if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid event id.' });
@@ -1271,7 +1348,7 @@ app.post('/api/guilds/:guildId/events/:id/start', requireAuth, requireGuildAdmin
     }
 });
 
-app.post('/api/guilds/:guildId/events/:id/cancel', requireAuth, requireGuildAdmin, requireBeta, async (req, res) => {
+app.post('/api/guilds/:guildId/events/:id/cancel', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);
         if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid event id.' });
@@ -1395,8 +1472,12 @@ app.get('/guild/:guildId/welcome', requireAuth, requireGuildAdminPage, (req, res
     res.type('html').send(guildPages.welcomePage({ guild: req.guild, user: req.user })));
 app.get('/guild/:guildId/leveling', requireAuth, requireGuildAdminPage, (req, res) =>
     res.type('html').send(guildPages.levelingPage({ guild: req.guild, user: req.user })));
+app.get('/guild/:guildId/badges', requireAuth, requireGuildAdminPage, (req, res) =>
+    res.type('html').send(guildPages.badgesPage({ guild: req.guild, user: req.user })));
 app.get('/guild/:guildId/rolerewards', requireAuth, requireGuildAdminPage, (req, res) =>
     res.type('html').send(guildPages.roleRewardsPage({ guild: req.guild, user: req.user })));
+app.get('/guild/:guildId/autoresponder', requireAuth, requireGuildAdminPage, (req, res) =>
+    res.type('html').send(guildPages.autoResponderPage({ guild: req.guild, user: req.user })));
 app.get('/guild/:guildId/prefix', requireAuth, requireGuildAdminPage, (req, res) =>
     res.type('html').send(guildPages.prefixPage({ guild: req.guild, user: req.user })));
 app.get('/guild/:guildId/reactions', requireAuth, requireGuildAdminPage, (req, res) =>

@@ -119,6 +119,7 @@ const SaveBar = (() => {
   let saveBtn = null;
   let resetBtn = null;
   const savers = [];
+  const savedCallbacks = [];
   let dirty = false;
   let saving = false;
   const trackedRoots = [];
@@ -249,6 +250,14 @@ const SaveBar = (() => {
       toast('Saved successfully', 'success');
       resnapshot();
       markClean();
+      // Fire "saved" callbacks so pages can react to a successful save (e.g.
+      // the General page re-fetches the website log so the just-recorded entry
+      // appears). runSave uses the internal closures (not window.saveBar.*), so
+      // overriding window.saveBar.markClean from a page script would NOT fire
+      // — this explicit hook is the supported way to observe a save.
+      for (const cb of savedCallbacks) {
+        try { await cb(); } catch (e) { /* a callback error must not break the save */ }
+      }
     } catch (err) {
       toast(err.message || 'Failed to save', 'error');
     } finally {
@@ -304,7 +313,14 @@ const SaveBar = (() => {
     if (typeof saver === 'function') savers.push(saver);
   }
 
-  return { register, track, markDirty, markClean };
+  // Register a callback fired AFTER a successful save (after the toast +
+  // re-snapshot). Use this to refresh page areas that depend on server-side
+  // writes triggered by the save (e.g. the website log on the General page).
+  function onSaved(cb) {
+    if (typeof cb === 'function') savedCallbacks.push(cb);
+  }
+
+  return { register, track, markDirty, markClean, onSaved };
 })();
 
 window.api = api;
