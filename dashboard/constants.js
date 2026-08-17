@@ -51,4 +51,10 @@ module.exports = {
     // Automod rule types + actions shared with the bot (utils/automodRules.js).
     AUTOMOD_RULES,
     AUTOMOD_ACTIONS,
+
+    // Leveling badge catalog (config.leveling.badges). The dashboard's Badges
+    // tab renders the achievement + special badges (awardable from the UI) and
+    // lists the level badges (earned automatically on level-up). Mirrored here
+    // so the page can render the catalog without an extra API round-trip.
+    BADGE_CATALOG: (config.leveling && config.leveling.badges) || { levelBadges: [], achievementBadges: [], specialBadges: [] },
 };

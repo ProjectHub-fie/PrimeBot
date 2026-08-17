@@ -68,8 +68,10 @@ function roleOptions(roles, selected) {
 }
 
 // Top navigation. `active` highlights the matching link. Hidden on the login
-// page (pass `login: true`).
-function navHTML({ active, user, login }) {
+// page (pass `login: true`). The back button (←) is hidden on the server
+// selection page (`hideBack: true`) since there's nowhere meaningful to go
+// back to from the dashboard root — it would just dump the user out of the app.
+function navHTML({ active, user, login, hideBack }) {
     if (login) return '';
     const link = (href, label, key) =>
         `<a href="${esc(href)}" class="${active === key ? 'active' : ''}">${esc(label)}</a>`;
@@ -86,10 +88,11 @@ function navHTML({ active, user, login }) {
         <button class="logout-btn" id="logout-btn">Log out</button>
       </span>`;
     }
+    const backBtn = hideBack ? '' : `<a href="javascript:history.back()" class="back-btn" aria-label="Go back to previous page" title="Go back to previous page"><span class="back-symbol">←</span></a>`;
     return `
     <header class="topbar">
       <div class="topbar-inner">
-        <a href="javascript:history.back()" class="back-btn" aria-label="Go back to previous page" title="Go back to previous page"><span class="back-symbol">←</span></a>
+        ${backBtn}
         <a href="/" class="brand">
           <span class="brand-mark">⚡</span>
           <span class="brand-name">PrimeBot</span>
@@ -124,6 +127,7 @@ function render(opts) {
         active,
         user,
         login = false,
+        hideBack = false,
         scripts = [],
         locals = {},
     } = opts;
@@ -150,7 +154,7 @@ function render(opts) {
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  ${navHTML({ active, user, login })}
+  ${navHTML({ active, user, login, hideBack })}
   <main id="app" class="container">
     ${body}
   </main>

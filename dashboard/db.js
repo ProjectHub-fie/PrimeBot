@@ -146,6 +146,108 @@ async function setLevelingRoleRewards(guildId, rewards) {
     return getLevelingRoleRewards(guildId);
 }
 
+// ── Badges (leveling achievement badges, in the LEVELING_DATABASE_URL pool) ─
+//
+// The bot's LevelingManager awards level/achievement/special badges into the
+// user_badges table (created by server/levelingDb.js). The dashboard's Badges
+// tab reads that table so admins can see who has which badge and manually
+// award/revoke the achievement & special badges. Level badges are earned
+// automatically on level-up and are not awardable from the dashboard.
+
+async function ensureUserBadgesTable() {
+    await getLevelingPool().query(`
+        CREATE TABLE IF NOT EXISTS user_badges (
+            id              SERIAL PRIMARY KEY,
+            guild_id        VARCHAR(50) NOT NULL,
+            user_id         VARCHAR(50) NOT NULL,
+            badge_id        VARCHAR(100) NOT NULL,
+            badge_name      VARCHAR(255) NOT NULL,
+            badge_emoji     VARCHAR(10) NOT NULL,
+            badge_color     VARCHAR(50) NOT NULL,
+            badge_description TEXT NOT NULL,
+            badge_type      VARCHAR(50) NOT NULL,
+            earned_at       TIMESTAMP NOT NULL,
+            created_at      TIMESTAMP DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS user_badges_guild_idx ON user_badges (guild_id);
+    `);
+}
+
+// All badge rows for a guild (optionally filtered to one user). Each row is
+// mapped to camelCase + an ISO earnedAt so the dashboard client can render it.
+async function getGuildBadges(guildId, userId) {
+    await ensureUserBadgesTable();
+    const params = [String(guildId)];
+    let where = 'WHERE guild_id = $1';
+    if (userId) {
+        params.push(String(userId));
+        where += ` AND user_id = $${params.length}`;
+    }
+    const res = await getLevelingPool().query(
+        `SELECT id, guild_id, user_id, badge_id, badge_name, badge_emoji,
+                badge_color, badge_description, badge_type, earned_at
+         FROM user_badges
+         ${where}
+         ORDER BY earned_at DESC`,
+        params
+    );
+    return res.rows.map(r => ({
+        id: r.id,
+        guildId: String(r.guild_id),
+        userId: String(r.user_id),
+        badgeId: r.badge_id,
+        badgeName: r.badge_name,
+        badgeEmoji: r.badge_emoji,
+        badgeColor: r.badge_color,
+        badgeDescription: r.badge_description,
+        badgeType: r.badge_type,
+        earnedAt: r.earned_at ? new Date(r.earned_at).toISOString() : null,
+    }));
+}
+
+// Award an achievement/special badge to a member from the dashboard. Mirrors
+// LevelingManager.awardBadge but writes directly to the table (the bot picks
+// up new rows via nothing — it only reads badges on profile/badge commands —
+// so no cache sync is needed). Returns the created row or throws on conflict.
+async function awardDashboardBadge(guildId, { userId, badgeType, badge }) {
+    await ensureUserBadgesTable();
+    if (!userId || !badge || !badgeType) throw new Error('Missing userId/badge/badgeType');
+    // Don't double-award.
+    const existing = await getLevelingPool().query(
+        `SELECT id FROM user_badges
+         WHERE guild_id = $1 AND user_id = $2 AND badge_id = $3 AND badge_type = $4
+         LIMIT 1`,
+        [String(guildId), String(userId), String(badge.id), String(badgeType)]
+    );
+    if (existing.rows.length > 0) {
+        const err = new Error('User already has this badge');
+        err.code = 'already_has_badge';
+        throw err;
+    }
+    await getLevelingPool().query(
+        `INSERT INTO user_badges
+            (guild_id, user_id, badge_id, badge_name, badge_emoji, badge_color,
+             badge_description, badge_type, earned_at, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),NOW())`,
+        [
+            String(guildId), String(userId), String(badge.id),
+            String(badge.name), String(badge.emoji), String(badge.color),
+            String(badge.description), String(badgeType),
+        ]
+    );
+    return getGuildBadges(guildId, userId);
+}
+
+// Revoke a badge row by id (dashboard-initiated). Returns the deleted id.
+async function revokeDashboardBadge(guildId, badgeRowId) {
+    await ensureUserBadgesTable();
+    await getLevelingPool().query(
+        `DELETE FROM user_badges WHERE id = $1 AND guild_id = $2`,
+        [Number(badgeRowId), String(guildId)]
+    );
+    return Number(badgeRowId);
+}
+
 const config = require('../config');
 const constants = require('./constants');
 const { normalizeGuildPrefix } = require('../utils/prefixHelper');
@@ -165,6 +267,8 @@ const SERVER_SETTINGS_COLUMNS = `
     xp_cooldown,
     auto_reactions_enabled,
     auto_reactions,
+    auto_responder_enabled,
+    auto_responder,
     no_prefix_users,
     updated_at
 `;
@@ -181,12 +285,16 @@ async function ensureServerSettingsTable() {
             xp_cooldown           INTEGER NOT NULL DEFAULT 60000,
             auto_reactions_enabled BOOLEAN NOT NULL DEFAULT false,
             auto_reactions         JSONB NOT NULL DEFAULT '[]',
+            auto_responder_enabled BOOLEAN NOT NULL DEFAULT false,
+            auto_responder         JSONB NOT NULL DEFAULT '[]',
             no_prefix_users        JSONB NOT NULL DEFAULT '{}',
             prefix                 VARCHAR(10) DEFAULT '${config.prefix}',
             updated_at             TIMESTAMP DEFAULT NOW()
         )
     `);
     await pool.query(`ALTER TABLE server_settings ADD COLUMN IF NOT EXISTS prefix VARCHAR(10) DEFAULT '${config.prefix}'`);
+    await pool.query(`ALTER TABLE server_settings ADD COLUMN IF NOT EXISTS auto_responder_enabled BOOLEAN NOT NULL DEFAULT false`);
+    await pool.query(`ALTER TABLE server_settings ADD COLUMN IF NOT EXISTS auto_responder JSONB NOT NULL DEFAULT '[]'`);
 }
 
 async function getServerSettings(guildId) {
@@ -204,6 +312,8 @@ async function upsertServerSettings(guildId, patch) {
     // Normalize nested objects back to JSON strings.
     const autoReactions = JSON.stringify(merged.autoReactions?.reactions || []);
     const autoReactionsEnabled = merged.autoReactions?.enabled ?? false;
+    const autoResponder = JSON.stringify(merged.autoResponder?.responses || []);
+    const autoResponderEnabled = merged.autoResponder?.enabled ?? false;
     const noPrefixUsers = JSON.stringify(merged.noPrefixUsers || {});
     const prefix = normalizeGuildPrefix(merged.prefix, config.prefix);
     const levelingEnabled = merged.leveling?.enabled ?? true;
@@ -215,8 +325,10 @@ async function upsertServerSettings(guildId, patch) {
         INSERT INTO server_settings (
             guild_id, prefix, receive_broadcasts, broadcast_channel_id,
             leveling_enabled, leveling_channel_id, xp_multiplier, xp_cooldown,
-            auto_reactions_enabled, auto_reactions, no_prefix_users, updated_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())
+            auto_reactions_enabled, auto_reactions,
+            auto_responder_enabled, auto_responder,
+            no_prefix_users, updated_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW())
         ON CONFLICT (guild_id) DO UPDATE SET
             prefix                 = EXCLUDED.prefix,
             receive_broadcasts     = EXCLUDED.receive_broadcasts,
@@ -227,6 +339,8 @@ async function upsertServerSettings(guildId, patch) {
             xp_cooldown            = EXCLUDED.xp_cooldown,
             auto_reactions_enabled = EXCLUDED.auto_reactions_enabled,
             auto_reactions         = EXCLUDED.auto_reactions,
+            auto_responder_enabled = EXCLUDED.auto_responder_enabled,
+            auto_responder         = EXCLUDED.auto_responder,
             no_prefix_users        = EXCLUDED.no_prefix_users,
             updated_at             = NOW()
     `, [
@@ -234,7 +348,9 @@ async function upsertServerSettings(guildId, patch) {
         merged.receiveBroadcasts ?? true,
         merged.broadcastChannelId ?? null,
         levelingEnabled, levelingChannelId, xpMultiplier, xpCooldown,
-        autoReactionsEnabled, autoReactions, noPrefixUsers,
+        autoReactionsEnabled, autoReactions,
+        autoResponderEnabled, autoResponder,
+        noPrefixUsers,
     ]);
 
     return getServerSettings(guildId);
@@ -252,6 +368,7 @@ function defaultServerSettings() {
             xpCooldown: 60000,
         },
         autoReactions: { enabled: false, reactions: [] },
+        autoResponder: { enabled: false, responses: [] },
         noPrefixUsers: {},
     };
 }
@@ -270,6 +387,10 @@ function rowToServerSettings(row) {
         autoReactions: {
             enabled: row.auto_reactions_enabled,
             reactions: row.auto_reactions || [],
+        },
+        autoResponder: {
+            enabled: row.auto_responder_enabled,
+            responses: row.auto_responder || [],
         },
         noPrefixUsers: row.no_prefix_users || {},
     };
@@ -1845,4 +1966,7 @@ module.exports = {
     getNodeStats,
     addWebsiteLog,
     getWebsiteLogs,
+    getGuildBadges,
+    awardDashboardBadge,
+    revokeDashboardBadge,
 };

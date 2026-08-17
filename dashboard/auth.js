@@ -268,4 +268,14 @@ async function requireBeta(req, res, next) {
     }
 }
 
-module.exports = { requireAuth, requireGuildAdmin, requireGuildAdminPage, requireBeta, touchIdleDeadline, isIdleExpired, IDLE_TIMEOUT_MS };
+/**
+ * Guard for "upcoming" (not-yet-released) features (e.g. Events). Upcoming
+ * features are disabled for ALL servers — the dashboard renders a "Coming Soon"
+ * overlay and the write endpoints return 403 so the feature can't be used via
+ * API either. Upcoming takes priority over beta. Must run AFTER requireGuildAdmin.
+ */
+async function requireUpcoming(req, res, next) {
+    return res.status(403).json({ error: 'This feature is coming soon and is not available yet.', reason: 'upcoming' });
+}
+
+module.exports = { requireAuth, requireGuildAdmin, requireGuildAdminPage, requireBeta, requireUpcoming, touchIdleDeadline, isIdleExpired, IDLE_TIMEOUT_MS };

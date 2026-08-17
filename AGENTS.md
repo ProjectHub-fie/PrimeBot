@@ -205,3 +205,55 @@ Settings pages (welcome / leveling / prefix / reactions / broadcast / logging / 
 - Bot: `npm start`
 - Dashboard (local): `npm run dashboard`
 - Tests: `node --test tests/*.test.js`
+
+## Badges page (beta)
+
+A dedicated **🏅 Badges** tab (just below **📈 Leveling** in the Server features sidebar) exposes the existing leveling badge-catalog (defined in `config.leveling.badges`) so server admins can browse/award/revoke badges per member from the dashboard. The tab is **beta-gated** (shows a BETA badge; non-beta servers see the standard locked overlay).
+
+- **Page:** `dashboard/render/guild-pages.js` `badgesPage` renders a badges table (member search + award/revoke buttons). Sits directly under Leveling in `render/guild.js` `TABS` (with `beta: true`).
+- **Badge catalog:** `dashboard/constants.js` `BADGE_CATALOG` re-exports `config.leveling.badges` (single source of truth, shared with the bot's leveling manager).
+- **API:** `GET /api/guilds/:guildId/badges` (list awarded badges), `POST /api/guilds/:guildId/badges` (award — guarded by `requireBeta`), `DELETE /api/guilds/:guildId/badges` (revoke — guarded by `requireBeta`). Read endpoint is open. All guarded by `requireAuth` + `requireGuildAdmin`.
+- **DB functions:** `dashboard/db.js` `getGuildBadges`/`awardDashboardBadge`/`revokeDashboardBadge`/`ensureBadgesTable` against the leveling pool (`LEVELING_DATABASE_URL` → `DATABASE_URL` fallback). The badges table self-creates (`CREATE TABLE IF NOT EXISTS`) on first use.
+- **Client:** `dashboard/public/js/badges.js` renders the table + award/revoke modal (reuses existing `.modal.floating-window` classes). Tests: `tests/autoResponder.test.js` covers the responder; badges are smoke-tested via the mock dashboard.
+
+## Auto-responder feature
+
+Like auto-reactions, but **replies with a configured text response** instead of reacting. Each rule: `{ trigger, response, caseSensitive, exactMatch }`. A rule fires when a message *contains* the trigger (default) or *exactly equals* it (Exact checkbox); the bot sends each matched response as a Discord reply to the triggering message. Configurable from the dashboard's **💬 Auto-Responder** tab (just above **🔁 Auto-Reactions**), the `/autoresponder` slash command, or the `$autoresponder` prefix command.
+
+- **Storage & caching:** stored in the `server_settings` table as the `auto_responder` JSONB column + `auto_responder_enabled` boolean (same table as auto-reactions; `CREATE TABLE` + `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` self-migrate). Mirrors the auto-reactions pattern exactly. The bot's `ServerSettingsManager` re-reads every ~30s so dashboard changes take effect without a bot restart.
+- **Manager (`utils/serverSettingsManager.js`):** `getAutoResponder`/`toggleAutoResponder`/`addAutoResponse`/`removeAutoResponse`/`getTriggeredResponses`. Adding a response does NOT auto-enable the master switch (the user/bot command enables it explicitly). `getTriggeredResponses` returns the array of response strings for a given message content (empty when disabled).
+- **Bot hook (`events/messageCreate.js`):** in the `if (!isUsingPrefix)` block (where auto-reactions runs), after auto-reactions, calls `getTriggeredResponses` and `message.reply()`s each. Fire-and-forget (never throws back into the handler). Only runs for non-command messages so prefix commands aren't double-answered.
+- **Slash command (`commands/autoresponder.js`):** subcommands `enable`/`disable`/`status`/`list`/`add` (trigger, response, exact)/`remove` (trigger). Requires `ManageGuild`. Auto-registered via `deploy-commands.js`.
+- **Prefix command (`events/messageCreate.js`):** `case "autoresponder"|"auto-responder"|"aresponder"|"ar"`. Subcommands `enable`/`disable`/`add [trigger] | [response]`/`exact [trigger] | [response]`/`remove [trigger]`/`list`. Uses `|` to separate trigger and response (so responses can contain spaces). Requires `ManageGuild`.
+- **Dashboard API:** extends `PATCH /api/guilds/:guildId/server` to accept an `autoResponder` sub-object (`{ enabled, responses: [{trigger, response, caseSensitive, exactMatch}] }`). Server-side normalisation validates/coerces each entry. Settings included in `getGuildConfig` (`server.autoResponder`) so the page loads in one fetch.
+- **Dashboard page:** `dashboard/render/guild-pages.js` `autoResponderPage` — toggle + dynamic rows (trigger, response, Exact checkbox) + the floating Save bar. `dashboard/public/js/autoresponder.js` wires add/remove rows + `saveBar.register(() => saveAutoResponder())`.
+- **Same-DB requirement:** for dashboard edits to reach the bot, both deployments must point at the same `DATABASE_URL` (auto-responder lives in the main `server_settings` table, no separate pool). The bot picks up dashboard writes via its ~30s cache reload.
+- **Tests:** `tests/autoResponder.test.js` (9 cases) covers contains/exact/caseSensitive matching, add/remove/update-by-trigger, disabled-returns-nothing, and multiple-matches — pure in-memory (stubs `_init`/`loadSettings`/`_saveGuildSettings`).
+
+## "Upcoming" feature overlay (priority over beta)
+
+A second gating layer alongside beta. Any tab in `render/guild.js` `TABS` can carry `upcoming: true` (in addition to or instead of `beta: true`). When set, the page renders a **blurred + inert** "Coming Soon……" overlay with a graphic for ALL servers — **upcoming takes priority over beta** (so a tab with both flags shows the upcoming overlay, not the beta one).
+
+- **Tab nav:** a tab with `upcoming: true` shows a **SOON** badge (`render/guild.js` `tabNavHTML` → `.soon-badge`).
+- **Page render:** `dashboard/render/guild-pages.js` `upcomingOverlayWrap(innerPanelHTML, { icon, title })` wraps the real panel markup in a `.upcoming-locked-wrap.locked` (blurred + `pointer-events:none` + `user-select:none`) with a `.upcoming-locked-overlay` containing a `.upcoming-graphic` (orb + animated dots) + `.upcoming-title` (`<title>……`) + a "still in the workshop, check back soon" message. The underlying editor markup is kept (just blurred) so flipping `upcoming: false` later re-enables the feature with no markup rewrite.
+- **Client guard:** `dashboard/public/js/events.js` (and any upcoming-gated page's JS) early-exits when it detects `.upcoming-locked-wrap.locked` (in addition to `.beta-locked-wrap.locked`) so no API calls/bindings run behind the overlay.
+- **API guard:** `dashboard/auth.js` `requireUpcoming` middleware — returns `403 { reason: 'upcoming' }` for ALL servers (the feature isn't usable from the API either). Applied to the events write endpoints (POST/PATCH/DELETE/POST start) in `dashboard/server.js`, replacing the previous `requireBeta` on those routes (upcoming takes priority).
+- **Event Management:** the 📅 Events tab is now `upcoming: true` (it was previously beta-gated). It stays visible in the sidebar (discoverable) but shows the "Coming Soon……" overlay for every server.
+- **CSS:** `.soon-badge`, `.upcoming-locked-wrap`, `.upcoming-locked-overlay`, `.upcoming-graphic`, `.upcoming-title` in `dashboard/public/styles.css`.
+
+## 404 page (graphical catch-all)
+
+Any unknown path renders a friendly graphical 404. On Vercel, `vercel.json` routes every request to the serverless handler (`dashboard/server.js`), so a broken/mistyped link lands here.
+
+- **Render:** `dashboard/render/pages.js` `notFoundPage` — a `.notfound-card` with an animated "404" graphic (the middle `0` has a pulsing glow orb behind it + a soft radial-gradient orb), a "Page not found" title, an explanation, and two buttons (Back to dashboard / Read the docs) + a support-server link. Returns HTTP 404.
+- **Handler:** the final `app.use((req, res) => …)` catch-all in `dashboard/server.js` sends `notFoundPage` for HTML clients and `{ error: 'Not found' }` JSON for others.
+- **CSS:** `.notfound-card`, `.notfound-404`, `.notfound-zero::after` (pulse animation), `.notfound-orb`, `.notfound-actions` in `dashboard/public/styles.css`.
+
+## Dashboard layout: back button
+
+The top-nav back button is only rendered on sub-pages, NOT on the **Servers** page (`/`, the server-selection landing page after login). `dashboard/render/layout.js` `render()`/`navHTML()` take a `hideBack` option; `dashboard/render/pages.js` `overviewPage` (the Servers page) passes `hideBack: true`. The back button is redundant on the landing page (there's nothing to go back to) and was visually confusing.
+
+## Website log: refresh-after-save
+
+The **⚙️ General** tab's website log table now refreshes automatically after a successful settings save (so the just-recorded audit entry appears without a manual reload). `dashboard/public/js/common.js` `SaveBar` exposes an `onSaved(cb)` registration hook (called after every successful save); `dashboard/public/js/general.js` registers a callback that re-fetches `GET /api/guilds/:guildId/logs/website`. Previously the log only updated on a full page reload.
+

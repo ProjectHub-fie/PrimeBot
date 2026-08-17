@@ -19,6 +19,12 @@ const mockDb = {
     getGuildConfig: async () => ({ server:{}, welcome:{}, leveling:{} }),
     getServerSettings: async () => ({}),
     upsertServerSettings: async (gid, patch) => patch,
+    getWebsiteLogs: async () => [{ id: 1, adminUserId: 't', adminUsername: 'Tester', content: 'Updated command prefix to "$"', createdAt: new Date().toISOString() }],
+    addWebsiteLog: async () => {},
+    getLevelingRoleRewards: async () => [],
+    getGuildBadges: async () => [],
+    awardDashboardBadge: async () => [],
+    revokeDashboardBadge: async () => 1,
 };
 
 const mockDiscord = {
@@ -49,6 +55,7 @@ const mockAuth = {
         next();
     },
     requireBeta: (req, res, next) => next(),
+    requireUpcoming: (req, res, next) => next(),
 };
 
 const origResolve = Module._resolveFilename;
