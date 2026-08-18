@@ -1,5 +1,7 @@
-/* Live page — lists running/ended live polls & giveaways and the join modal.
- * Mirrors the old SPA renderLive/bindLiveEvents/openJoinModal.
+/* Per-server Live Polls / Live Giveaways tab.
+ * Same card markup as the global live.js, but fetches only the items created in
+ * THIS server via /api/guilds/:guildId/live/polls|giveaways. The active page is
+ * detected from the body's data attribute set below.
  */
 
 const LIVE_PREFIX = '$';
@@ -42,17 +44,16 @@ function liveEndedCardHTML(item, kind) {
     </div>`;
 }
 
-function livePanelHTML(title, items, ended, kind) {
+function livePanelHTML(items, ended, kind) {
   return `
     <div class="live-panel">
-      <h2>${esc(title)}</h2>
       <h3 class="live-section-head">🟢 Running</h3>
       <div class="live-list">
-        ${items.length ? items.map(i => liveRunningCardHTML(i, kind)).join('') : '<p class="live-empty">No running items.</p>'}
+        ${items.length ? items.map(i => liveRunningCardHTML(i, kind)).join('') : '<p class="live-empty">No running items in this server.</p>'}
       </div>
       <h3 class="live-section-head">🔴 Ended</h3>
       <div class="live-list">
-        ${ended.length ? ended.map(i => liveEndedCardHTML(i, kind)).join('') : '<p class="live-empty">No ended items.</p>'}
+        ${ended.length ? ended.map(i => liveEndedCardHTML(i, kind)).join('') : '<p class="live-empty">No ended items in this server.</p>'}
       </div>
     </div>`;
 }
@@ -92,31 +93,30 @@ function openJoinModal(key, kind) {
   });
 }
 
-async function loadLive() {
-  // Each live page sets window.liveKind ('poll' | 'giveaway') via an inline
-  // script so this one script serves both the polls and giveaways pages.
-  const kind = window.liveKind === 'giveaway' ? 'giveaway' : 'poll';
+async function loadGuildLive() {
+  // guild-common.js sets window.guildData.guildId. The kind is derived from the
+  // page URL so the same script serves both the polls and giveaways tabs.
+  const guildId = window.guildData?.guildId;
+  const kind = window.location.pathname.endsWith('/live/giveaways') ? 'giveaway' : 'poll';
   const wrap = document.getElementById('live-content');
-  if (!wrap) return;
-  // Keep the refresh button label stable across reloads.
+  if (!wrap || !guildId) return;
   const refreshBtn = document.getElementById('live-refresh');
   if (refreshBtn) { refreshBtn.disabled = true; refreshBtn.textContent = '🔄 Refreshing…'; }
   try {
-    const data = await api(kind === 'poll' ? '/api/live/polls' : '/api/live/giveaways');
+    const data = await api(`/api/guilds/${encodeURIComponent(guildId)}/live/${kind === 'poll' ? 'polls' : 'giveaways'}`);
     const items = data.running || [];
     const ended = data.ended || [];
-    const title = kind === 'poll' ? '📊 Live Polls' : '🎉 Live Giveaways';
-    wrap.innerHTML = livePanelHTML(title, items, ended, kind);
+    wrap.innerHTML = livePanelHTML(items, ended, kind);
     wrap.querySelectorAll('.live-join-btn').forEach(btn => {
       btn.addEventListener('click', () => openJoinModal(btn.dataset.key, btn.dataset.kind));
     });
   } catch (err) {
-    wrap.innerHTML = `<div class="card"><div class="alert alert-error">${esc(err.message || 'Failed to load live data.')}</div></div>`;
+    wrap.innerHTML = `<div class="alert alert-error">${esc(err.message || 'Failed to load live data.')}</div>`;
   } finally {
     if (refreshBtn) { refreshBtn.disabled = false; refreshBtn.textContent = '🔄 Refresh'; }
   }
 }
 
-document.getElementById('live-refresh')?.addEventListener('click', () => loadLive());
+document.getElementById('live-refresh')?.addEventListener('click', () => loadGuildLive());
 
-loadLive();
+loadGuildLive();

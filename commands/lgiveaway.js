@@ -137,7 +137,7 @@ module.exports = {
         if (giveaway) {
             const votingEmbed = interaction.client.liveGiveawayManager.createGiveawayEmbed(giveaway, 0);
             const buttons = interaction.client.liveGiveawayManager.createJoinButton(result.giveawayId);
-            const votingMessage = await interaction.followUp({ embeds: [votingEmbed], components: buttons, ephemeral: false });
+            const votingMessage = await interaction.followUp({ embeds: [votingEmbed], components: [buttons], ephemeral: false });
             await interaction.client.liveGiveawayManager.updateGiveawayMessage(
                 result.giveawayId, votingMessage.id, interaction.channel.id
             );
@@ -158,7 +158,7 @@ module.exports = {
         }
         const embed = interaction.client.liveGiveawayManager.createGiveawayEmbed(giveaway, giveaway.participants.size);
         const buttons = interaction.client.liveGiveawayManager.createJoinButton(giveaway.giveawayId);
-        await interaction.reply({ embeds: [embed], components: buttons, ephemeral: false });
+        await interaction.reply({ embeds: [embed], components: [buttons], ephemeral: false });
     },
 
     async handleResults(interaction) {

@@ -388,6 +388,18 @@ const loggingSettings = pgTable('logging_settings', {
   updatedAt: timestamp('updated_at').defaultNow(),
 });
 
+// Dashboard admin-action audit trail (shown on the General settings page).
+// Lives in the dedicated LOG_DATABASE_URL pool (falling back to DATABASE_URL)
+// alongside logging_settings.
+const websiteLogs = pgTable('website_logs', {
+  id: serial('id').primaryKey(),
+  guildId: varchar('guild_id', { length: 50 }).notNull(),
+  adminUserId: varchar('admin_user_id', { length: 50 }).notNull(),
+  adminUsername: varchar('admin_username', { length: 100 }).notNull(),
+  content: text('content').notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
 // Automod settings table (per-guild premium automod config)
 const automodSettings = pgTable('automod_settings', {
   guildId: varchar('guild_id', { length: 50 }).primaryKey(),
@@ -469,10 +481,17 @@ const ticketPanels = pgTable('ticket_panels', {
   closeButtonEmoji: varchar('close_button_emoji', { length: 100 }),
   claimButtonLabel: varchar('claim_button_label', { length: 80 }),
   claimButtonEmoji: varchar('claim_button_emoji', { length: 100 }),
+  // Initial Close button colour (label/emoji are columns above).
+  closeButtonStyle: varchar('close_button_style', { length: 20 }).default('Danger'),
   // Ticket channel name templates per status (open/claimed/closed).
   openNameTemplate: varchar('open_name_template', { length: 100 }),
   claimedNameTemplate: varchar('claimed_name_template', { length: 100 }),
   closedNameTemplate: varchar('closed_name_template', { length: 100 }),
+  // JSONB: { confirmYes, confirmNo, closeEmbed, transcript, buttons }
+  // Holds the whole close-confirmation flow config (yes/no buttons, optional
+  // red close embed, transcript channel, and the 3 post-close action buttons:
+  // transcript / reopen / delete). See utils/ticketManager.js normalizeCloseFlow.
+  closeFlow: jsonb('close_flow'),
   enabled: boolean('enabled').default(true).notNull(),
   createdBy: varchar('created_by', { length: 50 }),
   createdAt: timestamp('created_at').defaultNow(),
@@ -526,8 +545,8 @@ const liveGiveaways = pgTable('live_giveaways', {
   winnerCount: integer('winner_count').default(1),
   isActive: boolean('is_active').default(true),
   ended: boolean('ended').default(false),
-  createdAt: timestamp('created_at').defaultNow(),
-  endsAt: timestamp('ends_at'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  endsAt: timestamp('ends_at', { withTimezone: true }),
   messageId: varchar('message_id', { length: 50 }),
   channelId: varchar('channel_id', { length: 50 }),
 });
@@ -536,14 +555,14 @@ const liveGiveawayParticipants = pgTable('live_giveaway_participants', {
   id: serial('id').primaryKey(),
   giveawayId: varchar('giveaway_id', { length: 100 }).notNull(),
   userId: varchar('user_id', { length: 50 }).notNull(),
-  joinedAt: timestamp('joined_at').defaultNow(),
+  joinedAt: timestamp('joined_at', { withTimezone: true }).defaultNow(),
 });
 
 const liveGiveawayWinners = pgTable('live_giveaway_winners', {
   id: serial('id').primaryKey(),
   giveawayId: varchar('giveaway_id', { length: 100 }).notNull(),
   userId: varchar('user_id', { length: 50 }).notNull(),
-  selectedAt: timestamp('selected_at').defaultNow(),
+  selectedAt: timestamp('selected_at', { withTimezone: true }).defaultNow(),
 });
 
 const liveGiveawaysRelations = relations(liveGiveaways, ({ many }) => ({
@@ -653,6 +672,7 @@ module.exports = {
   reactionRolesRelations,
   reactionRoleMappingsRelations,
   loggingSettings,
+  websiteLogs,
   automodSettings,
   automodWarnings,
   automodAppeals,

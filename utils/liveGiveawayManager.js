@@ -27,8 +27,8 @@ const CREATE_TABLE_SQL = `
         winner_count    INTEGER NOT NULL DEFAULT 1,
         is_active       BOOLEAN NOT NULL DEFAULT true,
         ended           BOOLEAN NOT NULL DEFAULT false,
-        created_at      TIMESTAMP DEFAULT NOW(),
-        ends_at         TIMESTAMP,
+        created_at      TIMESTAMPTZ DEFAULT NOW(),
+        ends_at         TIMESTAMPTZ,
         message_id      VARCHAR(50),
         channel_id      VARCHAR(50)
     );
@@ -37,7 +37,7 @@ const CREATE_TABLE_SQL = `
         id          SERIAL PRIMARY KEY,
         giveaway_id VARCHAR(100) NOT NULL,
         user_id     VARCHAR(50) NOT NULL,
-        joined_at   TIMESTAMP DEFAULT NOW(),
+        joined_at   TIMESTAMPTZ DEFAULT NOW(),
         UNIQUE (giveaway_id, user_id)
     );
     CREATE INDEX IF NOT EXISTS live_giveaway_participants_giveaway_idx ON live_giveaway_participants (giveaway_id);
@@ -45,9 +45,17 @@ const CREATE_TABLE_SQL = `
         id          SERIAL PRIMARY KEY,
         giveaway_id VARCHAR(100) NOT NULL,
         user_id     VARCHAR(50) NOT NULL,
-        selected_at TIMESTAMP DEFAULT NOW()
+        selected_at TIMESTAMPTZ DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS live_giveaway_winners_giveaway_idx ON live_giveaway_winners (giveaway_id);
+    -- Migrate legacy TIMESTAMP (without tz) columns to TIMESTAMPTZ so the
+    -- 'ends_at <= NOW()' expiry sweep compares UTC instants correctly. With
+    -- plain TIMESTAMP, a DB server whose timezone is ahead of UTC would see a
+    -- freshly-created "1h" giveaway as already expired, causing instant auto-end.
+    ALTER TABLE live_giveaways        ALTER COLUMN created_at TYPE TIMESTAMPTZ;
+    ALTER TABLE live_giveaways        ALTER COLUMN ends_at     TYPE TIMESTAMPTZ USING ends_at AT TIME ZONE 'UTC';
+    ALTER TABLE live_giveaway_participants ALTER COLUMN joined_at   TYPE TIMESTAMPTZ;
+    ALTER TABLE live_giveaway_winners      ALTER COLUMN selected_at TYPE TIMESTAMPTZ;
 `;
 
 class LiveGiveawayManager {

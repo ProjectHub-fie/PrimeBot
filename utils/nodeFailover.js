@@ -1,4 +1,4 @@
-const { db } = require('../server/db');
+const { seasonDb } = require('../server/seasonDb');
 const { sql } = require('drizzle-orm');
 
 // Three-host failover configuration.
@@ -38,7 +38,7 @@ let leaseTableReady = false;
 
 async function ensureTable() {
     if (tableReady) return;
-    await db.execute(sql`
+    await seasonDb.execute(sql`
         CREATE TABLE IF NOT EXISTS bot_node_status (
             role VARCHAR(20) PRIMARY KEY,
             node_name VARCHAR(255) NOT NULL,
@@ -51,7 +51,7 @@ async function ensureTable() {
 
 async function ensureLeaseTable() {
     if (leaseTableReady) return;
-    await db.execute(sql`
+    await seasonDb.execute(sql`
         CREATE TABLE IF NOT EXISTS bot_failover_lock (
             id INTEGER PRIMARY KEY DEFAULT 1,
             owner_node_name VARCHAR(255) NOT NULL,
@@ -65,7 +65,7 @@ async function ensureLeaseTable() {
 
 async function writeHeartbeat(role, active) {
     await ensureTable();
-    await db.execute(sql`
+    await seasonDb.execute(sql`
         INSERT INTO bot_node_status (role, node_name, last_heartbeat, active)
         VALUES (${role}, ${NODE_NAME}, NOW(), ${active})
         ON CONFLICT (role) DO UPDATE SET
@@ -83,7 +83,7 @@ async function getStatus(role) {
     // each other; comparing a remote timestamp against a local Date.now()
     // can make a perfectly fresh heartbeat look stale (or vice versa),
     // causing both nodes to think they should be active at the same time.
-    const result = await db.execute(sql`
+    const result = await seasonDb.execute(sql`
         SELECT node_name, last_heartbeat, active,
                EXTRACT(EPOCH FROM (NOW() - last_heartbeat)) * 1000 AS age_ms
         FROM bot_node_status
@@ -104,7 +104,7 @@ async function getPrimaryAgeMs() {
 // selfRole is optional; when omitted any other active node is returned.
 async function getOtherActiveNode(selfNodeName, selfRole) {
     await ensureTable();
-    const result = await db.execute(sql`
+    const result = await seasonDb.execute(sql`
         SELECT role, node_name, last_heartbeat, active,
                EXTRACT(EPOCH FROM (NOW() - last_heartbeat)) * 1000 AS age_ms
         FROM bot_node_status
@@ -164,7 +164,7 @@ async function acquireLease(role, nodeName) {
 
     try {
         console.log(`[FAILOVER] Attempting to acquire lease for role=${role} node=${nodeName}`);
-        const insertResult = await db.execute(sql`
+        const insertResult = await seasonDb.execute(sql`
             INSERT INTO bot_failover_lock (id, owner_node_name, owner_role, acquired_at, last_seen)
             VALUES (1, ${nodeName}, ${role}, NOW(), NOW())
             ON CONFLICT (id) DO NOTHING
@@ -175,7 +175,7 @@ async function acquireLease(role, nodeName) {
             return { acquired: true, ownerNodeName: nodeName, ownerRole: role, stolen: false };
         }
 
-        const existing = await db.execute(sql`
+        const existing = await seasonDb.execute(sql`
             SELECT owner_node_name, owner_role,
                    EXTRACT(EPOCH FROM (NOW() - last_seen)) * 1000 AS age_ms
             FROM bot_failover_lock
@@ -187,7 +187,7 @@ async function acquireLease(role, nodeName) {
         }
 
         if (row.owner_node_name === nodeName) {
-            await db.execute(sql`
+            await seasonDb.execute(sql`
                 UPDATE bot_failover_lock
                 SET last_seen = NOW()
                 WHERE id = 1 AND owner_node_name = ${nodeName}
@@ -204,7 +204,7 @@ async function acquireLease(role, nodeName) {
         // sn1 > sn2 > sn3.  This makes "set NODE_ROLE=sn1 and restart" the
         // reliable way to promote a host without manual DB edits.
         if (myPriority < holderPriority) {
-            await db.execute(sql`
+            await seasonDb.execute(sql`
                 UPDATE bot_failover_lock
                 SET owner_node_name = ${nodeName}, owner_role = ${role}, acquired_at = NOW(), last_seen = NOW()
                 WHERE id = 1
@@ -222,7 +222,7 @@ async function acquireLease(role, nodeName) {
 
         // Lower-priority node (or equal) only takes over when the lease is stale.
         if (ageMs > FAILOVER_THRESHOLD_MS) {
-            await db.execute(sql`
+            await seasonDb.execute(sql`
                 UPDATE bot_failover_lock
                 SET owner_node_name = ${nodeName}, owner_role = ${role}, acquired_at = NOW(), last_seen = NOW()
                 WHERE id = 1
@@ -242,7 +242,7 @@ async function acquireLease(role, nodeName) {
 async function refreshLease(nodeName, role) {
     try {
         await ensureLeaseTable();
-        const result = await db.execute(sql`
+        const result = await seasonDb.execute(sql`
             UPDATE bot_failover_lock
             SET last_seen = NOW(), owner_role = ${role}
             WHERE id = 1 AND owner_node_name = ${nodeName}
@@ -257,7 +257,7 @@ async function refreshLease(nodeName, role) {
 async function getLease() {
     try {
         await ensureLeaseTable();
-        const result = await db.execute(sql`
+        const result = await seasonDb.execute(sql`
             SELECT owner_node_name, owner_role,
                    EXTRACT(EPOCH FROM (NOW() - last_seen)) * 1000 AS age_ms
             FROM bot_failover_lock
@@ -275,7 +275,7 @@ async function getLease() {
 async function releaseLease(nodeName) {
     try {
         await ensureLeaseTable();
-        await db.execute(sql`
+        await seasonDb.execute(sql`
             DELETE FROM bot_failover_lock
             WHERE id = 1 AND owner_node_name = ${nodeName}
         `);
@@ -293,7 +293,7 @@ async function transferLease(targetNodeName, targetRole, fromNodeName = null, { 
         await ensureLeaseTable();
         const current = await getLease();
         if (!current) {
-            await db.execute(sql`
+            await seasonDb.execute(sql`
                 INSERT INTO bot_failover_lock (id, owner_node_name, owner_role, acquired_at, last_seen)
                 VALUES (1, ${targetNodeName}, ${targetRole}, NOW(), NOW())
                 ON CONFLICT (id) DO UPDATE SET
@@ -321,7 +321,7 @@ async function transferLease(targetNodeName, targetRole, fromNodeName = null, { 
             };
         }
 
-        const result = await db.execute(sql`
+        const result = await seasonDb.execute(sql`
             UPDATE bot_failover_lock
             SET owner_node_name = ${targetNodeName}, owner_role = ${targetRole}, acquired_at = NOW(), last_seen = NOW()
             WHERE id = 1

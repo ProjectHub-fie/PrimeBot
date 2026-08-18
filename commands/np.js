@@ -23,10 +23,10 @@ module.exports = {
                 .setRequired(false))
         .addIntegerOption(option =>
             option.setName('minutes')
-                .setDescription('Duration in minutes for add/enable mode')
+                .setDescription('Duration in minutes (leave empty for a lifetime grant that never expires)')
                 .setRequired(false)
                 .setMinValue(1)
-                .setMaxValue(60))
+                .setMaxValue(43200))
         .setDMPermission(false),
 
     async execute(interaction) {
@@ -48,7 +48,8 @@ module.exports = {
 
             const action = interaction.options.getString('action');
             const targetUser = interaction.options.getUser('user') || interaction.user;
-            const minutes = interaction.options.getInteger('minutes') || 10;
+            // Optional: when omitted, enableNoPrefixMode treats it as a lifetime grant.
+            const minutes = interaction.options.getInteger('minutes');
 
             const serverSettingsManager = interaction.client.serverSettingsManager;
             if (!serverSettingsManager) {
@@ -83,8 +84,12 @@ module.exports = {
                     .setTitle('🪄 No-Prefix Mode Enabled')
                     .setDescription(`No-prefix mode is now enabled for ${targetUser}.`)
                     .addFields(
-                        { name: 'Duration', value: `${minutes} minute${minutes !== 1 ? 's' : ''}`, inline: true },
-                        { name: 'Expires', value: `<t:${Math.floor(result.expiresAt / 1000)}:R>`, inline: true }
+                        result.lifetime
+                            ? { name: 'Duration', value: 'Lifetime (never expires)', inline: true }
+                            : { name: 'Duration', value: `${minutes} minute${minutes !== 1 ? 's' : ''}`, inline: true },
+                        result.lifetime
+                            ? { name: 'Expires', value: 'Never', inline: true }
+                            : { name: 'Expires', value: `<t:${Math.floor(result.expiresAt / 1000)}:R>`, inline: true }
                     )
                     .setFooter({ text: `Developer command • ${config.version}` });
 
@@ -111,11 +116,16 @@ module.exports = {
                 const expiresAt = serverSettingsManager.getNoPrefixExpiration(guildId, targetUser.id);
 
                 if (expiresAt) {
+                    const isLifetime = expiresAt === serverSettingsManager.constructor.NO_PREFIX_LIFETIME;
                     embed
                         .setColor(config.colors.success)
                         .setTitle('🪄 No-Prefix Mode Status')
                         .setDescription(`${targetUser} currently has no-prefix mode enabled.`)
-                        .addFields({ name: 'Expires', value: `<t:${Math.floor(expiresAt / 1000)}:R>`, inline: false })
+                        .addFields(
+                            isLifetime
+                                ? { name: 'Duration', value: 'Lifetime (never expires)', inline: true }
+                                : { name: 'Expires', value: `<t:${Math.floor(expiresAt / 1000)}:R>`, inline: false }
+                        )
                         .setFooter({ text: `Developer command • ${config.version}` });
                 } else {
                     embed

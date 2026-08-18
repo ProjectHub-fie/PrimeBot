@@ -17,6 +17,12 @@ module.exports = {
     // Session cookie name.
     SESSION_COOKIE: 'primebot.sid',
 
+    // Idle auto-logout window (ms). While the dashboard tab is visible the
+    // client heartbeats /api/session/heartbeat to keep the session alive; when
+    // the tab is hidden for this long the session is destroyed and the user is
+    // logged out automatically. Overridable via SESSION_IDLE_TIMEOUT_MS env.
+    SESSION_IDLE_TIMEOUT_MS: Math.max(1000, parseInt(process.env.SESSION_IDLE_TIMEOUT_MS, 10) || 120000),
+
     // Bot identity (for branding).
     BOT_NAME: 'PrimeBot',
     BOT_VERSION: config.version,
@@ -39,10 +45,16 @@ module.exports = {
     COLORS: config.colors,
 
     // Loggable event types shared with the bot (utils/logEvents.js).
-    // Each entry: { key, label, icon, color, category }.
+    // Each entry: { key, label, icon (emoji, for bot embeds), iconName (SVG, for the dashboard), color, category }.
     LOG_EVENTS,
 
     // Automod rule types + actions shared with the bot (utils/automodRules.js).
     AUTOMOD_RULES,
     AUTOMOD_ACTIONS,
+
+    // Leveling badge catalog (config.leveling.badges). The dashboard's Badges
+    // tab renders the achievement + special badges (awardable from the UI) and
+    // lists the level badges (earned automatically on level-up). Mirrored here
+    // so the page can render the catalog without an extra API round-trip.
+    BADGE_CATALOG: (config.leveling && config.leveling.badges) || { levelBadges: [], achievementBadges: [], specialBadges: [] },
 };

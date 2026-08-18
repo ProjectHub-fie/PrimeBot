@@ -89,6 +89,20 @@ function getLevelingPool() {
     return levelingPool;
 }
 
+// logging_settings + website_logs live in the dedicated LOG_DATABASE_URL pool
+// (falling back to DATABASE_URL), same multi-pool pattern as the other features.
+let logPool = null;
+function getLogPool() {
+    if (logPool) return logPool;
+    try {
+        logPool = require('../server/logDb').logPool;
+    } catch (err) {
+        console.error('[DASHBOARD DB] logDb unavailable:', err.message);
+        logPool = { query: async () => { throw new Error('Log database not configured'); } };
+    }
+    return logPool;
+}
+
 async function ensureLevelingRoleRewardsTable() {
     await getLevelingPool().query(`
         CREATE TABLE IF NOT EXISTS leveling_role_rewards (
@@ -132,6 +146,108 @@ async function setLevelingRoleRewards(guildId, rewards) {
     return getLevelingRoleRewards(guildId);
 }
 
+// ── Badges (leveling achievement badges, in the LEVELING_DATABASE_URL pool) ─
+//
+// The bot's LevelingManager awards level/achievement/special badges into the
+// user_badges table (created by server/levelingDb.js). The dashboard's Badges
+// tab reads that table so admins can see who has which badge and manually
+// award/revoke the achievement & special badges. Level badges are earned
+// automatically on level-up and are not awardable from the dashboard.
+
+async function ensureUserBadgesTable() {
+    await getLevelingPool().query(`
+        CREATE TABLE IF NOT EXISTS user_badges (
+            id              SERIAL PRIMARY KEY,
+            guild_id        VARCHAR(50) NOT NULL,
+            user_id         VARCHAR(50) NOT NULL,
+            badge_id        VARCHAR(100) NOT NULL,
+            badge_name      VARCHAR(255) NOT NULL,
+            badge_emoji     VARCHAR(10) NOT NULL,
+            badge_color     VARCHAR(50) NOT NULL,
+            badge_description TEXT NOT NULL,
+            badge_type      VARCHAR(50) NOT NULL,
+            earned_at       TIMESTAMP NOT NULL,
+            created_at      TIMESTAMP DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS user_badges_guild_idx ON user_badges (guild_id);
+    `);
+}
+
+// All badge rows for a guild (optionally filtered to one user). Each row is
+// mapped to camelCase + an ISO earnedAt so the dashboard client can render it.
+async function getGuildBadges(guildId, userId) {
+    await ensureUserBadgesTable();
+    const params = [String(guildId)];
+    let where = 'WHERE guild_id = $1';
+    if (userId) {
+        params.push(String(userId));
+        where += ` AND user_id = $${params.length}`;
+    }
+    const res = await getLevelingPool().query(
+        `SELECT id, guild_id, user_id, badge_id, badge_name, badge_emoji,
+                badge_color, badge_description, badge_type, earned_at
+         FROM user_badges
+         ${where}
+         ORDER BY earned_at DESC`,
+        params
+    );
+    return res.rows.map(r => ({
+        id: r.id,
+        guildId: String(r.guild_id),
+        userId: String(r.user_id),
+        badgeId: r.badge_id,
+        badgeName: r.badge_name,
+        badgeEmoji: r.badge_emoji,
+        badgeColor: r.badge_color,
+        badgeDescription: r.badge_description,
+        badgeType: r.badge_type,
+        earnedAt: r.earned_at ? new Date(r.earned_at).toISOString() : null,
+    }));
+}
+
+// Award an achievement/special badge to a member from the dashboard. Mirrors
+// LevelingManager.awardBadge but writes directly to the table (the bot picks
+// up new rows via nothing — it only reads badges on profile/badge commands —
+// so no cache sync is needed). Returns the created row or throws on conflict.
+async function awardDashboardBadge(guildId, { userId, badgeType, badge }) {
+    await ensureUserBadgesTable();
+    if (!userId || !badge || !badgeType) throw new Error('Missing userId/badge/badgeType');
+    // Don't double-award.
+    const existing = await getLevelingPool().query(
+        `SELECT id FROM user_badges
+         WHERE guild_id = $1 AND user_id = $2 AND badge_id = $3 AND badge_type = $4
+         LIMIT 1`,
+        [String(guildId), String(userId), String(badge.id), String(badgeType)]
+    );
+    if (existing.rows.length > 0) {
+        const err = new Error('User already has this badge');
+        err.code = 'already_has_badge';
+        throw err;
+    }
+    await getLevelingPool().query(
+        `INSERT INTO user_badges
+            (guild_id, user_id, badge_id, badge_name, badge_emoji, badge_color,
+             badge_description, badge_type, earned_at, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),NOW())`,
+        [
+            String(guildId), String(userId), String(badge.id),
+            String(badge.name), String(badge.emoji), String(badge.color),
+            String(badge.description), String(badgeType),
+        ]
+    );
+    return getGuildBadges(guildId, userId);
+}
+
+// Revoke a badge row by id (dashboard-initiated). Returns the deleted id.
+async function revokeDashboardBadge(guildId, badgeRowId) {
+    await ensureUserBadgesTable();
+    await getLevelingPool().query(
+        `DELETE FROM user_badges WHERE id = $1 AND guild_id = $2`,
+        [Number(badgeRowId), String(guildId)]
+    );
+    return Number(badgeRowId);
+}
+
 const config = require('../config');
 const constants = require('./constants');
 const { normalizeGuildPrefix } = require('../utils/prefixHelper');
@@ -151,6 +267,8 @@ const SERVER_SETTINGS_COLUMNS = `
     xp_cooldown,
     auto_reactions_enabled,
     auto_reactions,
+    auto_responder_enabled,
+    auto_responder,
     no_prefix_users,
     updated_at
 `;
@@ -167,12 +285,16 @@ async function ensureServerSettingsTable() {
             xp_cooldown           INTEGER NOT NULL DEFAULT 60000,
             auto_reactions_enabled BOOLEAN NOT NULL DEFAULT false,
             auto_reactions         JSONB NOT NULL DEFAULT '[]',
+            auto_responder_enabled BOOLEAN NOT NULL DEFAULT false,
+            auto_responder         JSONB NOT NULL DEFAULT '[]',
             no_prefix_users        JSONB NOT NULL DEFAULT '{}',
             prefix                 VARCHAR(10) DEFAULT '${config.prefix}',
             updated_at             TIMESTAMP DEFAULT NOW()
         )
     `);
     await pool.query(`ALTER TABLE server_settings ADD COLUMN IF NOT EXISTS prefix VARCHAR(10) DEFAULT '${config.prefix}'`);
+    await pool.query(`ALTER TABLE server_settings ADD COLUMN IF NOT EXISTS auto_responder_enabled BOOLEAN NOT NULL DEFAULT false`);
+    await pool.query(`ALTER TABLE server_settings ADD COLUMN IF NOT EXISTS auto_responder JSONB NOT NULL DEFAULT '[]'`);
 }
 
 async function getServerSettings(guildId) {
@@ -190,6 +312,8 @@ async function upsertServerSettings(guildId, patch) {
     // Normalize nested objects back to JSON strings.
     const autoReactions = JSON.stringify(merged.autoReactions?.reactions || []);
     const autoReactionsEnabled = merged.autoReactions?.enabled ?? false;
+    const autoResponder = JSON.stringify(merged.autoResponder?.responses || []);
+    const autoResponderEnabled = merged.autoResponder?.enabled ?? false;
     const noPrefixUsers = JSON.stringify(merged.noPrefixUsers || {});
     const prefix = normalizeGuildPrefix(merged.prefix, config.prefix);
     const levelingEnabled = merged.leveling?.enabled ?? true;
@@ -201,8 +325,10 @@ async function upsertServerSettings(guildId, patch) {
         INSERT INTO server_settings (
             guild_id, prefix, receive_broadcasts, broadcast_channel_id,
             leveling_enabled, leveling_channel_id, xp_multiplier, xp_cooldown,
-            auto_reactions_enabled, auto_reactions, no_prefix_users, updated_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())
+            auto_reactions_enabled, auto_reactions,
+            auto_responder_enabled, auto_responder,
+            no_prefix_users, updated_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW())
         ON CONFLICT (guild_id) DO UPDATE SET
             prefix                 = EXCLUDED.prefix,
             receive_broadcasts     = EXCLUDED.receive_broadcasts,
@@ -213,6 +339,8 @@ async function upsertServerSettings(guildId, patch) {
             xp_cooldown            = EXCLUDED.xp_cooldown,
             auto_reactions_enabled = EXCLUDED.auto_reactions_enabled,
             auto_reactions         = EXCLUDED.auto_reactions,
+            auto_responder_enabled = EXCLUDED.auto_responder_enabled,
+            auto_responder         = EXCLUDED.auto_responder,
             no_prefix_users        = EXCLUDED.no_prefix_users,
             updated_at             = NOW()
     `, [
@@ -220,7 +348,9 @@ async function upsertServerSettings(guildId, patch) {
         merged.receiveBroadcasts ?? true,
         merged.broadcastChannelId ?? null,
         levelingEnabled, levelingChannelId, xpMultiplier, xpCooldown,
-        autoReactionsEnabled, autoReactions, noPrefixUsers,
+        autoReactionsEnabled, autoReactions,
+        autoResponderEnabled, autoResponder,
+        noPrefixUsers,
     ]);
 
     return getServerSettings(guildId);
@@ -238,6 +368,7 @@ function defaultServerSettings() {
             xpCooldown: 60000,
         },
         autoReactions: { enabled: false, reactions: [] },
+        autoResponder: { enabled: false, responses: [] },
         noPrefixUsers: {},
     };
 }
@@ -256,6 +387,10 @@ function rowToServerSettings(row) {
         autoReactions: {
             enabled: row.auto_reactions_enabled,
             reactions: row.auto_reactions || [],
+        },
+        autoResponder: {
+            enabled: row.auto_responder_enabled,
+            responses: row.auto_responder || [],
         },
         noPrefixUsers: row.no_prefix_users || {},
     };
@@ -373,7 +508,7 @@ function rowToWelcomeSettings(row) {
 // ── logging_settings ───────────────────────────────────────────────────────
 
 async function ensureLoggingTable() {
-    await pool.query(`
+    await getLogPool().query(`
         CREATE TABLE IF NOT EXISTS logging_settings (
             guild_id              VARCHAR(50) PRIMARY KEY,
             enabled               BOOLEAN NOT NULL DEFAULT false,
@@ -386,15 +521,15 @@ async function ensureLoggingTable() {
             updated_at            TIMESTAMP DEFAULT NOW()
         )
     `);
-    await pool.query(`ALTER TABLE logging_settings ADD COLUMN IF NOT EXISTS webhook_name  VARCHAR(100) DEFAULT 'PrimeBot Logs'`);
-    await pool.query(`ALTER TABLE logging_settings ADD COLUMN IF NOT EXISTS events        JSONB NOT NULL DEFAULT '[]'`);
-    await pool.query(`ALTER TABLE logging_settings ADD COLUMN IF NOT EXISTS include_bots  BOOLEAN NOT NULL DEFAULT false`);
-    await pool.query(`ALTER TABLE logging_settings ADD COLUMN IF NOT EXISTS color         VARCHAR(20) DEFAULT '#5865F2'`);
+    await getLogPool().query(`ALTER TABLE logging_settings ADD COLUMN IF NOT EXISTS webhook_name  VARCHAR(100) DEFAULT 'PrimeBot Logs'`);
+    await getLogPool().query(`ALTER TABLE logging_settings ADD COLUMN IF NOT EXISTS events        JSONB NOT NULL DEFAULT '[]'`);
+    await getLogPool().query(`ALTER TABLE logging_settings ADD COLUMN IF NOT EXISTS include_bots  BOOLEAN NOT NULL DEFAULT false`);
+    await getLogPool().query(`ALTER TABLE logging_settings ADD COLUMN IF NOT EXISTS color         VARCHAR(20) DEFAULT '#5865F2'`);
 }
 
 async function getLoggingSettings(guildId) {
     await ensureLoggingTable();
-    const res = await pool.query(`SELECT * FROM logging_settings WHERE guild_id = $1`, [guildId]);
+    const res = await getLogPool().query(`SELECT * FROM logging_settings WHERE guild_id = $1`, [guildId]);
     if (res.rows.length === 0) return defaultLoggingSettings();
     return rowToLoggingSettings(res.rows[0]);
 }
@@ -404,7 +539,7 @@ async function upsertLoggingSettings(guildId, patch) {
     const current = await getLoggingSettings(guildId);
     const merged = { ...current, ...patch };
 
-    await pool.query(`
+    await getLogPool().query(`
         INSERT INTO logging_settings (
             guild_id, enabled, channel_id, webhook_url, webhook_name,
             events, include_bots, color, updated_at
@@ -454,6 +589,57 @@ function rowToLoggingSettings(row) {
         includeBots: row.include_bots,
         color: row.color || '#5865F2',
     };
+}
+
+// ── website_logs (dashboard admin-action audit trail, shown on General page) ─
+//
+// Each dashboard settings save records a row here (admin username + a short
+// human-readable content summary + timestamp). Lives in the LOG_DATABASE_URL
+// pool alongside logging_settings so a single connection string covers both the
+// bot's server logging and the dashboard's website log.
+
+async function ensureWebsiteLogsTable() {
+    await getLogPool().query(`
+        CREATE TABLE IF NOT EXISTS website_logs (
+            id              SERIAL PRIMARY KEY,
+            guild_id        VARCHAR(50) NOT NULL,
+            admin_user_id   VARCHAR(50) NOT NULL,
+            admin_username  VARCHAR(100) NOT NULL,
+            content         TEXT NOT NULL,
+            created_at      TIMESTAMP DEFAULT NOW()
+        )
+    `);
+    await getLogPool().query(
+        `CREATE INDEX IF NOT EXISTS website_logs_guild_idx ON website_logs (guild_id, created_at DESC)`
+    );
+}
+
+async function addWebsiteLog(guildId, { adminUserId, adminUsername, content }) {
+    await ensureWebsiteLogsTable();
+    await getLogPool().query(
+        `INSERT INTO website_logs (guild_id, admin_user_id, admin_username, content, created_at)
+         VALUES ($1, $2, $3, $4, NOW())`,
+        [String(guildId), String(adminUserId || ''), String(adminUsername || ''), String(content || '')]
+    );
+}
+
+async function getWebsiteLogs(guildId, limit = 100) {
+    await ensureWebsiteLogsTable();
+    const res = await getLogPool().query(
+        `SELECT id, admin_user_id, admin_username, content, created_at
+         FROM website_logs
+         WHERE guild_id = $1
+         ORDER BY created_at DESC
+         LIMIT $2`,
+        [String(guildId), Math.min(Math.max(Number(limit) || 100, 1), 500)]
+    );
+    return res.rows.map(r => ({
+        id: r.id,
+        adminUserId: r.admin_user_id,
+        adminUsername: r.admin_username,
+        content: r.content,
+        createdAt: r.created_at ? new Date(r.created_at).toISOString() : null,
+    }));
 }
 
 // ── reaction_roles + reaction_role_mappings ─────────────────────────────────
@@ -1094,8 +1280,10 @@ async function ensureTicketTables() {
             welcome_message        TEXT,
             close_button_label     VARCHAR(80) DEFAULT 'Close Ticket',
             close_button_emoji     VARCHAR(100),
+            close_button_style     VARCHAR(20) DEFAULT 'Danger',
             claim_button_label     VARCHAR(80),
             claim_button_emoji     VARCHAR(100),
+            close_flow             JSONB,
             enabled             BOOLEAN NOT NULL DEFAULT true,
             created_by          VARCHAR(50),
             created_at          TIMESTAMP DEFAULT NOW(),
@@ -1129,11 +1317,73 @@ async function ensureTicketTables() {
         ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS open_name_template     VARCHAR(100);
         ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS claimed_name_template VARCHAR(100);
         ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS closed_name_template   VARCHAR(100);
+        ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS close_button_style    VARCHAR(20) DEFAULT 'Danger';
+        ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS close_flow            JSONB;
     `);
 }
 
 const VALID_TICKET_BUTTON_STYLES = new Set(['Primary', 'Secondary', 'Success', 'Danger']);
 const VALID_TICKET_MESSAGE_TYPES = new Set(['embed', 'plain']);
+
+// Close-flow JSONB normalization — mirrors utils/ticketManager.js so the
+// dashboard and bot agree on the shape. Returns a complete object.
+const DEFAULT_TICKET_CLOSE_FLOW = {
+    confirmYes: { label: 'Yes', emoji: '✅', style: 'Success' },
+    confirmNo: { label: 'No', emoji: '✖️', style: 'Danger' },
+    closeEmbed: {
+        enabled: false,
+        title: '🔒 Ticket Closed',
+        description: 'This ticket was closed by {moderator} at {time}.\nOpened by {author}.',
+        color: '#ED4245',
+        footer: '{panel} · PrimeBot',
+    },
+    transcript: { enabled: false, channelId: null },
+    buttons: {
+        transcript: { label: 'Transcript', emoji: '📝', style: 'Primary' },
+        reopen: { label: 'Reopen', emoji: '🔓', style: 'Success' },
+        delete: { label: 'Delete', emoji: '🗑️', style: 'Danger' },
+    },
+};
+const TICKET_CLOSE_BTN_KEYS = ['transcript', 'reopen', 'delete'];
+
+function _ticketCoerceStyle(v, fallback = 'Primary') {
+    return VALID_TICKET_BUTTON_STYLES.has(v) ? v : fallback;
+}
+
+function _normalizeTicketBtnSpec(spec, fallback) {
+    const s = (spec && typeof spec === 'object') ? spec : {};
+    const label = (s.label == null ? '' : String(s.label)).trim();
+    const emoji = (s.emoji == null ? '' : String(s.emoji)).trim() || null;
+    return {
+        label: label || fallback.label,
+        emoji: emoji || fallback.emoji,
+        style: _ticketCoerceStyle(s.style, fallback.style),
+    };
+}
+
+function normalizeTicketCloseFlow(raw) {
+    const src = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
+    const out = {
+        confirmYes: _normalizeTicketBtnSpec(src.confirmYes, DEFAULT_TICKET_CLOSE_FLOW.confirmYes),
+        confirmNo: _normalizeTicketBtnSpec(src.confirmNo, DEFAULT_TICKET_CLOSE_FLOW.confirmNo),
+        closeEmbed: {
+            enabled: src.closeEmbed && src.closeEmbed.enabled === true ? true : false,
+            title: (src.closeEmbed && src.closeEmbed.title != null ? String(src.closeEmbed.title) : DEFAULT_TICKET_CLOSE_FLOW.closeEmbed.title).trim() || DEFAULT_TICKET_CLOSE_FLOW.closeEmbed.title,
+            description: (src.closeEmbed && src.closeEmbed.description != null ? String(src.closeEmbed.description) : DEFAULT_TICKET_CLOSE_FLOW.closeEmbed.description),
+            color: /^#[0-9a-fA-F]{6}$/.test(src.closeEmbed && src.closeEmbed.color) ? src.closeEmbed.color : DEFAULT_TICKET_CLOSE_FLOW.closeEmbed.color,
+            footer: (src.closeEmbed && src.closeEmbed.footer != null ? String(src.closeEmbed.footer) : DEFAULT_TICKET_CLOSE_FLOW.closeEmbed.footer),
+        },
+        transcript: {
+            enabled: src.transcript && src.transcript.enabled === true ? true : false,
+            channelId: (src.transcript && src.transcript.channelId != null ? String(src.transcript.channelId).trim() : null) || null,
+        },
+        buttons: {},
+    };
+    for (const k of TICKET_CLOSE_BTN_KEYS) {
+        out.buttons[k] = _normalizeTicketBtnSpec(src.buttons && src.buttons[k], DEFAULT_TICKET_CLOSE_FLOW.buttons[k]);
+    }
+    return out;
+}
 
 function ticketRowToPanel(row) {
     return {
@@ -1165,11 +1415,13 @@ function ticketRowToPanel(row) {
         welcomeMessage: row.welcome_message || null,
         closeButtonLabel: row.close_button_label || 'Close Ticket',
         closeButtonEmoji: row.close_button_emoji || null,
+        closeButtonStyle: row.close_button_style || 'Danger',
         claimButtonLabel: row.claim_button_label || null,
         claimButtonEmoji: row.claim_button_emoji || null,
         openNameTemplate: row.open_name_template != null ? row.open_name_template : null,
         claimedNameTemplate: row.claimed_name_template != null ? row.claimed_name_template : null,
         closedNameTemplate: row.closed_name_template != null ? row.closed_name_template : null,
+        closeFlow: row.close_flow != null ? normalizeTicketCloseFlow(row.close_flow) : normalizeTicketCloseFlow({}),
         enabled: row.enabled !== false,
         createdBy: row.created_by || null,
         createdAt: row.created_at,
@@ -1187,14 +1439,17 @@ function normalizeTicketPanel(data, keepUndefined = false) {
         cooldownSeconds: 0, maxOpenPerUser: 1, askReason: false,
         reasonPlaceholder: 'Briefly describe your issue',
         welcomeMessage: null, closeButtonLabel: 'Close Ticket',
-        closeButtonEmoji: '🔒', claimButtonLabel: null, claimButtonEmoji: null,
+        closeButtonEmoji: '🔒', closeButtonStyle: 'Danger',
+        claimButtonLabel: null, claimButtonEmoji: null,
         openNameTemplate: null, claimedNameTemplate: null, closedNameTemplate: null,
+        closeFlow: null,
         enabled: true, channelId: null, messageId: null,
     };
     const out = keepUndefined ? { ...(data || {}) } : { ...defaults, ...(data || {}) };
     out.name = (out.name == null ? '' : String(out.name)).trim() || 'Support Ticket';
     out.messageType = VALID_TICKET_MESSAGE_TYPES.has(out.messageType) ? out.messageType : 'embed';
     out.buttonStyle = VALID_TICKET_BUTTON_STYLES.has(out.buttonStyle) ? out.buttonStyle : 'Primary';
+    out.closeButtonStyle = VALID_TICKET_BUTTON_STYLES.has(out.closeButtonStyle) ? out.closeButtonStyle : 'Danger';
     out.color = /^#[0-9a-fA-F]{6}$/.test(out.color) ? out.color : '#5865F2';
     out.supportRoleIds = Array.isArray(out.supportRoleIds) ? out.supportRoleIds.map(String) : [];
     out.pingRoleIds = Array.isArray(out.pingRoleIds) ? out.pingRoleIds.map(String) : [];
@@ -1205,6 +1460,7 @@ function normalizeTicketPanel(data, keepUndefined = false) {
     for (const f of ['openNameTemplate', 'claimedNameTemplate', 'closedNameTemplate']) {
         if (out[f] != null) out[f] = String(out[f]).trim().slice(0, 100) || null;
     }
+    out.closeFlow = normalizeTicketCloseFlow(out.closeFlow);
     return out;
 }
 
@@ -1214,9 +1470,10 @@ const TICKET_PANEL_FIELDS = {
     buttonLabel: 1, buttonStyle: 1, buttonEmoji: 1, category: 1, ticketName: 1,
     supportRoleIds: 1, pingRoleIds: 1, ticketCategoryId: 1, cooldownSeconds: 1,
     maxOpenPerUser: 1, askReason: 1, reasonPlaceholder: 1, welcomeMessage: 1,
-    closeButtonLabel: 1, closeButtonEmoji: 1, claimButtonLabel: 1,
+    closeButtonLabel: 1, closeButtonEmoji: 1, closeButtonStyle: 1,
+    claimButtonLabel: 1,
     claimButtonEmoji: 1, openNameTemplate: 1, claimedNameTemplate: 1,
-    closedNameTemplate: 1, enabled: 1, createdBy: 1,
+    closedNameTemplate: 1, closeFlow: 1, enabled: 1, createdBy: 1,
 };
 
 async function _fetchTicketPanel(id) {
@@ -1241,10 +1498,10 @@ async function createTicketPanel(guildId, data) {
             button_style, button_emoji, category, ticket_name, support_role_ids,
             ping_role_ids, ticket_category_id, cooldown_seconds, max_open_per_user,
             ask_reason, reason_placeholder, welcome_message, close_button_label,
-            close_button_emoji, claim_button_label, claim_button_emoji,
+            close_button_emoji, close_button_style, claim_button_label, claim_button_emoji,
             open_name_template, claimed_name_template, closed_name_template,
-            enabled, created_by, created_at, updated_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,NOW(),NOW())
+            close_flow, enabled, created_by, created_at, updated_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,NOW(),NOW())
         RETURNING id
     `, [
         guildId, p.name, p.channelId || null, p.messageId || null, p.messageType,
@@ -1253,8 +1510,9 @@ async function createTicketPanel(guildId, data) {
         p.ticketName, JSON.stringify(p.supportRoleIds), JSON.stringify(p.pingRoleIds),
         p.ticketCategoryId, p.cooldownSeconds, p.maxOpenPerUser, p.askReason,
         p.reasonPlaceholder, p.welcomeMessage, p.closeButtonLabel,
-        p.closeButtonEmoji, p.claimButtonLabel, p.claimButtonEmoji,
+        p.closeButtonEmoji, p.closeButtonStyle, p.claimButtonLabel, p.claimButtonEmoji,
         p.openNameTemplate, p.claimedNameTemplate, p.closedNameTemplate,
+        JSON.stringify(p.closeFlow || {}),
         p.enabled, p.createdBy || null,
     ]);
     return _fetchTicketPanel(res.rows[0].id);
@@ -1278,9 +1536,9 @@ async function updateTicketPanel(id, patch) {
             support_role_ids = $18, ping_role_ids = $19, ticket_category_id = $20,
             cooldown_seconds = $21, max_open_per_user = $22, ask_reason = $23,
             reason_placeholder = $24, welcome_message = $25, close_button_label = $26,
-            close_button_emoji = $27, claim_button_label = $28, claim_button_emoji = $29,
-            open_name_template = $30, claimed_name_template = $31, closed_name_template = $32,
-            enabled = $33, updated_at = NOW()
+            close_button_emoji = $27, close_button_style = $28, claim_button_label = $29, claim_button_emoji = $30,
+            open_name_template = $31, claimed_name_template = $32, closed_name_template = $33,
+            close_flow = $34, enabled = $35, updated_at = NOW()
         WHERE id = $1
     `, [
         id, p.name, p.channelId || null, p.messageId || null, p.messageType,
@@ -1289,8 +1547,9 @@ async function updateTicketPanel(id, patch) {
         p.ticketName, JSON.stringify(p.supportRoleIds), JSON.stringify(p.pingRoleIds),
         p.ticketCategoryId, p.cooldownSeconds, p.maxOpenPerUser, p.askReason,
         p.reasonPlaceholder, p.welcomeMessage, p.closeButtonLabel,
-        p.closeButtonEmoji, p.claimButtonLabel, p.claimButtonEmoji,
+        p.closeButtonEmoji, p.closeButtonStyle, p.claimButtonLabel, p.claimButtonEmoji,
         p.openNameTemplate, p.claimedNameTemplate, p.closedNameTemplate,
+        JSON.stringify(p.closeFlow || {}),
         p.enabled,
     ]);
     return _fetchTicketPanel(id);
@@ -1325,17 +1584,18 @@ async function renameTicketPanel(id, newName) {
 // ── Live polls + live giveaways (LIVE_DATABASE_URL) ────────────────────────
 //
 // The dashboard surfaces all running and ended live polls and live giveaways
-// in the "Live" page. Live polls live in the main DB schema (live_polls etc.),
-// while live giveaways live in the dedicated LIVE_DATABASE_URL pool. Both are
-// read-only here (creation is via the bot commands) — the dashboard just lists
-// them. The bot's managers cache in memory and re-read periodically, so the
-// numbers here reflect the live state within that window.
+// in the "Live" page. Both live polls and live giveaways live in the dedicated
+// LIVE_DATABASE_URL pool (server/liveDb.js, falls back to DATABASE_URL). Both
+// are read-only here (creation is via the bot commands) — the dashboard just
+// lists them. The bot's managers cache in memory and re-read periodically, so
+// the numbers here reflect the live state within that window.
 
 async function getLivePolls() {
     try {
-        const res = await pool.query(`
+        const p = getLivePool();
+        const res = await p.query(`
             SELECT p.poll_id, p.pass_code, p.question, p.is_active,
-                   p.created_at, p.expires_at,
+                   p.created_at, p.expires_at, p.channel_id,
                    (SELECT COUNT(*) FROM live_poll_votes v WHERE v.poll_id = p.poll_id) AS total_votes
             FROM live_polls p
             ORDER BY p.created_at DESC
@@ -1347,6 +1607,7 @@ async function getLivePolls() {
             isActive: r.is_active !== false,
             createdAt: r.created_at,
             expiresAt: r.expires_at,
+            channelId: r.channel_id,
             totalVotes: Number(r.total_votes) || 0,
         }));
     } catch (err) {
@@ -1360,7 +1621,7 @@ async function getLiveGiveaways() {
         const p = getLivePool();
         const res = await p.query(`
             SELECT g.giveaway_id, g.pass_code, g.prize, g.description, g.is_active,
-                   g.ended, g.created_at, g.ends_at,
+                   g.ended, g.created_at, g.ends_at, g.channel_id,
                    (SELECT COUNT(*) FROM live_giveaway_participants pt WHERE pt.giveaway_id = g.giveaway_id) AS entries
             FROM live_giveaways g
             ORDER BY g.created_at DESC
@@ -1374,6 +1635,7 @@ async function getLiveGiveaways() {
             ended: r.ended === true,
             createdAt: r.created_at,
             endsAt: r.ends_at,
+            channelId: r.channel_id,
             entries: Number(r.entries) || 0,
         }));
     } catch (err) {
@@ -1388,7 +1650,7 @@ async function getEndedLiveGiveaways() {
     try {
         const p = getLivePool();
         const res = await p.query(`
-            SELECT g.giveaway_id, g.pass_code, g.prize, g.created_at, g.ends_at,
+            SELECT g.giveaway_id, g.pass_code, g.prize, g.created_at, g.ends_at, g.channel_id,
                    COALESCE(json_agg(w.user_id) FILTER (WHERE w.user_id IS NOT NULL), '[]') AS winners
             FROM live_giveaways g
             LEFT JOIN live_giveaway_winners w ON w.giveaway_id = g.giveaway_id
@@ -1402,6 +1664,7 @@ async function getEndedLiveGiveaways() {
             prize: r.prize,
             createdAt: r.created_at,
             endsAt: r.ends_at,
+            channelId: r.channel_id,
             winners: Array.isArray(r.winners) ? r.winners : [],
         }));
     } catch (err) {
@@ -1414,8 +1677,9 @@ async function getEndedLiveGiveaways() {
 // for ended items only).
 async function getEndedLivePolls() {
     try {
-        const res = await pool.query(`
-            SELECT p.poll_id, p.pass_code, p.question, p.created_at, p.expires_at,
+        const p = getLivePool();
+        const res = await p.query(`
+            SELECT p.poll_id, p.pass_code, p.question, p.created_at, p.expires_at, p.channel_id,
                    o.option_text, o.vote_count
             FROM live_polls p
             JOIN live_poll_options o ON o.poll_id = p.poll_id
@@ -1431,6 +1695,7 @@ async function getEndedLivePolls() {
                     question: r.question,
                     createdAt: r.created_at,
                     expiresAt: r.expires_at,
+                    channelId: r.channel_id,
                     options: [],
                 });
             }
@@ -1650,6 +1915,107 @@ async function cancelEventSchedule(id) {
     return true;
 }
 
+// ── Shardnode / failover status (bot_node_status + bot_failover_lock) ─────────
+//
+// The bot's nodeFailover module writes a heartbeat row per shard node (sn1/sn2/
+// sn3) every 15s and maintains a single-row lease lock. The dashboard reads
+// these tables directly so the Stats page can show live node health without any
+// bot↔dashboard IPC. Both tables live in the dedicated SEASON_DATABASE_URL pool
+// (server/seasonDb.js, falls back to DATABASE_URL) — the same pool the bot's
+// nodeFailover writes to and the dashboard session store uses, so all three
+// stay in sync as long as both deployments point at the same
+// SEASON_DATABASE_URL (or the same DATABASE_URL fallback).
+
+let seasonPool = null;
+function getSeasonPool() {
+    if (seasonPool) return seasonPool;
+    try {
+        seasonPool = require('../server/seasonDb').seasonPool;
+    } catch (err) {
+        console.error('[DASHBOARD DB] seasonDb unavailable:', err.message);
+        seasonPool = { query: async () => { throw new Error('Season database not configured'); } };
+    }
+    return seasonPool;
+}
+
+const FAILOVER_THRESHOLD_MS = 45000; // mirrors utils/nodeFailover.js
+const NODE_ROLES = ['sn1', 'sn2', 'sn3'];
+
+async function ensureNodeStatusTables() {
+    const p = getSeasonPool();
+    await p.query(`
+        CREATE TABLE IF NOT EXISTS bot_node_status (
+            role VARCHAR(20) PRIMARY KEY,
+            node_name VARCHAR(255) NOT NULL,
+            last_heartbeat TIMESTAMP NOT NULL DEFAULT NOW(),
+            active BOOLEAN NOT NULL DEFAULT false
+        )
+    `);
+    await p.query(`
+        CREATE TABLE IF NOT EXISTS bot_failover_lock (
+            id INTEGER PRIMARY KEY DEFAULT 1,
+            owner_node_name VARCHAR(255) NOT NULL,
+            owner_role VARCHAR(20) NOT NULL,
+            acquired_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            last_seen TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+    `);
+}
+
+async function getNodeStats() {
+    await ensureNodeStatusTables();
+    const p = getSeasonPool();
+    const [statusRes, leaseRes] = await Promise.all([
+        p.query(`
+            SELECT role, node_name, last_heartbeat, active,
+                   EXTRACT(EPOCH FROM (NOW() - last_heartbeat)) * 1000 AS age_ms
+            FROM bot_node_status
+        `).catch(() => ({ rows: [] })),
+        p.query(`
+            SELECT owner_node_name, owner_role, acquired_at, last_seen,
+                   EXTRACT(EPOCH FROM (NOW() - last_seen)) * 1000 AS age_ms
+            FROM bot_failover_lock WHERE id = 1
+        `).catch(() => ({ rows: [] })),
+    ]);
+
+    const byRole = {};
+    for (const row of statusRes.rows || []) {
+        byRole[row.role] = {
+            role: row.role,
+            nodeName: row.node_name,
+            active: !!row.active,
+            lastHeartbeat: row.last_heartbeat,
+            ageMs: Math.round(Number(row.age_ms) || 0),
+        };
+    }
+    // Always surface all three roles so the UI renders a stable grid, even when
+    // a node has never reported (no row yet). A node is "online" if it has a
+    // fresh heartbeat regardless of the active flag (standby nodes are alive
+    // too); "offline" once the heartbeat is older than the failover threshold.
+    const nodes = NODE_ROLES.map(role => byRole[role] || {
+        role,
+        nodeName: null,
+        active: false,
+        lastHeartbeat: null,
+        ageMs: null,
+    }).map(n => ({
+        ...n,
+        status: n.ageMs == null ? 'never' : (n.ageMs > FAILOVER_THRESHOLD_MS ? 'offline' : 'online'),
+    }));
+
+    const leaseRow = (leaseRes.rows || [])[0];
+    const lease = leaseRow ? {
+        ownerNodeName: leaseRow.owner_node_name,
+        ownerRole: leaseRow.owner_role,
+        acquiredAt: leaseRow.acquired_at,
+        lastSeen: leaseRow.last_seen,
+        ageMs: Math.round(Number(leaseRow.age_ms) || 0),
+        stale: Number(leaseRow.age_ms || Infinity) > FAILOVER_THRESHOLD_MS,
+    } : null;
+
+    return { nodes, lease, thresholdMs: FAILOVER_THRESHOLD_MS };
+}
+
 module.exports = {
     getServerSettings,
     upsertServerSettings,
@@ -1690,4 +2056,10 @@ module.exports = {
     deleteEventSchedule,
     startEventSchedule,
     cancelEventSchedule,
+    getNodeStats,
+    addWebsiteLog,
+    getWebsiteLogs,
+    getGuildBadges,
+    awardDashboardBadge,
+    revokeDashboardBadge,
 };

@@ -1,6 +1,6 @@
 const { EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder } = require('discord.js');
 const config = require('../config');
-const { pool } = require('../server/db');
+const { communityPool } = require('../server/communityDb');
 
 class CountingManager {
     constructor(client) {
@@ -14,8 +14,26 @@ class CountingManager {
 
     async loadCounting() {
         try {
+            // Self-create the counting_games table if it doesn't exist (mirrors
+            // the pollManager / giveawayManager pattern) so the feature works on a
+            // fresh COMMUNITY_DATABASE_URL database even if migration 0001 was
+            // never applied there.
+            await communityPool.query(`
+                CREATE TABLE IF NOT EXISTS counting_games (
+                    channel_id varchar(50) PRIMARY KEY,
+                    start_number integer NOT NULL DEFAULT 1,
+                    current_number integer NOT NULL DEFAULT 0,
+                    goal_number integer NOT NULL DEFAULT 100,
+                    last_user_id varchar(50),
+                    highest_number integer NOT NULL DEFAULT 0,
+                    fail_count integer NOT NULL DEFAULT 0,
+                    participants jsonb,
+                    updated_at timestamp with time zone DEFAULT now()
+                );
+            `).catch(err => console.error('[COUNTING] ensure counting_games table failed:', err.message));
+
             this.counting.clear();
-            const res = await pool.query(
+            const res = await communityPool.query(
                 'SELECT channel_id, start_number, current_number, goal_number, last_user_id, highest_number, fail_count, participants FROM counting_games'
             );
             for (const row of res.rows) {
@@ -41,7 +59,7 @@ class CountingManager {
         const game = this.counting.get(channelId);
         if (!game) return;
         try {
-            await pool.query(`
+            await communityPool.query(`
                 INSERT INTO counting_games (channel_id, start_number, current_number, goal_number, last_user_id, highest_number, fail_count, participants, updated_at)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
                 ON CONFLICT (channel_id) DO UPDATE SET
@@ -202,7 +220,7 @@ class CountingManager {
     async endCountingGame(channelId) {
         if (!this.counting.has(channelId)) return false;
         this.counting.delete(channelId);
-        await pool.query('DELETE FROM counting_games WHERE channel_id = $1', [channelId]).catch(err =>
+        await communityPool.query('DELETE FROM counting_games WHERE channel_id = $1', [channelId]).catch(err =>
             console.error(`[COUNTING] Error deleting game for ${channelId}:`, err.message)
         );
         return true;

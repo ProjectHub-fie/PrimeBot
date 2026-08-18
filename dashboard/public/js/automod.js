@@ -15,7 +15,7 @@ function automodRuleRowHTML(rule = {}) {
     ? rule.actions
     : (rule.action ? [rule.action] : ['delete']);
   const actionChecks = AUTOMOD_ACTIONS.map(a =>
-    `<label class="switch mini am-action-label"><input type="checkbox" class="am-action" value="${a.key}" ${selected.includes(a.key) ? 'checked' : ''}/><span class="switch-text">${a.icon} ${esc(a.label)}</span></label>`
+    `<label class="switch mini am-action-label"><input type="checkbox" class="am-action" value="${a.key}" ${selected.includes(a.key) ? 'checked' : ''}/><span class="switch-text">${window.svgIcon(a.iconName)} ${esc(a.label)}</span></label>`
   ).join('');
   let extra = '';
   if (meta.params.includes('words')) {
@@ -30,10 +30,10 @@ function automodRuleRowHTML(rule = {}) {
   return `
     <div class="reaction-row am-rule-row" data-type="${esc(meta.key)}">
       <label class="switch mini"><input type="checkbox" class="am-enabled" ${rule.enabled !== false ? 'checked' : ''}/><span class="slider"></span></label>
-      <span class="am-rule-label">${meta.icon} ${esc(meta.label)}</span>
+      <span class="am-rule-label">${window.svgIcon(meta.iconName)} ${esc(meta.label)}</span>
       <div class="am-actions-group">${actionChecks}</div>
       ${extra}
-      <button class="reaction-remove am-remove" type="button">✕</button>
+      <button class="reaction-remove am-remove" type="button">${window.svgIcon('x')}</button>
     </div>`;
 }
 
@@ -162,6 +162,9 @@ document.getElementById('am-add-rule')?.addEventListener('click', () => {
 document.getElementById('am-refresh-warnings')?.addEventListener('click', (e) => { e.preventDefault(); refreshAmWarnings(); });
 document.getElementById('am-refresh-appeals')?.addEventListener('click', (e) => { e.preventDefault(); refreshAmAppeals(); });
 
+// Adding a rule is an edit — surface the floating save bar.
+document.getElementById('am-add-rule')?.addEventListener('click', () => saveBar.markDirty());
+
 async function saveSettings(kind) {
   if (kind !== 'automod') return;
   const exemptRoleIds = [];
@@ -192,6 +195,7 @@ async function saveSettings(kind) {
   await api(`/api/guilds/${GUILD_ID}/automod`, { method: 'PATCH', body: JSON.stringify(body) });
 }
 
-bindSaveButtons(document, saveSettings);
+saveBar.register(() => saveSettings('automod'));
+saveBar.track(document.body);
 refreshAmWarnings();
 refreshAmAppeals();

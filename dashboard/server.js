@@ -24,7 +24,7 @@ const cookieParser = require('cookie-parser');
 const PgSession = require('connect-pg-simple')(session);
 
 const discord = require('./discord');
-const { requireAuth, requireGuildAdmin, requireGuildAdminPage } = require('./auth');
+const { requireAuth, requireGuildAdmin, requireGuildAdminPage, requireBeta, requireUpcoming } = require('./auth');
 const dashboardDb = require('./db');
 const constants = require('./constants');
 const pages = require('./render/pages');
@@ -62,8 +62,19 @@ const REDIRECT_URI = process.env.DISCORD_REDIRECT_URI || `${BASE_URL}/auth/callb
 
 const SESSION_SECRET = process.env.SESSION_SECRET || 'primebot-dashboard-dev-secret-change-me';
 
+// Idle auto-logout: while the dashboard tab is visible the client heartbeats
+// /api/session/heartbeat, which refreshes this deadline. When the tab is
+// hidden (backgrounded/minimized) the client stops heartbeating AND starts a
+// local 120s countdown that ends in logout. The server-side deadline is the
+// safety net for cases where the client JS can't run (tab closed, browser
+// throttled the timer, crash) — once it lapses, the next authenticated request
+// is treated as expired and the user is bounced to /login?error=idle_timeout.
+const SESSION_IDLE_TIMEOUT_MS = constants.SESSION_IDLE_TIMEOUT_MS;
+
 // On Vercel (serverless), MemoryStore is useless because each request may run
-// in a fresh instance. Store sessions in the same PostgreSQL DB the bot uses.
+// in a fresh instance. Store sessions in the dedicated SEASON_DATABASE_URL pool
+// (which falls back to DATABASE_URL), shared with the shardnode failover
+// service so the dashboard and bot see the same rows.
 //
 // CRITICAL: the session pool must negotiate SSL the same way the bot's main
 // pool does (server/db.js). Production Postgres on Vercel (Neon, Supabase,
@@ -71,14 +82,14 @@ const SESSION_SECRET = process.env.SESSION_SECRET || 'primebot-dashboard-dev-sec
 // without ssl silently fails every session write. The OAuth callback then
 // redirects to "/" on a save error, the session row is never persisted, the
 // next /api/me returns 401, and the user lands back on the login screen —
-// i.e. "login works but never reaches the dashboard". So we reuse the bot's
+// i.e. "login works but never reaches the dashboard". So we reuse an
 // already-SSL-aware pool rather than constructing a naive one.
 function buildSessionStore() {
     let pool = null;
     try {
-        pool = require('../server/db').pool;
+        pool = require('../server/seasonDb').seasonPool;
     } catch (err) {
-        console.warn('[SESSION] Could not import bot DB pool, falling back to a local pool:', err.message);
+        console.warn('[SESSION] Could not import season pool, falling back to a local pool:', err.message);
     }
     if (!pool && process.env.DATABASE_URL) {
         const dbUrl = process.env.DATABASE_URL;
@@ -148,6 +159,8 @@ app.use((req, res, next) => {
     res.locals.botWebsite = constants.BOT_WEBSITE;
     res.locals.botSupport = constants.BOT_SUPPORT;
     res.locals.user = req.session && req.session.user;
+    // Injected into the page shell for session-timeout.js (see render/layout.js).
+    res.locals.idleTimeoutMs = SESSION_IDLE_TIMEOUT_MS;
     next();
 });
 
@@ -209,6 +222,10 @@ app.get('/auth/callback', async (req, res) => {
         };
         req.session.guilds = guilds;
         req.session.guildsFetchedAt = Date.now();
+        // Start the idle-auto-logout clock: the deadline is refreshed by the
+        // client heartbeat while the tab is visible and by every authenticated
+        // request. See dashboard/auth.js touchIdleDeadline.
+        req.session.idleExpiresAt = Date.now() + SESSION_IDLE_TIMEOUT_MS;
 
         console.log(`[AUTH] Login OK for ${user.username} (${user.id}); ${guilds.length} guilds`);
 
@@ -231,10 +248,35 @@ app.get('/auth/callback', async (req, res) => {
 });
 
 app.get('/logout', (req, res) => {
+    const reason = req.query.reason;
     req.session.destroy(() => {
         res.clearCookie(constants.SESSION_COOKIE);
+        // An idle-timeout logout (vs a manual click) surfaces a friendly
+        // "session expired" message on the login page. Manual logout keeps the
+        // existing behavior of landing on "/" (which redirects to /login).
+        if (reason === 'idle_timeout') {
+            return res.redirect('/login?error=idle_timeout');
+        }
         res.redirect('/');
     });
+});
+
+// ── Idle auto-logout heartbeat ──────────────────────────────────────────────
+//
+// While the dashboard tab is visible, session-timeout.js POSTs here on an
+// interval (well under SESSION_IDLE_TIMEOUT_MS) to refresh the server-side idle
+// deadline. The tab being visible ⇒ the user is "active"; a hidden tab stops
+// heartbeating, so the deadline lapses after SESSION_IDLE_TIMEOUT_MS and the
+// next authenticated request (or this very endpoint) logs them out. This is the
+// server-side guarantee behind the client's Page-Visibility-driven countdown.
+app.post('/api/session/heartbeat', requireAuth, (req, res) => {
+    res.json({ ok: true, idleExpiresAt: req.session.idleExpiresAt, idleTimeoutMs: SESSION_IDLE_TIMEOUT_MS });
+});
+
+// Read-only accessor so the client can sync its local countdown to the server's
+// authoritative deadline (handles clock drift / resumed sessions).
+app.get('/api/session/heartbeat', requireAuth, (req, res) => {
+    res.json({ ok: true, idleExpiresAt: req.session.idleExpiresAt, idleTimeoutMs: SESSION_IDLE_TIMEOUT_MS });
 });
 
 // ── API: current user ───────────────────────────────────────────────────────
@@ -282,6 +324,39 @@ app.get('/api/stats', async (req, res) => {
 });
 
 // ── API: list manageable guilds (admin's guilds where the bot is present) ───
+
+// Detailed bot stats for the Stats page. The dashboard process can't see the
+// bot's in-memory runtime (ping/uptime/guilds.cache), so this returns what the
+// dashboard CAN measure: the authoritative server count (Discord REST), the bot
+// identity, version, and platform feature adoption.
+app.get('/api/stats/bot', requireAuth, async (req, res) => {
+    try {
+        await resolveBotSelf();
+        const restCount = await discord.getBotGuildCount();
+        const stats = await dashboardDb.getPlatformStats(restCount);
+        res.json({
+            ...stats,
+            bot: botSelf,
+            clientId: process.env.DISCORD_CLIENT_ID,
+            version: constants.BOT_VERSION,
+        });
+    } catch (err) {
+        console.error('[API] /api/stats/bot error:', err.message);
+        res.status(500).json({ error: 'Failed to load bot stats.' });
+    }
+});
+
+// Shardnode + failover status for the Stats page. Reads the heartbeat/lease
+// tables the bot's nodeFailover module writes.
+app.get('/api/stats/nodes', requireAuth, async (req, res) => {
+    try {
+        const nodes = await dashboardDb.getNodeStats();
+        res.json(nodes);
+    } catch (err) {
+        console.error('[API] /api/stats/nodes error:', err.message);
+        res.status(500).json({ error: 'Failed to load node stats.' });
+    }
+});
 
 app.get('/api/guilds', requireAuth, async (req, res) => {
     try {
@@ -401,6 +476,7 @@ app.patch('/api/guilds/:guildId/welcome', requireAuth, requireGuildAdmin, async 
         // Null out empty channel id.
         if ('channelId' in patch && !patch.channelId) patch.channelId = null;
         const updated = await dashboardDb.upsertWelcomeSettings(req.guild.id, patch);
+        recordWebsiteLog(req, 'Updated welcome message settings');
         res.json({ welcome: updated });
     } catch (err) {
         console.error('[API] update welcome error:', err.message);
@@ -454,7 +530,33 @@ app.patch('/api/guilds/:guildId/server', requireAuth, requireGuildAdmin, async (
             if ('enabled' in body.autoReactions) patch.autoReactions.enabled = Boolean(body.autoReactions.enabled);
         }
 
+        // Auto-responder sub-object. Each response is normalized to
+        // { trigger, response, caseSensitive, exactMatch }.
+        if (body.autoResponder && typeof body.autoResponder === 'object') {
+            const current = await dashboardDb.getServerSettings(req.guild.id);
+            const responses = Array.isArray(body.autoResponder.responses)
+                ? body.autoResponder.responses
+                    .filter(r => r && typeof r === 'object' && r.trigger && r.response)
+                    .map(r => ({
+                        trigger: String(r.trigger),
+                        response: String(r.response),
+                        caseSensitive: Boolean(r.caseSensitive),
+                        exactMatch: Boolean(r.exactMatch),
+                    }))
+                : (current.autoResponder?.responses || []);
+            patch.autoResponder = {
+                enabled: body.autoResponder.enabled ?? current.autoResponder?.enabled ?? false,
+                responses,
+            };
+            if ('enabled' in body.autoResponder) patch.autoResponder.enabled = Boolean(body.autoResponder.enabled);
+        }
+
         const updated = await dashboardDb.upsertServerSettings(req.guild.id, patch);
+        if ('prefix' in patch) recordWebsiteLog(req, `Updated command prefix to "${patch.prefix}"`);
+        if (body.leveling) recordWebsiteLog(req, 'Updated leveling settings');
+        if (body.autoReactions) recordWebsiteLog(req, 'Updated auto-reactions settings');
+        if (body.autoResponder) recordWebsiteLog(req, 'Updated auto-responder settings');
+        if ('receiveBroadcasts' in body) recordWebsiteLog(req, `Updated broadcast settings (receive: ${body.receiveBroadcasts ? 'on' : 'off'})`);
         res.json({ server: updated });
     } catch (err) {
         console.error('[API] update server error:', err.message);
@@ -476,13 +578,69 @@ app.get('/api/guilds/:guildId/leveling/rolerewards', requireAuth, requireGuildAd
     }
 });
 
-app.put('/api/guilds/:guildId/leveling/rolerewards', requireAuth, requireGuildAdmin, async (req, res) => {
+app.put('/api/guilds/:guildId/leveling/rolerewards', requireAuth, requireGuildAdmin, requireBeta, async (req, res) => {
     try {
         const rewards = await dashboardDb.setLevelingRoleRewards(req.guild.id, req.body?.roleRewards || []);
+        recordWebsiteLog(req, 'Updated leveling role rewards');
         res.json({ roleRewards: rewards });
     } catch (err) {
         console.error('[API] set leveling role rewards error:', err.message);
         res.status(500).json({ error: 'Failed to save leveling role rewards.' });
+    }
+});
+
+// ── API: leveling badges (beta) ─────────────────────────────────────────────
+// Reads the user_badges table (LEVELING_DATABASE_URL pool) so the Badges tab
+// can show a live ledger, and lets beta-server admins award/revoke achievement
+// & special badges. Level badges are earned automatically on level-up and are
+// not awardable from the dashboard. The catalog comes from config.leveling.badges
+// (mirrored in constants.BADGE_CATALOG) — the API only stores awarded rows.
+
+app.get('/api/guilds/:guildId/badges', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const badges = await dashboardDb.getGuildBadges(req.guild.id, req.query.userId);
+        res.json({ badges });
+    } catch (err) {
+        console.error('[API] get badges error:', err.message);
+        res.status(500).json({ error: 'Failed to load badges.' });
+    }
+});
+
+app.post('/api/guilds/:guildId/badges/award', requireAuth, requireGuildAdmin, requireBeta, async (req, res) => {
+    try {
+        const { userId, badgeType, badgeId } = req.body || {};
+        if (!userId || !badgeType || !badgeId) {
+            return res.status(400).json({ error: 'userId, badgeType and badgeId are required.' });
+        }
+        if (!['achievement', 'special'].includes(badgeType)) {
+            return res.status(400).json({ error: 'Only achievement and special badges can be awarded from the dashboard.' });
+        }
+        const catalog = constants.BADGE_CATALOG || {};
+        const list = badgeType === 'achievement' ? catalog.achievementBadges : catalog.specialBadges;
+        const badge = (list || []).find(b => b.id === badgeId);
+        if (!badge) return res.status(400).json({ error: 'Badge not found in catalog.' });
+        const badges = await dashboardDb.awardDashboardBadge(req.guild.id, { userId, badgeType, badge });
+        recordWebsiteLog(req, `Awarded ${badgeType} badge "${badge.name}" to <@${userId}>`);
+        res.json({ badges });
+    } catch (err) {
+        if (err.code === 'already_has_badge') {
+            return res.status(409).json({ error: 'That member already has this badge.', reason: 'already_has_badge' });
+        }
+        console.error('[API] award badge error:', err.message);
+        res.status(500).json({ error: 'Failed to award badge.' });
+    }
+});
+
+app.delete('/api/guilds/:guildId/badges/:rowId', requireAuth, requireGuildAdmin, requireBeta, async (req, res) => {
+    try {
+        const rowId = parseInt(req.params.rowId, 10);
+        if (!Number.isFinite(rowId)) return res.status(400).json({ error: 'Invalid badge row id.' });
+        await dashboardDb.revokeDashboardBadge(req.guild.id, rowId);
+        recordWebsiteLog(req, `Revoked badge row #${rowId}`);
+        res.json({ ok: true });
+    } catch (err) {
+        console.error('[API] revoke badge error:', err.message);
+        res.status(500).json({ error: 'Failed to revoke badge.' });
     }
 });
 
@@ -510,12 +668,41 @@ app.patch('/api/guilds/:guildId/logging', requireAuth, requireGuildAdmin, async 
             return res.status(400).json({ error: 'Color must be a hex color like #5865F2.' });
         }
         const updated = await dashboardDb.upsertLoggingSettings(req.guild.id, patch);
+        recordWebsiteLog(req, 'Updated server logging settings');
         res.json({ logging: updated });
     } catch (err) {
         console.error('[API] update logging error:', err.message);
         res.status(500).json({ error: 'Failed to update logging settings.' });
     }
 });
+
+// ── API: website logs (dashboard admin-action audit trail) ──────────────────
+//
+// Each settings save records a row in website_logs (LOG_DATABASE_URL pool). The
+// General settings page fetches the most recent entries and renders them in a
+// table (sl no, admin username, content, time) beside the prefix card.
+
+app.get('/api/guilds/:guildId/logs/website', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const limit = parseInt(req.query.limit, 10) || 100;
+        const logs = await dashboardDb.getWebsiteLogs(req.guild.id, limit);
+        res.json({ logs });
+    } catch (err) {
+        console.error('[API] get website logs error:', err.message);
+        res.status(500).json({ error: 'Failed to load website logs.' });
+    }
+});
+
+// Record a website log entry for the current admin (fire-and-forget). Never
+// throws — a logging failure must not break the settings save it accompanies.
+function recordWebsiteLog(req, content) {
+    const user = req.session && req.session.user;
+    dashboardDb.addWebsiteLog(req.guild.id, {
+        adminUserId: user && user.id || '',
+        adminUsername: (user && (user.globalName || user.username)) || 'Unknown',
+        content,
+    }).catch(err => console.error('[API] website log write failed:', err.message));
+}
 
 // ── API: Premium Automod settings + warnings ─────────────────────────────────
 
@@ -549,6 +736,7 @@ app.patch('/api/guilds/:guildId/automod', requireAuth, requireGuildAdmin, async 
         if ('dmEnabled' in patch) patch.dmEnabled = patch.dmEnabled !== false;
         if ('appealChannelId' in patch) patch.appealChannelId = patch.appealChannelId || null;
         const updated = await dashboardDb.upsertAutomodSettings(req.guild.id, patch);
+        recordWebsiteLog(req, 'Updated automod settings');
         res.json({ automod: updated });
     } catch (err) {
         console.error('[API] update automod error:', err.message);
@@ -1028,6 +1216,82 @@ app.get('/api/live', requireAuth, async (req, res) => {
     }
 });
 
+// Split endpoints — one per live page. Each returns only the kind that page
+// shows, so the polls page doesn't fetch giveaway rows (and vice versa).
+app.get('/api/live/polls', requireAuth, async (req, res) => {
+    try {
+        const [polls, endedPolls] = await Promise.all([
+            dashboardDb.getLivePolls(),
+            dashboardDb.getEndedLivePolls(),
+        ]);
+        res.json({
+            running: polls.filter(p => p.isActive),
+            ended: endedPolls,
+        });
+    } catch (err) {
+        console.error('[API] /api/live/polls error:', err.message);
+        res.status(500).json({ error: 'Failed to load live polls.' });
+    }
+});
+
+app.get('/api/live/giveaways', requireAuth, async (req, res) => {
+    try {
+        const [giveaways, endedGiveaways] = await Promise.all([
+            dashboardDb.getLiveGiveaways(),
+            dashboardDb.getEndedLiveGiveaways(),
+        ]);
+        res.json({
+            running: giveaways.filter(g => g.isActive && !g.ended),
+            ended: endedGiveaways,
+        });
+    } catch (err) {
+        console.error('[API] /api/live/giveaways error:', err.message);
+        res.status(500).json({ error: 'Failed to load live giveaways.' });
+    }
+});
+
+// Per-guild live views for the server-features sidebar. Live polls/giveaways
+// are cross-server (joined via pass code from any server), but each row records
+// the channel it was created in. We filter to items created in THIS server's
+// channels so the per-server tab shows "live activity in this server".
+app.get('/api/guilds/:guildId/live/polls', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const channels = await discord.getGuildChannels(req.guild.id).catch(() => []);
+        const ids = new Set((channels || []).map(c => String(c.id)));
+        const [polls, endedPolls] = await Promise.all([
+            dashboardDb.getLivePolls(),
+            dashboardDb.getEndedLivePolls(),
+        ]);
+        const inGuild = p => p.channelId && ids.has(String(p.channelId));
+        res.json({
+            running: polls.filter(p => p.isActive).filter(inGuild),
+            ended: endedPolls.filter(inGuild),
+        });
+    } catch (err) {
+        console.error('[API] /api/guilds/:guildId/live/polls error:', err.message);
+        res.status(500).json({ error: 'Failed to load live polls.' });
+    }
+});
+
+app.get('/api/guilds/:guildId/live/giveaways', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const channels = await discord.getGuildChannels(req.guild.id).catch(() => []);
+        const ids = new Set((channels || []).map(c => String(c.id)));
+        const [giveaways, endedGiveaways] = await Promise.all([
+            dashboardDb.getLiveGiveaways(),
+            dashboardDb.getEndedLiveGiveaways(),
+        ]);
+        const inGuild = g => g.channelId && ids.has(String(g.channelId));
+        res.json({
+            running: giveaways.filter(g => g.isActive && !g.ended).filter(inGuild),
+            ended: endedGiveaways.filter(inGuild),
+        });
+    } catch (err) {
+        console.error('[API] /api/guilds/:guildId/live/giveaways error:', err.message);
+        res.status(500).json({ error: 'Failed to load live giveaways.' });
+    }
+});
+
 // ── API: Event management (📅 Events tab) ────────────────────────────────────
 
 app.get('/api/guilds/:guildId/events', requireAuth, requireGuildAdmin, async (req, res) => {
@@ -1040,7 +1304,7 @@ app.get('/api/guilds/:guildId/events', requireAuth, requireGuildAdmin, async (re
     }
 });
 
-app.post('/api/guilds/:guildId/events', requireAuth, requireGuildAdmin, async (req, res) => {
+app.post('/api/guilds/:guildId/events', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
     try {
         const schedule = await dashboardDb.createEventSchedule(req.guild.id, req.body || {}, req.user.id);
         res.json({ schedule });
@@ -1050,7 +1314,7 @@ app.post('/api/guilds/:guildId/events', requireAuth, requireGuildAdmin, async (r
     }
 });
 
-app.patch('/api/guilds/:guildId/events/:id', requireAuth, requireGuildAdmin, async (req, res) => {
+app.patch('/api/guilds/:guildId/events/:id', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);
         if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid event id.' });
@@ -1062,7 +1326,7 @@ app.patch('/api/guilds/:guildId/events/:id', requireAuth, requireGuildAdmin, asy
     }
 });
 
-app.delete('/api/guilds/:guildId/events/:id', requireAuth, requireGuildAdmin, async (req, res) => {
+app.delete('/api/guilds/:guildId/events/:id', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);
         if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid event id.' });
@@ -1074,7 +1338,7 @@ app.delete('/api/guilds/:guildId/events/:id', requireAuth, requireGuildAdmin, as
     }
 });
 
-app.post('/api/guilds/:guildId/events/:id/start', requireAuth, requireGuildAdmin, async (req, res) => {
+app.post('/api/guilds/:guildId/events/:id/start', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);
         if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid event id.' });
@@ -1086,7 +1350,7 @@ app.post('/api/guilds/:guildId/events/:id/start', requireAuth, requireGuildAdmin
     }
 });
 
-app.post('/api/guilds/:guildId/events/:id/cancel', requireAuth, requireGuildAdmin, async (req, res) => {
+app.post('/api/guilds/:guildId/events/:id/cancel', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);
         if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid event id.' });
@@ -1186,8 +1450,18 @@ app.get('/docs', requireAuth, (req, res) => {
     res.type('html').send(pages.docsPage({ clientId: process.env.DISCORD_CLIENT_ID, user: req.user }));
 });
 
-app.get('/live', requireAuth, (req, res) => {
-    res.type('html').send(pages.livePage({ user: req.user }));
+app.get('/stats', requireAuth, (req, res) => {
+    res.type('html').send(pages.statsPage({ user: req.user }));
+});
+
+// Live is split into two separate pages. The old /live redirects to the polls
+// page so any existing bookmarks keep working.
+app.get('/live', (req, res) => res.redirect('/live/polls'));
+app.get('/live/polls', requireAuth, (req, res) => {
+    res.type('html').send(pages.livePollsPage({ user: req.user }));
+});
+app.get('/live/giveaways', requireAuth, (req, res) => {
+    res.type('html').send(pages.liveGiveawaysPage({ user: req.user }));
 });
 
 // Guild settings: each tab is its own page. requireGuildAdminPage fetches
@@ -1200,6 +1474,12 @@ app.get('/guild/:guildId/welcome', requireAuth, requireGuildAdminPage, (req, res
     res.type('html').send(guildPages.welcomePage({ guild: req.guild, user: req.user })));
 app.get('/guild/:guildId/leveling', requireAuth, requireGuildAdminPage, (req, res) =>
     res.type('html').send(guildPages.levelingPage({ guild: req.guild, user: req.user })));
+app.get('/guild/:guildId/badges', requireAuth, requireGuildAdminPage, (req, res) =>
+    res.type('html').send(guildPages.badgesPage({ guild: req.guild, user: req.user })));
+app.get('/guild/:guildId/rolerewards', requireAuth, requireGuildAdminPage, (req, res) =>
+    res.type('html').send(guildPages.roleRewardsPage({ guild: req.guild, user: req.user })));
+app.get('/guild/:guildId/autoresponder', requireAuth, requireGuildAdminPage, (req, res) =>
+    res.type('html').send(guildPages.autoResponderPage({ guild: req.guild, user: req.user })));
 app.get('/guild/:guildId/prefix', requireAuth, requireGuildAdminPage, (req, res) =>
     res.type('html').send(guildPages.prefixPage({ guild: req.guild, user: req.user })));
 app.get('/guild/:guildId/reactions', requireAuth, requireGuildAdminPage, (req, res) =>
@@ -1216,6 +1496,10 @@ app.get('/guild/:guildId/tickets', requireAuth, requireGuildAdminPage, (req, res
     res.type('html').send(guildPages.ticketsPage({ guild: req.guild, user: req.user })));
 app.get('/guild/:guildId/events', requireAuth, requireGuildAdminPage, (req, res) =>
     res.type('html').send(guildPages.eventsPage({ guild: req.guild, user: req.user })));
+app.get('/guild/:guildId/live/polls', requireAuth, requireGuildAdminPage, (req, res) =>
+    res.type('html').send(guildPages.livePollsPage({ guild: req.guild, user: req.user })));
+app.get('/guild/:guildId/live/giveaways', requireAuth, requireGuildAdminPage, (req, res) =>
+    res.type('html').send(guildPages.liveGiveawaysPage({ guild: req.guild, user: req.user })));
 
 // ── Health check ────────────────────────────────────────────────────────────
 

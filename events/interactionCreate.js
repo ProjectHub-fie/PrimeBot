@@ -554,7 +554,7 @@ module.exports = {
                             if (giveaway) {
                                 const embed = client.liveGiveawayManager.createGiveawayEmbed(giveaway, giveaway.participants.size);
                                 const buttons = client.liveGiveawayManager.createJoinButton(giveaway.giveawayId);
-                                await interaction.editReply({ embeds: [embed], components: buttons });
+                                await interaction.editReply({ embeds: [embed], components: [buttons] });
                             }
                             await interaction.followUp({ content: result.message, ephemeral: true }).catch(() => {});
                         } else {
@@ -581,7 +581,11 @@ module.exports = {
                     // Route to the appropriate handler based on customId or action
                     if (action === 'ticketpanel') {
                         // Premium ticket panels (configured from the dashboard).
-                        // customId forms: ticketpanel:open:<panelId> | ticketpanel:close | ticketpanel:reopen | ticketpanel:claim | ticketpanel:rename
+                        // customId forms:
+                        //   ticketpanel:open:<panelId> | ticketpanel:close
+                        //   ticketpanel:closeconfirm:yes|no  (close confirmation)
+                        //   ticketpanel:transcript | ticketpanel:delete
+                        //   ticketpanel:reopen | ticketpanel:claim | ticketpanel:rename
                         const sub = params[0];
                         const mgr = client.ticketPanelManager || client.ticketManager;
                         if (sub === 'open') {
@@ -593,7 +597,13 @@ module.exports = {
                                 await safeExecute(mgr.handleOpen.bind(mgr), [interaction, panel], null, 'Ticket panel open');
                             }
                         } else if (sub === 'close') {
-                            await safeExecute(mgr.handleClose.bind(mgr), [interaction], null, 'Ticket panel close');
+                            await safeExecute(mgr.handleClose.bind(mgr), [interaction], null, 'Ticket panel close prompt');
+                        } else if (sub === 'closeconfirm') {
+                            await safeExecute(mgr.handleCloseConfirm.bind(mgr), [interaction, params[1] || 'no'], null, 'Ticket panel close confirm');
+                        } else if (sub === 'transcript') {
+                            await safeExecute(mgr.handleTranscript.bind(mgr), [interaction], null, 'Ticket panel transcript');
+                        } else if (sub === 'delete') {
+                            await safeExecute(mgr.handleDelete.bind(mgr), [interaction], null, 'Ticket panel delete');
                         } else if (sub === 'reopen') {
                             await safeExecute(mgr.handleReopen.bind(mgr), [interaction], null, 'Ticket panel reopen');
                         } else if (sub === 'claim') {
@@ -701,6 +711,25 @@ module.exports = {
                     } else if (interaction.customId === 'categories_help') {
                         await interaction.reply({
                             content: 'Use the dropdown menu to browse different command categories. Each category contains specialized commands for different server needs.\n\n**Available Categories:**\n• General - Basic bot commands\n• Leveling - XP and ranking system\n• Games - Interactive games and fun\n• Moderation - Server management tools\n• Community - Social features and events\n• Administration - Advanced server config',
+                            ephemeral: true
+                        });
+                        return;
+                    } else if (interaction.customId === 'categories_prefix_refresh'
+                            || interaction.customId === 'categories_prefix_back') {
+                        // Prefix help menu: refresh / back-to-categories → re-render the
+                        // main prefix category menu (embed + dropdown + nav buttons).
+                        const { mainMenuEmbed, categorySelectRow, navigationButtonsRow } = require('../utils/prefixHelp');
+                        const pfx = (interaction.client.serverSettingsManager?.getGuildPrefix?.(interaction.guild?.id)) || '$';
+                        try {
+                            await interaction.update({
+                                embeds: [mainMenuEmbed(pfx, interaction.client)],
+                                components: [categorySelectRow(), navigationButtonsRow()],
+                            });
+                        } catch (_) {}
+                        return;
+                    } else if (interaction.customId === 'categories_prefix_help') {
+                        await interaction.reply({
+                            content: 'Use the dropdown menu to browse different command categories. Each category contains specialized commands for different server needs.\n\n**Available Categories:**\n• General - Basic bot commands and info\n• Leveling - XP, ranks, and badges (🧪 beta)\n• Games & Activities - Games, polls, and giveaways\n• Community - Cross-server live polls & giveaways\n• Tickets - Ticket support system\n• Welcome - Welcome system configuration\n• Moderation - Server management, roles, and tickets\n• Administration - Feature configuration',
                             ephemeral: true
                         });
                         return;
@@ -926,9 +955,12 @@ module.exports = {
                         const selectedCategory = interaction.values[0];
                         console.log(`[CATEGORIES] User selected category: ${selectedCategory}`);
 
-                        // Import the functions from the categories module
-                        const { showDetailedCategoryMenuHelp } = require('../utils/categoryHelpers');
-                        await showDetailedCategoryMenuHelp(interaction, selectedCategory);
+                        // Prefix-command dropdown → render the prefix category help
+                        // (the old code routed to the slash-command catalog, which
+                        // showed `/help` etc. — wrong for the prefix help menu).
+                        const { showPrefixCategoryMenuHelp } = require('../utils/prefixHelp');
+                        const prefix = (interaction.client.serverSettingsManager?.getGuildPrefix?.(interaction.guild?.id)) || '$';
+                        await showPrefixCategoryMenuHelp(interaction, selectedCategory, prefix);
                         return;
                     }
                     if (interaction.customId === 'category_select') {

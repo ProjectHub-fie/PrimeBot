@@ -10,19 +10,21 @@
  * @typedef {Object} LogEventMeta
  * @property {string} key     - Stable identifier stored in settings.events.
  * @property {string} label   - Human label shown in the dashboard toggles.
- * @property {string} icon    - Emoji prefix for the embed title.
+ * @property {string} icon    - Emoji prefix for the embed title (Discord embeds).
+ * @property {string} iconName - SVG icon name (dashboard/public/js/icons.js) for
+ *                               the dashboard UI chrome. The bot ignores this.
  * @property {string} color   - Default embed color (hex) for this event.
  * @property {string} category- Grouping for the dashboard UI.
  */
 const LOG_EVENTS = [
-    { key: 'memberJoin',    label: 'Member joined',          icon: '🟢', color: '#57F287', category: 'Members' },
-    { key: 'memberLeave',   label: 'Member left',            icon: '🔴', color: '#ED4245', category: 'Members' },
-    { key: 'memberBan',     label: 'Member banned',          icon: '🔨', color: '#ED4245', category: 'Members' },
-    { key: 'memberUnban',   label: 'Member unbanned',        icon: '🕊️', color: '#57F287', category: 'Members' },
-    { key: 'memberUpdate',  label: 'Member updated (roles / nickname)', icon: '📝', color: '#FEE75C', category: 'Members' },
-    { key: 'messageDelete', label: 'Message deleted',        icon: '🗑️', color: '#ED4245', category: 'Messages' },
-    { key: 'messageUpdate', label: 'Message edited',         icon: '✏️', color: '#FEE75C', category: 'Messages' },
-    { key: 'commandUse',    label: 'Slash command used',     icon: '⚙️', color: '#5865F2', category: 'Activity' },
+    { key: 'memberJoin',    label: 'Member joined',          icon: '🟢', iconName: 'userPlus',  color: '#57F287', category: 'Members' },
+    { key: 'memberLeave',   label: 'Member left',            icon: '🔴', iconName: 'userMinus', color: '#ED4245', category: 'Members' },
+    { key: 'memberBan',     label: 'Member banned',          icon: '🔨', iconName: 'ban',       color: '#ED4245', category: 'Members' },
+    { key: 'memberUnban',   label: 'Member unbanned',        icon: '🕊️', iconName: 'unlock',    color: '#57F287', category: 'Members' },
+    { key: 'memberUpdate',  label: 'Member updated (roles / nickname)', icon: '📝', iconName: 'pencil', color: '#FEE75C', category: 'Members' },
+    { key: 'messageDelete', label: 'Message deleted',        icon: '🗑️', iconName: 'trash',     color: '#ED4245', category: 'Messages' },
+    { key: 'messageUpdate', label: 'Message edited',         icon: '✏️', iconName: 'edit',      color: '#FEE75C', category: 'Messages' },
+    { key: 'commandUse',    label: 'Slash command used',     icon: '⚙️', iconName: 'terminal',  color: '#5865F2', category: 'Activity' },
 ];
 
 const LOG_EVENT_KEYS = LOG_EVENTS.map(e => e.key);
@@ -55,7 +57,7 @@ function isEventEnabled(settings, eventKey) {
 }
 
 function metaFor(eventKey) {
-    return LOG_EVENT_BY_KEY[eventKey] || { key: eventKey, label: eventKey, icon: '📜', color: '#5865F2', category: 'Other' };
+    return LOG_EVENT_BY_KEY[eventKey] || { key: eventKey, label: eventKey, icon: '📜', iconName: 'scroll', color: '#5865F2', category: 'Other' };
 }
 
 module.exports = {

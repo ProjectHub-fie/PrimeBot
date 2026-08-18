@@ -9,10 +9,10 @@
  */
 
 const constants = require('../constants');
-const { esc, channelOptions, roleOptions, render } = require('./layout');
+const { esc, channelOptions, roleOptions, render, svgIcon } = require('./layout');
 const { guildDataScript, guildHeaderHTML, tabNavHTML, TABS } = require('./guild');
 
-const { LOG_EVENTS, AUTOMOD_RULES, AUTOMOD_ACTIONS } = constants;
+const { LOG_EVENTS, AUTOMOD_RULES, AUTOMOD_ACTIONS, BADGE_CATALOG } = constants;
 
 // Wrap guild-tab body in the shared shell (header + tabs + data blob + page JS).
 function guildTab({ guild, active, panelHTML, scripts, title, user }) {
@@ -30,13 +30,42 @@ function guildTab({ guild, active, panelHTML, scripts, title, user }) {
     });
 }
 
+// ── "Upcoming feature" overlay ─────────────────────────────────────────────
+// A page marked `upcoming: true` (in render/guild.js TABS) is not yet released.
+// The page body is blurred and a "Coming Soon......" overlay with a graphic
+// covers it, so the tab stays discoverable in the sidebar but is unusable.
+// Upcoming takes PRIORITY over beta: a tab with both flags shows the Coming
+// Soon overlay even for beta servers (the feature simply isn't shipped yet).
+const UPCOMING_SUPPORT_URL = 'https://discord.gg/gd7UNSfX86';
+function upcomingOverlayWrap(innerPanelHTML, { icon = 'flask', title = 'Coming Soon' } = {}) {
+    const iconHTML = svgIcon(icon);
+    return `
+    <div class="card upcoming-locked-card">
+      <div class="upcoming-locked-wrap locked">
+        ${innerPanelHTML}
+      </div>
+      <div class="upcoming-locked-overlay">
+        <div class="upcoming-locked-box">
+          <div class="upcoming-graphic" aria-hidden="true">
+            <div class="upcoming-orb"></div>
+            <div class="upcoming-dots"><span></span><span></span><span></span></div>
+          </div>
+          <div class="upcoming-icon">${iconHTML}</div>
+          <div class="upcoming-title">${esc(title)}……</div>
+          <div class="upcoming-text">This feature is still in the workshop. We're putting the finishing touches on it — check back soon!</div>
+          <a class="btn btn-discord" href="${UPCOMING_SUPPORT_URL}" target="_blank" rel="noopener">${svgIcon('logIn')} Follow updates on Discord</a>
+        </div>
+      </div>
+    </div>`;
+}
+
 // ── Welcome ─────────────────────────────────────────────────────────────────
 
 function welcomePanelHTML(w, channels) {
     const s = w || {};
     return `
     <div class="card">
-      <div class="card-title"><span><span class="icon">👋</span> Welcome messages</span></div>
+      <div class="card-title"><span><span class="icon">${svgIcon('hand')}</span> Welcome messages</span></div>
       <p class="card-desc">Greet new members with a customizable message, banner and optional DM.</p>
 
       <div class="switch-row">
@@ -107,10 +136,6 @@ function welcomePanelHTML(w, channels) {
         <label class="field-label" for="welcome-footer">Custom footer (optional)</label>
         <input type="text" id="welcome-footer" value="${esc(s.customFooter || '')}" placeholder="Powered by PrimeBot" />
       </div>
-
-      <div class="form-actions">
-        <button class="btn btn-primary" data-save="welcome">Save welcome settings</button>
-      </div>
     </div>`;
 }
 
@@ -126,12 +151,10 @@ function welcomePage({ guild, user }) {
 
 function levelingPage({ guild, user }) {
     const lev = guild._config.server?.leveling || {};
-    const roleRewards = (lev.roleRewards || []).slice().sort((a, b) => a.level - b.level);
-    const rewardRows = roleRewards.map(r => levelingRewardRowHTML(r, guild._roles)).join('');
     const panelHTML = `
     <div class="card">
-      <div class="card-title"><span><span class="icon">📈</span> Leveling &amp; XP</span></div>
-      <p class="card-desc">Reward members with XP for chatting and earn badges as they level up.</p>
+      <div class="card-title"><span><span class="icon">${svgIcon('trendingUp')}</span> Leveling &amp; XP</span></div>
+      <p class="card-desc">Reward members with XP for chatting and earn badges as they level up. Role rewards now have their own <a href="/guild/${esc(guild.id)}/rolerewards">${svgIcon('gift')} Role Rewards</a> tab.</p>
 
       <div class="switch-row">
         <div class="switch-label">
@@ -158,22 +181,8 @@ function levelingPage({ guild, user }) {
         <input type="number" id="leveling-cooldown" min="5" max="300" step="1" value="${esc(lev.xpCooldown ? lev.xpCooldown / 1000 : 60)}" />
         <div class="field-hint">Time between XP gains per user (5 – 300 seconds).</div>
       </div>
-
-      <div class="form-actions">
-        <button class="btn btn-primary" data-save="leveling">Save leveling settings</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-title"><span><span class="icon">🎭</span> Role rewards</span></div>
-      <p class="card-desc">Automatically grant a role when a member reaches a level. Roles are saved to the database and persist across bot restarts.</p>
-      <div id="lev-rewards-list">${rewardRows}</div>
-      <button class="btn btn-secondary" id="lev-reward-add" type="button">+ Add reward</button>
-      <div class="form-actions">
-        <button class="btn btn-primary" id="lev-rewards-save">Save role rewards</button>
-      </div>
     </div>`;
-    return guildTab({ guild, user, active: 'leveling', panelHTML, scripts: ['/js/guild-common.js', '/js/settings-basic.js', '/js/leveling.js'] });
+    return guildTab({ guild, user, active: 'leveling', panelHTML, scripts: ['/js/guild-common.js', '/js/settings-basic.js'] });
 }
 
 function levelingRewardRowHTML(r = {}, roles = []) {
@@ -186,24 +195,205 @@ function levelingRewardRowHTML(r = {}, roles = []) {
     </div>`;
 }
 
-// ── Prefix ──────────────────────────────────────────────────────────────────
+// ── Badges (beta) ───────────────────────────────────────────────────────────
+//
+// A dedicated beta-gated page for the leveling badge system. The bot's
+// LevelingManager awards level badges automatically on level-up; achievement
+// and special badges are awardable here by server admins. The page shows the
+// badge catalog (level / achievement / special) and a live "awarded badges"
+// ledger fetched from /api/guilds/:id/badges. Non-beta servers see the
+// standard locked overlay.
+
+const BADGES_BETA_MSG = 'This server isn’t a beta server yet. Join support server to gain beta access';
+
+function badgeCardHTML(b, { awardable = false } = {}) {
+    const typeLabel = b.type === 'level'
+        ? `Level ${b.level} badge`
+        : (b.type === 'achievement' ? 'Achievement badge' : 'Special badge');
+    const awardAttr = awardable
+        ? `data-badge-id="${esc(b.id)}" data-badge-type="${esc(b.type)}"`
+        : '';
+    const awardBtn = awardable
+        ? `<button class="btn btn-secondary btn-sm badge-award-btn" ${awardAttr}>Award to member…</button>`
+        : `<span class="badge-locked-tag">Auto-awarded on level-up</span>`;
+    return `
+    <div class="badge-card badge-type-${esc(b.type)}">
+      <div class="badge-emoji">${esc(b.emoji)}</div>
+      <div class="badge-info">
+        <div class="badge-name">${esc(b.name)}</div>
+        <div class="badge-desc">${esc(b.description)}</div>
+        <div class="badge-meta">${esc(typeLabel)}</div>
+      </div>
+      <div class="badge-action">${awardBtn}</div>
+    </div>`;
+}
+
+function badgesPage({ guild, user }) {
+    const catalog = BADGE_CATALOG || { levelBadges: [], achievementBadges: [], specialBadges: [] };
+    const levelCards = (catalog.levelBadges || [])
+        .map(b => badgeCardHTML({ ...b, type: 'level' }, { awardable: false })).join('');
+    const achievementCards = (catalog.achievementBadges || [])
+        .map(b => badgeCardHTML({ ...b, type: 'achievement' }, { awardable: true })).join('');
+    const specialCards = (catalog.specialBadges || [])
+        .map(b => badgeCardHTML({ ...b, type: 'special' }, { awardable: true })).join('');
+
+    const innerPanelHTML = `
+      <div class="card-title"><span><span class="icon">${svgIcon('award')}</span> Badges <span class="beta-badge">BETA</span></span></div>
+      <div class="beta-banner">${svgIcon('flask')} This feature is in beta — expect changes. Please report any issues.</div>
+      <p class="card-desc">Members earn level badges automatically as they level up. Server admins can award achievement and special badges to recognize community contributions.</p>
+
+      <h3 class="badge-section-head">${svgIcon('trendingUp')} Level badges</h3>
+      <p class="card-hint">Awarded automatically when a member reaches the level.</p>
+      <div class="badge-grid">${levelCards || '<p class="live-empty">No level badges configured.</p>'}</div>
+
+      <h3 class="badge-section-head">${svgIcon('userCheck')} Achievement badges</h3>
+      <p class="card-hint">Award these manually to recognize members.</p>
+      <div class="badge-grid">${achievementCards || '<p class="live-empty">No achievement badges configured.</p>'}</div>
+
+      <h3 class="badge-section-head">${svgIcon('star')} Special badges</h3>
+      <p class="card-hint">Rare, manually-awarded badges for exceptional members.</p>
+      <div class="badge-grid">${specialCards || '<p class="live-empty">No special badges configured.</p>'}</div>
+
+      <h3 class="badge-section-head">${svgIcon('list')} Awarded badges</h3>
+      <p class="card-desc">Live ledger of badges awarded in this server. <a href="#" id="badges-refresh">Refresh</a></p>
+      <div id="badges-list"><p class="live-empty">Loading…</p></div>`;
+
+    const panelHTML = `
+    <div class="card${guild._beta ? '' : ' beta-locked-card'}">
+      <div class="beta-locked-wrap${guild._beta ? '' : ' locked'}">
+        ${innerPanelHTML}
+      </div>
+      ${guild._beta ? '' : `
+        <div class="beta-locked-overlay">
+          <div class="beta-locked-box">
+            <div class="beta-locked-icon">${svgIcon('lock')}</div>
+            <div class="beta-locked-text">${esc(BADGES_BETA_MSG)}</div>
+            <a class="btn btn-discord" href="https://discord.gg/gd7UNSfX86" target="_blank" rel="noopener">Join support server</a>
+          </div>
+        </div>`}
+    </div>
+    <div id="badge-modal" class="modal-overlay hidden"></div>`;
+
+    return guildTab({
+        guild, user, active: 'badges', panelHTML,
+        scripts: ['/js/guild-common.js', '/js/badges.js'],
+    });
+}
+
+// ── Prefix / General ────────────────────────────────────────────────────────
+//
+// The "General" tab (top of the server features menu) hosts the command prefix
+// editor and the website log table side by side. The website log is an
+// audit trail of dashboard admin actions for this server (sl no, admin
+// username, content, time) fetched from /api/guilds/:id/logs/website.
 
 function prefixPage({ guild, user }) {
     const prefix = guild._config.server?.prefix || '$';
     const panelHTML = `
-    <div class="card">
-      <div class="card-title"><span><span class="icon">⚡</span> Command prefix</span></div>
-      <p class="card-desc">Set a custom prefix for text commands in this server (max 3 characters, no spaces).</p>
-      <div class="field">
-        <label class="field-label" for="prefix-value">Prefix</label>
-        <input type="text" id="prefix-value" maxlength="3" value="${esc(prefix)}" style="max-width:120px" />
-        <div class="field-hint">Members will type this before text commands, e.g. <code>${esc(prefix)}help</code></div>
+    <div class="general-grid">
+      <div class="card">
+        <div class="card-title"><span><span class="icon">${svgIcon('zap')}</span> Command prefix</span></div>
+        <p class="card-desc">Set a custom prefix for text commands in this server (max 3 characters, no spaces).</p>
+        <div class="field">
+          <label class="field-label" for="prefix-value">Prefix</label>
+          <input type="text" id="prefix-value" maxlength="3" value="${esc(prefix)}" style="max-width:120px" />
+          <div class="field-hint">Members will type this before text commands, e.g. <code>${esc(prefix)}help</code></div>
+        </div>
       </div>
-      <div class="form-actions">
-        <button class="btn btn-primary" data-save="prefix">Save prefix</button>
+
+      <div class="card">
+        <div class="card-title"><span><span class="icon">${svgIcon('receipt')}</span> Website log</span></div>
+        <p class="card-desc">Dashboard actions performed for this server.</p>
+        <div class="wlog-wrap">
+          <table class="wlog-table">
+            <thead>
+              <tr><th>#</th><th>Admin</th><th>Content</th><th>Time</th></tr>
+            </thead>
+            <tbody id="wlog-body"><tr><td colspan="4" class="wlog-empty">Loading…</td></tr></tbody>
+          </table>
+        </div>
       </div>
     </div>`;
-    return guildTab({ guild, user, active: 'prefix', panelHTML, scripts: ['/js/guild-common.js', '/js/settings-basic.js'] });
+    return guildTab({ guild, user, active: 'prefix', panelHTML, scripts: ['/js/guild-common.js', '/js/settings-basic.js', '/js/general.js'] });
+}
+
+// ── Role Rewards (beta) ─────────────────────────────────────────────────────
+//
+// A dedicated beta-gated page for the leveling role-rewards editor (the same
+// editor that used to live inside the Leveling page). Non-beta servers see the
+// standard locked overlay so they can discover the feature but can't use it.
+
+const ROLE_REWARDS_BETA_MSG = 'This server isn’t a beta server yet. Join support server to gain beta access';
+
+function roleRewardsPage({ guild, user }) {
+    const lev = guild._config.server?.leveling || {};
+    const roleRewards = (lev.roleRewards || []).slice().sort((a, b) => a.level - b.level);
+    const rewardRows = roleRewards.map(r => levelingRewardRowHTML(r, guild._roles)).join('');
+    const panelHTML = `
+    <div class="card${guild._beta ? '' : ' beta-locked-card'}">
+      <div class="card-title"><span><span class="icon">${svgIcon('gift')}</span> Role Rewards <span class="beta-badge">BETA</span></span></div>
+      <div class="beta-banner">${svgIcon('flask')} This feature is in beta — expect changes. Please report any issues.</div>
+      <div class="beta-locked-wrap${guild._beta ? '' : ' locked'}">
+        <p class="card-desc">Automatically grant a role when a member reaches a level. Roles are saved to the database and persist across bot restarts.</p>
+        <div id="lev-rewards-list">${rewardRows}</div>
+        <button class="btn btn-secondary" id="lev-reward-add" type="button">+ Add reward</button>
+      </div>
+      ${guild._beta ? '' : `
+        <div class="beta-locked-overlay">
+          <div class="beta-locked-box">
+            <div class="beta-locked-icon">${svgIcon('lock')}</div>
+            <div class="beta-locked-text">${esc(ROLE_REWARDS_BETA_MSG)}</div>
+            <a class="btn btn-discord" href="https://discord.gg/gd7UNSfX86" target="_blank" rel="noopener">Join support server</a>
+          </div>
+        </div>`}
+    </div>`;
+    return guildTab({ guild, user, active: 'rolerewards', panelHTML, scripts: ['/js/guild-common.js', '/js/settings-basic.js', '/js/leveling.js'] });
+}
+
+// ── Auto-responder ──────────────────────────────────────────────────────────
+//
+// Like auto-reactions, but replies with a configured text response instead of
+// reacting. Each rule: { trigger, response, exactMatch }. exactMatch (the
+// "Exact match" checkbox) makes the rule fire only when the message EQUALS the
+// trigger; otherwise it fires on a substring (contains) match. Saved as the
+// autoResponder sub-object via PATCH /api/guilds/:id/server.
+
+function autoResponderRowHTML(r) {
+    return `
+    <div class="reaction-row ar-row" data-index="">
+      <input type="text" class="ar-trigger" value="${esc(r.trigger || '')}" placeholder="trigger word or phrase" />
+      <input type="text" class="ar-response" value="${esc(r.response || '')}" placeholder="reply text" />
+      <label class="ar-exact-wrap" title="Only fire when the message exactly equals the trigger">
+        <input type="checkbox" class="ar-exact" ${r.exactMatch ? 'checked' : ''}/> Exact
+      </label>
+      <button class="reaction-remove ar-remove" type="button">✕</button>
+    </div>`;
+}
+
+function autoResponderPage({ guild, user }) {
+    const ar = guild._config.server?.autoResponder || { enabled: false, responses: [] };
+    const rows = (ar.responses || []).map(r => autoResponderRowHTML(r)).join('');
+    const panelHTML = `
+    <div class="card">
+      <div class="card-title"><span><span class="icon">${svgIcon('message')}</span> Auto-Responder</span></div>
+      <p class="card-desc">Automatically reply with a text response when a message contains (or exactly matches) a trigger. Also configurable with <code>/autoresponder</code> or <code>$autoresponder</code>.</p>
+
+      <div class="switch-row">
+        <div class="switch-label">
+          <div class="sl-title">Enable auto-responder</div>
+          <div class="sl-desc">Master switch for all response rules below.</div>
+        </div>
+        <label class="switch"><input type="checkbox" id="ar-enabled" ${ar.enabled ? 'checked' : ''}/><span class="slider"></span></label>
+      </div>
+
+      <div class="field">
+        <label class="field-label">Response rules</label>
+        <div class="reactions-list ar-list" id="ar-list">${rows}</div>
+        <button class="btn btn-secondary" id="ar-add">+ Add response</button>
+        <div class="field-hint">A rule fires when a message contains the trigger (unchecked) or exactly equals it (Exact checked). Replies are sent as a Discord reply to the triggering message.</div>
+      </div>
+    </div>`;
+    return guildTab({ guild, user, active: 'autoresponder', panelHTML, scripts: ['/js/guild-common.js', '/js/autoresponder.js'] });
 }
 
 // ── Auto-reactions ──────────────────────────────────────────────────────────
@@ -222,7 +412,7 @@ function reactionsPage({ guild, user }) {
     const rows = (ar.reactions || []).map(r => reactionRowHTML(r)).join('');
     const panelHTML = `
     <div class="card">
-      <div class="card-title"><span><span class="icon">🔁</span> Auto-reactions</span></div>
+      <div class="card-title"><span><span class="icon">${svgIcon('repeat')}</span> Auto-reactions</span></div>
       <p class="card-desc">Automatically react to messages containing a trigger word with an emoji.</p>
 
       <div class="switch-row">
@@ -239,10 +429,6 @@ function reactionsPage({ guild, user }) {
         <button class="btn btn-secondary" id="reaction-add">+ Add rule</button>
         <div class="field-hint">Trigger is matched as a substring of the message.</div>
       </div>
-
-      <div class="form-actions">
-        <button class="btn btn-primary" data-save="reactions">Save auto-reactions</button>
-      </div>
     </div>`;
     return guildTab({ guild, user, active: 'reactions', panelHTML, scripts: ['/js/guild-common.js', '/js/settings-basic.js'] });
 }
@@ -253,7 +439,7 @@ function broadcastPage({ guild, user }) {
     const server = guild._config.server;
     const panelHTML = `
     <div class="card">
-      <div class="card-title"><span><span class="icon">📢</span> Broadcasts</span></div>
+      <div class="card-title"><span><span class="icon">${svgIcon('megaphone')}</span> Broadcasts</span></div>
       <p class="card-desc">Choose whether this server receives official PrimeBot broadcast announcements.</p>
 
       <div class="switch-row">
@@ -268,10 +454,6 @@ function broadcastPage({ guild, user }) {
         <label class="field-label" for="broadcast-channel">Broadcast channel</label>
         <select id="broadcast-channel" data-channel-select>${channelOptions(guild._channels, server?.broadcastChannelId)}</select>
         <div class="field-hint">Where broadcast messages are posted.</div>
-      </div>
-
-      <div class="form-actions">
-        <button class="btn btn-primary" data-save="broadcast">Save broadcast settings</button>
       </div>
     </div>`;
     return guildTab({ guild, user, active: 'broadcast', panelHTML, scripts: ['/js/guild-common.js', '/js/settings-basic.js'] });
@@ -289,13 +471,13 @@ function loggingPanelHTML(logging, channels) {
         <label class="switch mini">
           <input type="checkbox" class="log-event" data-event="${esc(e.key)}" ${enabled.has(e.key) ? 'checked' : ''}/>
           <span class="slider"></span>
-          <span class="switch-text">${e.icon} ${esc(e.label)}</span>
+          <span class="switch-text">${svgIcon(e.iconName)} ${esc(e.label)}</span>
         </label>`).join('');
         return `<div class="event-group"><div class="event-group-title">${esc(cat)}</div>${items}</div>`;
     }).join('');
     return `
     <div class="card">
-      <div class="card-title"><span><span class="icon">📜</span> Server logging</span></div>
+      <div class="card-title"><span><span class="icon">${svgIcon('scroll')}</span> Server logging</span></div>
       <p class="card-desc">Send rich embed logs of server events to a channel and/or a Discord webhook.</p>
 
       <div class="switch-row">
@@ -346,10 +528,6 @@ function loggingPanelHTML(logging, channels) {
         <div class="event-grid">${eventToggles}</div>
         <div class="field-hint">Choose which event types generate a log embed.</div>
       </div>
-
-      <div class="form-actions">
-        <button class="btn btn-primary" data-save="logging">Save logging settings</button>
-      </div>
     </div>`;
 }
 
@@ -389,7 +567,7 @@ function rrMenuCardHTML(menu) {
     return `
     <div class="card rr-menu-card" data-menu="${menu.id}">
       <div class="card-title">
-        <span><span class="icon">🎭</span> ${esc(menu.title || 'Untitled menu')} <span class="tag ${menu.enabled ? 'on' : 'off'}">#${menu.id}</span></span>
+        <span><span class="icon">${svgIcon('smile')}</span> ${esc(menu.title || 'Untitled menu')} <span class="tag ${menu.enabled ? 'on' : 'off'}">#${menu.id}</span></span>
         <button class="btn btn-secondary btn-sm rr-delete" data-menu="${menu.id}">Delete</button>
       </div>
       <div class="rr-meta">
@@ -414,7 +592,7 @@ function reactionRolesPage({ guild, user }) {
     const modeOpts = RR_MODES.map(m => `<option value="${m.value}">${esc(m.label)}</option>`).join('');
     const panelHTML = `
     <div class="card">
-      <div class="card-title"><span><span class="icon">🎭</span> Reaction Roles</span></div>
+      <div class="card-title"><span><span class="icon">${svgIcon('smile')}</span> Reaction Roles</span></div>
       <p class="card-desc">Let members self-assign roles by reacting. PrimeBot gives you premium modes for free: <strong>toggle</strong>, <strong>sticky</strong> (one-click assign), <strong>verify</strong> (grant once, e.g. rules gate), and <strong>unique</strong> (only one role at a time). Roles persist across bot restarts.</p>
       <div class="rr-list">${listHTML}</div>
     </div>
@@ -534,7 +712,7 @@ function ticketsPage({ guild, user }) {
     const typeOpts = TICKET_MESSAGE_TYPES.map(t => `<option value="${t.value}">${esc(t.label)}</option>`).join('');
     const panelHTML = `
     <div class="card">
-      <div class="card-title"><span><span class="icon">🎫</span> Tickets</span></div>
+      <div class="card-title"><span><span class="icon">${svgIcon('ticket')}</span> Tickets</span></div>
       <p class="card-desc">Ticket panels are configurable <strong>only from the dashboard</strong> — slash and prefix ticket commands are disabled. Build a panel (embed or plain message, custom button, support/ping roles, claim button, per-user limits), then <strong>Send</strong> it to a channel and use <strong>Update message</strong> to re-render an existing message by id.</p>
       <div class="rr-list">${listHTML}</div>
     </div>
@@ -653,12 +831,94 @@ function ticketsPage({ guild, user }) {
         <input type="text" id="tk-close-emoji" maxlength="100" value="🔒" />
       </div>
       <div class="field">
+        <label class="field-label" for="tk-close-style">Close button colour</label>
+        <select id="tk-close-style">${styleOpts}</select>
+      </div>
+      <div class="field">
         <label class="field-label" for="tk-claim-label">Claim button label (optional — leave blank for no claim button)</label>
         <input type="text" id="tk-claim-label" maxlength="80" placeholder="Claim" />
       </div>
       <div class="field">
         <label class="field-label" for="tk-claim-emoji">Claim button emoji (optional)</label>
         <input type="text" id="tk-claim-emoji" maxlength="100" placeholder="✋" />
+      </div>
+
+      <div class="card-title" style="margin-top:8px"><span>Close flow — confirmation, close embed &amp; post-close buttons</span></div>
+      <p class="card-hint">When a member presses <strong>Close</strong>, a <strong>Yes / No</strong> confirmation row is shown. <strong>Yes</strong> closes the ticket and (optionally) posts an editable red embed, then reveals <strong>Transcript / Reopen / Delete</strong> buttons. Every button below has a configurable label, emoji, and colour.</p>
+      <div class="field">
+        <label class="field-label">Yes (confirm) button</label>
+        <div class="reaction-row" style="display:flex;gap:6px;flex-wrap:wrap">
+          <input type="text" id="tk-cf-yes-label" maxlength="80" value="Yes" placeholder="Yes" style="flex:2" />
+          <input type="text" id="tk-cf-yes-emoji" maxlength="100" value="✅" placeholder="✅" style="flex:1" />
+          <select id="tk-cf-yes-style" style="flex:1">${styleOpts}</select>
+        </div>
+      </div>
+      <div class="field">
+        <label class="field-label">No (cancel) button</label>
+        <div class="reaction-row" style="display:flex;gap:6px;flex-wrap:wrap">
+          <input type="text" id="tk-cf-no-label" maxlength="80" value="No" placeholder="No" style="flex:2" />
+          <input type="text" id="tk-cf-no-emoji" maxlength="100" value="✖️" placeholder="✖️" style="flex:1" />
+          <select id="tk-cf-no-style" style="flex:1">${styleOpts}</select>
+        </div>
+      </div>
+      <div class="switch-row">
+        <div class="switch-label"><div class="sl-title">Show a close embed</div><div class="sl-desc">Optional red embed shown after the ticket is closed (before the action buttons). Edit its text below.</div></div>
+        <label class="switch"><input type="checkbox" id="tk-cf-embed-enabled"/><span class="slider"></span></label>
+      </div>
+      <div class="field">
+        <label class="field-label" for="tk-cf-embed-title">Close embed title</label>
+        <input type="text" id="tk-cf-embed-title" maxlength="255" value="🔒 Ticket Closed" />
+      </div>
+      <div class="field">
+        <label class="field-label" for="tk-cf-embed-desc">Close embed description</label>
+        <textarea id="tk-cf-embed-desc" placeholder="This ticket was closed by {moderator} at {time}."></textarea>
+        <div class="field-hint">Placeholders: {time} {timestamp} {author} {moderator} {panel} {reason}. {timestamp} renders as a Discord relative-time tag.</div>
+      </div>
+      <div class="field">
+        <label class="field-label" for="tk-cf-embed-footer">Close embed footer text</label>
+        <input type="text" id="tk-cf-embed-footer" maxlength="255" value="{panel} · PrimeBot" />
+      </div>
+      <div class="field">
+        <label class="field-label">Close embed colour (default red)</label>
+        <div class="color-field">
+          <input type="color" id="tk-cf-embed-color" value="#ED4245" />
+          <input type="text" id="tk-cf-embed-color-text" value="#ED4245" style="flex:1" />
+        </div>
+      </div>
+
+      <div class="switch-row">
+        <div class="switch-label"><div class="sl-title">Save transcripts to a channel</div><div class="sl-desc">Optional. When the Transcript button is pressed, the ticket's messages are saved to this channel.</div></div>
+        <label class="switch"><input type="checkbox" id="tk-cf-transcript-enabled"/><span class="slider"></span></label>
+      </div>
+      <div class="field">
+        <label class="field-label" for="tk-cf-transcript-channel">Transcript channel ID</label>
+        <input type="text" id="tk-cf-transcript-channel" placeholder="123456789012345678" />
+        <div class="field-hint">Dashboard-only. The channel PrimeBot posts ticket transcripts to.</div>
+      </div>
+
+      <div class="field">
+        <label class="field-label">Transcript button</label>
+        <div class="reaction-row" style="display:flex;gap:6px;flex-wrap:wrap">
+          <input type="text" id="tk-cf-btn-transcript-label" maxlength="80" value="Transcript" placeholder="Transcript" style="flex:2" />
+          <input type="text" id="tk-cf-btn-transcript-emoji" maxlength="100" value="📝" placeholder="📝" style="flex:1" />
+          <select id="tk-cf-btn-transcript-style" style="flex:1">${styleOpts}</select>
+        </div>
+      </div>
+      <div class="field">
+        <label class="field-label">Reopen button</label>
+        <div class="reaction-row" style="display:flex;gap:6px;flex-wrap:wrap">
+          <input type="text" id="tk-cf-btn-reopen-label" maxlength="80" value="Reopen" placeholder="Reopen" style="flex:2" />
+          <input type="text" id="tk-cf-btn-reopen-emoji" maxlength="100" value="🔓" placeholder="🔓" style="flex:1" />
+          <select id="tk-cf-btn-reopen-style" style="flex:1">${styleOpts}</select>
+        </div>
+      </div>
+      <div class="field">
+        <label class="field-label">Delete button</label>
+        <div class="reaction-row" style="display:flex;gap:6px;flex-wrap:wrap">
+          <input type="text" id="tk-cf-btn-delete-label" maxlength="80" value="Delete" placeholder="Delete" style="flex:2" />
+          <input type="text" id="tk-cf-btn-delete-emoji" maxlength="100" value="🗑️" placeholder="🗑️" style="flex:1" />
+          <select id="tk-cf-btn-delete-style" style="flex:1">${styleOpts}</select>
+        </div>
       </div>
       <div class="switch-row">
         <div class="switch-label"><div class="sl-title">Enabled</div><div class="sl-desc">When off, the open button is disabled.</div></div>
@@ -686,7 +946,7 @@ function automodPage({ guild, user }) {
         const meta = AUTOMOD_RULES.find(r => r.key === rule.type) || AUTOMOD_RULES[0];
         const selected = Array.isArray(rule.actions) && rule.actions.length ? rule.actions : (rule.action ? [rule.action] : ['delete']);
         const actionChecks = AUTOMOD_ACTIONS.map(a =>
-            `<label class="switch mini am-action-label"><input type="checkbox" class="am-action" value="${a.key}" ${selected.includes(a.key) ? 'checked' : ''}/><span class="switch-text">${a.icon} ${esc(a.label)}</span></label>`
+            `<label class="switch mini am-action-label"><input type="checkbox" class="am-action" value="${a.key}" ${selected.includes(a.key) ? 'checked' : ''}/><span class="switch-text">${svgIcon(a.iconName)} ${esc(a.label)}</span></label>`
         ).join('');
         let extra = '';
         if (meta.params.includes('words')) extra = `<input type="text" class="am-words" value="${esc((rule.words || []).join(', '))}" placeholder="extra domains/terms (comma-separated)" />`;
@@ -695,25 +955,25 @@ function automodPage({ guild, user }) {
         return `
       <div class="reaction-row am-rule-row" data-type="${esc(meta.key)}">
         <label class="switch mini"><input type="checkbox" class="am-enabled" ${rule.enabled !== false ? 'checked' : ''}/><span class="slider"></span></label>
-        <span class="am-rule-label">${meta.icon} ${esc(meta.label)}</span>
+        <span class="am-rule-label">${svgIcon(meta.iconName)} ${esc(meta.label)}</span>
         <div class="am-actions-group">${actionChecks}</div>
         ${extra}
-        <button class="reaction-remove am-remove" type="button">✕</button>
+        <button class="reaction-remove am-remove" type="button">${svgIcon('x')}</button>
       </div>`;
     }).join('');
-    const addTypeOpts = AUTOMOD_RULES.map(r => `<option value="${r.key}">${r.icon} ${esc(r.label)}</option>`).join('');
+    const addTypeOpts = AUTOMOD_RULES.map(r => `<option value="${r.key}">${svgIcon(r.iconName, 'am-opt-ico')} ${esc(r.label)}</option>`).join('');
     const warnActionChecks = warnActions.map(a =>
-        `<label class="switch mini am-action-label"><input type="checkbox" class="am-warn-action" value="${a.key}" ${(s.warnActions || [s.warnAction || 'timeout']).includes(a.key) ? 'checked' : ''}/><span class="switch-text">${a.icon} ${esc(a.label)}</span></label>`
+        `<label class="switch mini am-action-label"><input type="checkbox" class="am-warn-action" value="${a.key}" ${(s.warnActions || [s.warnAction || 'timeout']).includes(a.key) ? 'checked' : ''}/><span class="switch-text">${svgIcon(a.iconName)} ${esc(a.label)}</span></label>`
     ).join('');
     const dmRows = dmKeys.map(k => {
         const a = AUTOMOD_ACTIONS.find(x => x.key === k);
-        const label = a ? `${a.icon} ${a.label}` : (k === 'escalation' ? '🚫 Escalation' : k);
+        const label = a ? `${svgIcon(a.iconName)} ${a.label}` : (k === 'escalation' ? `${svgIcon('octagonX')} Escalation` : k);
         return `<div class="field-row"><label class="field-label" style="min-width:120px">${label}</label><input type="text" class="am-dm-message" data-key="${k}" value="${esc(dmMessages[k] || '')}" placeholder="(use default)" style="flex:1"/></div>`;
     }).join('');
 
     const panelHTML = `
     <div class="card">
-      <div class="card-title"><span><span class="icon">🛡️</span> Premium Automod</span></div>
+      <div class="card-title"><span><span class="icon">${svgIcon('shield')}</span> Premium Automod</span></div>
       <p class="card-desc">Automatic moderation that scans every message against your rules. Premium features for free: blocked words, invite/bad-link/NSFW filtering, spam &amp; mass-mention detection, caps/emoji/repeated-char/new-account filters, multi-action punishment, DM notifications, warning escalation, and appeals.</p>
 
       <div class="switch-row">
@@ -750,7 +1010,7 @@ function automodPage({ guild, user }) {
         <div class="reactions-list" id="am-rules-list">${ruleRows}</div>
         <div style="display:flex; gap:8px; align-items:center; margin-top:8px">
           <select id="am-add-type">${addTypeOpts}</select>
-          <button class="btn btn-secondary" id="am-add-rule">+ Add rule</button>
+          <button class="btn btn-secondary" id="am-add-rule">${svgIcon('plus')} Add rule</button>
         </div>
         <div class="field-hint">Select one or more actions per rule. "Delete" is always applied first when chosen.</div>
       </div>
@@ -781,20 +1041,16 @@ function automodPage({ guild, user }) {
         <select id="am-appeal-channel" data-channel-select>${channelOptions(guild._channels, s.appealChannelId)}</select>
         <div class="field-hint">New appeals filed via <code>/appeal</code> are posted here for moderators to review.</div>
       </div>
-
-      <div class="form-actions">
-        <button class="btn btn-primary" data-save="automod">Save automod settings</button>
-      </div>
     </div>
 
     <div class="card">
-      <div class="card-title"><span><span class="icon">⚠️</span> Warnings</span></div>
+      <div class="card-title"><span><span class="icon">${svgIcon('alertTriangle')}</span> Warnings</span></div>
       <p class="card-desc">Live warning ledger for this server (automod + manual <code>/warn</code>). <a href="#" id="am-refresh-warnings">Refresh</a></p>
       <div id="am-warnings-list"><div class="field-hint">Loading…</div></div>
     </div>
 
     <div class="card">
-      <div class="card-title"><span><span class="icon">📨</span> Appeals</span></div>
+      <div class="card-title"><span><span class="icon">${svgIcon('envelope')}</span> Appeals</span></div>
       <p class="card-desc">Punishment appeals filed by members. Approving an appeal reverses the action (unban/unmute) automatically. <a href="#" id="am-refresh-appeals">Refresh</a></p>
       <div id="am-appeals-list"><div class="field-hint">Loading…</div></div>
     </div>`;
@@ -811,12 +1067,16 @@ function automodPage({ guild, user }) {
 }
 
 // ── Events ──────────────────────────────────────────────────────────────────
+//
+// Event Management is marked `upcoming: true` in render/guild.js TABS, so the
+// page renders the "Coming Soon......" overlay for ALL servers (upcoming takes
+// priority over beta). The underlying editor markup is kept (blurred) so the
+// tab remains discoverable and the feature can be re-enabled by flipping the
+// `upcoming` flag off — no markup rewrite needed when it ships.
 
 function eventsPage({ guild, user }) {
-    const panelHTML = `
-    <div class="card">
-      <div class="card-title"><span><span class="icon">📅</span> Event Management <span class="beta-badge">BETA</span></span></div>
-      <div class="beta-banner">🧪 This feature is in beta — expect changes. Please report any issues.</div>
+    const innerPanelHTML = `
+      <div class="card-title"><span><span class="icon">${svgIcon('calendar')}</span> Event Management <span class="soon-badge">SOON</span></span></div>
       <p>Schedule an event with a countdown and a list of timed tasks. The bot will lock/unlock or hide/unhide the channel(s) you choose (pick one, or hold Ctrl/Cmd to select several), add/remove roles, or send a text/embed message at the offsets you set (seconds from the event start).</p>
       <div class="ev-form" id="ev-form">
         <div class="form-row">
@@ -833,14 +1093,53 @@ function eventsPage({ guild, user }) {
         </div>
       </div>
       <h3 class="ev-list-head">Scheduled events</h3>
-      <div id="ev-list"><p class="live-empty">Loading…</p></div>
-    </div>
-    <div id="ev-modal" class="modal-overlay hidden"></div>`;
+      <div id="ev-list"><p class="live-empty">Loading…</p></div>`;
+    const panelHTML = upcomingOverlayWrap(innerPanelHTML, { icon: 'calendar', title: 'Event Management' });
     return guildTab({ guild, user, active: 'events', panelHTML, scripts: ['/js/guild-common.js', '/js/events.js'] });
 }
 
+// ── Live Polls / Live Giveaways (per-server) ─────────────────────────────────
+//
+// Live polls & giveaways are inherently cross-server (joined via pass code from
+// any server), so these tabs show the items CREATED in this server, plus a link
+// to the global cross-server Live pages. The client (guild-live.js) fetches
+// /api/guilds/:guildId/live/polls|giveaways and reuses the live-card markup.
+
+function livePollsPage({ guild, user }) {
+    const panelHTML = `
+    <div class="card">
+      <div class="card-title"><span><span class="icon">${svgIcon('barChart')}</span> Live Polls</span><button class="btn btn-secondary live-refresh-btn" id="live-refresh">${svgIcon("refresh")} Refresh</button></div>
+      <p class="card-desc">Live polls created in <strong>${esc(guild.name)}</strong> — running and recently ended. Live polls are cross-server: anyone can join with the pass code from any server where PrimeBot is present.</p>
+      <p class="card-hint">Create one in Discord with <code>$lpoll</code>. See <a href="/live/polls">all live polls across PrimeBot →</a></p>
+      <div id="live-content"><p class="live-empty">Loading live polls…</p></div>
+    </div>
+    <div id="live-join-modal" class="modal-overlay hidden"></div>`;
+    return guildTab({
+        guild, user, active: 'live/polls',
+        panelHTML,
+        scripts: ['/js/guild-common.js', '/js/guild-live.js'],
+    });
+}
+
+function liveGiveawaysPage({ guild, user }) {
+    const panelHTML = `
+    <div class="card">
+      <div class="card-title"><span><span class="icon">${svgIcon('gift')}</span> Live Giveaways</span><button class="btn btn-secondary live-refresh-btn" id="live-refresh">${svgIcon("refresh")} Refresh</button></div>
+      <p class="card-desc">Live giveaways created in <strong>${esc(guild.name)}</strong> — running and recently ended. Live giveaways are cross-server: anyone can join with the pass code from any server where PrimeBot is present.</p>
+      <p class="card-hint">Create one in Discord with <code>$lgiveway</code>. See <a href="/live/giveaways">all live giveaways across PrimeBot →</a></p>
+      <div id="live-content"><p class="live-empty">Loading live giveaways…</p></div>
+    </div>
+    <div id="live-join-modal" class="modal-overlay hidden"></div>`;
+    return guildTab({
+        guild, user, active: 'live/giveaways',
+        panelHTML,
+        scripts: ['/js/guild-common.js', '/js/guild-live.js'],
+    });
+}
+
 module.exports = {
-    welcomePage, levelingPage, prefixPage, reactionsPage, broadcastPage,
+    welcomePage, levelingPage, badgesPage, prefixPage, roleRewardsPage, autoResponderPage, reactionsPage, broadcastPage,
     loggingPage, reactionRolesPage, ticketsPage, automodPage, eventsPage,
+    livePollsPage, liveGiveawaysPage,
     TABS,
 };

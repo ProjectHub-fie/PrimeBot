@@ -25,6 +25,8 @@ const CREATE_TABLE_SQL = `
         xp_cooldown           INTEGER NOT NULL DEFAULT 60000,
         auto_reactions_enabled BOOLEAN NOT NULL DEFAULT false,
         auto_reactions         JSONB NOT NULL DEFAULT '[]',
+        auto_responder_enabled BOOLEAN NOT NULL DEFAULT false,
+        auto_responder         JSONB NOT NULL DEFAULT '[]',
         no_prefix_users        JSONB NOT NULL DEFAULT '{}',
         prefix                 VARCHAR(10) DEFAULT '${config.prefix}',
         updated_at             TIMESTAMP DEFAULT NOW()
@@ -54,6 +56,8 @@ class ServerSettingsManager {
         if (this._tableReady) return;
         await pool.query(CREATE_TABLE_SQL);
         await pool.query(`ALTER TABLE server_settings ADD COLUMN IF NOT EXISTS prefix VARCHAR(10) DEFAULT '${config.prefix}'`);
+        await pool.query(`ALTER TABLE server_settings ADD COLUMN IF NOT EXISTS auto_responder_enabled BOOLEAN NOT NULL DEFAULT false`);
+        await pool.query(`ALTER TABLE server_settings ADD COLUMN IF NOT EXISTS auto_responder JSONB NOT NULL DEFAULT '[]'`);
         this._tableReady = true;
     }
 
@@ -185,6 +189,10 @@ class ServerSettingsManager {
                 enabled: row.auto_reactions_enabled,
                 reactions: row.auto_reactions || [],
             },
+            autoResponder: {
+                enabled: row.auto_responder_enabled,
+                responses: row.auto_responder || [],
+            },
             noPrefixUsers: row.no_prefix_users || {},
         };
     }
@@ -205,6 +213,10 @@ class ServerSettingsManager {
                 enabled: false,
                 reactions: [],
             },
+            autoResponder: {
+                enabled: false,
+                responses: [],
+            },
             noPrefixUsers: {},
         };
     }
@@ -221,14 +233,17 @@ class ServerSettingsManager {
         // Ensure leveling sub-object exists (safe default)
         const lev = s.leveling || { enabled: true, levelUpChannelId: null, xpMultiplier: 1.0, xpCooldown: 60000 };
         const ar  = s.autoReactions || { enabled: false, reactions: [] };
+        const ars = s.autoResponder || { enabled: false, responses: [] };
         await this._ensureTable();
         // Welcome settings are stored exclusively in WELCOME_DATABASE_URL — not written here.
         await pool.query(`
             INSERT INTO server_settings (
                 guild_id, receive_broadcasts, broadcast_channel_id,
                 leveling_enabled, leveling_channel_id, xp_multiplier, xp_cooldown,
-                auto_reactions_enabled, auto_reactions, no_prefix_users, prefix, updated_at
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, NOW())
+                auto_reactions_enabled, auto_reactions,
+                auto_responder_enabled, auto_responder,
+                no_prefix_users, prefix, updated_at
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, NOW())
             ON CONFLICT (guild_id) DO UPDATE SET
                 receive_broadcasts    = EXCLUDED.receive_broadcasts,
                 broadcast_channel_id  = EXCLUDED.broadcast_channel_id,
@@ -238,6 +253,8 @@ class ServerSettingsManager {
                 xp_cooldown           = EXCLUDED.xp_cooldown,
                 auto_reactions_enabled = EXCLUDED.auto_reactions_enabled,
                 auto_reactions         = EXCLUDED.auto_reactions,
+                auto_responder_enabled = EXCLUDED.auto_responder_enabled,
+                auto_responder         = EXCLUDED.auto_responder,
                 no_prefix_users        = EXCLUDED.no_prefix_users,
                 prefix                 = EXCLUDED.prefix,
                 updated_at             = NOW()
@@ -251,6 +268,8 @@ class ServerSettingsManager {
             lev.xpCooldown,
             ar.enabled,
             JSON.stringify(ar.reactions),
+            ars.enabled,
+            JSON.stringify(ars.responses),
             JSON.stringify(s.noPrefixUsers),
             normalizeGuildPrefix(s.prefix, config.prefix),
         ]);
@@ -352,7 +371,14 @@ class ServerSettingsManager {
 
     // ── No-prefix mode ────────────────────────────────────────────────────────
 
+    // Sentinel stored in noPrefixUsers[userId] to mark a lifetime grant — one
+    // that never expires and is never auto-disabled. Any other value is a
+    // numeric expiration timestamp (ms since epoch).
+    static NO_PREFIX_LIFETIME = 'lifetime';
+
     _normalizeNoPrefixExpiration(value) {
+        if (value === ServerSettingsManager.NO_PREFIX_LIFETIME) return ServerSettingsManager.NO_PREFIX_LIFETIME;
+
         const numericValue = Number(value);
         if (!Number.isFinite(numericValue) || numericValue <= 0) return null;
 
@@ -363,18 +389,32 @@ class ServerSettingsManager {
             : numericValue;
     }
 
-    enableNoPrefixMode(guildId, userId, minutes = 10) {
+    // Enable no-prefix mode. `minutes` is OPTIONAL: when omitted (null/undefined)
+    // the grant is for the user's lifetime — it never expires and is not
+    // auto-disabled. When provided, it must be a positive number of minutes.
+    enableNoPrefixMode(guildId, userId, minutes = null) {
         if (!userId) return { success: false, message: 'Invalid user' };
-        if (minutes <= 0 || minutes > 60) return { success: false, message: 'Duration must be between 1 and 60 minutes' };
+
+        const isLifetime = minutes === null || minutes === undefined;
+        if (!isLifetime) {
+            const mins = Number(minutes);
+            if (!Number.isFinite(mins) || mins <= 0) return { success: false, message: 'Duration must be a positive number of minutes' };
+        }
 
         try {
             const s = this.getGuildSettings(guildId);
             if (!s.noPrefixUsers) s.noPrefixUsers = {};
+            if (isLifetime) {
+                s.noPrefixUsers[userId] = ServerSettingsManager.NO_PREFIX_LIFETIME;
+                this.serverSettings.set(guildId, s);
+                this._saveGuildSettings(guildId);
+                return { success: true, message: 'No-prefix mode enabled for a lifetime (never expires)', expiresAt: ServerSettingsManager.NO_PREFIX_LIFETIME, lifetime: true };
+            }
             const expirationTime = Date.now() + minutes * 60 * 1000;
             s.noPrefixUsers[userId] = expirationTime;
             this.serverSettings.set(guildId, s);
             this._saveGuildSettings(guildId);
-            return { success: true, message: `No-prefix mode enabled for ${minutes} minute${minutes !== 1 ? 's' : ''}`, expiresAt: expirationTime };
+            return { success: true, message: `No-prefix mode enabled for ${minutes} minute${minutes !== 1 ? 's' : ''}`, expiresAt: expirationTime, lifetime: false };
         } catch (err) {
             console.error(`[SERVER SETTINGS] Error enabling no-prefix mode:`, err);
             return { success: false, message: 'An error occurred.' };
@@ -397,6 +437,8 @@ class ServerSettingsManager {
             const s = this.getGuildSettings(guildId);
             const expirationTime = this._normalizeNoPrefixExpiration(s.noPrefixUsers?.[userId]);
             if (!expirationTime) return false;
+            // Lifetime grants never expire and are never auto-removed.
+            if (expirationTime === ServerSettingsManager.NO_PREFIX_LIFETIME) return true;
             if (Date.now() >= expirationTime) {
                 delete s.noPrefixUsers[userId];
                 this._saveGuildSettings(guildId);
@@ -410,12 +452,18 @@ class ServerSettingsManager {
         }
     }
 
+    // Returns the expiration value: null (not enabled), the NO_PREFIX_LIFETIME
+    // sentinel (lifetime grant), or a numeric ms timestamp (timed grant).
     getNoPrefixExpiration(guildId, userId) {
         if (!userId) return null;
         const s = this.getGuildSettings(guildId);
         if (!s.noPrefixUsers) return null;
         const exp = this._normalizeNoPrefixExpiration(s.noPrefixUsers[userId]);
         if (!exp) return null;
+        if (exp === ServerSettingsManager.NO_PREFIX_LIFETIME) {
+            s.noPrefixUsers[userId] = ServerSettingsManager.NO_PREFIX_LIFETIME;
+            return ServerSettingsManager.NO_PREFIX_LIFETIME;
+        }
         if (Date.now() >= exp) {
             delete s.noPrefixUsers[userId];
             this.serverSettings.set(guildId, s);
@@ -424,6 +472,10 @@ class ServerSettingsManager {
         }
         s.noPrefixUsers[userId] = exp;
         return exp;
+    }
+
+    isNoPrefixLifetime(guildId, userId) {
+        return this.getNoPrefixExpiration(guildId, userId) === ServerSettingsManager.NO_PREFIX_LIFETIME;
     }
 
     // ── Welcome ───────────────────────────────────────────────────────────────
@@ -600,6 +652,83 @@ class ServerSettingsManager {
             if (msg.includes(trig)) triggered.push(reaction.emoji);
         }
         return triggered;
+    }
+
+    // ── Auto-responder ────────────────────────────────────────────────────────
+    //
+    // Like auto-reactions, but replies with a configured text response instead
+    // of reacting. Each entry: { trigger, response, caseSensitive, exactMatch }.
+    // exactMatch: true → the message must EQUAL the trigger (trimmed); false →
+    // the trigger just needs to appear anywhere in the message (includes).
+    // caseSensitive controls lowercasing of both sides before comparing.
+
+    getAutoResponder(guildId) {
+        const s = this.getGuildSettings(guildId);
+        if (!s.autoResponder) {
+            s.autoResponder = { enabled: false, responses: [] };
+            this.serverSettings.set(guildId, s);
+        }
+        return s.autoResponder;
+    }
+
+    toggleAutoResponder(guildId) {
+        const s = this.getGuildSettings(guildId);
+        if (!s.autoResponder) {
+            s.autoResponder = { enabled: true, responses: [] };
+        } else {
+            s.autoResponder.enabled = !s.autoResponder.enabled;
+        }
+        this.serverSettings.set(guildId, s);
+        this._saveGuildSettings(guildId);
+        return s.autoResponder.enabled;
+    }
+
+    addAutoResponse(guildId, trigger, response, { caseSensitive = false, exactMatch = false } = {}) {
+        if (!trigger || !response) return false;
+        const s = this.getGuildSettings(guildId);
+        if (!s.autoResponder) s.autoResponder = { enabled: true, responses: [] };
+        const entry = { trigger, response, caseSensitive: !!caseSensitive, exactMatch: !!exactMatch };
+        const idx = s.autoResponder.responses.findIndex(r => r.trigger.toLowerCase() === trigger.toLowerCase());
+        if (idx !== -1) {
+            s.autoResponder.responses[idx] = entry;
+        } else {
+            s.autoResponder.responses.push(entry);
+        }
+        this.serverSettings.set(guildId, s);
+        this._saveGuildSettings(guildId);
+        return true;
+    }
+
+    removeAutoResponse(guildId, trigger) {
+        if (!trigger) return false;
+        const s = this.getGuildSettings(guildId);
+        if (!s.autoResponder?.responses) return false;
+        const before = s.autoResponder.responses.length;
+        s.autoResponder.responses = s.autoResponder.responses.filter(
+            r => r.trigger.toLowerCase() !== trigger.toLowerCase()
+        );
+        if (s.autoResponder.responses.length === before) return false;
+        this.serverSettings.set(guildId, s);
+        this._saveGuildSettings(guildId);
+        return true;
+    }
+
+    // Returns the array of response strings to send for a given message.
+    getTriggeredResponses(guildId, content) {
+        if (!content) return [];
+        const s = this.getGuildSettings(guildId);
+        if (!s.autoResponder?.enabled) return [];
+        const responses = [];
+        for (const r of s.autoResponder.responses) {
+            let msg = content;
+            let trig = r.trigger;
+            if (!r.caseSensitive) { msg = msg.toLowerCase(); trig = trig.toLowerCase(); }
+            const match = r.exactMatch
+                ? msg.trim() === trig.trim()
+                : msg.includes(trig);
+            if (match) responses.push(r.response);
+        }
+        return responses;
     }
 }
 
