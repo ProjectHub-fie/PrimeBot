@@ -14,16 +14,27 @@ async function initializeDatabase() {
         // Try to import database components
         require('dotenv').config();
         
-        // Check for PostgreSQL database configuration
-        const hasPostgreSQL = process.env.DATABASE_URL || process.env.DB_HOST || process.env.DB_USER || process.env.DB_NAME;
+        // Live polls live in the dedicated LIVE_DATABASE_URL pool (server/liveDb.js,
+        // which falls back to DATABASE_URL). Build a drizzle instance on that pool
+        // rather than reusing the main DATABASE_URL pool — same multi-pool pattern
+        // as the live giveaways. The dashboard reads these same tables via the
+        // same pool (dashboard/db.js getLivePolls/getEndedLivePolls), so they
+        // stay in sync as long as both deployments point at the same
+        // LIVE_DATABASE_URL (or the same DATABASE_URL fallback).
+        const liveDbModule = require('../server/liveDb.js');
+        const livePool = liveDbModule.livePool;
+        const { drizzle } = require('drizzle-orm/node-postgres');
         
-        if (!hasPostgreSQL) {
+        // Resolve a connection string so we can decide whether to even try.
+        const hasLiveDb = process.env.LIVE_DATABASE_URL || process.env.DATABASE_URL
+            || process.env.DB_HOST || process.env.DB_USER || process.env.DB_NAME;
+        
+        if (!hasLiveDb) {
             console.log('⚠️ No database configuration found, using fallback mode');
             return false;
         }
         
-        const dbModule = require('../server/db.js');
-        db = dbModule.db;
+        db = drizzle(livePool, { schema: require('../shared/schema.js') });
         
         const schemaModule = require('../shared/schema.js');
         livePolls = schemaModule.livePolls;
@@ -114,17 +125,26 @@ class LivePollManager {
             const initialized = await initializeDatabase();
             
             if (initialized) {
-                const { initializeGracefully } = require('../server/db.js');
-                this.dbReady = await initializeGracefully();
+                // Verify the live pool actually connects before declaring ready.
+                const liveDbModule = require('../server/liveDb.js');
+                const livePool = liveDbModule.livePool;
+                let connected = false;
+                try {
+                    const client = await livePool.connect();
+                    await client.query('SELECT NOW()');
+                    client.release();
+                    connected = true;
+                } catch (err) {
+                    console.error('❌ Live poll database connection failed:', err.message);
+                    connected = false;
+                }
+                this.dbReady = connected;
                 
                 // Get the actual database instance
                 if (this.dbReady) {
-                    const dbModule = require('../server/db.js');
-                    this.db = dbModule.pool;
-                    this.drizzleDb = dbModule.db;
-                    // Keep module-level db in sync for createLivePoll / vote helpers
-                    if (!db) db = dbModule.db;
-                    if (!global.livePollDb) global.livePollDb = dbModule.db;
+                    this.db = livePool; // raw pg.Pool for ensureLivePollTables()
+                    this.drizzleDb = db; // drizzle instance built on livePool (module-level)
+                    if (!global.livePollDb) global.livePollDb = db;
                     // Self-create the live poll tables (mirrors LiveGiveawayManager's
                     // CREATE TABLE IF NOT EXISTS). drizzle never runs DDL, so if the
                     // 0000 migration was never applied to this database the poll tables

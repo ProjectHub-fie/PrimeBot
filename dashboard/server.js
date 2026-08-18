@@ -72,7 +72,9 @@ const SESSION_SECRET = process.env.SESSION_SECRET || 'primebot-dashboard-dev-sec
 const SESSION_IDLE_TIMEOUT_MS = constants.SESSION_IDLE_TIMEOUT_MS;
 
 // On Vercel (serverless), MemoryStore is useless because each request may run
-// in a fresh instance. Store sessions in the same PostgreSQL DB the bot uses.
+// in a fresh instance. Store sessions in the dedicated SEASON_DATABASE_URL pool
+// (which falls back to DATABASE_URL), shared with the shardnode failover
+// service so the dashboard and bot see the same rows.
 //
 // CRITICAL: the session pool must negotiate SSL the same way the bot's main
 // pool does (server/db.js). Production Postgres on Vercel (Neon, Supabase,
@@ -80,14 +82,14 @@ const SESSION_IDLE_TIMEOUT_MS = constants.SESSION_IDLE_TIMEOUT_MS;
 // without ssl silently fails every session write. The OAuth callback then
 // redirects to "/" on a save error, the session row is never persisted, the
 // next /api/me returns 401, and the user lands back on the login screen —
-// i.e. "login works but never reaches the dashboard". So we reuse the bot's
+// i.e. "login works but never reaches the dashboard". So we reuse an
 // already-SSL-aware pool rather than constructing a naive one.
 function buildSessionStore() {
     let pool = null;
     try {
-        pool = require('../server/db').pool;
+        pool = require('../server/seasonDb').seasonPool;
     } catch (err) {
-        console.warn('[SESSION] Could not import bot DB pool, falling back to a local pool:', err.message);
+        console.warn('[SESSION] Could not import season pool, falling back to a local pool:', err.message);
     }
     if (!pool && process.env.DATABASE_URL) {
         const dbUrl = process.env.DATABASE_URL;

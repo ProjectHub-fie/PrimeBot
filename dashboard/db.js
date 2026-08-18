@@ -1584,15 +1584,16 @@ async function renameTicketPanel(id, newName) {
 // ── Live polls + live giveaways (LIVE_DATABASE_URL) ────────────────────────
 //
 // The dashboard surfaces all running and ended live polls and live giveaways
-// in the "Live" page. Live polls live in the main DB schema (live_polls etc.),
-// while live giveaways live in the dedicated LIVE_DATABASE_URL pool. Both are
-// read-only here (creation is via the bot commands) — the dashboard just lists
-// them. The bot's managers cache in memory and re-read periodically, so the
-// numbers here reflect the live state within that window.
+// in the "Live" page. Both live polls and live giveaways live in the dedicated
+// LIVE_DATABASE_URL pool (server/liveDb.js, falls back to DATABASE_URL). Both
+// are read-only here (creation is via the bot commands) — the dashboard just
+// lists them. The bot's managers cache in memory and re-read periodically, so
+// the numbers here reflect the live state within that window.
 
 async function getLivePolls() {
     try {
-        const res = await pool.query(`
+        const p = getLivePool();
+        const res = await p.query(`
             SELECT p.poll_id, p.pass_code, p.question, p.is_active,
                    p.created_at, p.expires_at, p.channel_id,
                    (SELECT COUNT(*) FROM live_poll_votes v WHERE v.poll_id = p.poll_id) AS total_votes
@@ -1676,7 +1677,8 @@ async function getEndedLiveGiveaways() {
 // for ended items only).
 async function getEndedLivePolls() {
     try {
-        const res = await pool.query(`
+        const p = getLivePool();
+        const res = await p.query(`
             SELECT p.poll_id, p.pass_code, p.question, p.created_at, p.expires_at, p.channel_id,
                    o.option_text, o.vote_count
             FROM live_polls p
@@ -1918,13 +1920,30 @@ async function cancelEventSchedule(id) {
 // The bot's nodeFailover module writes a heartbeat row per shard node (sn1/sn2/
 // sn3) every 15s and maintains a single-row lease lock. The dashboard reads
 // these tables directly so the Stats page can show live node health without any
-// bot↔dashboard IPC. Both tables live in the main DATABASE_URL pool.
+// bot↔dashboard IPC. Both tables live in the dedicated SEASON_DATABASE_URL pool
+// (server/seasonDb.js, falls back to DATABASE_URL) — the same pool the bot's
+// nodeFailover writes to and the dashboard session store uses, so all three
+// stay in sync as long as both deployments point at the same
+// SEASON_DATABASE_URL (or the same DATABASE_URL fallback).
+
+let seasonPool = null;
+function getSeasonPool() {
+    if (seasonPool) return seasonPool;
+    try {
+        seasonPool = require('../server/seasonDb').seasonPool;
+    } catch (err) {
+        console.error('[DASHBOARD DB] seasonDb unavailable:', err.message);
+        seasonPool = { query: async () => { throw new Error('Season database not configured'); } };
+    }
+    return seasonPool;
+}
 
 const FAILOVER_THRESHOLD_MS = 45000; // mirrors utils/nodeFailover.js
 const NODE_ROLES = ['sn1', 'sn2', 'sn3'];
 
 async function ensureNodeStatusTables() {
-    await pool.query(`
+    const p = getSeasonPool();
+    await p.query(`
         CREATE TABLE IF NOT EXISTS bot_node_status (
             role VARCHAR(20) PRIMARY KEY,
             node_name VARCHAR(255) NOT NULL,
@@ -1932,7 +1951,7 @@ async function ensureNodeStatusTables() {
             active BOOLEAN NOT NULL DEFAULT false
         )
     `);
-    await pool.query(`
+    await p.query(`
         CREATE TABLE IF NOT EXISTS bot_failover_lock (
             id INTEGER PRIMARY KEY DEFAULT 1,
             owner_node_name VARCHAR(255) NOT NULL,
@@ -1945,13 +1964,14 @@ async function ensureNodeStatusTables() {
 
 async function getNodeStats() {
     await ensureNodeStatusTables();
+    const p = getSeasonPool();
     const [statusRes, leaseRes] = await Promise.all([
-        pool.query(`
+        p.query(`
             SELECT role, node_name, last_heartbeat, active,
                    EXTRACT(EPOCH FROM (NOW() - last_heartbeat)) * 1000 AS age_ms
             FROM bot_node_status
         `).catch(() => ({ rows: [] })),
-        pool.query(`
+        p.query(`
             SELECT owner_node_name, owner_role, acquired_at, last_seen,
                    EXTRACT(EPOCH FROM (NOW() - last_seen)) * 1000 AS age_ms
             FROM bot_failover_lock WHERE id = 1
