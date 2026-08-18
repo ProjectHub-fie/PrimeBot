@@ -77,6 +77,11 @@ html, body {
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  /* Respect device notches / rounded corners on mobile (viewport-fit=cover). */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
 }
 
 /* Atmospheric backdrop */
@@ -129,11 +134,14 @@ code {
   background: rgba(10, 11, 16, 0.78);
   backdrop-filter: saturate(150%) blur(18px);
   border-bottom: 1px solid var(--border);
+  padding-top: var(--safe-top);
 }
 .topbar-inner {
   max-width: var(--maxw);
   margin: 0 auto;
   padding: 0 22px;
+  padding-left: calc(22px + var(--safe-left));
+  padding-right: calc(22px + var(--safe-right));
   height: 62px;
   display: flex;
   align-items: center;
@@ -178,13 +186,16 @@ code {
   border-left: 1px solid var(--border);
 }
 
-.topnav { display: flex; align-items: center; gap: 4px; }
+.topnav { display: flex; align-items: center; gap: 4px; overflow-x: auto; scrollbar-width: none; -ms-overflow-style: none; }
+.topnav::-webkit-scrollbar { display: none; }
 .topnav a {
   color: var(--text-dim);
   font-weight: 500;
   font-size: 14px;
   padding: 8px 13px;
   border-radius: var(--radius-sm);
+  white-space: nowrap;
+  flex: 0 0 auto;
   transition: background var(--transition), color var(--transition);
 }
 .topnav a:hover { color: var(--text); text-decoration: none; background: rgba(255, 255, 255, 0.045); }
@@ -944,6 +955,7 @@ select:focus {
 .footer {
   border-top: 1px solid var(--border);
   padding: 14px 22px;
+  padding-bottom: calc(14px + var(--safe-bottom));
   text-align: center;
   color: var(--text-faint);
   font-size: 12px;
@@ -1247,8 +1259,18 @@ select:focus {
 @media (max-width: 900px) {
   .live-grid { grid-template-columns: 1fr; }
 }
+@media (max-width: 760px) {
+  /* Trim the chrome — keep the brand mark + name, drop the "Dashboard" sub
+     and the username label so the scrollable topnav has room on phones. */
+  .brand-sub { display: none; }
+  .user-name { display: none; }
+  .topbar-inner { gap: 8px; }
+  .topnav { gap: 2px; }
+  .topnav a { padding: 8px 10px; }
+}
 @media (max-width: 640px) {
-  .topnav a:not(.user-name) { display: none; }
+  /* The topnav now scrolls horizontally instead of vanishing, so all pages
+     (Servers / Overview / Stats / Docs) stay reachable on mobile. */
   .reaction-row { grid-template-columns: 1fr; }
   .page-head h1 { font-size: 24px; }
   .docs-toc ul { grid-template-columns: 1fr; }
@@ -1257,7 +1279,13 @@ select:focus {
   .stats-cards { grid-template-columns: 1fr; }
   .donut-grid { grid-template-columns: repeat(2, 1fr); }
   .login-title { font-size: 30px; }
-  .container { padding: 22px 16px 64px; }
+  .container { padding: 18px 14px 72px; padding-left: calc(14px + var(--safe-left)); padding-right: calc(14px + var(--safe-right)); padding-bottom: calc(72px + var(--safe-bottom)); }
+  .am-rule-row { gap: 8px; }
+  .am-rule-row .am-rule-label { min-width: 0; width: 100%; }
+  .am-rule-row .am-actions-group { width: 100%; }
+  .field-row { flex-direction: column; align-items: stretch; }
+  .field-row > input, .field-row > select { width: 100%; }
+  .save-bar { width: calc(100% - 24px); flex-wrap: wrap; justify-content: center; text-align: center; }
 }
 
 
@@ -1323,7 +1351,7 @@ select:focus {
 .save-bar {
   position: fixed;
   left: 50%;
-  bottom: 24px;
+  bottom: calc(24px + var(--safe-bottom));
   transform: translateX(-50%);
   z-index: 60;
   display: flex;
@@ -1334,6 +1362,7 @@ select:focus {
   border: 1px solid var(--border);
   border-radius: 999px;
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
+  max-width: calc(100vw - 24px);
   /* Slide-up-in / slide-down-out. visibility is delayed on hide so the
      slide-out finishes before the bar becomes invisible to assistive tech. */
   transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1),
@@ -1469,6 +1498,8 @@ select:focus {
   left: 0;
   bottom: 0;
   width: min(300px, 84vw);
+  padding-top: var(--safe-top);
+  padding-bottom: var(--safe-bottom);
   background: var(--bg-soft);
   border-right: 1px solid var(--border);
   box-shadow: var(--shadow);

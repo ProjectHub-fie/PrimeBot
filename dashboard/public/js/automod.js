@@ -15,7 +15,7 @@ function automodRuleRowHTML(rule = {}) {
     ? rule.actions
     : (rule.action ? [rule.action] : ['delete']);
   const actionChecks = AUTOMOD_ACTIONS.map(a =>
-    `<label class="switch mini am-action-label"><input type="checkbox" class="am-action" value="${a.key}" ${selected.includes(a.key) ? 'checked' : ''}/><span class="switch-text">${a.icon} ${esc(a.label)}</span></label>`
+    `<label class="switch mini am-action-label"><input type="checkbox" class="am-action" value="${a.key}" ${selected.includes(a.key) ? 'checked' : ''}/><span class="switch-text">${window.svgIcon(a.iconName)} ${esc(a.label)}</span></label>`
   ).join('');
   let extra = '';
   if (meta.params.includes('words')) {
@@ -30,10 +30,10 @@ function automodRuleRowHTML(rule = {}) {
   return `
     <div class="reaction-row am-rule-row" data-type="${esc(meta.key)}">
       <label class="switch mini"><input type="checkbox" class="am-enabled" ${rule.enabled !== false ? 'checked' : ''}/><span class="slider"></span></label>
-      <span class="am-rule-label">${meta.icon} ${esc(meta.label)}</span>
+      <span class="am-rule-label">${window.svgIcon(meta.iconName)} ${esc(meta.label)}</span>
       <div class="am-actions-group">${actionChecks}</div>
       ${extra}
-      <button class="reaction-remove am-remove" type="button">✕</button>
+      <button class="reaction-remove am-remove" type="button">${window.svgIcon('x')}</button>
     </div>`;
 }
 

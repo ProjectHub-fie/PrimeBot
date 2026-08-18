@@ -16,6 +16,8 @@
  * @property {string} key        - Stable identifier stored in rule.type.
  * @property {string} label      - Human label shown in the dashboard.
  * @property {string} icon       - Emoji prefix for the dashboard/log embed.
+ * @property {string} iconName   - SVG icon name (dashboard/public/js/icons.js)
+ *                                 for the dashboard UI chrome. The bot ignores it.
  * @property {string} category   - Grouping for the dashboard UI.
  * @property {string} description
  * @property {string[]} params   - Extra fields this rule accepts beyond the
@@ -26,11 +28,11 @@
  */
 
 const ACTIONS = [
-    { key: 'delete',  label: 'Delete message',  icon: '🗑️' },
-    { key: 'warn',    label: 'Warn member',     icon: '⚠️' },
-    { key: 'timeout', label: 'Timeout (mute)',  icon: '🔇' },
-    { key: 'kick',    label: 'Kick',            icon: '👢' },
-    { key: 'ban',     label: 'Ban',             icon: '🔨' },
+    { key: 'delete',  label: 'Delete message',  icon: '🗑️', iconName: 'trash' },
+    { key: 'warn',    label: 'Warn member',     icon: '⚠️', iconName: 'alertTriangle' },
+    { key: 'timeout', label: 'Timeout (mute)',  icon: '🔇', iconName: 'mute' },
+    { key: 'kick',    label: 'Kick',            icon: '👢', iconName: 'userX' },
+    { key: 'ban',     label: 'Ban',             icon: '🔨', iconName: 'ban' },
 ];
 const ACTION_KEYS = ACTIONS.map(a => a.key);
 const ACTION_BY_KEY = Object.fromEntries(ACTIONS.map(a => [a.key, a]));
@@ -40,6 +42,7 @@ const RULES = [
         key: 'blockedWords',
         label: 'Blocked words',
         icon: '🚫',
+        iconName: 'ban',
         category: 'Content',
         description: 'Delete and act on messages containing blocked words or phrases (substring match).',
         params: ['words'],
@@ -49,6 +52,7 @@ const RULES = [
         key: 'invites',
         label: 'Discord invites',
         icon: '📨',
+        iconName: 'envelope',
         category: 'Content',
         description: 'Detect Discord server invite links (discord.gg/, discord.com/invite/).',
         params: [],
@@ -58,6 +62,7 @@ const RULES = [
         key: 'links',
         label: 'All links',
         icon: '🔗',
+        iconName: 'link',
         category: 'Content',
         description: 'Detect any URL (http/https) in messages.',
         params: [],
@@ -67,6 +72,7 @@ const RULES = [
         key: 'badLinks',
         label: 'Bad / phishing links',
         icon: '🪝',
+        iconName: 'linkOff',
         category: 'Content',
         description: 'Detect known phishing/scam URLs and impersonation domains (discord, steam, nitro gift lures). Add your own domains via the "words" field.',
         params: ['words'],
@@ -76,6 +82,7 @@ const RULES = [
         key: 'nsfw',
         label: 'NSFW content',
         icon: '🔞',
+        iconName: 'eyeOff',
         category: 'Content',
         description: 'Detect common NSFW terms. Add your own terms via the "words" field.',
         params: ['words'],
@@ -85,6 +92,7 @@ const RULES = [
         key: 'repeatedChars',
         label: 'Repeated characters',
         icon: '🔁',
+        iconName: 'repeat',
         category: 'Spam',
         description: 'Act when a message contains a run of the same character. Threshold is the run length.',
         params: ['threshold'],
@@ -94,6 +102,7 @@ const RULES = [
         key: 'newAccount',
         label: 'New / alt account',
         icon: '🐣',
+        iconName: 'userClock',
         category: 'Spam',
         description: 'Act when the message author\'s account is newer than the configured age (days). Useful against raid/alt raids.',
         params: ['threshold'],
@@ -104,6 +113,7 @@ const RULES = [
         key: 'mentions',
         label: 'Mass mentions',
         icon: '@',
+        iconName: 'at',
         category: 'Spam',
         description: 'Act when a message mentions too many users/roles. Threshold is the count.',
         params: ['threshold'],
@@ -113,6 +123,7 @@ const RULES = [
         key: 'spam',
         label: 'Duplicate / rapid spam',
         icon: '🌀',
+        iconName: 'activity',
         category: 'Spam',
         description: 'Act when a member sends the same message (or N messages) within a short window.',
         params: ['threshold', 'seconds'],
@@ -122,6 +133,7 @@ const RULES = [
         key: 'caps',
         label: 'Excessive caps',
         icon: '🔠',
+        iconName: 'type',
         category: 'Content',
         description: 'Act when a message is mostly uppercase letters. Threshold is the % of caps.',
         params: ['threshold'],
@@ -131,6 +143,7 @@ const RULES = [
         key: 'emojiSpam',
         label: 'Emoji spam',
         icon: '🎉',
+        iconName: 'smile',
         category: 'Content',
         description: 'Act when a message contains too many emoji. Threshold is the count.',
         params: ['threshold'],
@@ -140,6 +153,7 @@ const RULES = [
         key: 'newlines',
         label: 'Wall of text / newlines',
         icon: '↩️',
+        iconName: 'alignLeft',
         category: 'Content',
         description: 'Act when a message has too many line breaks. Threshold is the count.',
         params: ['threshold'],
@@ -149,6 +163,7 @@ const RULES = [
         key: 'zalgo',
         label: 'Zalgo / glitch text',
         icon: '͓z̷',
+        iconName: 'flask',
         category: 'Content',
         description: 'Detect unicode combining characters used for glitchy text spam.',
         params: [],
@@ -311,7 +326,7 @@ function normalizeAction(action, fallback = 'delete') {
 }
 
 function metaFor(type) {
-    return RULE_BY_KEY[type] || { key: type, label: type, icon: '🛡️', category: 'Other', description: '', params: [], actions: [] };
+    return RULE_BY_KEY[type] || { key: type, label: type, icon: '🛡️', iconName: 'shield', category: 'Other', description: '', params: [], actions: [] };
 }
 
 /**
