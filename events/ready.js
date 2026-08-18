@@ -52,6 +52,20 @@ module.exports = {
 
         updateStatus();
 
+        // Flagship slash commands surfaced on the bot's profile / "Apps" command
+        // list. These are the commands every PrimeBot user should see first
+        // when they open the bot's profile card. They are registered globally
+        // via deploy-commands.js; here we just log the curated set on boot so
+        // it is visible that the profile command list includes them.
+        const PROFILE_COMMANDS = ['invite', 'help', 'lgiveway', 'lpoll', 'automod'];
+        console.log('Bot profile flagship commands:', PROFILE_COMMANDS.join(', '));
+        PROFILE_COMMANDS.forEach((name) => {
+            const cmd = client.commands.get(name);
+            if (!cmd) {
+                console.warn(`[PROFILE] Expected command "${name}" is not loaded — it will not show on the bot profile.`);
+            }
+        });
+
         // Update activity every 5 minutes
         setInterval(updateStatus, 5 * 60 * 1000);
 

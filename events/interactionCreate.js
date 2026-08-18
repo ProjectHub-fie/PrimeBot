@@ -63,7 +63,7 @@ async function showMainHelpUpdate(interaction) {
                 .setEmoji('⚙️'),
             new ButtonBuilder()
                 .setCustomId('help_prefix')
-                .setLabel('Prefix Commands')
+                .setLabel('Sash')
                 .setStyle(ButtonStyle.Secondary)
                 .setEmoji('💬'),
             new ButtonBuilder()
@@ -78,6 +78,176 @@ async function showMainHelpUpdate(interaction) {
         embeds: [mainEmbed],
         components: [categoryButtons, adminButton]
     });
+}
+
+/**
+ * Show the "sash" command menu. This is the prefix-command help content
+ * (categorized legacy/prefix commands) but branded as "sash" — the word
+ * "prefix" is replaced with "sash" everywhere it would appear so the menu
+ * reads as a "Sash Commands" menu rather than a "Prefix Commands" one.
+ *
+ * The button leads here from the main /help menu's "Sash" button.
+ */
+async function showSashHelp(interaction, page) {
+    const category = page || 'main';
+    const prefix = config.prefix;
+
+    // Sash (prefix) command catalogue, grouped identically to the messageCreate
+    // prefix help so the two stay in sync. Only the label "sash" differs.
+    const SASH_CATEGORIES = {
+        general: {
+            title: '⚡ Sash General Commands',
+            desc: 'Basic bot commands you run with your sash:',
+            fields: [
+                { name: `${prefix}help [category]`, value: 'Show this categorized sash menu' },
+                { name: `${prefix}about`, value: 'Information about the bot' },
+                { name: `${prefix}updates`, value: 'Latest bot updates and features' },
+                { name: `${prefix}ses`, value: 'Bot session and status information' },
+                { name: `${prefix}ping`, value: 'Check bot latency and response time' },
+                { name: `${prefix}np [duration]`, value: 'Enable no-sash mode for easier commands' },
+            ],
+            color: config.colors.primary,
+        },
+        leveling: {
+            title: '📊 Sash Leveling System',
+            desc: 'XP, ranks, and progression via sash commands:',
+            fields: [
+                { name: `${prefix}rank [@user]`, value: 'View level and XP progress' },
+                { name: `${prefix}leaderboard [page]`, value: 'Server XP leaderboard' },
+                { name: `${prefix}badges [@user]`, value: 'View achievement badges' },
+                { name: `${prefix}level-enable`, value: 'Enable leveling (Admin)' },
+                { name: `${prefix}level-disable`, value: 'Disable leveling (Admin)' },
+                { name: `${prefix}level-channel #channel`, value: 'Level-up channel (Admin)' },
+                { name: `${prefix}award-xp @user [amount]`, value: 'Award XP (Admin)' },
+                { name: `${prefix}award-badge @user [badge]`, value: 'Award badges (Admin)' },
+            ],
+            color: config.colors.success,
+        },
+        games: {
+            title: '🎮 Sash Games & Activities',
+            desc: 'Interactive games run with your sash:',
+            fields: [
+                { name: `${prefix}tictactoe @user`, value: 'Classic Tic-Tac-Toe game' },
+                { name: `${prefix}truthdare`, value: 'Truth or Dare with custom questions' },
+                { name: `${prefix}counting [start]`, value: 'Number counting game' },
+                { name: `${prefix}poll [question] [options]`, value: 'Create interactive polls' },
+            ],
+            color: config.colors.warning,
+        },
+        moderation: {
+            title: '🛡️ Sash Moderation Tools',
+            desc: 'Moderation and server management sash commands:',
+            fields: [
+                { name: `${prefix}kick @member [reason]`, value: 'Kick a member' },
+                { name: `${prefix}ban @member [reason] [days]`, value: 'Ban a member' },
+                { name: `${prefix}move @user #channel`, value: 'Move members between voice channels' },
+                { name: `${prefix}end [activity]`, value: 'End ongoing activities' },
+                { name: `${prefix}snipe [#channel]`, value: 'Recover last deleted message snapshot' },
+                { name: `${prefix}lock [#channel]`, value: 'Lock a channel (Admin)' },
+                { name: `${prefix}unlock [#channel]`, value: 'Unlock a channel (Admin)' },
+                { name: `${prefix}hide [#channel]`, value: 'Hide a channel (Admin)' },
+                { name: `${prefix}unhide [#channel]`, value: 'Unhide a channel (Admin)' },
+                { name: `${prefix}nuke [name] [#channel]`, value: 'Nuke and recreate a channel (Admin)' },
+            ],
+            color: config.colors.secondary || config.colors.primary,
+        },
+        community: {
+            title: '👥 Sash Community Features',
+            desc: 'Engagement and social sash commands:',
+            fields: [
+                { name: `${prefix}poll "[question]" opt1 opt2 [time]`, value: 'Create server polls' },
+                { name: `${prefix}lpoll create ...`, value: 'Create cross-server live polls' },
+                { name: `${prefix}giveaway [prize] [duration]`, value: 'Create giveaways' },
+                { name: `${prefix}reroll [giveaway-id]`, value: 'Reroll giveaway winners' },
+                { name: `${prefix}birthday set [date]`, value: 'Birthday celebration system' },
+                { name: `${prefix}welcome-config`, value: 'Configure welcome messages' },
+                { name: `${prefix}broadcast [message]`, value: 'Announce to all servers' },
+            ],
+            color: config.colors.success,
+        },
+        admin: {
+            title: '⚙️ Sash Administration',
+            desc: 'Advanced server configuration via sash (Admin):',
+            fields: [
+                { name: `${prefix}welcome-enable`, value: 'Enable welcome system' },
+                { name: `${prefix}welcome-disable`, value: 'Disable welcome system' },
+                { name: `${prefix}welcome-channel #channel`, value: 'Set welcome channel' },
+                { name: `${prefix}broadcastsettings`, value: 'Configure broadcast settings' },
+                { name: `${prefix}autoreact enable`, value: 'Enable auto-reactions' },
+                { name: `${prefix}autoreact disable`, value: 'Disable auto-reactions' },
+                { name: `${prefix}autoreact add [word] [emoji]`, value: 'Add auto-reaction trigger' },
+                { name: `${prefix}autoreact remove [word]`, value: 'Remove auto-reaction trigger' },
+            ],
+            color: config.colors.error,
+        },
+    };
+
+    const backButton = new ActionRowBuilder()
+        .addComponents(
+            new ButtonBuilder()
+                .setCustomId('help_sash')
+                .setLabel('Back to Sash Menu')
+                .setStyle(ButtonStyle.Secondary)
+                .setEmoji('◀️')
+        );
+
+    if (category === 'main' || category === 'back') {
+        // Main sash menu: category chooser with a back-to-categories button.
+        const mainEmbed = new EmbedBuilder()
+            .setColor(config.colors.primary)
+            .setTitle('💬 Sash Command Categories')
+            .setDescription(
+                `Sash commands are classic text commands you run by typing your sash (\`${prefix}\`) followed by the command name.\n\n` +
+                `**Usage:** \`${prefix}help [category]\` — choose a category below to browse its sash commands.`
+            )
+            .addFields(
+                { name: '⚡ General', value: `\`${prefix}help general\`\nBasic bot commands`, inline: true },
+                { name: '📊 Leveling', value: `\`${prefix}help leveling\`\nXP, ranks, progression`, inline: true },
+                { name: '🎮 Games', value: `\`${prefix}help games\`\nFun interactive games`, inline: true },
+                { name: '🛡️ Moderation', value: `\`${prefix}help moderation\`\nModeration tools`, inline: true },
+                { name: '👥 Community', value: `\`${prefix}help community\`\nSocial features`, inline: true },
+                { name: '⚙️ Administration', value: `\`${prefix}help admin\`\nAdvanced config`, inline: true }
+            )
+            .setFooter({ text: `Sash: ${prefix} • Version: ${config.version}` })
+            .setTimestamp();
+
+        const catButtons = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('help_sash_general').setLabel('General').setStyle(ButtonStyle.Primary).setEmoji('⚡'),
+            new ButtonBuilder().setCustomId('help_sash_leveling').setLabel('Leveling').setStyle(ButtonStyle.Primary).setEmoji('📊'),
+            new ButtonBuilder().setCustomId('help_sash_games').setLabel('Games').setStyle(ButtonStyle.Primary).setEmoji('🎮'),
+            new ButtonBuilder().setCustomId('help_sash_moderation').setLabel('Moderation').setStyle(ButtonStyle.Secondary).setEmoji('🛡️'),
+            new ButtonBuilder().setCustomId('help_sash_community').setLabel('Community').setStyle(ButtonStyle.Success).setEmoji('👥'),
+        );
+        const adminRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('help_sash_admin').setLabel('Administration').setStyle(ButtonStyle.Danger).setEmoji('⚙️'),
+            new ButtonBuilder().setCustomId('help_back').setLabel('Back to Categories').setStyle(ButtonStyle.Secondary).setEmoji('↩️'),
+        );
+
+        await interaction.update({ embeds: [mainEmbed], components: [catButtons, adminRow] });
+        return;
+    }
+
+    const cat = SASH_CATEGORIES[category];
+    if (!cat) {
+        await interaction.update({
+            embeds: [new EmbedBuilder()
+                .setColor(config.colors.error)
+                .setTitle('❌ Unknown Sash Category')
+                .setDescription(`The sash category "${category}" was not found.`)],
+            components: [backButton],
+        });
+        return;
+    }
+
+    const embed = new EmbedBuilder()
+        .setColor(cat.color)
+        .setTitle(cat.title)
+        .setDescription(cat.desc)
+        .addFields(cat.fields.map(f => ({ ...f, inline: false })))
+        .setFooter({ text: `Sash: ${prefix} • Version: ${config.version}` })
+        .setTimestamp();
+
+    await interaction.update({ embeds: [embed], components: [backButton] });
 }
 
 /**
@@ -508,12 +678,12 @@ module.exports = {
                         } else if (['general', 'leveling', 'games', 'moderation', 'community', 'admin'].includes(category)) {
                             // Show category help
                             await showCategoryHelpUpdate(interaction, category);
-                        } else if (category === 'prefix') {
-                            // Handle prefix commands help
-                            await interaction.reply({
-                                content: 'Prefix commands are legacy commands that start with a prefix like `!` or `$`. This bot primarily uses slash commands which are accessed by typing `/` followed by the command name.',
-                                ephemeral: true
-                            });
+                        } else if (category === 'prefix' || category === 'sash') {
+                            // Show the sash (prefix) command menu content, branded "sash".
+                            await showSashHelp(interaction, 'main');
+                        } else if (category.startsWith('sash_')) {
+                            // Sash category drill-down (e.g. help_sash_general).
+                            await showSashHelp(interaction, category.replace('sash_', ''));
                         } else if (category === 'support') {
                             await interaction.reply({
                                 content: 'For support, please join our support server or contact the bot administrators.',
