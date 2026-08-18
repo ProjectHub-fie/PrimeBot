@@ -68,14 +68,27 @@ function roleOptions(roles, selected) {
     return `<option value="">— None —</option>${opts}`;
 }
 
+// Inline SVG icons for the top nav. Kept here so the nav is self-contained
+// (no extra HTTP requests) and stays crisp at any DPI.
+const NAV_ICONS = {
+    servers: '<svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18v4H3zm0 6h18v4H3zm0 6h18v4H3z"/><circle cx="6" cy="7" r="1" fill="currentColor"/><circle cx="6" cy="13" r="1" fill="currentColor"/><circle cx="6" cy="19" r="1" fill="currentColor"/></svg>',
+    overview: '<svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h6V4H4v9zm0 7h6v-5H4v5zm10 0h6V11h-6v9zm0-16v5h6V4h-6z"/></svg>',
+    live: '<svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M5.5 5.5a9 9 0 0 0 0 13M18.5 5.5a9 9 0 0 1 0 13M8.5 8.5a5 5 0 0 0 0 7M15.5 8.5a5 5 0 0 1 0 7"/></svg>',
+    docs: '<svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6H6zm8 1.5V8h4.5L14 3.5zM8 13h8v1.5H8V13zm0 3h8v1.5H8V16z"/></svg>',
+    website: '<svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm6.93 6h-2.95a15.6 15.6 0 0 0-1.38-3.2A8.03 8.03 0 0 1 18.93 8zM12 4.04c.83 1.2 1.48 2.53 1.91 3.96h-3.82c.43-1.43 1.08-2.76 1.91-3.96zM4.26 14a7.96 7.96 0 0 1 0-4h3.38a16.5 16.5 0 0 0-.14 2c0 .68.05 1.35.14 2H4.26zm.81 2h2.95c.32 1.16.78 2.24 1.38 3.2A8.03 8.03 0 0 1 5.07 16zm2.95-8H5.07a8.03 8.03 0 0 1 4.33-3.2A15.6 15.6 0 0 0 8.02 8zM12 19.96c-.83-1.2-1.48-2.53-1.91-3.96h3.82c-.43 1.43-1.08 2.76-1.91 3.96zM14.34 14H9.66a14.6 14.6 0 0 1-.16-2c0-.68.06-1.35.16-2h4.68c.1.65.16 1.32.16 2 0 .68-.06 1.35-.16 2zm.25 5.2c.6-.96 1.06-2.04 1.38-3.2h2.95a8.03 8.03 0 0 1-4.33 3.2zm1.77-5.2c.09-.65.14-1.32.14-2 0-.68-.05-1.35-.14-2h3.38a7.96 7.96 0 0 1 0 4h-3.38z"/></svg>',
+};
+
 // Top navigation. `active` highlights the matching link. Hidden on the login
 // page (pass `login: true`). The back button (←) is hidden on the server
 // selection page (`hideBack: true`) since there's nowhere meaningful to go
 // back to from the dashboard root — it would just dump the user out of the app.
 function navHTML({ active, user, login, hideBack }) {
     if (login) return '';
-    const link = (href, label, key) =>
-        `<a href="${esc(href)}" class="${active === key ? 'active' : ''}">${esc(label)}</a>`;
+    const link = (href, label, key, { icon = '', external = false } = {}) => {
+        const cls = active === key ? 'active' : '';
+        const extra = external ? ' target="_blank" rel="noopener"' : '';
+        return `<a href="${esc(href)}" class="${cls}"${extra}>${icon}${esc(label)}</a>`;
+    };
     let userMenu = '';
     if (user) {
         const url = userAvatarUrl(user);
@@ -100,6 +113,11 @@ function navHTML({ active, user, login, hideBack }) {
           <span class="brand-sub">Dashboard</span>
         </a>
         <nav class="topnav">
+          ${link('/', 'Servers', 'servers', { icon: NAV_ICONS.servers })}
+          ${link('/dashboard', 'Overview', 'overview', { icon: NAV_ICONS.overview })}
+          ${link('/live', 'Live', 'live', { icon: NAV_ICONS.live })}
+          ${link('/docs', 'Docs', 'docs', { icon: NAV_ICONS.docs })}
+          ${link(constants.BOT_WEBSITE, 'Website', 'website', { icon: NAV_ICONS.website, external: true })}
           ${link('/', 'Servers', 'servers')}
           ${link('/dashboard', 'Overview', 'overview')}
           ${link('/stats', 'Stats', 'stats')}

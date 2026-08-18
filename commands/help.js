@@ -131,7 +131,7 @@ async function showMainHelp(interaction) {
                 .setEmoji('⚙️'),
             new ButtonBuilder()
                 .setCustomId('help_prefix')
-                .setLabel('Prefix Commands')
+                .setLabel('Sash')
                 .setStyle(ButtonStyle.Secondary)
                 .setEmoji('💬'),
             new ButtonBuilder()

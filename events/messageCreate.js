@@ -113,7 +113,7 @@ module.exports = {
 
 
       const webButton = new ButtonBuilder()
-          .setLabel("Website ")
+          .setLabel("Website")
           .setStyle(ButtonStyle.Link)
           .setURL(config.website);
       
