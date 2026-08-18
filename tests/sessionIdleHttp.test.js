@@ -46,14 +46,12 @@ function mockDiscord() {
   };
 }
 
-// server/db exports a `pool`; returning one whose connect() throws makes
-// buildSessionStore's `require('../server/db').pool` resolve to an object that
-// isn't used (buildSessionStore only checks for truthiness, then PgSession is
-// constructed). To force MemoryStore we instead make the import throw so the
-// `try { pool = require('../server/db').pool }` catch branch runs AND
-// process.env.DATABASE_URL is unset → returns undefined → MemoryStore.
-function mockBotDbThrow() {
-  throw new Error('mock: no bot db pool — use MemoryStore for sessions');
+// server/seasonDb exports the seasonPool the session store now uses (moved off
+// the main server/db pool). Returning a thrown import makes buildSessionStore's
+// `require('../server/seasonDb').seasonPool` catch branch run, AND with
+// process.env.DATABASE_URL unset → returns undefined → MemoryStore.
+function mockSeasonDbThrow() {
+  throw new Error('mock: no season db pool — use MemoryStore for sessions');
 }
 
 let app;
@@ -72,7 +70,7 @@ function bootApp() {
     if (fromServer && request === './db') return mockDb();
     if (fromServer && request === './discord') return mockDiscord();
     // auth is REAL — do not swap it.
-    if (fromServer && request === '../server/db') throw mockBotDbThrow();
+    if (fromServer && request === '../server/seasonDb') throw mockSeasonDbThrow();
     return origLoad.apply(this, arguments);
   };
   try {

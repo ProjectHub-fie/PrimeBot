@@ -1,7 +1,7 @@
 const { EmbedBuilder } = require('discord.js');
 const config = require('../config');
 const ms = require('ms');
-const { pool } = require('../server/db');
+const { communityPool } = require('../server/communityDb');
 
 class PollManager {
     constructor(client) {
@@ -16,7 +16,7 @@ class PollManager {
     // ─── Internal ─────────────────────────────────────────────────────────────
 
     async _ensureTables() {
-        await pool.query(`
+        await communityPool.query(`
             CREATE TABLE IF NOT EXISTS polls (
                 message_id  VARCHAR(50) PRIMARY KEY,
                 channel_id  VARCHAR(50) NOT NULL,
@@ -29,7 +29,7 @@ class PollManager {
                 ended       BOOLEAN NOT NULL DEFAULT false
             )
         `);
-        await pool.query(`
+        await communityPool.query(`
             CREATE TABLE IF NOT EXISTS poll_options (
                 id           SERIAL PRIMARY KEY,
                 message_id   VARCHAR(50) NOT NULL,
@@ -62,7 +62,7 @@ class PollManager {
             for (const [messageId, poll] of Object.entries(data)) {
                 try {
                     const expiresAt = poll.endTime ? new Date(poll.endTime) : null;
-                    await pool.query(`
+                    await communityPool.query(`
                         INSERT INTO polls (message_id, channel_id, guild_id, question, creator_id, is_active, expires_at, ended)
                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                         ON CONFLICT (message_id) DO NOTHING
@@ -71,7 +71,7 @@ class PollManager {
 
                     if (poll.options && Array.isArray(poll.options)) {
                         for (let i = 0; i < poll.options.length; i++) {
-                            await pool.query(`
+                            await communityPool.query(`
                                 INSERT INTO poll_options (message_id, option_text, option_index, emoji, vote_count)
                                 VALUES ($1, $2, $3, $4, 0)
                                 ON CONFLICT DO NOTHING
@@ -93,7 +93,7 @@ class PollManager {
     async loadPolls() {
         try {
             // Load all active (not ended) polls
-            const pollsRes = await pool.query(`
+            const pollsRes = await communityPool.query(`
                 SELECT message_id, channel_id, guild_id, question, creator_id,
                        EXTRACT(EPOCH FROM expires_at) * 1000 AS end_time_ms, ended
                 FROM polls
@@ -101,7 +101,7 @@ class PollManager {
             `);
 
             for (const row of pollsRes.rows) {
-                const optsRes = await pool.query(
+                const optsRes = await communityPool.query(
                     `SELECT option_text FROM poll_options WHERE message_id = $1 ORDER BY option_index`,
                     [row.message_id]
                 );
@@ -184,14 +184,14 @@ class PollManager {
         }
 
         // Save to DB
-        await pool.query(`
+        await communityPool.query(`
             INSERT INTO polls (message_id, channel_id, guild_id, question, creator_id, is_active, expires_at, ended)
             VALUES ($1, $2, $3, $4, $5, true, to_timestamp($6 / 1000.0), false)
             ON CONFLICT (message_id) DO NOTHING
         `, [message.id, channelId, guildId, question, userId || null, endTime]);
 
         for (let i = 0; i < options.length; i++) {
-            await pool.query(`
+            await communityPool.query(`
                 INSERT INTO poll_options (message_id, option_text, option_index, emoji, vote_count)
                 VALUES ($1, $2, $3, $4, 0)
             `, [message.id, options[i], i, this.getOptionEmoji(i)]);
@@ -292,7 +292,7 @@ class PollManager {
     }
 
     async _markPollEnded(messageId) {
-        await pool.query(
+        await communityPool.query(
             `UPDATE polls SET ended = true, is_active = false WHERE message_id = $1`,
             [messageId]
         ).catch(err => console.error('[POLLS] DB update failed:', err.message));

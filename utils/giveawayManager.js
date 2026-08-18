@@ -1,6 +1,8 @@
 const { EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder } = require('discord.js');
 const { eq, and, lt } = require('drizzle-orm');
 const config = require('../config');
+const { communityDb, communityPool } = require('../server/communityDb');
+const communitySchema = require('../shared/schema');
 
 class GiveawayManager {
     constructor(client) {
@@ -18,12 +20,27 @@ class GiveawayManager {
 
     async initializeDatabase() {
         try {
-            // Wait for client database to be ready
-            if (this.client.db && this.client.schema) {
-                this.db = this.client.db;
-                this.schema = this.client.schema;
+            // Static giveaways live in the dedicated COMMUNITY_DATABASE_URL pool
+            // (server/communityDb.js, falls back to DATABASE_URL) — decoupled from
+            // client.db/client.schema (the main DATABASE_URL pool). The dashboard
+            // reads these same giveaways via the same community pool, so they stay
+            // in sync as long as both deployments point at the same
+            // COMMUNITY_DATABASE_URL (or the same DATABASE_URL fallback).
+            let connected = false;
+            try {
+                const client = await communityPool.connect();
+                await client.query('SELECT NOW()');
+                client.release();
+                connected = true;
+            } catch (err) {
+                console.error('❌ GiveawayManager database connection failed:', err.message);
+            }
+            if (connected) {
+                this.db = communityDb;
+                this.schema = communitySchema;
                 this.dbReady = true;
                 console.log('✅ GiveawayManager database connection established');
+                await this._ensureTables();
                 await this.loadGiveaways();
             } else {
                 // Retry after a short delay if database isn't ready yet
@@ -35,6 +52,48 @@ class GiveawayManager {
             console.log('[GIVEAWAY] Will operate in memory-only mode until database is available');
             // Retry after a longer delay
             setTimeout(() => this.initializeDatabase(), 10000);
+        }
+    }
+
+    /**
+     * Self-create the giveaways tables if they don't exist. Mirrors the
+     * LiveGiveawayManager / pollManager pattern so the feature works on a fresh
+     * COMMUNITY_DATABASE_URL database even if drizzle-kit migrations were
+     * never applied there. (Migrations 0000 create these in the main DB.)
+     */
+    async _ensureTables() {
+        try {
+            await communityPool.query(`
+                CREATE TABLE IF NOT EXISTS giveaways (
+                    id serial PRIMARY KEY NOT NULL,
+                    message_id varchar(50) NOT NULL,
+                    channel_id varchar(50) NOT NULL,
+                    guild_id varchar(50) NOT NULL,
+                    prize text NOT NULL,
+                    description text,
+                    winner_count integer DEFAULT 1,
+                    host_id varchar(50) NOT NULL,
+                    is_active boolean DEFAULT true,
+                    ended boolean DEFAULT false,
+                    created_at timestamp DEFAULT now(),
+                    ends_at timestamp NOT NULL,
+                    CONSTRAINT giveaways_message_id_unique UNIQUE(message_id)
+                );
+                CREATE TABLE IF NOT EXISTS giveaway_participants (
+                    id serial PRIMARY KEY NOT NULL,
+                    giveaway_id varchar(50) NOT NULL,
+                    user_id varchar(50) NOT NULL,
+                    joined_at timestamp DEFAULT now()
+                );
+                CREATE TABLE IF NOT EXISTS giveaway_winners (
+                    id serial PRIMARY KEY NOT NULL,
+                    giveaway_id varchar(50) NOT NULL,
+                    user_id varchar(50) NOT NULL,
+                    selected_at timestamp DEFAULT now()
+                );
+            `);
+        } catch (err) {
+            console.error('[GIVEAWAY] _ensureTables failed:', err.message);
         }
     }
 
