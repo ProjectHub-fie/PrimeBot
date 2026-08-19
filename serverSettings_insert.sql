@@ -1,4 +1,4 @@
--- PostgreSQL INSERT for server settings (restored copy)
+-- PostgreSQL INSERT for server settings
 -- Table structure:
 -- CREATE TABLE server_settings (
 --   guild_id TEXT PRIMARY KEY,
