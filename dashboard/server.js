@@ -1452,6 +1452,14 @@ app.get('/docs', requireAuth, (req, res) => {
     res.type('html').send(pages.docsPage({ clientId: process.env.DISCORD_CLIENT_ID, user: req.user }));
 });
 
+// Public legal pages — linked from the login screen and the footer.
+app.get('/privacy', (req, res) => {
+    res.type('html').send(pages.privacyPage({ user: req.session && req.session.user }));
+});
+app.get('/terms', (req, res) => {
+    res.type('html').send(pages.termsPage({ user: req.session && req.session.user }));
+});
+
 app.get('/stats', requireAuth, (req, res) => {
     res.type('html').send(pages.statsPage({ user: req.user }));
 });

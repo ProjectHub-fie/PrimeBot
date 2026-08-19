@@ -980,6 +980,13 @@ select:focus {
   font-weight: 500;
   letter-spacing: 0.02em;
 }
+.footer-links { margin-left: 10px; }
+.footer-links a { color: var(--text-dim); transition: color var(--transition); }
+.footer-links a:hover { color: var(--accent); }
+
+.login-legal { color: var(--text-faint); font-size: 12px; margin: 14px 0 0; }
+.login-legal a { color: var(--text-dim); transition: color var(--transition); }
+.login-legal a:hover { color: var(--accent); }
 
 .hidden { display: none !important; }
 

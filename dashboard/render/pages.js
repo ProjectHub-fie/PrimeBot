@@ -33,6 +33,7 @@ function loginPage({ errorKey } = {}) {
         <a href="${esc(constants.BOT_INVITE_URL)}" class="btn btn-secondary" target="_blank" rel="noopener">${svgIcon('plus')} Invite PrimeBot</a>
       </div>
       <a href="/docs" class="btn btn-secondary">${svgIcon('book')} Documentation</a>
+      <p class="login-legal">By signing in you agree to the <a href="/terms">Terms of Service</a> and <a href="/privacy">Privacy Policy</a>.</p>
 
       <div class="stats-band" id="stats-band" aria-live="polite">
         <div class="stats-band-head">
@@ -341,6 +342,147 @@ function overviewPage({ guilds = [], clientId, user } = {}) {
     return render({ title: 'PrimeBot · Servers', body, active: 'servers', hideBack: true, scripts: ['/js/servers.js'], user });
 }
 
+// ── Privacy Policy ─────────────────────────────────────────────────────────
+
+const LEGAL_LAST_UPDATED = '2026-08-19';
+
+function privacyPage({ user } = {}) {
+    const body = `
+    <div class="docs">
+      <div class="docs-hero">
+        <div class="docs-hero-icon">${svgIcon('shield')}</div>
+        <h1 class="docs-title">Privacy Policy</h1>
+        <p class="docs-lead">How PrimeBot collects, uses and protects information when you use the Discord bot and this dashboard. Last updated ${LEGAL_LAST_UPDATED}.</p>
+      </div>
+
+      <nav class="docs-toc">
+        <h3>On this page</h3>
+        <ul>
+          <li><a href="#collect">Information we collect</a></li>
+          <li><a href="#use">How we use it</a></li>
+          <li><a href="#storage">Storage &amp; retention</a></li>
+          <li><a href="#sharing">Sharing</a></li>
+          <li><a href="#security">Security</a></li>
+          <li><a href="#rights">Your rights &amp; deletion</a></li>
+          <li><a href="#contact">Contact</a></li>
+        </ul>
+      </nav>
+
+      <section id="collect" class="docs-section">
+        <h2>1 · Information we collect</h2>
+        <p><strong>From Discord OAuth (dashboard sign-in):</strong> your Discord user ID, username and avatar, and the list of servers you manage. We only request the <code>identify</code> and <code>guilds</code> scopes — we never see your Discord password or email.</p>
+        <p><strong>Configuration data:</strong> per-server settings you save in the dashboard or through bot commands — welcome messages, leveling settings, prefixes, auto-reactions, automod rules, ticket panels, reaction roles, event schedules, live polls/giveaways and similar configuration.</p>
+        <p><strong>Bot runtime data:</strong> message metadata strictly needed for features to work (e.g. reaction events for reaction roles, message content scanned in-memory by the automod, XP counters, warnings, ticket transcripts you choose to save), plus node heartbeats used for failover.</p>
+      </section>
+
+      <section id="use" class="docs-section">
+        <h2>2 · How we use it</h2>
+        <ul class="docs-list">
+          <li>To authenticate you and show only the servers you can manage.</li>
+          <li>To store and apply your per-server bot configuration.</li>
+          <li>To operate features you enable (automod scanning, logging to your chosen channels/webhooks, polls, giveaways, leveling, tickets).</li>
+          <li>To keep the service reliable (failover heartbeats, error diagnosis, abuse prevention).</li>
+        </ul>
+        <p>Automod message scanning happens in memory and is not persisted except for warnings, deleted-message log entries you configure, and action logs you opt into.</p>
+      </section>
+
+      <section id="storage" class="docs-section">
+        <h2>3 · Storage &amp; retention</h2>
+        <p>Data is stored in managed PostgreSQL databases. Dashboard sessions expire automatically, including after a period of tab inactivity. Configuration data is kept until you delete it or remove the bot from your server; audit/website logs and warnings may be kept for a reasonable period for moderation continuity.</p>
+      </section>
+
+      <section id="sharing" class="docs-section">
+        <h2>4 · Sharing</h2>
+        <p>We do not sell or rent your data. Data is shared only with the infrastructure providers required to run the service (hosting, database) and with Discord itself through its API. Content you explicitly send to a webhook URL you configured goes to that destination by your choice.</p>
+      </section>
+
+      <section id="security" class="docs-section">
+        <h2>5 · Security</h2>
+        <p>Sessions are stored server-side behind secure cookies, all traffic is over HTTPS, and access to configuration is limited to members with the Manage Server permission. No system is perfectly secure, but we take reasonable steps to protect your data.</p>
+      </section>
+
+      <section id="rights" class="docs-section">
+        <h2>6 · Your rights &amp; deletion</h2>
+        <p>You can revoke dashboard access at any time from <em>Discord → Settings → Authorized Apps</em>. Removing PrimeBot from your server stops further data collection for that server. To request deletion of stored configuration, warnings or logs for a server, contact us in the support server.</p>
+      </section>
+
+      <section id="contact" class="docs-section">
+        <h2>7 · Contact</h2>
+        <p>Questions about this policy? Reach us in our <a href="https://discord.gg/gd7UNSfX86" target="_blank" rel="noopener">support server</a>. Also see the <a href="/terms">Terms of Service</a>.</p>
+      </section>
+    </div>`;
+    return render({ title: 'PrimeBot · Privacy Policy', body, user, login: !user });
+}
+
+// ── Terms of Service ───────────────────────────────────────────────────────
+
+function termsPage({ user } = {}) {
+    const body = `
+    <div class="docs">
+      <div class="docs-hero">
+        <div class="docs-hero-icon">${svgIcon('book')}</div>
+        <h1 class="docs-title">Terms of Service</h1>
+        <p class="docs-lead">The rules for using PrimeBot — the Discord bot and this dashboard. By using PrimeBot you agree to these terms. Last updated ${LEGAL_LAST_UPDATED}.</p>
+      </div>
+
+      <nav class="docs-toc">
+        <h3>On this page</h3>
+        <ul>
+          <li><a href="#acceptance">Acceptance</a></li>
+          <li><a href="#service">The service</a></li>
+          <li><a href="#acceptable-use">Acceptable use</a></li>
+          <li><a href="#content">Your content</a></li>
+          <li><a href="#availability">Availability &amp; changes</a></li>
+          <li><a href="#liability">Liability</a></li>
+          <li><a href="#termination">Termination</a></li>
+        </ul>
+      </nav>
+
+      <section id="acceptance" class="docs-section">
+        <h2>1 · Acceptance</h2>
+        <p>By inviting PrimeBot to a server, using its commands, or signing in to the dashboard, you agree to these Terms of Service and to <a href="/privacy">our Privacy Policy</a>. If you don't agree, remove the bot and stop using the dashboard.</p>
+        <p>You must comply with <a href="https://discord.com/terms" target="_blank" rel="noopener">Discord's Terms of Service</a> and <a href="https://discord.com/guidelines" target="_blank" rel="noopener">Community Guidelines</a> at all times while using PrimeBot.</p>
+      </section>
+
+      <section id="service" class="docs-section">
+        <h2>2 · The service</h2>
+        <p>PrimeBot provides Discord server tooling — welcome messages, leveling, polls, giveaways, tickets, automod, logging, reaction roles, event scheduling and a web dashboard — free of charge. Features marked <strong>BETA</strong> or <strong>SOON</strong> are experimental, may be gated, and may change or be withdrawn at any time.</p>
+      </section>
+
+      <section id="acceptable-use" class="docs-section">
+        <h2>3 · Acceptable use</h2>
+        <ul class="docs-list">
+          <li>Don't use PrimeBot to violate Discord's rules, the law, or other people's rights.</li>
+          <li>Don't abuse, spam, or attempt to disrupt the bot, the dashboard, or other users — including exploiting bugs, flooding commands, or evading automod.</li>
+          <li>Don't use the bot to distribute malware, phishing, hate, or illegal content.</li>
+          <li>Only configure servers you have the Manage Server permission for.</li>
+        </ul>
+      </section>
+
+      <section id="content" class="docs-section">
+        <h2>4 · Your content</h2>
+        <p>You keep ownership of the content you configure (messages, embeds, images, webhook URLs). You grant us a limited license to store and transmit that content solely to operate the features you enabled. You are responsible for ensuring you have the rights to any content you configure.</p>
+      </section>
+
+      <section id="availability" class="docs-section">
+        <h2>5 · Availability &amp; changes</h2>
+        <p>PrimeBot is provided "as is" and "as available". We aim for high availability via our failover system but do not guarantee uninterrupted service. We may add, change or remove features — including free features — at any time, with notice in the support server where reasonable.</p>
+      </section>
+
+      <section id="liability" class="docs-section">
+        <h2>6 · Liability</h2>
+        <p>To the maximum extent permitted by law, PrimeBot and its operators are not liable for any indirect, incidental or consequential damages, data loss, or moderation outcomes (including automod actions taken under rules you configured). Because the service is free, any aggregate liability is limited to the amount you paid for it — zero.</p>
+      </section>
+
+      <section id="termination" class="docs-section">
+        <h2>7 · Termination</h2>
+        <p>You can stop using PrimeBot at any time by removing it from your servers and revoking dashboard access. We may suspend or block access for servers or users that violate these terms. Sections that should reasonably survive (liability, acceptable use) survive termination.</p>
+        <p>Questions? Contact us in the <a href="https://discord.gg/gd7UNSfX86" target="_blank" rel="noopener">support server</a>.</p>
+      </section>
+    </div>`;
+    return render({ title: 'PrimeBot · Terms of Service', body, user, login: !user });
+}
+
 // ── 404 ────────────────────────────────────────────────────────────────────
 //
 // Catch-all for any unknown path. On Vercel every request is routed to the
@@ -368,4 +510,4 @@ function notFoundPage({ user } = {}) {
     return render({ title: 'PrimeBot · 404 Not found', body, user });
 }
 
-module.exports = { loginPage, docsPage, statsPage, livePollsPage, liveGiveawaysPage, overviewPage, notFoundPage, guildCardHTML };
+module.exports = { loginPage, docsPage, statsPage, livePollsPage, liveGiveawaysPage, overviewPage, notFoundPage, guildCardHTML, privacyPage, termsPage };
