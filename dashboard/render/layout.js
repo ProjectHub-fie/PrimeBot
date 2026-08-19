@@ -118,10 +118,7 @@ function navHTML({ active, user, login, hideBack }) {
           ${link('/live', 'Live', 'live', { icon: NAV_ICONS.live })}
           ${link('/docs', 'Docs', 'docs', { icon: NAV_ICONS.docs })}
           ${link(constants.BOT_WEBSITE, 'Website', 'website', { icon: NAV_ICONS.website, external: true })}
-          ${link('/', 'Servers', 'servers')}
-          ${link('/dashboard', 'Overview', 'overview')}
           ${link('/stats', 'Stats', 'stats')}
-          ${link('/docs', 'Docs', 'docs')}
           ${userMenu}
         </nav>
       </div>

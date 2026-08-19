@@ -19,8 +19,34 @@ class BirthdayManager {
         });
     }
 
+    // Self-create the birthday tables if they don't exist (mirrors the
+    // countingManager pattern) so the feature works even if migration 0001 was
+    // never applied to the database. The unique index on (guild_id, user_id) is
+    // required by setBirthday's ON CONFLICT clause.
+    async _ensureTables() {
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS birthdays_guilds (
+                guild_id varchar(50) PRIMARY KEY,
+                announcement_channel varchar(50),
+                role_id varchar(50)
+            );
+            CREATE TABLE IF NOT EXISTS birthdays (
+                id serial PRIMARY KEY,
+                guild_id varchar(50) NOT NULL,
+                user_id varchar(50) NOT NULL,
+                month integer NOT NULL,
+                day integer NOT NULL,
+                year integer,
+                last_celebrated varchar(50),
+                CONSTRAINT fk_birthdays_guild FOREIGN KEY (guild_id) REFERENCES birthdays_guilds(guild_id) ON DELETE CASCADE
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS birthdays_guild_user_uniq ON birthdays (guild_id, user_id);
+        `).catch(err => console.error('[BIRTHDAYS] ensure tables failed:', err.message));
+    }
+
     async loadBirthdays() {
         try {
+            await this._ensureTables();
             this.birthdays.clear();
 
             // Load guild configs
