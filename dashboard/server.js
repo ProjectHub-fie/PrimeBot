@@ -105,10 +105,12 @@ function buildSessionStore() {
             // exist in the shared DB with a different schema (e.g. another app's
             // auth table), which would break connect-pg-simple.
             tableName: 'primebot_dashboard_session',
-            createTableIfNotExists: true,
+            // connect-pg-simple honors `createTableIfMissing` (the
+            // `createTableIfNotExists` name is silently ignored).
+            createTableIfMissing: true,
             pruneSessionInterval: false,
             // Surface connection failures instead of hanging on cold starts.
-            error: (err) => console.error('[SESSION] PgSession store error:', err.message),
+            errorLog: (err) => console.error('[SESSION] PgSession store error:', err && err.message ? err.message : err),
         });
     }
     // Local dev fallback (single process).
