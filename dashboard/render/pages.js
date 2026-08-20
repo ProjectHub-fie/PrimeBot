@@ -4,6 +4,7 @@
  */
 
 const constants = require('../constants');
+const commandDocs = require('../commandDocs');
 const { esc, guildIconHTML, render, svgIcon } = require('./layout');
 const { LOG_EVENTS } = constants;
 
@@ -83,128 +84,77 @@ function loginPage({ errorKey } = {}) {
 
 // ── Docs ───────────────────────────────────────────────────────────────────
 
+function docCommandCard(prefix, cmd) {
+    const chips = [];
+    if (cmd.permission) chips.push(`<span class="doc-chip doc-chip-perm">${esc(cmd.permission)}</span>`);
+    if (cmd.note) chips.push(`<span class="doc-chip doc-chip-note">${esc(cmd.note)}</span>`);
+    const aliases = cmd.aliases.slice(1);
+    const aliasHTML = aliases.length
+        ? `<div class="doc-cmd-aliases">Also: ${aliases.map((a) => `<code>${esc(prefix)}${esc(a)}</code>`).join(' ')}</div>`
+        : '';
+    const usageHTML = cmd.usage.length
+        ? `<div class="doc-cmd-usage">${cmd.usage.map((u) => `<code>${esc(prefix)}${esc(u)}</code>`).join('')}</div>`
+        : '';
+    const search = [
+        cmd.name, ...cmd.aliases, cmd.category, cmd.description,
+        cmd.permission || '', cmd.note || '', ...cmd.usage.map((u) => `${prefix}${u}`), ...cmd.usage,
+    ].join(' ').toLowerCase();
+    return `<article class="doc-cmd" id="cmd-${esc(cmd.name)}" data-category="${esc(cmd.category.toLowerCase())}" data-search="${esc(search)}">
+      <div class="doc-cmd-head">
+        <span class="doc-cmd-icon">${svgIcon(cmd.icon)}</span>
+        <h3 class="doc-cmd-name"><code>${esc(prefix)}${esc(cmd.name)}</code></h3>
+        <span class="doc-cmd-chips">${chips.join('')}</span>
+      </div>
+      <p class="doc-cmd-desc">${esc(cmd.description)}</p>
+      ${aliasHTML}
+      ${usageHTML}
+    </article>`;
+}
+
 function docsPage({ clientId, user } = {}) {
-    const inviteUrl = clientId
-        ? `https://discord.com/oauth2/authorize?client_id=${clientId}&permissions=8&integration_type=0&scope=bot%20applications.commands`
-        : 'https://discord.com/oauth2/authorize?client_id=YOUR_CLIENT_ID&permissions=8&integration_type=0&scope=bot%20applications.commands';
+    const { commands, categories } = commandDocs.buildCommandDocs();
+    const prefix = '$'; // default server prefix for usage examples
+
+    const sections = categories
+        .map((cat) => {
+            const cmds = commands.filter((c) => c.category === cat.name);
+            if (!cmds.length) return '';
+            return `<section class="doc-cat" data-category="${esc(cat.name.toLowerCase())}">
+      <div class="doc-cat-head">
+        <span class="doc-cat-icon">${svgIcon(cat.icon)}</span>
+        <h2>${esc(cat.name)}</h2>
+        <span class="doc-cat-count">${cmds.length} command${cmds.length === 1 ? '' : 's'}</span>
+      </div>
+      <div class="doc-cmd-grid">
+        ${cmds.map((cmd) => docCommandCard(prefix, cmd)).join('\n        ')}
+      </div>
+    </section>`;
+        })
+        .filter(Boolean)
+        .join('\n      ');
+
     const body = `
-    <div class="docs">
+    <div class="docs docs-commands-layout">
       <div class="docs-hero">
         <div class="docs-hero-icon">${svgIcon('book')}</div>
-        <h1 class="docs-title">PrimeBot Documentation</h1>
-        <p class="docs-lead">Everything you need to set up, configure and manage PrimeBot for your Discord server — from inviting the bot to tuning welcome messages, leveling and auto-reactions.</p>
+        <h1 class="docs-title">Command documentation</h1>
+        <p class="docs-lead">Every prefix command PrimeBot understands, auto-generated from the bot's command handler. Commands run with your server's prefix (default <code>$</code>) — most also exist as slash commands.</p>
       </div>
 
-      <nav class="docs-toc">
-        <h3>On this page</h3>
-        <ul>
-          <li><a href="#getting-started">Getting started</a></li>
-          <li><a href="#login">Logging in</a></li>
-          <li><a href="#servers">Your servers</a></li>
-          <li><a href="#welcome">Welcome system</a></li>
-          <li><a href="#leveling">Leveling &amp; XP</a></li>
-          <li><a href="#prefix">Command prefix</a></li>
-          <li><a href="#reactions">Auto-reactions</a></li>
-          <li><a href="#broadcast">Broadcasts</a></li>
-          <li><a href="#commands">Command reference</a></li>
-          <li><a href="#faq">FAQ &amp; troubleshooting</a></li>
-        </ul>
-      </nav>
+      <div class="docs-search-wrap">
+        <span class="docs-search-icon">${svgIcon('search')}</span>
+        <input id="docs-search" class="docs-search" type="search" placeholder="Search commands, categories, permissions…" autocomplete="off" aria-label="Search commands" />
+      </div>
+      <div class="docs-meta-row">
+        <span id="docs-count">${commands.length} commands</span>
+        <span class="docs-meta-hint">Press <kbd>/</kbd> to search</span>
+      </div>
 
-      <section id="getting-started" class="docs-section">
-        <h2>1 · Getting started</h2>
-        <p>PrimeBot is a community engagement bot with welcome messages, an XP-based leveling system, polls, giveaways, ticketing, moderation and more. To use it in your server you first need to invite it.</p>
-        <ol class="docs-steps">
-          <li>
-            <strong>Invite PrimeBot to your server.</strong><br />
-            Use the official invite link with administrator permissions so all features work out of the box:
-            <div class="docs-code-row"><code class="docs-code">${esc(inviteUrl)}</code><a class="btn btn-primary btn-sm" href="${esc(inviteUrl)}" target="_blank" rel="noopener">Open invite</a></div>
-          </li>
-          <li><strong>Make sure you have permissions.</strong> You need the <em>Manage Server</em> permission (or be the server owner) to configure PrimeBot through this dashboard.</li>
-          <li><strong>Log in below.</strong> The dashboard uses Discord OAuth2, so you sign in with the same Discord account you use to manage your server.</li>
-        </ol>
-      </section>
+      ${sections}
 
-      <section id="login" class="docs-section">
-        <h2>2 · Logging in</h2>
-        <p>Click <strong>Login with Discord</strong> on the home screen. You'll be sent to Discord to authorize the dashboard to read your username and the list of servers you manage. We never see your password, and you can revoke access at any time from <em>Discord → Settings → Authorized Apps</em>.</p>
-        <div class="docs-callout docs-callout-info">
-          <strong>Privacy:</strong> The dashboard only requests the <code>identify</code> and <code>guilds</code> scopes. Your access token is stored in a server-side session tied to a secure cookie — it is never exposed to the browser or shared with third parties.
-        </div>
-      </section>
-
-      <section id="servers" class="docs-section">
-        <h2>3 · Your servers</h2>
-        <p>After logging in you'll land on the <strong>Servers</strong> overview. It lists every server where you have <em>Manage Server</em> rights, and shows whether PrimeBot is present. Click any server with the green “PrimeBot is here” badge to open its configuration.</p>
-        <p>Servers where the bot isn't a member are shown separately with an <strong>Invite</strong> button — use it to add PrimeBot, then refresh the list.</p>
-      </section>
-
-      <section id="welcome" class="docs-section">
-        <h2>4 · Welcome system</h2>
-        <p>Greet new members with a custom message, an auto-generated banner, and an optional DM. Configure:</p>
-        <ul class="docs-list">
-          <li><strong>Enabled</strong> — turn the whole welcome system on or off.</li>
-          <li><strong>Channel</strong> — where welcome messages are posted (leave empty to DM only).</li>
-          <li><strong>Message</strong> — supports placeholders such as <code>{user}</code> (mention) and <code>{server}</code> (server name).</li>
-          <li><strong>Color</strong> — the accent color of the welcome card, as a hex code (e.g. <code>#5865F2</code>).</li>
-          <li><strong>Banner URL</strong> — an optional image shown at the top of the card.</li>
-          <li><strong>DM enabled + DM message</strong> — send a private welcome message to the new member.</li>
-          <li><strong>Member count / join date / account age</strong> — toggle extra stats on the welcome card.</li>
-        </ul>
-      </section>
-
-      <section id="leveling" class="docs-section">
-        <h2>5 · Leveling &amp; XP</h2>
-        <p>Members earn XP by chatting. Tune the system per server:</p>
-        <ul class="docs-list">
-          <li><strong>Enabled</strong> — turn leveling on or off.</li>
-          <li><strong>XP multiplier</strong> — scales how fast members earn XP (0–5). <code>1.0</code> is default.</li>
-          <li><strong>XP cooldown</strong> — minimum seconds between XP awards (5–300s) to prevent spam.</li>
-          <li><strong>Level-up channel</strong> — where level-up announcements are posted (leave empty to disable announcements).</li>
-        </ul>
-      </section>
-
-      <section id="prefix" class="docs-section">
-        <h2>6 · Command prefix</h2>
-        <p>PrimeBot responds to both slash commands and a text prefix. Set a per-server prefix here (the default is <code>$</code>). Prefixes can be 1–5 characters and must not contain spaces.</p>
-      </section>
-
-      <section id="reactions" class="docs-section">
-        <h2>7 · Auto-reactions</h2>
-        <p>Have PrimeBot automatically react to messages that match keywords. Enable the feature, then add keyword → emoji pairs. When a message contains a matching keyword, the bot adds the configured emoji reaction.</p>
-      </section>
-
-      <section id="broadcast" class="docs-section">
-        <h2>8 · Broadcasts</h2>
-        <p>Opt a server into receiving bot-wide broadcast announcements. Toggle <strong>Receive broadcasts</strong> and pick a <strong>broadcast channel</strong>. Messages sent by the bot owner are delivered to every opted-in server's chosen channel.</p>
-      </section>
-
-      <section id="commands" class="docs-section">
-        <h2>9 · Command reference</h2>
-        <p>PrimeBot ships with 40+ commands. Here are the main categories. Slash commands use <code>/</code>; prefix commands use your server's prefix (default <code>$</code>).</p>
-        <div class="docs-cmd-grid">
-          <div class="docs-cmd-card">
-            <h4>${svgIcon('shield')} Moderation</h4>
-            <ul><li><code>ban</code> / <code>kick</code> — remove members</li><li><code>purge</code> — bulk-delete messages</li><li><code>lock</code> / <code>unlock</code> — lock channels</li><li><code>nuke</code> — clear &amp; recreate a channel</li><li><code>hide</code> / <code>unhide</code> — hide channels</li><li><code>move</code> — move members</li><li><code>role</code> — assign roles</li></ul>
-          </div>
-          <div class="docs-cmd-card">
-            <h4>${svgIcon('star')} Engagement</h4>
-            <ul><li><code>poll</code> / <code>endpoll</code> — simple polls</li><li><code>lpoll</code> / <code>endgame</code> — live polls</li><li><code>giveaway</code> / <code>reroll</code> / <code>end</code> — giveaways</li><li><code>counting</code> — counting game</li><li><code>tictactoe</code> — play tic-tac-toe</li><li><code>truthdare</code> — truth or dare</li></ul>
-          </div>
-          <div class="docs-cmd-card">
-            <h4>${svgIcon('ticket')} Tickets &amp; Support</h4>
-            <ul><li><code>createticket</code> / <code>ticket</code> — open tickets</li><li><code>tickethistory</code> — view past tickets</li></ul>
-          </div>
-        </div>
-      </section>
-
-      <section id="faq" class="docs-section">
-        <h2>10 · FAQ &amp; troubleshooting</h2>
-        <p><strong>Changes don't take effect?</strong> The bot caches settings in memory and re-reads the database roughly every 30 seconds, so allow up to half a minute for dashboard changes to reach the bot (provided the bot and dashboard use the same database).</p>
-        <p><strong>Can't see your server?</strong> Ensure you have <em>Manage Server</em> permission and that PrimeBot has been added to it.</p>
-      </section>
+      <div id="docs-empty" class="docs-empty doc-hidden">No commands match your search.</div>
     </div>`;
-    return render({ title: 'PrimeBot Documentation', body, active: 'docs', user });
+    return render({ title: 'PrimeBot Command Documentation', body, active: 'docs', user, scripts: ['/js/docs.js'] });
 }
 
 // ── Live ────────────────────────────────────────────────────────────────────

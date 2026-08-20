@@ -401,7 +401,7 @@ class AutomodManager {
             for (const rule of settings.rules) {
                 const match = this.matchRule(rule, ctx);
                 if (match) {
-                    const applied = await this._enforce(message, rule, match.reason, settings);
+                    const applied = await this._enforce(message, rule, match.reason, settings, null);
                     return { rule: rule.type, actions: applied, reason: match.reason };
                 }
             }
@@ -416,9 +416,11 @@ class AutomodManager {
      * Enforce a rule's actions (multi-action) against a message. `delete` is
      * always applied first (so the offending content is removed before further
      * action), then each remaining action runs in order. Returns the list of
-     * action keys actually applied.
+     * action keys actually applied. `invoker` is the moderator Message or
+     * CommandInteraction responsible for the action (null for fully automatic
+     * rule triggers, where the bot itself acts).
      */
-    async _enforce(message, rule, reason, settings) {
+    async _enforce(message, rule, reason, settings, invoker = null) {
         const meta = metaFor(rule.type);
         const actions = Array.isArray(rule.actions) && rule.actions.length
             ? rule.actions
@@ -437,6 +439,7 @@ class AutomodManager {
             guild: message.guild,
             member: message.member,
             author: message.author,
+            invoker,
             reason,
             settings,
             ruleType: rule.type,
@@ -458,6 +461,7 @@ class AutomodManager {
             { name: 'Channel', value: `<#${message.channelId}>`, inline: true },
             { name: 'Rule', value: `${meta.icon} ${meta.label} (\`${rule.type}\`)`, inline: true },
             { name: 'Actions', value: actionLabels, inline: true },
+            { name: 'Responsible moderator', value: this._moderatorLabel(invoker), inline: true },
             { name: 'Reason', value: reason, inline: false },
         ];
         if (message.content) {
@@ -596,6 +600,17 @@ class AutomodManager {
         return invoker?.author?.id || invoker?.user?.id || null;
     }
 
+    // Human-readable "responsible moderator" line for automod embeds. Accepts a
+    // prefix Message (`.author`) or a slash CommandInteraction (`.user`). When
+    // the action was fully automatic (no human invoker) the bot itself is
+    // credited as the moderator.
+    _moderatorLabel(invoker) {
+        const user = invoker?.author || invoker?.user || null;
+        if (!user) return 'PrimeBot Automod (automatic)';
+        const id = user.id ? ` (<@${user.id}>)` : '';
+        return `${user.tag || user.username || 'unknown'}${id}`;
+    }
+
     async warnMember(invoker, member, reason) {
         const count = await this.addWarning(invoker.guild.id, member.id, {
             moderatorId: this._moderatorId(invoker), reason,
@@ -604,7 +619,7 @@ class AutomodManager {
         let escalated = false;
         if (count >= settings.warnThreshold) {
             await this._applyEscalation({
-                guild: invoker.guild, member, author: member.user, reason, settings,
+                guild: invoker.guild, member, author: member.user, invoker, reason, settings,
             }, settings, count);
             escalated = true;
         }

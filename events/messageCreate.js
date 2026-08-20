@@ -24,6 +24,7 @@ function tcpPing(host, port = 443) {
 }
 const { pool } = require("../server/db");
 const betaManager = require("../utils/betaManager");
+const npEmbed = require("../utils/npEmbed");
 const { isBetaFeature } = require("../utils/betaFeatureMatcher");
 
 /**
@@ -3261,20 +3262,7 @@ module.exports = {
                     
                     if (args.length === 0) {
                         // Show usage info
-                        const npHelpEmbed = new EmbedBuilder()
-                            .setColor(config.colors.primary)
-                            .setTitle("🪄 No-Prefix Mode")
-                            .setDescription("Developer-only no-prefix mode management. Add/remove a target user and let them use commands without the prefix.")
-                            .addFields(
-                                { name: `${prefix}np add @user [minutes]`, value: "Add/enable a selected user for no-prefix command access. Omit minutes for a lifetime grant." },
-                                { name: `${prefix}np remove @user`, value: "Remove/disable a selected user's no-prefix command access" },
-                                { name: `${prefix}np status @user`, value: "Check a user's current no-prefix status" },
-                                { name: `${prefix}np enable [minutes]`, value: "Enable no-prefix mode for yourself (omit minutes for lifetime)" },
-                                { name: `${prefix}np disable`, value: "Disable no-prefix mode for yourself (legacy alias)" }
-                            )
-                            .setFooter({ text: "Developer command • Main database-backed no-prefix mode", iconURL: client.user.displayAvatarURL() });
-                            
-                        return message.reply({ embeds: [npHelpEmbed] });
+                        return message.reply({ embeds: [npEmbed.helpEmbed(prefix)] });
                     }
                     
                     const npSubCommand = args[0].toLowerCase();
@@ -3301,23 +3289,12 @@ module.exports = {
                             );
 
                             if (result.success) {
-                                const enableEmbed = new EmbedBuilder()
-                                    .setColor(config.colors.success)
-                                    .setTitle("🪄 No-Prefix Mode Added")
-                                    .setDescription(`No-prefix command access has been added for ${target}.`)
-                                    .addFields(
-                                        result.lifetime
-                                            ? { name: "Duration", value: "Lifetime (never expires)" }
-                                            : { name: "Duration", value: `${duration} minute${duration !== 1 ? 's' : ''}` },
-                                        result.lifetime
-                                            ? { name: "Expires", value: "Never" }
-                                            : { name: "Expires", value: `<t:${Math.floor(result.expiresAt / 1000)}:R>` },
-                                        { name: "How to use", value: "The selected user can now type command names without the prefix." }
-                                    )
-                                    .setFooter({ text: "Developer command • Main database", iconURL: client.user.displayAvatarURL() })
-                                    .setTimestamp();
-
-                                return message.reply({ embeds: [enableEmbed] });
+                                return message.reply({ embeds: [npEmbed.grantEmbed({
+                                    targetUser: target,
+                                    minutes: duration,
+                                    lifetime: !!result.lifetime,
+                                    expiresAt: result.expiresAt,
+                                })] });
                             } else {
                                 return message.reply(result.message || "Failed to enable no-prefix mode.");
                             }
@@ -3333,16 +3310,9 @@ module.exports = {
                             );
                             
                             if (disabled) {
-                                const disableEmbed = new EmbedBuilder()
-                                    .setColor(config.colors.error)
-                                    .setTitle("🪄 No-Prefix Mode Removed")
-                                    .setDescription(`No-prefix command access has been removed for ${target}.`)
-                                    .setFooter({ text: `Prefix: ${prefix}`, iconURL: client.user.displayAvatarURL() })
-                                    .setTimestamp();
-                                    
-                                return message.reply({ embeds: [disableEmbed] });
+                                return message.reply({ embeds: [npEmbed.revokeEmbed({ targetUser: target, removed: true })] });
                             } else {
-                                return message.reply("That user does not currently have no-prefix mode enabled.");
+                                return message.reply({ embeds: [npEmbed.revokeEmbed({ targetUser: target, removed: false })] });
                             }
                         }
                             
@@ -3353,26 +3323,12 @@ module.exports = {
                                 message.guild.id,
                                 target.id
                             );
+                            const ServerSettingsManager = client.serverSettingsManager.constructor;
+                            const npExpires = expirationTime === ServerSettingsManager.NO_PREFIX_LIFETIME
+                                ? 'lifetime'
+                                : expirationTime;
 
-                            if (expirationTime) {
-                                const ServerSettingsManager = client.serverSettingsManager.constructor;
-                                const isLifetime = expirationTime === ServerSettingsManager.NO_PREFIX_LIFETIME;
-                                const statusEmbed = new EmbedBuilder()
-                                    .setColor(config.colors.primary)
-                                    .setTitle("🪄 No-Prefix Mode Status")
-                                    .setDescription(`${target} has no-prefix mode enabled.`)
-                                    .addFields(
-                                        isLifetime
-                                            ? { name: "Duration", value: "Lifetime (never expires)" }
-                                            : { name: "Expires", value: `<t:${Math.floor(expirationTime / 1000)}:R>` }
-                                    )
-                                    .setFooter({ text: "Developer command • Main database", iconURL: client.user.displayAvatarURL() })
-                                    .setTimestamp();
-
-                                return message.reply({ embeds: [statusEmbed] });
-                            } else {
-                                return message.reply(`${target} does not have no-prefix mode enabled.`);
-                            }
+                            return message.reply({ embeds: [npEmbed.statusEmbed({ targetUser: target, expiresAt: npExpires })] });
                         }
 
                         case "user": {
@@ -3399,22 +3355,12 @@ module.exports = {
                             );
 
                             if (userResult.success) {
-                                const userEnableEmbed = new EmbedBuilder()
-                                    .setColor(config.colors.success)
-                                    .setTitle("🪄 No-Prefix Mode Enabled")
-                                    .setDescription(`No-prefix mode has been enabled for ${targetUser}.`)
-                                    .addFields(
-                                        userResult.lifetime
-                                            ? { name: "Duration", value: "Lifetime (never expires)" }
-                                            : { name: "Duration", value: `${userDuration} minute${userDuration !== 1 ? 's' : ''}` },
-                                        userResult.lifetime
-                                            ? { name: "Expires", value: "Never" }
-                                            : { name: "Expires", value: `<t:${Math.floor(userResult.expiresAt / 1000)}:R>` }
-                                    )
-                                    .setFooter({ text: `Enabled by ${message.author.tag}`, iconURL: message.author.displayAvatarURL() })
-                                    .setTimestamp();
-
-                                return message.reply({ embeds: [userEnableEmbed] });
+                                return message.reply({ embeds: [npEmbed.grantEmbed({
+                                    targetUser,
+                                    minutes: userDuration,
+                                    lifetime: !!userResult.lifetime,
+                                    expiresAt: userResult.expiresAt,
+                                })] });
                             } else {
                                 return message.reply(userResult.message || "Failed to enable no-prefix mode for the user.");
                             }
