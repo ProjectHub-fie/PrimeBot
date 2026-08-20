@@ -180,7 +180,7 @@ function render(opts) {
     ${body}
   </main>
   <footer class="footer">
-    <span>PrimeBot <span id="bot-version">${esc(version)}</span> · Control panel for server admins</span>
+    <span>PrimeBot <span id="bot-version">${esc(version)}</span> · © <a href="https://projecthub-me.vercel.app" target="_blank" rel="noopener">Projecthub</a></span>
     <span class="footer-links"><a href="/privacy">Privacy Policy</a> · <a href="/terms">Terms of Service</a></span>
   </footer>
   <div id="toast" class="toast toast-hidden"></div>

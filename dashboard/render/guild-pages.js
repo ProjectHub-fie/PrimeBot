@@ -283,7 +283,7 @@ function badgesPage({ guild, user }) {
 // ── Prefix / General ────────────────────────────────────────────────────────
 //
 // The "General" tab (top of the server features menu) hosts the command prefix
-// editor and the website log table side by side. The website log is an
+// editor and the audit log table side by side. The audit log is an
 // audit trail of dashboard admin actions for this server (sl no, admin
 // username, content, time) fetched from /api/guilds/:id/logs/website.
 
@@ -302,7 +302,7 @@ function prefixPage({ guild, user }) {
       </div>
 
       <div class="card">
-        <div class="card-title"><span><span class="icon">${svgIcon('receipt')}</span> Website log</span></div>
+        <div class="card-title"><span><span class="icon">${svgIcon('receipt')}</span> Audit log</span></div>
         <p class="card-desc">Dashboard actions performed for this server.</p>
         <div class="wlog-wrap">
           <table class="wlog-table">

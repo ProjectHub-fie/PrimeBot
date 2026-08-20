@@ -992,7 +992,10 @@ select:focus {
 
 /* ── Documentation page ──────────────────────────────────────────────────── */
 .docs { max-width: 900px; margin: 0 auto; padding: 8px 0 60px; }
-.docs-hero { text-align: center; padding: 44px 16px 30px; }
+.docs-hero { text-align: center; padding: 44px 16px 30px; position: relative; }
+/* In-body back button rendered on public (logged-out) docs renders — the no-nav
+   login shell hides the top nav's back button on those pages. */
+.docs-hero .docs-back { position: absolute; left: 16px; top: 44px; }
 .docs-hero-icon { color: var(--accent-strong); display: flex; justify-content: center; margin-bottom: 12px; }
 .docs-hero-icon .ico { width: 52px; height: 52px; }
 .docs-title { font-size: 36px; font-weight: 700; margin: 0 0 12px; letter-spacing: -0.03em; line-height: 1.1; }
