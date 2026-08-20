@@ -181,6 +181,7 @@ function render(opts) {
   </main>
   <footer class="footer">
     <span>PrimeBot <span id="bot-version">${esc(version)}</span> · Control panel for server admins</span>
+    <span class="footer-links"><a href="/privacy">Privacy Policy</a> · <a href="/terms">Terms of Service</a></span>
   </footer>
   <div id="toast" class="toast toast-hidden"></div>
   <script src="/js/icons.js"></script>

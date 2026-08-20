@@ -135,7 +135,6 @@ async function showMainHelp(interaction) {
                 .setStyle(ButtonStyle.Secondary)
                 .setEmoji('💬'),
             new ButtonBuilder()
-                .setCustomId('help_support')
                 .setLabel('Support')
                 .setStyle(ButtonStyle.Link)
                 .setURL(config.supportServer || 'https://discord.gg/primebot')
