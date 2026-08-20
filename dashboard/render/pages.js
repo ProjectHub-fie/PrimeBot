@@ -154,7 +154,9 @@ function docsPage({ clientId, user } = {}) {
 
       <div id="docs-empty" class="docs-empty doc-hidden">No commands match your search.</div>
     </div>`;
-    return render({ title: 'PrimeBot Command Documentation', body, active: 'docs', user, scripts: ['/js/docs.js'] });
+    // login: !user renders the no-nav shell for logged-out visitors (docs is
+    // public — linked from the login screen), matching the legal pages.
+    return render({ title: 'PrimeBot Command Documentation', body, active: 'docs', user, login: !user, scripts: ['/js/docs.js'] });
 }
 
 // ── Live ────────────────────────────────────────────────────────────────────
