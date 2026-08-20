@@ -1448,8 +1448,11 @@ app.get(['/', '/dashboard'], requireAuth, async (req, res) => {
     }
 });
 
-app.get('/docs', requireAuth, (req, res) => {
-    res.type('html').send(pages.docsPage({ clientId: process.env.DISCORD_CLIENT_ID, user: req.user }));
+// Public docs page — the login screen links straight to it, so it must not
+// require a session (requireAuth would bounce logged-out visitors back to
+// /login, making the docs appear broken). Same pattern as the legal pages.
+app.get('/docs', (req, res) => {
+    res.type('html').send(pages.docsPage({ clientId: process.env.DISCORD_CLIENT_ID, user: req.session && req.session.user }));
 });
 
 // Public legal pages — linked from the login screen and the footer.
