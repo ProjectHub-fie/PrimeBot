@@ -133,9 +133,15 @@ function docsPage({ clientId, user } = {}) {
         .filter(Boolean)
         .join('\n      ');
 
+    // Public (logged-out) visitors render the no-nav login shell, so the top
+    // nav's back button never appears (login: !user below). Render an in-body
+    // back button for them; logged-in users already get the nav's back button.
+    const backBtn = user ? '' : `<a href="javascript:history.back()" class="back-btn docs-back" aria-label="Go back to previous page" title="Go back to previous page">${svgIcon('arrowLeft', 'back-symbol')}</a>`;
+
     const body = `
     <div class="docs docs-commands-layout">
       <div class="docs-hero">
+        ${backBtn}
         <div class="docs-hero-icon">${svgIcon('book')}</div>
         <h1 class="docs-title">Command documentation</h1>
         <p class="docs-lead">Every prefix command PrimeBot understands, auto-generated from the bot's command handler. Commands run with your server's prefix (default <code>$</code>) — most also exist as slash commands.</p>
