@@ -1,5 +1,6 @@
-const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const { SlashCommandBuilder } = require('discord.js');
 const config = require('../config');
+const npEmbed = require('../utils/npEmbed');
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -59,83 +60,46 @@ module.exports = {
                 });
             }
 
-            const embed = new EmbedBuilder()
-                .setColor(config.colors.primary)
-                .setTimestamp();
+            const LIFETIME = serverSettingsManager.constructor.NO_PREFIX_LIFETIME;
 
             if (action === 'add' || action === 'enable') {
                 const result = serverSettingsManager.enableNoPrefixMode(guildId, targetUser.id, minutes);
 
                 if (!result.success) {
                     return interaction.reply({
-                        embeds: [
-                            new EmbedBuilder()
-                                .setColor(config.colors.error)
-                                .setTitle('❌ No-Prefix Error')
-                                .setDescription(result.message || 'Could not enable no-prefix mode.')
-                                .setTimestamp()
-                        ],
+                        embeds: [npEmbed.errorEmbed(result.message)],
                         ephemeral: true
                     });
                 }
 
-                embed
-                    .setColor(config.colors.success)
-                    .setTitle('🪄 No-Prefix Mode Enabled')
-                    .setDescription(`No-prefix mode is now enabled for ${targetUser}.`)
-                    .addFields(
-                        result.lifetime
-                            ? { name: 'Duration', value: 'Lifetime (never expires)', inline: true }
-                            : { name: 'Duration', value: `${minutes} minute${minutes !== 1 ? 's' : ''}`, inline: true },
-                        result.lifetime
-                            ? { name: 'Expires', value: 'Never', inline: true }
-                            : { name: 'Expires', value: `<t:${Math.floor(result.expiresAt / 1000)}:R>`, inline: true }
-                    )
-                    .setFooter({ text: `Developer command • ${config.version}` });
-
-                return interaction.reply({ embeds: [embed], ephemeral: true });
+                return interaction.reply({
+                    embeds: [npEmbed.grantEmbed({
+                        targetUser,
+                        minutes,
+                        lifetime: !!result.lifetime,
+                        expiresAt: result.expiresAt,
+                    })],
+                    ephemeral: true
+                });
             }
 
             if (action === 'remove' || action === 'disable') {
                 const disabled = serverSettingsManager.disableNoPrefixMode(guildId, targetUser.id);
 
-                embed
-                    .setColor(disabled ? config.colors.success : config.colors.warning)
-                    .setTitle(disabled ? '🪄 No-Prefix Mode Disabled' : 'ℹ️ No-Prefix Mode Was Not Active')
-                    .setDescription(
-                        disabled
-                            ? `No-prefix mode has been disabled for ${targetUser}.`
-                            : `${targetUser} does not currently have no-prefix mode enabled.`
-                    )
-                    .setFooter({ text: `Developer command • ${config.version}` });
-
-                return interaction.reply({ embeds: [embed], ephemeral: true });
+                return interaction.reply({
+                    embeds: [npEmbed.revokeEmbed({ targetUser, removed: !!disabled })],
+                    ephemeral: true
+                });
             }
 
             if (action === 'status') {
-                const expiresAt = serverSettingsManager.getNoPrefixExpiration(guildId, targetUser.id);
+                const raw = serverSettingsManager.getNoPrefixExpiration(guildId, targetUser.id);
+                const expiresAt = raw === LIFETIME ? 'lifetime' : raw;
 
-                if (expiresAt) {
-                    const isLifetime = expiresAt === serverSettingsManager.constructor.NO_PREFIX_LIFETIME;
-                    embed
-                        .setColor(config.colors.success)
-                        .setTitle('🪄 No-Prefix Mode Status')
-                        .setDescription(`${targetUser} currently has no-prefix mode enabled.`)
-                        .addFields(
-                            isLifetime
-                                ? { name: 'Duration', value: 'Lifetime (never expires)', inline: true }
-                                : { name: 'Expires', value: `<t:${Math.floor(expiresAt / 1000)}:R>`, inline: false }
-                        )
-                        .setFooter({ text: `Developer command • ${config.version}` });
-                } else {
-                    embed
-                        .setColor(config.colors.warning)
-                        .setTitle('ℹ️ No-Prefix Mode Status')
-                        .setDescription(`${targetUser} does not currently have no-prefix mode enabled.`)
-                        .setFooter({ text: `Developer command • ${config.version}` });
-                }
-
-                return interaction.reply({ embeds: [embed], ephemeral: true });
+                return interaction.reply({
+                    embeds: [npEmbed.statusEmbed({ targetUser, expiresAt })],
+                    ephemeral: true
+                });
             }
 
             return interaction.reply({
