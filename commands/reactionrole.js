@@ -38,9 +38,9 @@ module.exports = {
             sub.setName('create')
                 .setDescription('Post a role embed the bot will watch for reactions')
                 .addChannelOption(o => o.setName('channel').setDescription('Channel to post the embed in').setRequired(true))
+                .addStringOption(o => o.setName('mappings').setDescription('JSON array: [{"emoji":"🎉","roleId":"123","label":"..."}]').setRequired(true))
                 .addStringOption(o => o.setName('title').setDescription('Embed title').setRequired(false))
                 .addStringOption(o => o.setName('description').setDescription('Embed body text').setRequired(false))
-                .addStringOption(o => o.setName('mappings').setDescription('JSON array: [{"emoji":"🎉","roleId":"123","label":"..."}]').setRequired(true))
                 .addStringOption(o => o.setName('mode').setDescription('Behavior').setRequired(false)
                     .addChoices(
                         { name: 'Normal (toggle on/off)', value: 'normal' },
