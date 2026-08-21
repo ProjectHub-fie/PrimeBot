@@ -1094,7 +1094,11 @@ function eventsPage({ guild, user }) {
       </div>
       <h3 class="ev-list-head">Scheduled events</h3>
       <div id="ev-list"><p class="live-empty">Loading…</p></div>`;
-    const panelHTML = upcomingOverlayWrap(innerPanelHTML, { icon: 'calendar', title: 'Event Management' });
+    // Developer/owner-role viewers bypass the upcoming gate: render the real
+    // editor (no "Coming Soon" overlay) so the feature can be exercised.
+    const panelHTML = guild._bypassUpcoming
+        ? innerPanelHTML
+        : upcomingOverlayWrap(innerPanelHTML, { icon: 'calendar', title: 'Event Management' });
     return guildTab({ guild, user, active: 'events', panelHTML, scripts: ['/js/guild-common.js', '/js/events.js'] });
 }
 

@@ -537,12 +537,22 @@ app.patch('/api/guilds/:guildId/server', requireAuth, requireGuildAdmin, async (
             if ('levelUpChannelId' in patch.leveling) patch.leveling.levelUpChannelId = patch.leveling.levelUpChannelId || null;
         }
 
-        // Auto-reactions sub-object.
+        // Auto-reactions sub-object — drop malformed entries (no trigger/emoji)
+        // so a bad row can't silently break message.react() in the bot.
         if (body.autoReactions && typeof body.autoReactions === 'object') {
             const current = await dashboardDb.getServerSettings(req.guild.id);
+            const reactions = Array.isArray(body.autoReactions.reactions)
+                ? body.autoReactions.reactions
+                    .filter(r => r && typeof r === 'object' && r.trigger && r.emoji)
+                    .map(r => ({
+                        trigger: String(r.trigger),
+                        emoji: String(r.emoji),
+                        caseSensitive: Boolean(r.caseSensitive),
+                    }))
+                : (current.autoReactions?.reactions || []);
             patch.autoReactions = {
                 enabled: body.autoReactions.enabled ?? current.autoReactions?.enabled ?? false,
-                reactions: Array.isArray(body.autoReactions.reactions) ? body.autoReactions.reactions : (current.autoReactions?.reactions || []),
+                reactions,
             };
             if ('enabled' in body.autoReactions) patch.autoReactions.enabled = Boolean(body.autoReactions.enabled);
         }
