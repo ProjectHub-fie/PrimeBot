@@ -173,3 +173,86 @@ test('countOpenTickets counts only open tickets for the guild+user', () => {
     mgr._byChannel.set('c4', { guildId: 'other', userId: 'u', status: 'open' });
     assert.equal(mgr.countOpenTickets('g', 'u'), 1);
 });
+
+// ── Per-guild panel-name uniqueness (dashboard/db.js) ───────────────────────
+
+test('isTicketNameConflict detects a 23505 violation on the guild+name index', () => {
+    const dashboardDb = require('../dashboard/db');
+    assert.equal(dashboardDb.isTicketNameConflict({ code: '23505', constraint: 'ticket_panels_guild_name_idx' }), true);
+    assert.equal(dashboardDb.isTicketNameConflict({ code: '23505', constraint: 'some_other_idx' }), false);
+    assert.equal(dashboardDb.isTicketNameConflict({ code: '42P01', constraint: 'ticket_panels_guild_name_idx' }), false);
+    assert.equal(dashboardDb.isTicketNameConflict(null), false);
+});
+
+test('uniqueCloneName picks the first free "(copy)"/"(copy n)" name', () => {
+    const dashboardDb = require('../dashboard/db');
+    assert.equal(dashboardDb.uniqueCloneName('Support', []), 'Support (copy)');
+    assert.equal(
+        dashboardDb.uniqueCloneName('Support', [{ name: 'Support (copy)' }]),
+        'Support (copy 2)',
+    );
+    assert.equal(
+        dashboardDb.uniqueCloneName('Support', [{ name: 'Support (copy)' }, { name: 'Support (copy 2)' }]),
+        'Support (copy 3)',
+    );
+});
+
+test('createTicketPanel maps a duplicate-name 23505 to a friendly 409 error', async () => {
+    const savedQuery = ticketPool.query;
+    ticketPool.query = async (sql) => {
+        if (/INSERT INTO ticket_panels/i.test(String(sql))) {
+            const err = new Error('duplicate key value violates unique constraint "ticket_panels_guild_name_idx"');
+            err.code = '23505';
+            err.constraint = 'ticket_panels_guild_name_idx';
+            throw err;
+        }
+        return { rows: [] };
+    };
+    try {
+        const dashboardDb = require('../dashboard/db');
+        await assert.rejects(
+            () => dashboardDb.createTicketPanel('g1', { name: 'Support' }),
+            (err) => {
+                assert.equal(err.status, 409);
+                assert.match(err.message, /already exists/);
+                assert.doesNotMatch(err.message, /duplicate key/);
+                return true;
+            },
+        );
+    } finally {
+        ticketPool.query = savedQuery;
+    }
+});
+
+test('cloneTicketPanel auto-suffixes the default copy name when it is taken', async () => {
+    const savedQuery = ticketPool.query;
+    const panels = [
+        { id: 7, guild_id: 'g1', name: 'Support', support_role_ids: [], ping_role_ids: [], enabled: true },
+        { id: 8, guild_id: 'g1', name: 'Support (copy)', support_role_ids: [], ping_role_ids: [], enabled: true },
+    ];
+    let insertedName = null;
+    ticketPool.query = async (sql, params) => {
+        const text = String(sql);
+        if (/INSERT INTO ticket_panels/i.test(text)) {
+            insertedName = params[1];
+            return { rows: [{ id: 9 }] };
+        }
+        if (/FROM ticket_panels WHERE id = \$1/i.test(text) && params[0] === 7) {
+            return { rows: [panels[0]] };
+        }
+        if (/FROM ticket_panels WHERE id = \$1/i.test(text)) {
+            return { rows: [] }; // refetch of the new panel
+        }
+        if (/FROM ticket_panels WHERE guild_id = \$1/i.test(text)) {
+            return { rows: panels };
+        }
+        return { rows: [] }; // ensureTicketTables CREATEs
+    };
+    try {
+        const dashboardDb = require('../dashboard/db');
+        await dashboardDb.cloneTicketPanel(7, null);
+        assert.equal(insertedName, 'Support (copy 2)');
+    } finally {
+        ticketPool.query = savedQuery;
+    }
+});

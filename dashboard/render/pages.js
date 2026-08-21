@@ -23,9 +23,10 @@ function loginPage({ errorKey, turnstileSiteKey } = {}) {
     const errorHTML = errorMsg
         ? `<div class="alert alert-error" style="margin:0 0 16px;text-align:left">${esc(errorMsg)}</div>`
         : '';
-    // Invisible Cloudflare Turnstile: when a site key is configured the login
-    // button runs the widget (no visible checkbox) and forwards the token to
-    // /auth/discord, which verifies it before starting Discord OAuth.
+    // Invisible Cloudflare Turnstile: when a site key is configured the
+    // invisible widget starts as soon as the login page loads and caches the
+    // token, so clicking Login forwards it to /auth/discord with no visible
+    // wait (verified before starting Discord OAuth).
     const turnstileHTML = turnstileSiteKey ? `
       <div id="cf-turnstile-widget" class="cf-turnstile-hidden"></div>
       <p id="turnstile-error" class="turnstile-error" hidden></p>
