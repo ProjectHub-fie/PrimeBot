@@ -23,6 +23,11 @@ module.exports = {
     // logged out automatically. Overridable via SESSION_IDLE_TIMEOUT_MS env.
     SESSION_IDLE_TIMEOUT_MS: Math.max(1000, parseInt(process.env.SESSION_IDLE_TIMEOUT_MS, 10) || 120000),
 
+    // Cloudflare Turnstile (invisible) public site key for the login page.
+    // Empty string = widget not rendered. The matching TURNSTILE_SECRET_KEY
+    // is read directly from the env by dashboard/turnstile.js.
+    TURNSTILE_SITE_KEY: process.env.TURNSTILE_SITE_KEY || '',
+
     // Bot identity (for branding).
     BOT_NAME: 'PrimeBot',
     BOT_VERSION: config.version,

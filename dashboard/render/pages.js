@@ -15,13 +15,22 @@ const LOGIN_ERRORS = {
     auth_failed: 'Discord sign-in failed. Please try again.',
     session_failed: 'Signed in to Discord, but the server could not save your session. This usually means the database connection is failing on Vercel (check DATABASE_URL / SSL and that the primebot_dashboard_session table is reachable).',
     idle_timeout: 'You were logged out automatically because the dashboard tab was inactive for a while. Sign in again to continue.',
+    turnstile_failed: 'The security check could not be verified. Please try signing in again.',
 };
 
-function loginPage({ errorKey } = {}) {
+function loginPage({ errorKey, turnstileSiteKey } = {}) {
     const errorMsg = errorKey && LOGIN_ERRORS[errorKey];
     const errorHTML = errorMsg
         ? `<div class="alert alert-error" style="margin:0 0 16px;text-align:left">${esc(errorMsg)}</div>`
         : '';
+    // Invisible Cloudflare Turnstile: when a site key is configured the login
+    // button runs the widget (no visible checkbox) and forwards the token to
+    // /auth/discord, which verifies it before starting Discord OAuth.
+    const turnstileHTML = turnstileSiteKey ? `
+      <div id="cf-turnstile-widget" class="cf-turnstile-hidden"></div>
+      <p id="turnstile-error" class="turnstile-error" hidden></p>
+      <script>window.__TURNSTILE_SITE_KEY__=${JSON.stringify(turnstileSiteKey)};</script>
+      <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>` : '';
     const body = `
     <div class="login-wrap">
       <div class="login-hero">${svgIcon('zap')}</div>
@@ -30,11 +39,12 @@ function loginPage({ errorKey } = {}) {
       ${errorHTML}
       <p class="login-sub">Sign in with Discord to configure PrimeBot for the servers you manage — welcome messages, leveling, prefixes, auto-reactions and more, all in one place.</p>
       <div class="login-actions">
-        <a href="/auth/discord" class="btn btn-discord">${svgIcon('logIn')} Login with Discord</a>
+        <a href="/auth/discord" id="login-discord-btn" class="btn btn-discord">${svgIcon('logIn')} Login with Discord</a>
         <a href="${esc(constants.BOT_INVITE_URL)}" class="btn btn-secondary" target="_blank" rel="noopener">${svgIcon('plus')} Invite PrimeBot</a>
       </div>
       <a href="/docs" class="btn btn-secondary">${svgIcon('book')} Documentation</a>
       <p class="login-legal">By signing in you agree to the <a href="/terms">Terms of Service</a> and <a href="/privacy">Privacy Policy</a>.</p>
+      ${turnstileHTML}
 
       <div class="stats-band" id="stats-band" aria-live="polite">
         <div class="stats-band-head">

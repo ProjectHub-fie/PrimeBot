@@ -987,6 +987,9 @@ select:focus {
 .login-legal { color: var(--text-faint); font-size: 12px; margin: 14px 0 0; }
 .login-legal a { color: var(--text-dim); transition: color var(--transition); }
 .login-legal a:hover { color: var(--accent); }
+/* Invisible Turnstile: the widget renders no visible box. */
+.cf-turnstile-hidden { display: none; }
+.turnstile-error { color: var(--red); font-size: 13px; margin: 10px 0 0; }
 
 .hidden { display: none !important; }
 

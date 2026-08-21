@@ -53,3 +53,60 @@ async function loadLoginStats() {
 }
 
 loadLoginStats();
+
+/* ── Invisible Cloudflare Turnstile gate on "Login with Discord" ────────────
+ * When the server rendered a site key (window.__TURNSTILE_SITE_KEY__), the
+ * login button executes the invisible widget instead of navigating directly;
+ * the issued token rides along to /auth/discord, which verifies it with
+ * Cloudflare before starting the Discord OAuth2 redirect. Without a site key
+ * the button stays a plain link.
+ */
+(function initTurnstile() {
+  const siteKey = window.__TURNSTILE_SITE_KEY__;
+  const btn = document.getElementById('login-discord-btn');
+  if (!siteKey || !btn) return;
+
+  const errEl = document.getElementById('turnstile-error');
+  let widgetId = null;
+  let pending = false;
+
+  function showError(msg) {
+    if (!errEl) return;
+    errEl.textContent = msg;
+    errEl.hidden = false;
+  }
+
+  function renderWidget() {
+    if (widgetId !== null) return true;
+    if (!window.turnstile) return false; // api.js still loading
+    widgetId = window.turnstile.render('#cf-turnstile-widget', {
+      sitekey: siteKey,
+      size: 'invisible',
+      callback(token) {
+        pending = false;
+        window.location.href = '/auth/discord?cf-turnstile-response=' + encodeURIComponent(token);
+      },
+      'error-callback'() {
+        pending = false;
+        showError('Security check failed to load. Please try again.');
+        if (widgetId !== null) window.turnstile.reset(widgetId);
+      },
+      'expired-callback'() {
+        if (widgetId !== null) window.turnstile.reset(widgetId);
+      },
+    });
+    return true;
+  }
+
+  btn.addEventListener('click', (e) => {
+    e.preventDefault();
+    if (pending) return;
+    if (!renderWidget()) {
+      showError('Security check is still loading — please try again in a moment.');
+      return;
+    }
+    if (errEl) errEl.hidden = true;
+    pending = true;
+    window.turnstile.execute(widgetId);
+  });
+})();

@@ -24,6 +24,7 @@ const cookieParser = require('cookie-parser');
 const PgSession = require('connect-pg-simple')(session);
 
 const discord = require('./discord');
+const turnstile = require('./turnstile');
 const { requireAuth, requireGuildAdmin, requireGuildAdminPage, requireBeta, requireUpcoming } = require('./auth');
 const dashboardDb = require('./db');
 const constants = require('./constants');
@@ -184,13 +185,27 @@ app.get('/login', (req, res) => {
     // Render the server-side login page; if ?error=... is present it shows a
     // human-readable reason (e.g. session persistence failed after Discord auth)
     // instead of silently bouncing back to Discord.
-    res.type('html').send(pages.loginPage({ errorKey: req.query.error }));
+    res.type('html').send(pages.loginPage({ errorKey: req.query.error, turnstileSiteKey: constants.TURNSTILE_SITE_KEY }));
 });
 
 // Starts the Discord OAuth2 flow. The login page's "Login with Discord" button
-// points here (separate from /login, which now renders the page).
-app.get('/auth/discord', (req, res) => {
+// points here (separate from /login, which now renders the page). When
+// TURNSTILE_SECRET_KEY is configured, the invisible Turnstile token from the
+// login page must verify with Cloudflare before the OAuth redirect is issued.
+app.get('/auth/discord', async (req, res) => {
     if (req.session && req.session.user) return res.redirect('/');
+    if (turnstile.isTurnstileEnabled()) {
+        try {
+            const result = await turnstile.verifyTurnstile(req.query['cf-turnstile-response'], req.ip);
+            if (!result.success) {
+                console.warn('[AUTH] Turnstile verification failed:', result['error-codes'] || 'unknown');
+                return res.redirect('/login?error=turnstile_failed');
+            }
+        } catch (err) {
+            console.error('[AUTH] Turnstile verification error:', err.message);
+            return res.redirect('/login?error=turnstile_failed');
+        }
+    }
     const params = new URLSearchParams({
         client_id: process.env.DISCORD_CLIENT_ID,
         redirect_uri: REDIRECT_URI,
