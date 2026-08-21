@@ -1070,6 +1070,14 @@ function ticketPanelMessagePayload(panel) {
     return { content: panel.content || null, embeds: [embed], components };
 }
 
+// Name-conflict errors thrown by the ticket DB helpers carry err.status = 409;
+// respond with that friendly message instead of a 500 with the raw error.
+function ticketPanelError(res, err, what) {
+    const status = err.status || 500;
+    const message = status < 500 ? err.message : `Failed to ${what}: ${err.message}`;
+    res.status(status).json({ error: message });
+}
+
 app.get('/api/guilds/:guildId/tickets', requireAuth, requireGuildAdmin, async (req, res) => {
     try {
         const panels = await dashboardDb.getTicketPanels(req.guild.id);
@@ -1090,7 +1098,7 @@ app.post('/api/guilds/:guildId/tickets', requireAuth, requireGuildAdmin, async (
         res.json({ ticketPanel: panel });
     } catch (err) {
         console.error('[API] create ticket panel error:', err.message);
-        res.status(500).json({ error: 'Failed to create ticket panel: ' + err.message });
+        ticketPanelError(res, err, 'create ticket panel');
     }
 });
 
@@ -1111,7 +1119,7 @@ app.patch('/api/guilds/:guildId/tickets/:id', requireAuth, requireGuildAdmin, as
         res.json({ ticketPanel: panel });
     } catch (err) {
         console.error('[API] update ticket panel error:', err.message);
-        res.status(500).json({ error: 'Failed to update ticket panel: ' + err.message });
+        ticketPanelError(res, err, 'update ticket panel');
     }
 });
 
@@ -1141,7 +1149,7 @@ app.post('/api/guilds/:guildId/tickets/:id/clone', requireAuth, requireGuildAdmi
         res.json({ ticketPanel: panel });
     } catch (err) {
         console.error('[API] clone ticket panel error:', err.message);
-        res.status(500).json({ error: 'Failed to clone ticket panel: ' + err.message });
+        ticketPanelError(res, err, 'clone ticket panel');
     }
 });
 
@@ -1154,7 +1162,7 @@ app.post('/api/guilds/:guildId/tickets/:id/rename', requireAuth, requireGuildAdm
         res.json({ ticketPanel: panel });
     } catch (err) {
         console.error('[API] rename ticket panel error:', err.message);
-        res.status(500).json({ error: 'Failed to rename ticket panel: ' + err.message });
+        ticketPanelError(res, err, 'rename ticket panel');
     }
 });
 

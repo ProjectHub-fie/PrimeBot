@@ -2,10 +2,11 @@
  * Cloudflare Turnstile (invisible) verification for the dashboard login flow.
  *
  * The login page renders an invisible Turnstile widget (site key from
- * TURNSTILE_SITE_KEY). When the user clicks "Login with Discord" the widget
- * executes and the resulting token is sent along to GET /auth/discord, which
- * verifies it here against Cloudflare's siteverify endpoint before starting
- * the Discord OAuth2 redirect.
+ * TURNSTILE_SITE_KEY). The widget executes as soon as the page loads and the
+ * resulting token is cached client-side; when the user clicks "Login with
+ * Discord" the token is sent along to GET /auth/discord, which verifies it
+ * here against Cloudflare's siteverify endpoint before starting the Discord
+ * OAuth2 redirect. Pre-running the challenge removes the click-time wait.
  *
  * Env vars:
  *   TURNSTILE_SITE_KEY   — public site key, rendered into the login page.

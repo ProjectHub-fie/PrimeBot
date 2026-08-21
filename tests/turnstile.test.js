@@ -214,3 +214,80 @@ test('HTTP: /auth/discord bounces when Cloudflare rejects the token', async () =
         else process.env.TURNSTILE_SECRET_KEY = savedSecret;
     }
 });
+
+// ── Client behavior (login.js in a vm sandbox) ──────────────────────────────
+// The invisible widget must start on PAGE LOAD (not on click) and cache the
+// token, so clicking Login navigates instantly. login.js is plain browser JS;
+// run it in a vm with a minimal DOM + turnstile stub (same trick the icons
+// test uses for window-global exposure).
+const vm = require('node:vm');
+const fs = require('fs');
+
+const LOGIN_JS = fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'public', 'js', 'login.js'), 'utf8');
+
+function makeLoginSandbox({ executeBehavior } = {}) {
+    const els = {};
+    const rendered = [];
+    const executed = [];
+    const listeners = {};
+    const fakeEl = (id) => ({
+        id,
+        textContent: '',
+        hidden: true,
+        style: {},
+        addEventListener(type, fn) { listeners[type] = fn; },
+        querySelector() { return { textContent: '' }; },
+    });
+    const sandboxWindow = {
+        __TURNSTILE_SITE_KEY__: 'site-key',
+        location: { href: '' },
+        turnstile: {
+            render(sel, opts) { rendered.push(opts); return rendered.length - 1; },
+            execute(widgetId) {
+                executed.push(widgetId);
+                if (executeBehavior === 'resolve') rendered[widgetId].callback('tok-page-load');
+                // default: leave the challenge in-flight (no token yet)
+            },
+            reset() {},
+        },
+    };
+    const sandbox = {
+        window: sandboxWindow,
+        document: { getElementById: (id) => (els[id] = els[id] || fakeEl(id)) },
+        performance,
+        requestAnimationFrame: () => {},
+        api: async () => ({}),
+        esc: (s) => String(s),
+        setInterval, clearInterval, setTimeout, clearTimeout,
+        console,
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(LOGIN_JS, sandbox);
+    return { sandboxWindow, rendered, executed, listeners };
+}
+
+test('client: the widget executes on page load (eager warm-up)', () => {
+    const { rendered, executed } = makeLoginSandbox();
+    assert.equal(rendered.length, 1, 'widget rendered exactly once');
+    assert.ok(executed.length >= 1, 'widget executed without waiting for a click');
+});
+
+test('client: a cached token makes Login navigate instantly on click', () => {
+    const { sandboxWindow, rendered, listeners } = makeLoginSandbox({ executeBehavior: 'resolve' });
+    assert.equal(sandboxWindow.location.href, '', 'no navigation before the click');
+    listeners.click({ preventDefault() {} });
+    assert.equal(sandboxWindow.location.href, '/auth/discord?cf-turnstile-response=tok-page-load');
+    assert.equal(rendered.length, 1, 'no second widget render');
+});
+
+test('client: a click while the challenge is still in flight waits, then navigates from the callback', () => {
+    const { sandboxWindow, rendered, executed, listeners } = makeLoginSandbox();
+    listeners.click({ preventDefault() {} }); // token not ready yet
+    assert.equal(sandboxWindow.location.href, '', 'click did not navigate without a token');
+    rendered[rendered.length - 1].callback('tok-after-wait');
+    assert.equal(sandboxWindow.location.href, '/auth/discord?cf-turnstile-response=tok-after-wait');
+    // Expiry refreshes the cached token in the background.
+    const before = executed.length;
+    rendered[rendered.length - 1]['expired-callback']();
+    assert.equal(executed.length, before + 1, 'expiry re-executes the challenge');
+});

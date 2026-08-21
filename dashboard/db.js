@@ -1476,6 +1476,20 @@ const TICKET_PANEL_FIELDS = {
     closedNameTemplate: 1, closeFlow: 1, enabled: 1, createdBy: 1,
 };
 
+// PostgreSQL unique_violation (23505) on the per-guild panel-name index is a
+// predictable client mistake → map it to a friendly 409-style error instead of
+// surfacing the raw Postgres message through the API.
+function ticketNameTakenError(name) {
+    const err = new Error(`A ticket panel named "${name}" already exists in this server. Pick a different name.`);
+    err.status = 409;
+    return err;
+}
+
+function isTicketNameConflict(err) {
+    return Boolean(err) && err.code === '23505'
+        && String(err.constraint || '').includes('ticket_panels_guild_name_idx');
+}
+
 async function _fetchTicketPanel(id) {
     const res = await getTicketPool().query('SELECT * FROM ticket_panels WHERE id = $1', [id]);
     if (res.rows.length === 0) return null;
@@ -1491,30 +1505,36 @@ async function getTicketPanels(guildId) {
 async function createTicketPanel(guildId, data) {
     await ensureTicketTables();
     const p = normalizeTicketPanel(data);
-    const res = await getTicketPool().query(`
-        INSERT INTO ticket_panels (
-            guild_id, name, channel_id, message_id, message_type, title, description,
-            color, thumbnail_url, image_url, footer_text, content, button_label,
-            button_style, button_emoji, category, ticket_name, support_role_ids,
-            ping_role_ids, ticket_category_id, cooldown_seconds, max_open_per_user,
-            ask_reason, reason_placeholder, welcome_message, close_button_label,
-            close_button_emoji, close_button_style, claim_button_label, claim_button_emoji,
-            open_name_template, claimed_name_template, closed_name_template,
-            close_flow, enabled, created_by, created_at, updated_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,NOW(),NOW())
-        RETURNING id
-    `, [
-        guildId, p.name, p.channelId || null, p.messageId || null, p.messageType,
-        p.title, p.description, p.color, p.thumbnailUrl, p.imageUrl, p.footerText,
-        p.content, p.buttonLabel, p.buttonStyle, p.buttonEmoji, p.category,
-        p.ticketName, JSON.stringify(p.supportRoleIds), JSON.stringify(p.pingRoleIds),
-        p.ticketCategoryId, p.cooldownSeconds, p.maxOpenPerUser, p.askReason,
-        p.reasonPlaceholder, p.welcomeMessage, p.closeButtonLabel,
-        p.closeButtonEmoji, p.closeButtonStyle, p.claimButtonLabel, p.claimButtonEmoji,
-        p.openNameTemplate, p.claimedNameTemplate, p.closedNameTemplate,
-        JSON.stringify(p.closeFlow || {}),
-        p.enabled, p.createdBy || null,
-    ]);
+    let res;
+    try {
+        res = await getTicketPool().query(`
+            INSERT INTO ticket_panels (
+                guild_id, name, channel_id, message_id, message_type, title, description,
+                color, thumbnail_url, image_url, footer_text, content, button_label,
+                button_style, button_emoji, category, ticket_name, support_role_ids,
+                ping_role_ids, ticket_category_id, cooldown_seconds, max_open_per_user,
+                ask_reason, reason_placeholder, welcome_message, close_button_label,
+                close_button_emoji, close_button_style, claim_button_label, claim_button_emoji,
+                open_name_template, claimed_name_template, closed_name_template,
+                close_flow, enabled, created_by, created_at, updated_at
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,NOW(),NOW())
+            RETURNING id
+        `, [
+            guildId, p.name, p.channelId || null, p.messageId || null, p.messageType,
+            p.title, p.description, p.color, p.thumbnailUrl, p.imageUrl, p.footerText,
+            p.content, p.buttonLabel, p.buttonStyle, p.buttonEmoji, p.category,
+            p.ticketName, JSON.stringify(p.supportRoleIds), JSON.stringify(p.pingRoleIds),
+            p.ticketCategoryId, p.cooldownSeconds, p.maxOpenPerUser, p.askReason,
+            p.reasonPlaceholder, p.welcomeMessage, p.closeButtonLabel,
+            p.closeButtonEmoji, p.closeButtonStyle, p.claimButtonLabel, p.claimButtonEmoji,
+            p.openNameTemplate, p.claimedNameTemplate, p.closedNameTemplate,
+            JSON.stringify(p.closeFlow || {}),
+            p.enabled, p.createdBy || null,
+        ]);
+    } catch (err) {
+        if (isTicketNameConflict(err)) throw ticketNameTakenError(p.name);
+        throw err;
+    }
     return _fetchTicketPanel(res.rows[0].id);
 }
 
@@ -1527,31 +1547,36 @@ async function updateTicketPanel(id, patch) {
         if (key in patch) next[key] = patch[key];
     }
     const p = normalizeTicketPanel(next, true);
-    await getTicketPool().query(`
-        UPDATE ticket_panels SET
-            name = $2, channel_id = $3, message_id = $4, message_type = $5,
-            title = $6, description = $7, color = $8, thumbnail_url = $9,
-            image_url = $10, footer_text = $11, content = $12, button_label = $13,
-            button_style = $14, button_emoji = $15, category = $16, ticket_name = $17,
-            support_role_ids = $18, ping_role_ids = $19, ticket_category_id = $20,
-            cooldown_seconds = $21, max_open_per_user = $22, ask_reason = $23,
-            reason_placeholder = $24, welcome_message = $25, close_button_label = $26,
-            close_button_emoji = $27, close_button_style = $28, claim_button_label = $29, claim_button_emoji = $30,
-            open_name_template = $31, claimed_name_template = $32, closed_name_template = $33,
-            close_flow = $34, enabled = $35, updated_at = NOW()
-        WHERE id = $1
-    `, [
-        id, p.name, p.channelId || null, p.messageId || null, p.messageType,
-        p.title, p.description, p.color, p.thumbnailUrl, p.imageUrl, p.footerText,
-        p.content, p.buttonLabel, p.buttonStyle, p.buttonEmoji, p.category,
-        p.ticketName, JSON.stringify(p.supportRoleIds), JSON.stringify(p.pingRoleIds),
-        p.ticketCategoryId, p.cooldownSeconds, p.maxOpenPerUser, p.askReason,
-        p.reasonPlaceholder, p.welcomeMessage, p.closeButtonLabel,
-        p.closeButtonEmoji, p.closeButtonStyle, p.claimButtonLabel, p.claimButtonEmoji,
-        p.openNameTemplate, p.claimedNameTemplate, p.closedNameTemplate,
-        JSON.stringify(p.closeFlow || {}),
-        p.enabled,
-    ]);
+    try {
+        await getTicketPool().query(`
+            UPDATE ticket_panels SET
+                name = $2, channel_id = $3, message_id = $4, message_type = $5,
+                title = $6, description = $7, color = $8, thumbnail_url = $9,
+                image_url = $10, footer_text = $11, content = $12, button_label = $13,
+                button_style = $14, button_emoji = $15, category = $16, ticket_name = $17,
+                support_role_ids = $18, ping_role_ids = $19, ticket_category_id = $20,
+                cooldown_seconds = $21, max_open_per_user = $22, ask_reason = $23,
+                reason_placeholder = $24, welcome_message = $25, close_button_label = $26,
+                close_button_emoji = $27, close_button_style = $28, claim_button_label = $29, claim_button_emoji = $30,
+                open_name_template = $31, claimed_name_template = $32, closed_name_template = $33,
+                close_flow = $34, enabled = $35, updated_at = NOW()
+            WHERE id = $1
+        `, [
+            id, p.name, p.channelId || null, p.messageId || null, p.messageType,
+            p.title, p.description, p.color, p.thumbnailUrl, p.imageUrl, p.footerText,
+            p.content, p.buttonLabel, p.buttonStyle, p.buttonEmoji, p.category,
+            p.ticketName, JSON.stringify(p.supportRoleIds), JSON.stringify(p.pingRoleIds),
+            p.ticketCategoryId, p.cooldownSeconds, p.maxOpenPerUser, p.askReason,
+            p.reasonPlaceholder, p.welcomeMessage, p.closeButtonLabel,
+            p.closeButtonEmoji, p.closeButtonStyle, p.claimButtonLabel, p.claimButtonEmoji,
+            p.openNameTemplate, p.claimedNameTemplate, p.closedNameTemplate,
+            JSON.stringify(p.closeFlow || {}),
+            p.enabled,
+        ]);
+    } catch (err) {
+        if (isTicketNameConflict(err)) throw ticketNameTakenError(p.name);
+        throw err;
+    }
     return _fetchTicketPanel(id);
 }
 
@@ -1561,13 +1586,27 @@ async function deleteTicketPanel(id) {
     return true;
 }
 
+// Pick "(copy)", "(copy 2)", ... — the first default clone name that isn't
+// already taken by another panel in the guild (the unique index would reject
+// a bare second "(copy)" otherwise).
+function uniqueCloneName(baseName, panels) {
+    let n = 1;
+    while (panels.some((p) => p.name === cloneNameFor(baseName, n))) n += 1;
+    return cloneNameFor(baseName, n);
+}
+
+function cloneNameFor(baseName, n) {
+    return n === 1 ? `${baseName} (copy)` : `${baseName} (copy ${n})`;
+}
+
 async function cloneTicketPanel(id, newName) {
     await ensureTicketTables();
     const src = await _fetchTicketPanel(id);
     if (!src) throw new Error('Ticket panel not found.');
     const data = { ...src };
     delete data.id;
-    data.name = (newName && String(newName).trim()) || `${src.name} (copy)`;
+    const explicit = newName && String(newName).trim();
+    data.name = explicit || uniqueCloneName(src.name, await getTicketPanels(src.guildId));
     data.channelId = null;
     data.messageId = null;
     return createTicketPanel(src.guildId, data);
@@ -1577,7 +1616,12 @@ async function renameTicketPanel(id, newName) {
     const name = newName && String(newName).trim();
     if (!name) throw new Error('A name is required.');
     await ensureTicketTables();
-    await getTicketPool().query('UPDATE ticket_panels SET name = $2, updated_at = NOW() WHERE id = $1', [id, name]);
+    try {
+        await getTicketPool().query('UPDATE ticket_panels SET name = $2, updated_at = NOW() WHERE id = $1', [id, name]);
+    } catch (err) {
+        if (isTicketNameConflict(err)) throw ticketNameTakenError(name);
+        throw err;
+    }
     return _fetchTicketPanel(id);
 }
 
@@ -2062,4 +2106,6 @@ module.exports = {
     getGuildBadges,
     awardDashboardBadge,
     revokeDashboardBadge,
+    isTicketNameConflict,
+    uniqueCloneName,
 };
