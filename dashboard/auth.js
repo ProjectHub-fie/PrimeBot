@@ -11,7 +11,23 @@ const pages = require('./render/pages');
 const L = require('./render/layout');
 const dashboardDb = require('./db');
 const betaManager = require('../utils/betaManager');
+const botRoles = require('../utils/botRoles');
 const constants = require('./constants');
+
+// Users holding a developer/owner bot role (utils/botRoles.js, bot_roles table
+// on COMMUNITY_DATABASE_URL) bypass the dashboard's beta + upcoming feature
+// gates so they can exercise locked features for testing. Degrades to false on
+// any DB error so a role-DB outage never widens access.
+async function canBypassFeatureGates(req) {
+    const userId = req.user && req.user.id;
+    if (!userId) return false;
+    try {
+        return await botRoles.canBypassFeatureGates(userId);
+    } catch (err) {
+        console.error('[AUTH] canBypassFeatureGates error:', err.message);
+        return false;
+    }
+}
 
 // Idle auto-logout window (server-side safety net). Single source of truth in
 // dashboard/constants.js (SESSION_IDLE_TIMEOUT_MS env, default 120000ms).
@@ -235,9 +251,17 @@ async function requireGuildAdminPage(req, res, next) {
         req.guild._channels = channels;
         req.guild._roles = roles;
         req.guild._config = config;
-        // Beta access flag (allowed && enabled). Used to gate the Events tab/page/API.
-        // Degrades to false on any DB error so non-beta servers see the locked state.
-        req.guild._beta = await betaManager.canAccess(req.guild.id).catch(() => false);
+        // Beta access flag (allowed && enabled) — developer/owner-role users
+        // bypass the gate entirely (they can exercise beta features anywhere).
+        // Degrades to false on any DB error so non-beta servers stay locked.
+        const [betaAccess, bypassGates] = await Promise.all([
+            betaManager.canAccess(req.guild.id).catch(() => false),
+            canBypassFeatureGates(req).catch(() => false),
+        ]);
+        req.guild._beta = betaAccess || bypassGates;
+        // Upcoming-gate bypass (same privileged roles). eventsPage skips the
+        // "Coming Soon" overlay when this is set.
+        req.guild._bypassUpcoming = bypassGates;
         next();
     } catch (err) {
         console.error('[AUTH] requireGuildAdminPage error:', err.message);
@@ -257,8 +281,11 @@ async function requireGuildAdminPage(req, res, next) {
  */
 async function requireBeta(req, res, next) {
     try {
-        const allowed = await betaManager.canAccess(req.guild.id).catch(() => false);
-        if (!allowed) {
+        const [allowed, bypass] = await Promise.all([
+            betaManager.canAccess(req.guild.id).catch(() => false),
+            canBypassFeatureGates(req).catch(() => false),
+        ]);
+        if (!allowed && !bypass) {
             return res.status(403).json({ error: 'This feature is in beta and not enabled for this server.', reason: 'beta_required' });
         }
         next();
@@ -275,6 +302,10 @@ async function requireBeta(req, res, next) {
  * API either. Upcoming takes priority over beta. Must run AFTER requireGuildAdmin.
  */
 async function requireUpcoming(req, res, next) {
+    // Developer/owner-role users bypass the upcoming gate so they can exercise
+    // unreleased features. Everyone else still gets 403.
+    const bypass = await canBypassFeatureGates(req).catch(() => false);
+    if (bypass) return next();
     return res.status(403).json({ error: 'This feature is coming soon and is not available yet.', reason: 'upcoming' });
 }
 

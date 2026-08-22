@@ -62,9 +62,19 @@ class ServerSettingsManager {
     }
 
     async _init() {
-        await this._ensureTable();
-        await this._migrateFromJson();
-        await this.loadSettings();
+        // Each step is isolated: a boot-time failure (e.g. the DB isn't ready
+        // yet when the bot boots) must NOT abort before _startReloadInterval —
+        // otherwise the reload loop never starts and dashboard saves (auto-
+        // reactions / auto-responder) never reach the bot until a restart.
+        await this._ensureTable().catch(err =>
+            console.error('[SERVER SETTINGS] Table ensure failed (will retry on reload):', err.message)
+        );
+        await this._migrateFromJson().catch(err =>
+            console.error('[SERVER SETTINGS] JSON migration failed:', err.message)
+        );
+        await this.loadSettings().catch(err =>
+            console.error('[SERVER SETTINGS] Initial load failed (will retry on reload):', err.message)
+        );
         this._startReloadInterval();
     }
 
@@ -75,6 +85,7 @@ class ServerSettingsManager {
      * bot is restarted. Reload on a configurable interval (default 30s).
      */
     _startReloadInterval() {
+        if (this._reloadTimer) return;
         const ms = parseInt(process.env.SETTINGS_RELOAD_INTERVAL_MS, 10) || 30000;
         this._reloadTimer = setInterval(() => {
             this.loadSettings().catch(err =>

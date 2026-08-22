@@ -256,6 +256,15 @@ const countingGames = pgTable('counting_games', {
   updatedAt: timestamp('updated_at').defaultNow(),
 });
 
+// PrimeBot staff role assignment table (bot_roles) — one row per user.
+// Power order: user < moderator < admin < developer < owner (config-seeded).
+const botRoles = pgTable('bot_roles', {
+  userId: varchar('user_id', { length: 32 }).primaryKey(),
+  role: varchar('role', { length: 20 }).notNull(),
+  updatedBy: varchar('updated_by', { length: 32 }),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
 // Beta settings table
 const betaSettings = pgTable('beta_settings', {
   guildId: varchar('guild_id', { length: 50 }).primaryKey(),
@@ -653,6 +662,7 @@ module.exports = {
   giveawaysRelations,
   giveawayParticipantsRelations,
   giveawayWinnersRelations,
+  botRoles,
   userLevels,
   userBadges,
   userLevelsRelations,

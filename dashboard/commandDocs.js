@@ -46,6 +46,12 @@ const METADATA = {
         description: "View the server's current text prefix or change it.",
         usage: ['prefix [new prefix]'],
     },
+    dev: {
+        category: 'Configuration',
+        description: 'PrimeBot bot-management role service. Shows your role (or another user\'s); the owner assigns user/moderator/admin/developer roles. The owner role is reserved for config developerIds.',
+        usage: ['dev [@user]', 'dev add @user <role>', 'dev remove @user', 'dev list'],
+        note: 'add/remove/list are owner-only',
+    },
     role: {
         category: 'Moderation', permission: MANAGE_ROLES,
         description: 'Manage roles: add or remove a role for a member, create a new role, or list the server roles.',

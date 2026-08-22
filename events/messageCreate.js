@@ -25,6 +25,8 @@ function tcpPing(host, port = 443) {
 const { pool } = require("../server/db");
 const betaManager = require("../utils/betaManager");
 const npEmbed = require("../utils/npEmbed");
+const botRoles = require("../utils/botRoles");
+const devEmbed = require("../utils/devEmbed");
 const { isBetaFeature } = require("../utils/betaFeatureMatcher");
 
 /**
@@ -484,19 +486,28 @@ module.exports = {
             }
             
             if (!isUsingPrefix) {
-                // Process counting game messages before returning
-                const processed = await client.countingManager.processCountingMessage(message);
+                // Process counting game messages before returning. A counting or
+                // leveling failure must NOT abort the auto-react/auto-respond
+                // block below (they share one outer try/catch in this handler).
+                const processed = await client.countingManager
+                    .processCountingMessage(message)
+                    .catch(err => {
+                        console.error('[COUNTING] processCountingMessage failed:', err.message);
+                        return false;
+                    });
                 if (processed) return; // Message was processed as a count
-                
-                // Process message for XP and leveling in servers with leveling enabled
-                await client.levelingManager.processMessage(message);
-                
+
+                // Process message for XP and leveling (the manager is null for
+                // the first ~2s of boot — optional chaining keeps this safe).
+                await client.levelingManager?.processMessage(message)
+                    .catch(err => console.error('[LEVELING] processMessage failed:', err.message));
+
                 // Check for auto-reactions if in a guild
                 if (message.guild) {
-                    const triggeredEmojis = client.serverSettingsManager.getTriggeredReactions(
+                    const triggeredEmojis = client.serverSettingsManager?.getTriggeredReactions?.(
                         message.guild.id,
                         message.content
-                    );
+                    ) || [];
                     
                     // Add each reaction with a small delay to avoid rate limiting
                     if (triggeredEmojis.length > 0) {
@@ -518,7 +529,7 @@ module.exports = {
                 // (this block) so prefix commands aren't double-answered.
                 try {
                     const triggeredResponses = client.serverSettingsManager?.getTriggeredResponses?.(
-                        message.guild.id,
+                        message.guild?.id,
                         message.content
                     );
                     if (triggeredResponses && triggeredResponses.length > 0) {
@@ -3370,6 +3381,102 @@ module.exports = {
                             return message.reply(`Unknown no-prefix command: ${npSubCommand}. Use \`${prefix}np\` to see available commands.`);
                     }
                     return;
+                }
+
+                // ── PrimeBot role service ($dev) ──────────────────────────────
+                // $dev                     → your role
+                // $dev @user               → a user's role
+                // $dev add @user <role>    → assign (owner only)
+                // $dev remove @user        → reset to user (owner only)
+                // $dev list                → all assigned roles (owner only)
+                // (No "role" alias — $role manages Discord guild roles elsewhere.)
+                case "dev": {
+                    if (!message.guild) {
+                        return message.reply({ embeds: [devEmbed.errorEmbed('This command can only be used in a server.')] });
+                    }
+
+                    const devSub = args[0] ? args[0].toLowerCase() : null;
+                    const invokerIsOwner = botRoles.isConfigOwner(message.author.id);
+
+                    // Resolve a target from a mention or a raw id argument.
+                    const devTargetAt = (i) =>
+                        message.mentions.users.first()
+                        || (args[i] && /^\d{17,20}$/.test(args[i])
+                            ? { id: args[i], tag: args[i], displayAvatarURL: () => null }
+                            : null);
+
+                    const showRole = async (target) => {
+                        const targetRole = await botRoles.getRole(target.id);
+                        const assigned = botRoles.isConfigOwner(target.id)
+                            ? 'config'
+                            : (targetRole === 'user' ? 'default' : 'database');
+                        return message.reply({ embeds: [devEmbed.roleEmbed({ targetUser: target, role: targetRole, assigned })] });
+                    };
+
+                    if (!devSub || devSub === 'user' || devSub === 'status' || devSub === 'check') {
+                        return showRole(devTargetAt(1) || message.author);
+                    }
+
+                    if (devSub === 'help') {
+                        return message.reply({ embeds: [devEmbed.helpEmbed(prefix)] });
+                    }
+
+                    if (devSub === 'list') {
+                        if (!invokerIsOwner) {
+                            return message.reply({ embeds: [devEmbed.errorEmbed('Only the bot owner can list assigned roles.')] });
+                        }
+                        const rows = await botRoles.listRoleRows();
+                        return message.reply({ embeds: [devEmbed.listEmbed(rows)] });
+                    }
+
+                    if (devSub === 'add') {
+                        if (!invokerIsOwner) {
+                            return message.reply({ embeds: [devEmbed.errorEmbed('Only the bot owner can manage roles.')] });
+                        }
+                        const target = devTargetAt(1);
+                        if (!target) {
+                            return message.reply({ embeds: [devEmbed.errorEmbed(`Mention a user to assign a role: \`${prefix}dev add @user <user|moderator|admin|developer>\``)] });
+                        }
+                        const role = botRoles.normalizeRoleName(args[2]);
+                        if (!role || role === 'owner') {
+                            return message.reply({
+                                embeds: [devEmbed.errorEmbed(`Unknown or reserved role.\nValid roles: **user, moderator, admin, developer**.\nThe **owner** role is reserved for the bot owner id in \`config.developerIds\` and cannot be assigned.`)],
+                            });
+                        }
+                        const ok = await botRoles.setRole(target.id, role, message.author.id);
+                        if (!ok) {
+                            return message.reply({ embeds: [devEmbed.errorEmbed('Failed to save the role — check the database connection.')] });
+                        }
+                        return message.reply({
+                            embeds: [devEmbed.successEmbed('✅ Role assigned', `<@${target.id}> is now **${botRoles.ROLE_INFO[role].emoji} ${botRoles.ROLE_INFO[role].label}**.`)],
+                        });
+                    }
+
+                    if (devSub === 'remove') {
+                        if (!invokerIsOwner) {
+                            return message.reply({ embeds: [devEmbed.errorEmbed('Only the bot owner can manage roles.')] });
+                        }
+                        const target = devTargetAt(1);
+                        if (!target) {
+                            return message.reply({ embeds: [devEmbed.errorEmbed(`Mention a user to reset: \`${prefix}dev remove @user\``)] });
+                        }
+                        if (botRoles.isConfigOwner(target.id)) {
+                            return message.reply({ embeds: [devEmbed.errorEmbed('The bot **owner** (from `config.developerIds`) cannot be reset.')] });
+                        }
+                        const ok = await botRoles.removeRole(target.id);
+                        if (!ok) {
+                            return message.reply({ embeds: [devEmbed.errorEmbed('Failed to reset the role — check the database connection.')] });
+                        }
+                        return message.reply({
+                            embeds: [devEmbed.successEmbed('✅ Role reset', `<@${target.id}> is back to **${botRoles.ROLE_INFO.user.emoji} ${botRoles.ROLE_INFO.user.label}**.`)],
+                        });
+                    }
+
+                    // An unrecognized sub-word that mentions a user is a lookup
+                    // (e.g. `$dev @user`); anything else shows the help card.
+                    const fallTarget = devTargetAt(0);
+                    if (fallTarget) return showRole(fallTarget);
+                    return message.reply({ embeds: [devEmbed.helpEmbed(prefix)] });
                 }
 
                 case "purge": {
