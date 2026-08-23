@@ -46,7 +46,7 @@ test('guild tab pages: card-title icons are SVG, no emoji leftovers in titles', 
     };
     for (const fn of ['welcomePage', 'levelingPage', 'badgesPage', 'prefixPage',
                       'roleRewardsPage', 'autoResponderPage', 'reactionsPage',
-                      'loggingPage', 'reactionRolesPage', 'ticketsPage',
+                      'birthdaysPage', 'loggingPage', 'reactionRolesPage', 'ticketsPage',
                       'automodPage', 'eventsPage', 'livePollsPage', 'liveGiveawaysPage']) {
         const html = guildPages[fn]({ guild, user: { username: 'u' } });
         assert.ok(hasIco(html), `${fn} has no svg icon`);

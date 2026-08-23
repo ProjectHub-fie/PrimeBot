@@ -1,7 +1,11 @@
 const { EmbedBuilder } = require('discord.js');
 const config = require('../config');
-const { pool } = require('../server/db');
+const { birthdayPool: pool } = require('../server/birthdayDb');
 const ms = require('ms');
+
+// How often the manager re-reads the tables so dashboard edits (settings,
+// custom embed image, added/removed birthdays) take effect without a restart.
+const RELOAD_INTERVAL_MS = Math.max(1000, Number(process.env.BIRTHDAY_RELOAD_INTERVAL_MS) || 5000);
 
 class BirthdayManager {
     constructor(client) {
@@ -17,6 +21,20 @@ class BirthdayManager {
             console.error('[BIRTHDAYS] Failed to initialize BirthdayManager:', err);
             this.isReady = false;
         });
+        this._startReloadInterval();
+    }
+
+    // Periodic re-read of the birthday tables. Dashboard saves write the DB
+    // directly, so without this the bot would keep serving stale cached values
+    // until a restart. A failed reload is logged and retried on the next tick.
+    _startReloadInterval() {
+        if (this._reloadTimer) return;
+        this._reloadTimer = setInterval(() => {
+            this.loadBirthdays().catch(err => {
+                console.error('[BIRTHDAYS] Periodic reload failed:', err.message);
+            });
+        }, RELOAD_INTERVAL_MS);
+        if (this._reloadTimer.unref) this._reloadTimer.unref();
     }
 
     // Self-create the birthday tables if they don't exist (mirrors the
@@ -28,8 +46,10 @@ class BirthdayManager {
             CREATE TABLE IF NOT EXISTS birthdays_guilds (
                 guild_id varchar(50) PRIMARY KEY,
                 announcement_channel varchar(50),
-                role_id varchar(50)
+                role_id varchar(50),
+                embed_image_url text
             );
+            ALTER TABLE birthdays_guilds ADD COLUMN IF NOT EXISTS embed_image_url text;
             CREATE TABLE IF NOT EXISTS birthdays (
                 id serial PRIMARY KEY,
                 guild_id varchar(50) NOT NULL,
@@ -50,11 +70,12 @@ class BirthdayManager {
             this.birthdays.clear();
 
             // Load guild configs
-            const guildsRes = await pool.query('SELECT guild_id, announcement_channel, role_id FROM birthdays_guilds');
+            const guildsRes = await pool.query('SELECT guild_id, announcement_channel, role_id, embed_image_url FROM birthdays_guilds');
             for (const row of guildsRes.rows) {
                 this.birthdays.set(row.guild_id, {
                     channel: row.announcement_channel || null,
                     role: row.role_id || null,
+                    imageUrl: row.embed_image_url || null,
                     users: new Map(),
                 });
             }
@@ -63,7 +84,7 @@ class BirthdayManager {
             const bdRes = await pool.query('SELECT guild_id, user_id, month, day, year, last_celebrated FROM birthdays');
             for (const row of bdRes.rows) {
                 if (!this.birthdays.has(row.guild_id)) {
-                    this.birthdays.set(row.guild_id, { channel: null, role: null, users: new Map() });
+                    this.birthdays.set(row.guild_id, { channel: null, role: null, imageUrl: null, users: new Map() });
                 }
                 this.birthdays.get(row.guild_id).users.set(row.user_id, {
                     month: row.month,
@@ -81,7 +102,8 @@ class BirthdayManager {
     }
 
     startCheckingBirthdays() {
-        setInterval(() => this.checkBirthdays(), 60 * 60 * 1000); // every hour
+        const timer = setInterval(() => this.checkBirthdays(), 60 * 60 * 1000); // every hour
+        if (timer.unref) timer.unref();
         this.checkBirthdays();
         console.log('[BIRTHDAYS] Birthday checking started.');
     }
@@ -163,6 +185,10 @@ class BirthdayManager {
         const embed = embedStyles[this.currentEmbedIndex % embedStyles.length]();
         this.currentEmbedIndex++;
 
+        // A dashboard-configured custom image overrides the built-in per-style
+        // image on every birthday embed for this server.
+        if (guildData.imageUrl) embed.setImage(guildData.imageUrl);
+
         await channel.send({ content: `🎂 <@${userId}>`, embeds: [embed] });
 
         if (guildData.role) {
@@ -176,9 +202,14 @@ class BirthdayManager {
     }
 
     async setBirthday(guildId, userId, month, day, year = null) {
+        // Accepts either positional args or a single options object
+        // ({ guildId, userId, month, day, year }) — the slash command passes the latter.
+        if (guildId && typeof guildId === 'object') {
+            ({ guildId, userId, month, day, year = null } = guildId);
+        }
         try {
             if (!this.birthdays.has(guildId)) {
-                this.birthdays.set(guildId, { channel: null, role: null, users: new Map() });
+                this.birthdays.set(guildId, { channel: null, role: null, imageUrl: null, users: new Map() });
             }
 
             this.birthdays.get(guildId).users.set(userId, { month, day, year, lastCelebrated: null });
@@ -213,7 +244,7 @@ class BirthdayManager {
     async setChannel(guildId, channelId) {
         try {
             if (!this.birthdays.has(guildId)) {
-                this.birthdays.set(guildId, { channel: channelId, role: null, users: new Map() });
+                this.birthdays.set(guildId, { channel: channelId, role: null, imageUrl: null, users: new Map() });
             } else {
                 this.birthdays.get(guildId).channel = channelId;
             }
@@ -232,7 +263,7 @@ class BirthdayManager {
     async setRole(guildId, roleId) {
         try {
             if (!this.birthdays.has(guildId)) {
-                this.birthdays.set(guildId, { channel: null, role: roleId, users: new Map() });
+                this.birthdays.set(guildId, { channel: null, role: roleId, imageUrl: null, users: new Map() });
             } else {
                 this.birthdays.get(guildId).role = roleId;
             }
@@ -248,6 +279,32 @@ class BirthdayManager {
         }
     }
 
+    // Set (or clear, with null/empty) the custom image shown on every birthday
+    // embed for this server. Configured from the dashboard Birthdays tab.
+    async setEmbedImage(guildId, imageUrl) {
+        try {
+            const url = imageUrl || null;
+            if (!this.birthdays.has(guildId)) {
+                this.birthdays.set(guildId, { channel: null, role: null, imageUrl: url, users: new Map() });
+            } else {
+                this.birthdays.get(guildId).imageUrl = url;
+            }
+            await pool.query(`
+                INSERT INTO birthdays_guilds (guild_id, embed_image_url)
+                VALUES ($1, $2)
+                ON CONFLICT (guild_id) DO UPDATE SET embed_image_url = EXCLUDED.embed_image_url
+            `, [guildId, url]);
+            return true;
+        } catch (error) {
+            console.error('[BIRTHDAYS] Error setting embed image:', error);
+            return false;
+        }
+    }
+
+    // Aliases used by the slash/prefix command paths.
+    setAnnouncementChannel(guildId, channelId) { return this.setChannel(guildId, channelId); }
+    setBirthdayRole(guildId, roleId) { return this.setRole(guildId, roleId); }
+
     getBirthday(guildId, userId) {
         return this.birthdays.get(guildId)?.users.get(userId) || null;
     }
@@ -258,7 +315,7 @@ class BirthdayManager {
             // are visible immediately without requiring a restart.
             const [configRes, bdRes] = await Promise.all([
                 pool.query(
-                    'SELECT announcement_channel, role_id FROM birthdays_guilds WHERE guild_id = $1',
+                    'SELECT announcement_channel, role_id, embed_image_url FROM birthdays_guilds WHERE guild_id = $1',
                     [guildId]
                 ),
                 pool.query(
@@ -281,8 +338,9 @@ class BirthdayManager {
             // Sync the fresh data back into the in-memory map so the rest of the
             // manager (checkBirthdays, etc.) also benefits from it.
             const guildData = {
-                channel: configRow?.announcement_channel || null,
-                role:    configRow?.role_id || null,
+                channel:  configRow?.announcement_channel || null,
+                role:     configRow?.role_id || null,
+                imageUrl: configRow?.embed_image_url || null,
                 users,
             };
             this.birthdays.set(guildId, guildData);
@@ -291,7 +349,7 @@ class BirthdayManager {
         } catch (error) {
             console.error('[BIRTHDAYS] Error fetching guild birthdays from DB:', error);
             // Fall back to the cached map so the list command still works on DB error.
-            return this.birthdays.get(guildId) || { channel: null, role: null, users: new Map() };
+            return this.birthdays.get(guildId) || { channel: null, role: null, imageUrl: null, users: new Map() };
         }
     }
 

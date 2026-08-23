@@ -231,6 +231,7 @@ const birthdaysGuilds = pgTable('birthdays_guilds', {
   guildId: varchar('guild_id', { length: 50 }).primaryKey(),
   announcementChannel: varchar('announcement_channel', { length: 50 }),
   roleId: varchar('role_id', { length: 50 }),
+  embedImageUrl: text('embed_image_url'),
 });
 
 const birthdays = pgTable('birthdays', {

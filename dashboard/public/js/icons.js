@@ -18,6 +18,7 @@
 
 const ICONS = {
   zap: '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
+  cake: '<path d="M20 21v-8a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8"/><path d="M4 16s.5-1 2-1 2.5 2 4 2 2.5-2 4-2 2.5 2 4 2 2-1 2-1"/><path d="M2 21h20"/><path d="M7 8v3"/><path d="M12 8v3"/><path d="M17 8v3"/><path d="M7 4h.01"/><path d="M12 4h.01"/><path d="M17 4h.01"/>',
   hand: '<path d="M18 11V6a1.5 1.5 0 0 0-3 0v4"/><path d="M15 11V5a1.5 1.5 0 0 0-3 0v6"/><path d="M12 11V7a1.5 1.5 0 0 0-3 0v6"/><path d="M9 11V9a1.5 1.5 0 0 0-3 0v7a8 8 0 0 0 8 8h1a8 8 0 0 0 7-4l2-3.5a1.5 1.5 0 0 0-2.5-1.6L18 14"/>',
   trendingUp: '<polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>',
   hash: '<line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/>',
