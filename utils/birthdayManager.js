@@ -7,11 +7,18 @@ const ms = require('ms');
 // custom embed image, added/removed birthdays) take effect without a restart.
 const RELOAD_INTERVAL_MS = Math.max(1000, Number(process.env.BIRTHDAY_RELOAD_INTERVAL_MS) || 5000);
 
+// Hardcoded fallback image shown on the `/birthday list` / `$birthday list`
+// embed. A dashboard-configured custom embed image URL (embed_image_url)
+// overrides it per server; when none is set this default is always used.
+const DEFAULT_LIST_IMAGE_URL = 'https://cdn.discordapp.com/attachments/1358057358009303120/1531595983421706350/images_1.jpeg?ex=6a8c106a&is=6a8abeea&hm=5b145926398d16d26194735de3f9700c65843ef5d7e27e91e4de39b7dd1215b8&';
+
 class BirthdayManager {
     static MONTH_NAMES = [
         'January', 'February', 'March', 'April', 'May', 'June',
         'July', 'August', 'September', 'October', 'November', 'December',
     ];
+
+    static DEFAULT_LIST_IMAGE_URL = DEFAULT_LIST_IMAGE_URL;
 
     constructor(client) {
         this.client = client;
@@ -198,7 +205,7 @@ class BirthdayManager {
                 .setTitle('🌟 Birthday Alert!')
                 .setDescription(`📣 Say Happy Birthday to **${member.displayName}**! 🎁\n\n💫 Another year of awesome adventures ahead! 💫`)
                 .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
-                .setImage('https://cdn.discordapp.com/attachments/1358057358009303120/1531595983421706350/images_1.jpeg?ex=6a69c96a&is=6a6877ea&hm=043f9154583b7518858052bd76b3972819c262ee215d33976e1920f3b83d1175&')
+                .setImage('https://cdn.discordapp.com/attachments/1358057358009303120/1531595983421706350/images_1.jpeg?ex=6a8c106a&is=6a8abeea&hm=5b145926398d16d26194735de3f9700c65843ef5d7e27e91e4de39b7dd1215b8&')
                 .setTimestamp(),
         ];
 
@@ -324,6 +331,13 @@ class BirthdayManager {
     // Aliases used by the slash/prefix command paths.
     setAnnouncementChannel(guildId, channelId) { return this.setChannel(guildId, channelId); }
     setBirthdayRole(guildId, roleId) { return this.setRole(guildId, roleId); }
+
+    // The image shown on the `/birthday list` / `$birthday list` embed for a
+    // guild: the dashboard-configured custom embed image when set, otherwise
+    // the hardcoded default (the built-in fallback never goes away).
+    getListImageUrl(guildId) {
+        return this.birthdays.get(guildId)?.imageUrl || DEFAULT_LIST_IMAGE_URL;
+    }
 
     getBirthday(guildId, userId) {
         return this.birthdays.get(guildId)?.users.get(userId) || null;

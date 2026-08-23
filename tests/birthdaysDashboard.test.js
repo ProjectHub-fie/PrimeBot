@@ -150,3 +150,23 @@ test('the constructor starts the periodic DB reload loop (dashboard saves reach 
     assert.ok(mgr._reloadTimer, 'reload interval must be running');
     clearInterval(mgr._reloadTimer);
 });
+
+// ── Birthday list image: hardcoded default + per-server custom override ─────
+
+test('getListImageUrl falls back to the hardcoded default when no custom image is set', () => {
+    const mgr = freshManager();
+    clearInterval(mgr._reloadTimer);
+    assert.strictEqual(mgr.getListImageUrl('no-such-guild'), BirthdayManager.DEFAULT_LIST_IMAGE_URL);
+    mgr.birthdays.set('g5', { channel: null, role: null, imageUrl: null, users: new Map() });
+    assert.strictEqual(mgr.getListImageUrl('g5'), BirthdayManager.DEFAULT_LIST_IMAGE_URL);
+    assert.ok(BirthdayManager.DEFAULT_LIST_IMAGE_URL.includes('images_1.jpeg'), 'default list image URL changed unexpectedly');
+});
+
+test('getListImageUrl returns the dashboard custom image when set', async () => {
+    const mgr = freshManager();
+    clearInterval(mgr._reloadTimer);
+    birthdayPool.query = async () => ({ rows: [] });
+    await mgr.setEmbedImage('g6', 'https://img.example.com/list.png');
+    assert.strictEqual(mgr.getListImageUrl('g6'), 'https://img.example.com/list.png');
+    birthdayPool.query = realQuery;
+});

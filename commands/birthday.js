@@ -177,6 +177,8 @@ module.exports = {
                     const embed = new EmbedBuilder()
                         .setColor(config.colors.primary)
                         .setTitle('🎂 Server Birthdays')
+                        // Custom dashboard image when set, else the hardcoded default.
+                        .setImage(birthdayManager.getListImageUrl(interaction.guild.id))
                         .setDescription(birthdays.map((b, index) => {
                             const user = interaction.client.users.cache.get(b.userId);
                             const username = user ? user.username : `<@${b.userId}>`;
