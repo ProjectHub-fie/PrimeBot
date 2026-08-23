@@ -1339,11 +1339,13 @@ async function getPlatformStats(serverCountOverride) {
         automodEnabled,
         ticketPanels,
     ] = await Promise.all([
-        _count(`SELECT COUNT(*) FROM server_settings`),
-        _count(`SELECT COUNT(*) FROM server_settings WHERE leveling_enabled = true`),
+        // Exclude the 'global' sentinel row (global no-prefix grants) — it is
+        // not a real guild and must not inflate the adoption stats.
+        _count(`SELECT COUNT(*) FROM server_settings WHERE guild_id <> 'global'`),
+        _count(`SELECT COUNT(*) FROM server_settings WHERE leveling_enabled = true AND guild_id <> 'global'`),
         _welcomeCount(`SELECT COUNT(*) FROM welcome_settings WHERE enabled = true`),
-        _count(`SELECT COUNT(*) FROM server_settings WHERE auto_reactions_enabled = true`),
-        _count(`SELECT COUNT(*) FROM server_settings WHERE receive_broadcasts = true`),
+        _count(`SELECT COUNT(*) FROM server_settings WHERE auto_reactions_enabled = true AND guild_id <> 'global'`),
+        _count(`SELECT COUNT(*) FROM server_settings WHERE receive_broadcasts = true AND guild_id <> 'global'`),
         _welcomeCount(`SELECT COUNT(*) FROM welcome_settings WHERE banner_url IS NOT NULL AND banner_url <> ''`),
         _automodCount(`SELECT COUNT(*) FROM automod_settings WHERE enabled = true`),
         _ticketCount(`SELECT COUNT(*) FROM ticket_panels WHERE enabled = true`),
