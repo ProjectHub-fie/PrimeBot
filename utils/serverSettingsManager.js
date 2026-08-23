@@ -305,7 +305,10 @@ class ServerSettingsManager {
                 }
                 this.serverSettings.set(row.guild_id, fresh);
             }
-            console.log(`[SERVER SETTINGS] Loaded settings for ${this.serverSettings.size} servers.`);
+            this._migrateLegacyNoPrefixGrants();
+            const serverCount = [...this.serverSettings.keys()]
+                .filter(id => id !== ServerSettingsManager.GLOBAL_NO_PREFIX_GUILD_ID).length;
+            console.log(`[SERVER SETTINGS] Loaded settings for ${serverCount} servers.`);
         } catch (error) {
             console.error('[SERVER SETTINGS] Error loading settings:', error);
         }
@@ -366,17 +369,22 @@ class ServerSettingsManager {
     getOptedOutServers() {
         const out = [];
         for (const [id, s] of this.serverSettings.entries()) {
+            if (id === ServerSettingsManager.GLOBAL_NO_PREFIX_GUILD_ID) continue;
             if (!s.receiveBroadcasts) out.push(id);
         }
         return out;
     }
 
     getBroadcastReceptionCount() {
+        const GLOBAL = ServerSettingsManager.GLOBAL_NO_PREFIX_GUILD_ID;
         let count = 0;
-        for (const s of this.serverSettings.values()) {
+        let realGuildRows = 0;
+        for (const [id, s] of this.serverSettings.entries()) {
+            if (id === GLOBAL) continue;
+            realGuildRows++;
             if (s.receiveBroadcasts) count++;
         }
-        const serversWithoutSettings = this.client.guilds.cache.size - this.serverSettings.size;
+        const serversWithoutSettings = this.client.guilds.cache.size - realGuildRows;
         return count + Math.max(0, serversWithoutSettings);
     }
 
@@ -386,6 +394,13 @@ class ServerSettingsManager {
     // that never expires and is never auto-disabled. Any other value is a
     // numeric expiration timestamp (ms since epoch).
     static NO_PREFIX_LIFETIME = 'lifetime';
+
+    // No-prefix grants are GLOBAL per user: a grant made in any server applies
+    // in every server ("set once, works everywhere"). They live in a dedicated
+    // sentinel row (guild_id 'global') of server_settings, so no schema change
+    // is needed. Legacy per-guild no_prefix_users maps are folded into this
+    // bucket on load (see _migrateLegacyNoPrefixGrants).
+    static GLOBAL_NO_PREFIX_GUILD_ID = 'global';
 
     _normalizeNoPrefixExpiration(value) {
         if (value === ServerSettingsManager.NO_PREFIX_LIFETIME) return ServerSettingsManager.NO_PREFIX_LIFETIME;
@@ -400,9 +415,11 @@ class ServerSettingsManager {
             : numericValue;
     }
 
-    // Enable no-prefix mode. `minutes` is OPTIONAL: when omitted (null/undefined)
-    // the grant is for the user's lifetime — it never expires and is not
-    // auto-disabled. When provided, it must be a positive number of minutes.
+    // Enable no-prefix mode GLOBALLY (every server). `guildId` is accepted for
+    // backward compatibility but ignored — grants are stored in the global
+    // bucket. `minutes` is OPTIONAL: when omitted (null/undefined) the grant is
+    // for the user's lifetime — it never expires and is not auto-disabled.
+    // When provided, it must be a positive number of minutes.
     enableNoPrefixMode(guildId, userId, minutes = null) {
         if (!userId) return { success: false, message: 'Invalid user' };
 
@@ -412,20 +429,19 @@ class ServerSettingsManager {
             if (!Number.isFinite(mins) || mins <= 0) return { success: false, message: 'Duration must be a positive number of minutes' };
         }
 
+        const GLOBAL = ServerSettingsManager.GLOBAL_NO_PREFIX_GUILD_ID;
         try {
-            const s = this.getGuildSettings(guildId);
+            const s = this.getGuildSettings(GLOBAL);
             if (!s.noPrefixUsers) s.noPrefixUsers = {};
             if (isLifetime) {
                 s.noPrefixUsers[userId] = ServerSettingsManager.NO_PREFIX_LIFETIME;
-                this.serverSettings.set(guildId, s);
-                this._saveGuildSettings(guildId);
-                return { success: true, message: 'No-prefix mode enabled for a lifetime (never expires)', expiresAt: ServerSettingsManager.NO_PREFIX_LIFETIME, lifetime: true };
+                this._saveGuildSettings(GLOBAL);
+                return { success: true, message: 'No-prefix mode enabled for a lifetime (never expires), in all servers', expiresAt: ServerSettingsManager.NO_PREFIX_LIFETIME, lifetime: true };
             }
             const expirationTime = Date.now() + minutes * 60 * 1000;
             s.noPrefixUsers[userId] = expirationTime;
-            this.serverSettings.set(guildId, s);
-            this._saveGuildSettings(guildId);
-            return { success: true, message: `No-prefix mode enabled for ${minutes} minute${minutes !== 1 ? 's' : ''}`, expiresAt: expirationTime, lifetime: false };
+            this._saveGuildSettings(GLOBAL);
+            return { success: true, message: `No-prefix mode enabled for ${minutes} minute${minutes !== 1 ? 's' : ''}, in all servers`, expiresAt: expirationTime, lifetime: false };
         } catch (err) {
             console.error(`[SERVER SETTINGS] Error enabling no-prefix mode:`, err);
             return { success: false, message: 'An error occurred.' };
@@ -434,25 +450,26 @@ class ServerSettingsManager {
 
     disableNoPrefixMode(guildId, userId) {
         if (!userId) return false;
-        const s = this.getGuildSettings(guildId);
-        if (!s.noPrefixUsers || !s.noPrefixUsers[userId]) return false;
+        const GLOBAL = ServerSettingsManager.GLOBAL_NO_PREFIX_GUILD_ID;
+        const s = this.serverSettings.get(GLOBAL);
+        if (!s?.noPrefixUsers || !s.noPrefixUsers[userId]) return false;
         delete s.noPrefixUsers[userId];
-        this.serverSettings.set(guildId, s);
-        this._saveGuildSettings(guildId);
+        this._saveGuildSettings(GLOBAL);
         return true;
     }
 
     hasNoPrefixMode(guildId, userId) {
         try {
-            if (!guildId || !userId) return false;
-            const s = this.getGuildSettings(guildId);
-            const expirationTime = this._normalizeNoPrefixExpiration(s.noPrefixUsers?.[userId]);
+            if (!userId) return false;
+            const GLOBAL = ServerSettingsManager.GLOBAL_NO_PREFIX_GUILD_ID;
+            const s = this.serverSettings.get(GLOBAL);
+            const expirationTime = this._normalizeNoPrefixExpiration(s?.noPrefixUsers?.[userId]);
             if (!expirationTime) return false;
             // Lifetime grants never expire and are never auto-removed.
             if (expirationTime === ServerSettingsManager.NO_PREFIX_LIFETIME) return true;
             if (Date.now() >= expirationTime) {
                 delete s.noPrefixUsers[userId];
-                this._saveGuildSettings(guildId);
+                this._saveGuildSettings(GLOBAL);
                 return false;
             }
             s.noPrefixUsers[userId] = expirationTime;
@@ -467,8 +484,9 @@ class ServerSettingsManager {
     // sentinel (lifetime grant), or a numeric ms timestamp (timed grant).
     getNoPrefixExpiration(guildId, userId) {
         if (!userId) return null;
-        const s = this.getGuildSettings(guildId);
-        if (!s.noPrefixUsers) return null;
+        const GLOBAL = ServerSettingsManager.GLOBAL_NO_PREFIX_GUILD_ID;
+        const s = this.serverSettings.get(GLOBAL);
+        if (!s?.noPrefixUsers) return null;
         const exp = this._normalizeNoPrefixExpiration(s.noPrefixUsers[userId]);
         if (!exp) return null;
         if (exp === ServerSettingsManager.NO_PREFIX_LIFETIME) {
@@ -477,12 +495,48 @@ class ServerSettingsManager {
         }
         if (Date.now() >= exp) {
             delete s.noPrefixUsers[userId];
-            this.serverSettings.set(guildId, s);
-            this._saveGuildSettings(guildId);
+            this._saveGuildSettings(GLOBAL);
             return null;
         }
         s.noPrefixUsers[userId] = exp;
         return exp;
+    }
+
+    // Folds legacy per-guild no-prefix grants into the global bucket. Runs
+    // after every settings load; lifetime wins over timed grants, later
+    // expirations win over earlier ones, and expired/invalid entries are
+    // dropped. Cleared per-guild maps are persisted so the migration only
+    // does real work once.
+    _migrateLegacyNoPrefixGrants() {
+        const GLOBAL = ServerSettingsManager.GLOBAL_NO_PREFIX_GUILD_ID;
+        const LIFETIME = ServerSettingsManager.NO_PREFIX_LIFETIME;
+        const clearedGuilds = [];
+        let globalSettings = null;
+
+        for (const [guildId, s] of this.serverSettings.entries()) {
+            if (guildId === GLOBAL || !s.noPrefixUsers) continue;
+            const entries = Object.entries(s.noPrefixUsers);
+            if (!entries.length) continue;
+
+            globalSettings = globalSettings || this.getGuildSettings(GLOBAL);
+            if (!globalSettings.noPrefixUsers) globalSettings.noPrefixUsers = {};
+
+            for (const [userId, raw] of entries) {
+                const exp = this._normalizeNoPrefixExpiration(raw);
+                if (!exp) continue;
+                if (exp !== LIFETIME && Date.now() >= exp) continue;
+                const existing = this._normalizeNoPrefixExpiration(globalSettings.noPrefixUsers[userId]);
+                if (existing === LIFETIME) continue;
+                if (exp === LIFETIME || !existing || exp > existing) {
+                    globalSettings.noPrefixUsers[userId] = exp;
+                }
+            }
+            s.noPrefixUsers = {};
+            clearedGuilds.push(guildId);
+        }
+
+        if (globalSettings) this._saveGuildSettings(GLOBAL);
+        for (const guildId of clearedGuilds) this._saveGuildSettings(guildId);
     }
 
     isNoPrefixLifetime(guildId, userId) {

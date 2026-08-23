@@ -8,13 +8,18 @@ const ms = require('ms');
 const RELOAD_INTERVAL_MS = Math.max(1000, Number(process.env.BIRTHDAY_RELOAD_INTERVAL_MS) || 5000);
 
 class BirthdayManager {
+    static MONTH_NAMES = [
+        'January', 'February', 'March', 'April', 'May', 'June',
+        'July', 'August', 'September', 'October', 'November', 'December',
+    ];
+
     constructor(client) {
         this.client = client;
         this.birthdays = new Map();
         this.isReady = false;
         this.currentEmbedIndex = 0;
 
-        this.loadBirthdays().then(() => {
+        this._initPromise = this.loadBirthdays().then(() => {
             this.isReady = true;
             this.startCheckingBirthdays();
         }).catch(err => {
@@ -22,6 +27,21 @@ class BirthdayManager {
             this.isReady = false;
         });
         this._startReloadInterval();
+    }
+
+    // Await before first DB use so command paths don't race the boot load.
+    waitForReady() {
+        return this._initPromise;
+    }
+
+    // "May 9" style label used by the birthday set/check command replies.
+    formatDate(month, day) {
+        const m = Number(month);
+        const d = Number(day);
+        if (!Number.isInteger(m) || m < 1 || m > 12 || !Number.isInteger(d) || d < 1 || d > 31) {
+            return 'Invalid date';
+        }
+        return `${BirthdayManager.MONTH_NAMES[m - 1]} ${d}`;
     }
 
     // Periodic re-read of the birthday tables. Dashboard saves write the DB

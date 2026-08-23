@@ -33,7 +33,7 @@ function helpEmbed(prefix) {
     return baseEmbed(
         config.colors.primary,
         '🪄 No-Prefix Mode',
-        'Developer-only no-prefix management. Granted users can run commands without typing the prefix.'
+        'Developer-only no-prefix management. Granted users can run commands without typing the prefix — set once, it works in **every** server.'
     ).addFields(
         { name: `${prefix}np add @user [minutes]`, value: 'Grant a user no-prefix access. Omit minutes for a lifetime grant.', inline: false },
         { name: `${prefix}np remove @user`, value: "Revoke a user's no-prefix access.", inline: false },
@@ -47,12 +47,12 @@ function grantEmbed({ targetUser, minutes, lifetime, expiresAt }) {
     return baseEmbed(
         config.colors.success,
         '🪄 No-Prefix Mode Enabled',
-        `${targetUser} can now run commands **without the prefix**.`
+        `${targetUser} can now run commands **without the prefix** in every server.`
     ).addFields(
         { name: 'Target User', value: targetLabel(targetUser), inline: false },
         { name: 'Duration', value: formatDuration(minutes, lifetime), inline: true },
         { name: 'Expires', value: lifetime ? 'Never' : formatExpiry(expiresAt), inline: true },
-        { name: 'How to use', value: 'The granted user simply types a command name (e.g. `help`) with no prefix.', inline: false }
+        { name: 'How to use', value: 'The granted user simply types a command name (e.g. `help`) with no prefix, in any server.', inline: false }
     );
 }
 
