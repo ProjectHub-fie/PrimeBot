@@ -1116,6 +1116,10 @@ function parseEmojiForDiscord(emoji) {
 // are disabled). The dashboard writes the DB row directly; the bot's
 // TicketPanelManager picks it up on its cache reload.
 //
+// Tickets is currently an "upcoming" (not-yet-released) feature — every write
+// endpoint is guarded by requireUpcoming (403 { reason: 'upcoming' } for all
+// servers; developer/owner-role users bypass). The read endpoint stays open.
+//
 //   GET    .../tickets                         list panels
 //   POST   .../tickets                         create a panel
 //   PATCH  .../tickets/:id                     edit a panel
@@ -1179,7 +1183,7 @@ app.get('/api/guilds/:guildId/tickets', requireAuth, requireGuildAdmin, async (r
     }
 });
 
-app.post('/api/guilds/:guildId/tickets', requireAuth, requireGuildAdmin, async (req, res) => {
+app.post('/api/guilds/:guildId/tickets', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
     try {
         const body = req.body || {};
         if (!body.name || !String(body.name).trim()) {
@@ -1193,7 +1197,7 @@ app.post('/api/guilds/:guildId/tickets', requireAuth, requireGuildAdmin, async (
     }
 });
 
-app.patch('/api/guilds/:guildId/tickets/:id', requireAuth, requireGuildAdmin, async (req, res) => {
+app.patch('/api/guilds/:guildId/tickets/:id', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);
         if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid panel id.' });
@@ -1214,7 +1218,7 @@ app.patch('/api/guilds/:guildId/tickets/:id', requireAuth, requireGuildAdmin, as
     }
 });
 
-app.delete('/api/guilds/:guildId/tickets/:id', requireAuth, requireGuildAdmin, async (req, res) => {
+app.delete('/api/guilds/:guildId/tickets/:id', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);
         if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid panel id.' });
@@ -1231,7 +1235,7 @@ app.delete('/api/guilds/:guildId/tickets/:id', requireAuth, requireGuildAdmin, a
     }
 });
 
-app.post('/api/guilds/:guildId/tickets/:id/clone', requireAuth, requireGuildAdmin, async (req, res) => {
+app.post('/api/guilds/:guildId/tickets/:id/clone', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);
         if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid panel id.' });
@@ -1244,7 +1248,7 @@ app.post('/api/guilds/:guildId/tickets/:id/clone', requireAuth, requireGuildAdmi
     }
 });
 
-app.post('/api/guilds/:guildId/tickets/:id/rename', requireAuth, requireGuildAdmin, async (req, res) => {
+app.post('/api/guilds/:guildId/tickets/:id/rename', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);
         if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid panel id.' });
@@ -1259,7 +1263,7 @@ app.post('/api/guilds/:guildId/tickets/:id/rename', requireAuth, requireGuildAdm
 
 // Send the panel to a channel: post the panel message via REST and store the
 // resulting channel/message id on the panel so the bot can later "update" it.
-app.post('/api/guilds/:guildId/tickets/:id/send', requireAuth, requireGuildAdmin, async (req, res) => {
+app.post('/api/guilds/:guildId/tickets/:id/send', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);
         if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid panel id.' });
@@ -1277,7 +1281,7 @@ app.post('/api/guilds/:guildId/tickets/:id/send', requireAuth, requireGuildAdmin
 
 // Re-render an existing panel message by id (the "update panel" button). The
 // messageId may be the panel's stored one or a new one supplied in the body.
-app.post('/api/guilds/:guildId/tickets/:id/update', requireAuth, requireGuildAdmin, async (req, res) => {
+app.post('/api/guilds/:guildId/tickets/:id/update', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);
         if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid panel id.' });

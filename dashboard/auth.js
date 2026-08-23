@@ -296,8 +296,8 @@ async function requireBeta(req, res, next) {
 }
 
 /**
- * Guard for "upcoming" (not-yet-released) features (e.g. Events). Upcoming
- * features are disabled for ALL servers — the dashboard renders a "Coming Soon"
+ * Guard for "upcoming" (not-yet-released) features (e.g. Events, Tickets).
+ * Upcoming features are disabled for ALL servers — the dashboard renders a "Coming Soon"
  * overlay and the write endpoints return 403 so the feature can't be used via
  * API either. Upcoming takes priority over beta. Must run AFTER requireGuildAdmin.
  */

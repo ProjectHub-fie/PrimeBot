@@ -4,6 +4,14 @@
 
 const GUILD_ID = window.guildData?.guildId;
 
+// Tickets is currently an "upcoming" feature (see ticketsPage
+// upcoming-locked-wrap) — the page renders a blurred "Coming Soon" overlay for
+// ALL servers. In that case this script exits early — no API calls, no
+// bindings — so the overlay is the only thing that works.
+if (document.querySelector('.upcoming-locked-wrap.locked, .beta-locked-wrap.locked')) {
+  // Nothing to wire — the overlay covers the panel.
+} else {
+
 const TICKET_BUTTON_STYLES = [
   { value: 'Primary', label: 'Blurple (Primary)' },
   { value: 'Secondary', label: 'Grey (Secondary)' },
@@ -354,3 +362,5 @@ document.getElementById('tk-save')?.addEventListener('click', async (e) => {
 
 document.getElementById('tk-cancel-edit')?.addEventListener('click', clearTicketForm);
 bindTicketCardActions();
+
+} // end upcoming/beta lock guard

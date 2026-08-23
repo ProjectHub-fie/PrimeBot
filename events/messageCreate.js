@@ -1716,7 +1716,9 @@ module.exports = {
                                 const upcomingEmbed = new EmbedBuilder()
                                     .setColor("#FFC0CB")
                                     .setTitle("🎂 Server Birthdays")
-                                    .setThumbnail("https://i.imgur.com/1XXtUx0.gif");
+                                    .setThumbnail("https://i.imgur.com/1XXtUx0.gif")
+                                    // Custom dashboard image when set, else the hardcoded default.
+                                    .setImage(client.birthdayManager.getListImageUrl(message.guild.id));
 
                                 const lines = [];
                                 for (const birthday of allBirthdays.slice(0, 25)) {

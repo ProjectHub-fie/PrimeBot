@@ -489,7 +489,7 @@ function birthdaysPage({ guild, user }) {
       <div class="field">
         <label class="field-label" for="bd-image-url">Custom embed image URL</label>
         <input type="url" id="bd-image-url" value="${esc(s.imageUrl || '')}" placeholder="https://…/birthday-banner.png" />
-        <div class="field-hint">Shown on <strong>every</strong> birthday embed, overriding the built-in image. Leave blank to use the default images.</div>
+        <div class="field-hint">Shown on <strong>every</strong> birthday celebration card <strong>and</strong> the birthday list embed, overriding the built-in images. Leave blank to use the default images.</div>
         <div id="bd-image-preview-wrap" class="bd-image-preview-wrap${s.imageUrl ? '' : ' hidden'}"><img id="bd-image-preview" src="${esc(s.imageUrl || '')}" alt="Birthday embed image preview" /></div>
       </div>
 
@@ -984,7 +984,15 @@ function ticketsPage({ guild, user }) {
         <button class="btn btn-secondary" id="tk-cancel-edit" style="display:none">Cancel edit</button>
       </div>
     </div>`;
-    return guildTab({ guild, user, active: 'tickets', panelHTML, scripts: ['/js/guild-common.js', '/js/tickets.js'] });
+    // Tickets is marked `upcoming: true` in render/guild.js TABS — the page
+    // renders the "Coming Soon……" overlay for ALL servers (upcoming takes
+    // priority over beta). The underlying editor markup is kept (blurred) so
+    // flipping the flag off later re-enables the feature with no rewrite.
+    // Developer/owner-role viewers bypass the gate and get the real editor.
+    const wrappedPanelHTML = guild._bypassUpcoming
+        ? panelHTML
+        : upcomingOverlayWrap(panelHTML, { icon: 'ticket', title: 'Tickets' });
+    return guildTab({ guild, user, active: 'tickets', panelHTML: wrappedPanelHTML, scripts: ['/js/guild-common.js', '/js/tickets.js'] });
 }
 
 // ── Automod ─────────────────────────────────────────────────────────────────
