@@ -97,8 +97,8 @@ client.betaManager = betaManager;
     client.liveGiveawayManager = { giveaways: new Map() };
     client.birthdayManager  = { getBirthday: noop, setBirthday: noop, removeBirthday: noop,
                                  getAllBirthdays: () => new Map(), getUpcomingBirthdays: async () => [],
-                                 getGuildBirthdays: async () => ({ channel: null, role: null, users: new Map() }),
-                                 setAnnouncementChannel: noop, setBirthdayRole: noop,
+                                 getGuildBirthdays: async () => ({ channel: null, role: null, imageUrl: null, users: new Map() }),
+                                 setAnnouncementChannel: noop, setBirthdayRole: noop, setEmbedImage: noop,
                                  getGuildConfig: () => ({ announcementChannel: null, birthdayRole: null }) };
     client.emojiManager     = { getEmoji: noop, getAllEmojis: () => [] };
     client.countingManager  = { isCountingChannel: () => false, processCountingMessage: noopAsync };

@@ -671,6 +671,87 @@ app.delete('/api/guilds/:guildId/badges/:rowId', requireAuth, requireGuildAdmin,
     }
 });
 
+// ── API: birthdays ──────────────────────────────────────────────────────────
+// Reads/writes the birthdays + birthdays_guilds tables (BIRTHDAY_DATABASE_URL
+// pool) so the Birthdays tab can list every registered birthday, add/remove
+// entries, and set the announcement channel, birthday role and the custom
+// embed image URL. The bot's BirthdayManager re-reads these tables every ~5s
+// so dashboard edits take effect without a bot restart.
+
+app.get('/api/guilds/:guildId/birthdays', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const [settings, birthdays] = await Promise.all([
+            dashboardDb.getGuildBirthdaySettings(req.guild.id),
+            dashboardDb.getGuildBirthdays(req.guild.id),
+        ]);
+        res.json({ settings, birthdays });
+    } catch (err) {
+        console.error('[API] get birthdays error:', err.message);
+        res.status(500).json({ error: 'Failed to load birthdays.' });
+    }
+});
+
+app.patch('/api/guilds/:guildId/birthdays', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const body = req.body || {};
+        const patch = {};
+        if ('channelId' in body) patch.channelId = body.channelId || null;
+        if ('roleId' in body) patch.roleId = body.roleId || null;
+        if ('imageUrl' in body) {
+            const url = String(body.imageUrl || '').trim();
+            if (url && !/^https?:\/\/\S+/i.test(url)) {
+                return res.status(400).json({ error: 'Image URL must be a valid http(s) URL.' });
+            }
+            patch.imageUrl = url || null;
+        }
+        const settings = await dashboardDb.upsertGuildBirthdaySettings(req.guild.id, patch);
+        if ('imageUrl' in patch) recordWebsiteLog(req, patch.imageUrl ? 'Set a custom birthday embed image' : 'Cleared the custom birthday embed image');
+        if ('channelId' in patch) recordWebsiteLog(req, 'Updated birthday announcement channel');
+        if ('roleId' in patch) recordWebsiteLog(req, 'Updated birthday role');
+        res.json({ settings });
+    } catch (err) {
+        console.error('[API] update birthday settings error:', err.message);
+        res.status(500).json({ error: 'Failed to save birthday settings.' });
+    }
+});
+
+app.post('/api/guilds/:guildId/birthdays', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const { userId, month, day, year } = req.body || {};
+        const m = parseInt(month, 10);
+        const d = parseInt(day, 10);
+        const y = year != null && year !== '' ? parseInt(year, 10) : null;
+        if (!userId || !/^\d{17,20}$/.test(String(userId))) {
+            return res.status(400).json({ error: 'A valid member user ID (17-20 digits) is required.' });
+        }
+        if (!Number.isFinite(m) || m < 1 || m > 12 || !Number.isFinite(d) || d < 1 || d > 31) {
+            return res.status(400).json({ error: 'Month must be 1-12 and day must be 1-31.' });
+        }
+        if (y != null && (!Number.isFinite(y) || y < 1900 || y > new Date().getFullYear())) {
+            return res.status(400).json({ error: 'Year must be between 1900 and the current year.' });
+        }
+        const birthdays = await dashboardDb.addGuildBirthday(req.guild.id, { userId, month: m, day: d, year: y });
+        recordWebsiteLog(req, `Added birthday for <@${userId}> (${m}/${d}${y ? `/${y}` : ''})`);
+        res.json({ birthdays });
+    } catch (err) {
+        console.error('[API] add birthday error:', err.message);
+        res.status(500).json({ error: 'Failed to add birthday.' });
+    }
+});
+
+app.delete('/api/guilds/:guildId/birthdays/:userId', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const userId = String(req.params.userId || '');
+        if (!/^\d{17,20}$/.test(userId)) return res.status(400).json({ error: 'Invalid user ID.' });
+        const birthdays = await dashboardDb.removeGuildBirthday(req.guild.id, userId);
+        recordWebsiteLog(req, `Removed birthday for <@${userId}>`);
+        res.json({ birthdays });
+    } catch (err) {
+        console.error('[API] remove birthday error:', err.message);
+        res.status(500).json({ error: 'Failed to remove birthday.' });
+    }
+});
+
 // ── API: update logging settings (channel, webhook, events) ─────────────────
 
 app.patch('/api/guilds/:guildId/logging', requireAuth, requireGuildAdmin, async (req, res) => {
@@ -1534,6 +1615,8 @@ app.get('/guild/:guildId/reactionroles', requireAuth, requireGuildAdminPage, (re
     res.type('html').send(guildPages.reactionRolesPage({ guild: req.guild, user: req.user })));
 app.get('/guild/:guildId/broadcast', requireAuth, requireGuildAdminPage, (req, res) =>
     res.type('html').send(guildPages.broadcastPage({ guild: req.guild, user: req.user })));
+app.get('/guild/:guildId/birthdays', requireAuth, requireGuildAdminPage, (req, res) =>
+    res.type('html').send(guildPages.birthdaysPage({ guild: req.guild, user: req.user })));
 app.get('/guild/:guildId/logging', requireAuth, requireGuildAdminPage, (req, res) =>
     res.type('html').send(guildPages.loggingPage({ guild: req.guild, user: req.user })));
 app.get('/guild/:guildId/automod', requireAuth, requireGuildAdminPage, (req, res) =>

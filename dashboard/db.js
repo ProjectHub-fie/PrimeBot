@@ -103,6 +103,20 @@ function getLogPool() {
     return logPool;
 }
 
+// birthdays_guilds + birthdays live in the dedicated BIRTHDAY_DATABASE_URL pool
+// (falling back to DATABASE_URL), same multi-pool pattern as the other features.
+let birthdayPool = null;
+function getBirthdayPool() {
+    if (birthdayPool) return birthdayPool;
+    try {
+        birthdayPool = require('../server/birthdayDb').birthdayPool;
+    } catch (err) {
+        console.error('[DASHBOARD DB] birthdayDb unavailable:', err.message);
+        birthdayPool = { query: async () => { throw new Error('Birthday database not configured'); } };
+    }
+    return birthdayPool;
+}
+
 async function ensureLevelingRoleRewardsTable() {
     await getLevelingPool().query(`
         CREATE TABLE IF NOT EXISTS leveling_role_rewards (
@@ -144,6 +158,117 @@ async function setLevelingRoleRewards(guildId, rewards) {
         }
     }
     return getLevelingRoleRewards(guildId);
+}
+
+// ── Birthdays (in the dedicated BIRTHDAY_DATABASE_URL pool) ─────────────────
+//
+// The bot's BirthdayManager writes birthdays + per-guild settings into the
+// birthdays/birthdays_guilds tables. The dashboard's Birthdays tab reads them
+// so admins can see every registered birthday, add/remove entries, and set the
+// custom embed image URL. The bot re-reads these tables every ~5s
+// (RELOAD_INTERVAL_MS in utils/birthdayManager.js) so dashboard edits take
+// effect without a bot restart.
+
+async function ensureBirthdayTables() {
+    const pool = getBirthdayPool();
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS birthdays_guilds (
+            guild_id varchar(50) PRIMARY KEY,
+            announcement_channel varchar(50),
+            role_id varchar(50),
+            embed_image_url text
+        );
+        ALTER TABLE birthdays_guilds ADD COLUMN IF NOT EXISTS embed_image_url text;
+        CREATE TABLE IF NOT EXISTS birthdays (
+            id serial PRIMARY KEY,
+            guild_id varchar(50) NOT NULL,
+            user_id varchar(50) NOT NULL,
+            month integer NOT NULL,
+            day integer NOT NULL,
+            year integer,
+            last_celebrated varchar(50)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS birthdays_guild_user_uniq ON birthdays (guild_id, user_id);
+    `);
+}
+
+async function getGuildBirthdaySettings(guildId) {
+    await ensureBirthdayTables();
+    const res = await getBirthdayPool().query(
+        'SELECT announcement_channel, role_id, embed_image_url FROM birthdays_guilds WHERE guild_id = $1',
+        [guildId]
+    );
+    const row = res.rows[0] || {};
+    return {
+        channelId: row.announcement_channel || null,
+        roleId: row.role_id || null,
+        imageUrl: row.embed_image_url || null,
+    };
+}
+
+async function upsertGuildBirthdaySettings(guildId, patch) {
+    await ensureBirthdayTables();
+    const current = await getGuildBirthdaySettings(guildId);
+    const next = {
+        channelId: 'channelId' in patch ? (patch.channelId || null) : current.channelId,
+        roleId: 'roleId' in patch ? (patch.roleId || null) : current.roleId,
+        imageUrl: 'imageUrl' in patch ? (patch.imageUrl || null) : current.imageUrl,
+    };
+    await getBirthdayPool().query(
+        `INSERT INTO birthdays_guilds (guild_id, announcement_channel, role_id, embed_image_url)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (guild_id) DO UPDATE SET
+             announcement_channel = EXCLUDED.announcement_channel,
+             role_id = EXCLUDED.role_id,
+             embed_image_url = EXCLUDED.embed_image_url`,
+        [guildId, next.channelId, next.roleId, next.imageUrl]
+    );
+    return next;
+}
+
+// Returns every birthday registered in the guild, sorted by next occurrence,
+// each annotated with daysUntil (mirrors BirthdayManager.getAllBirthdays).
+async function getGuildBirthdays(guildId) {
+    await ensureBirthdayTables();
+    const res = await getBirthdayPool().query(
+        'SELECT user_id, month, day, year, last_celebrated FROM birthdays WHERE guild_id = $1',
+        [guildId]
+    );
+    const now = new Date();
+    return res.rows.map(r => {
+        const nextBirthday = new Date(now.getFullYear(), r.month - 1, r.day);
+        if (nextBirthday < now) nextBirthday.setFullYear(now.getFullYear() + 1);
+        const daysUntil = Math.ceil((nextBirthday - now) / (1000 * 60 * 60 * 24));
+        return {
+            userId: String(r.user_id),
+            month: Number(r.month),
+            day: Number(r.day),
+            year: r.year != null ? Number(r.year) : null,
+            lastCelebrated: r.last_celebrated || null,
+            daysUntil,
+        };
+    }).sort((a, b) => a.daysUntil - b.daysUntil);
+}
+
+async function addGuildBirthday(guildId, { userId, month, day, year = null }) {
+    await ensureBirthdayTables();
+    await getBirthdayPool().query(
+        `INSERT INTO birthdays (guild_id, user_id, month, day, year, last_celebrated)
+         VALUES ($1, $2, $3, $4, $5, NULL)
+         ON CONFLICT (guild_id, user_id) DO UPDATE SET
+             month = EXCLUDED.month, day = EXCLUDED.day, year = EXCLUDED.year, last_celebrated = NULL`,
+        [guildId, String(userId), month, day, year]
+    );
+    return getGuildBirthdays(guildId);
+}
+
+async function removeGuildBirthday(guildId, userId) {
+    await ensureBirthdayTables();
+    await getBirthdayPool().query(
+        'DELETE FROM birthdays WHERE guild_id = $1 AND user_id = $2',
+        [guildId, String(userId)]
+    );
+    return getGuildBirthdays(guildId);
 }
 
 // ── Badges (leveling achievement badges, in the LEVELING_DATABASE_URL pool) ─
@@ -1110,7 +1235,7 @@ function rowToAutomodAppeal(row) {
 // ── Combined view (one fetch per guild for the settings page) ───────────────
 
 async function getGuildConfig(guildId) {
-    const [server, welcome, logging, reactionRoles, automod, ticketPanels, levelingRoleRewards] = await Promise.all([
+    const [server, welcome, logging, reactionRoles, automod, ticketPanels, levelingRoleRewards, birthdaySettings, birthdays] = await Promise.all([
         getServerSettings(guildId).catch(err => {
             console.error('[DASHBOARD DB] server_settings read failed:', err.message);
             return defaultServerSettings();
@@ -1139,13 +1264,21 @@ async function getGuildConfig(guildId) {
             console.error('[DASHBOARD DB] leveling_role_rewards read failed:', err.message);
             return [];
         }),
+        getGuildBirthdaySettings(guildId).catch(err => {
+            console.error('[DASHBOARD DB] birthday settings read failed:', err.message);
+            return { channelId: null, roleId: null, imageUrl: null };
+        }),
+        getGuildBirthdays(guildId).catch(err => {
+            console.error('[DASHBOARD DB] birthdays read failed:', err.message);
+            return [];
+        }),
     ]);
     // Attach durable role rewards onto the leveling settings (kept in a separate
     // pool so they survive restarts and reach the bot via its cache reload).
     if (server && server.leveling) {
         server.leveling.roleRewards = levelingRoleRewards || [];
     }
-    return { server, welcome, logging, reactionRoles, automod, ticketPanels };
+    return { server, welcome, logging, reactionRoles, automod, ticketPanels, birthdaySettings, birthdays };
 }
 
 // ── Aggregated platform stats (public — shown on the login screen) ──────────
@@ -2106,6 +2239,11 @@ module.exports = {
     getGuildBadges,
     awardDashboardBadge,
     revokeDashboardBadge,
+    getGuildBirthdays,
+    getGuildBirthdaySettings,
+    upsertGuildBirthdaySettings,
+    addGuildBirthday,
+    removeGuildBirthday,
     isTicketNameConflict,
     uniqueCloneName,
 };

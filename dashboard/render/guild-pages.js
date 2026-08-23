@@ -459,6 +459,60 @@ function broadcastPage({ guild, user }) {
     return guildTab({ guild, user, active: 'broadcast', panelHTML, scripts: ['/js/guild-common.js', '/js/settings-basic.js'] });
 }
 
+// ── Birthdays ───────────────────────────────────────────────────────────────
+//
+// Admins can see every birthday registered in the server (sorted by next
+// occurrence), add/remove entries, and configure the announcement channel,
+// birthday role, and a custom image URL shown on every birthday embed. Data
+// lives in the birthdays/birthdays_guilds tables (BIRTHDAY_DATABASE_URL pool);
+// the bot re-reads them every ~5s so dashboard edits take effect live.
+
+function birthdaysPage({ guild, user }) {
+    const s = guild._config.birthdaySettings || { channelId: null, roleId: null, imageUrl: null };
+    const panelHTML = `
+    <div class="card">
+      <div class="card-title"><span><span class="icon">${svgIcon('cake')}</span> Birthdays</span></div>
+      <p class="card-desc">Manage member birthdays and how the bot celebrates them. The bot announces each birthday in the channel below and can grant a temporary birthday role.</p>
+
+      <div class="field">
+        <label class="field-label" for="bd-channel">Announcement channel</label>
+        <select id="bd-channel" data-channel-select>${channelOptions(guild._channels, s.channelId)}</select>
+        <div class="field-hint">Where birthday announcements are posted.</div>
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="bd-role">Birthday role</label>
+        <select id="bd-role" data-role-select data-placeholder="— None —">${roleOptions(guild._roles, s.roleId)}</select>
+        <div class="field-hint">Granted to the member for 24 hours on their birthday.</div>
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="bd-image-url">Custom embed image URL</label>
+        <input type="url" id="bd-image-url" value="${esc(s.imageUrl || '')}" placeholder="https://…/birthday-banner.png" />
+        <div class="field-hint">Shown on <strong>every</strong> birthday embed, overriding the built-in image. Leave blank to use the default images.</div>
+        <div id="bd-image-preview-wrap" class="bd-image-preview-wrap${s.imageUrl ? '' : ' hidden'}"><img id="bd-image-preview" src="${esc(s.imageUrl || '')}" alt="Birthday embed image preview" /></div>
+      </div>
+
+      <h3 class="badge-section-head">${svgIcon('calendar')} Registered birthdays</h3>
+      <p class="card-desc">All birthdays set in this server, sorted by next occurrence. <a href="#" id="bd-refresh">Refresh</a></p>
+      <div id="bd-list"><p class="live-empty">Loading…</p></div>
+
+      <h3 class="badge-section-head">${svgIcon('userPlus')} Add a birthday</h3>
+      <div class="bd-add-form">
+        <input type="text" id="bd-add-userid" placeholder="Member user ID" />
+        <select id="bd-add-month">
+          <option value="">Month</option>
+          ${['January','February','March','April','May','June','July','August','September','October','November','December'].map((m, i) => `<option value="${i + 1}">${m}</option>`).join('')}
+        </select>
+        <input type="number" id="bd-add-day" min="1" max="31" placeholder="Day" />
+        <input type="number" id="bd-add-year" min="1900" placeholder="Year (optional)" />
+        <button class="btn btn-primary" id="bd-add-btn" type="button">Add</button>
+      </div>
+      <div class="field-hint">Right-click a member in Discord → Copy User ID (enable Developer Mode first).</div>
+    </div>`;
+    return guildTab({ guild, user, active: 'birthdays', panelHTML, scripts: ['/js/guild-common.js', '/js/birthdays.js'] });
+}
+
 // ── Logging ─────────────────────────────────────────────────────────────────
 
 function loggingPanelHTML(logging, channels) {
@@ -1143,7 +1197,7 @@ function liveGiveawaysPage({ guild, user }) {
 
 module.exports = {
     welcomePage, levelingPage, badgesPage, prefixPage, roleRewardsPage, autoResponderPage, reactionsPage, broadcastPage,
-    loggingPage, reactionRolesPage, ticketsPage, automodPage, eventsPage,
+    birthdaysPage, loggingPage, reactionRolesPage, ticketsPage, automodPage, eventsPage,
     livePollsPage, liveGiveawaysPage,
     TABS,
 };
