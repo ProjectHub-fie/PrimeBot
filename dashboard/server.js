@@ -333,7 +333,7 @@ app.get('/api/stats', async (req, res) => {
                 autoReactions: { count: 0, percent: 0 },
                 broadcasts: { count: 0, percent: 0 },
             },
-            welcomeBanners: 0,
+            totalUsers: 0,
             bot: botSelf,
             clientId: process.env.DISCORD_CLIENT_ID,
         });
@@ -1122,7 +1122,6 @@ function parseEmojiForDiscord(emoji) {
 //
 //   GET    .../tickets                         list panels
 //   POST   .../tickets                         create a panel
-//   PATCH  .../tickets/:id                     edit a panel
 //   DELETE .../tickets/:id                      delete a panel
 //   POST   .../tickets/:id/clone               clone a panel under a new name
 //   POST   .../tickets/:id/rename              rename a panel
@@ -1197,27 +1196,9 @@ app.post('/api/guilds/:guildId/tickets', requireAuth, requireGuildAdmin, require
     }
 });
 
-app.patch('/api/guilds/:guildId/tickets/:id', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
-    try {
-        const id = parseInt(req.params.id, 10);
-        if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid panel id.' });
-        const panel = await dashboardDb.updateTicketPanel(id, req.body || {});
-        // If the panel was already sent and embed-visible fields changed,
-        // re-render the live message so it stays in sync.
-        if (panel && panel.messageId && panel.channelId) {
-            try {
-                await discord.editChannelMessage(panel.channelId, panel.messageId, ticketPanelMessagePayload(panel));
-            } catch (err) {
-                console.error('[API] edit ticket panel message failed:', err.message);
-            }
-        }
-        res.json({ ticketPanel: panel });
-    } catch (err) {
-        console.error('[API] update ticket panel error:', err.message);
-        ticketPanelError(res, err, 'update ticket panel');
-    }
-});
-
+// Panels are intentionally NOT editable after creation (no PATCH route) —
+// clone a panel or delete + recreate it instead. The /update endpoint below
+// only re-renders the Discord message; it never changes panel config.
 app.delete('/api/guilds/:guildId/tickets/:id', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);

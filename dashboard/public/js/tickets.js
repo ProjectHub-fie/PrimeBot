@@ -1,4 +1,5 @@
-/* Tickets page — panel list + create/edit/clone/rename/send/update.
+/* Tickets page — panel list + create/clone/rename/send/update.
+ * Panels cannot be edited after creation — clone or delete + recreate instead.
  * Mirrors the old SPA bindTicketEvents + bindTicketCardActions + refreshTicketList.
  */
 
@@ -36,7 +37,6 @@ function ticketPanelCardHTML(panel) {
           <button class="btn btn-secondary btn-sm tk-update" data-panel="${panel.id}">Update message</button>
           <button class="btn btn-secondary btn-sm tk-rename" data-panel="${panel.id}">Rename</button>
           <button class="btn btn-secondary btn-sm tk-clone" data-panel="${panel.id}">Clone</button>
-          <button class="btn btn-secondary btn-sm tk-edit" data-panel="${panel.id}">Edit</button>
           <button class="btn btn-secondary btn-sm tk-delete" data-panel="${panel.id}">Delete</button>
         </span>
       </div>
@@ -148,82 +148,6 @@ function readCloseFlowForm() {
   };
 }
 
-function fillCloseFlowForm(cf) {
-  const set = (id, val) => { const el = document.querySelector(id); if (el) el.value = val ?? ''; };
-  const chk = (id, v) => { const el = document.querySelector(id); if (el) el.checked = !!v; };
-  set('#tk-cf-yes-label', cf.confirmYes?.label);
-  set('#tk-cf-yes-emoji', cf.confirmYes?.emoji);
-  set('#tk-cf-yes-style', cf.confirmYes?.style);
-  set('#tk-cf-no-label', cf.confirmNo?.label);
-  set('#tk-cf-no-emoji', cf.confirmNo?.emoji);
-  set('#tk-cf-no-style', cf.confirmNo?.style);
-  chk('#tk-cf-embed-enabled', cf.closeEmbed?.enabled);
-  set('#tk-cf-embed-title', cf.closeEmbed?.title);
-  set('#tk-cf-embed-desc', cf.closeEmbed?.description);
-  set('#tk-cf-embed-color', cf.closeEmbed?.color || '#ED4245');
-  set('#tk-cf-embed-color-text', cf.closeEmbed?.color || '#ED4245');
-  set('#tk-cf-embed-footer', cf.closeEmbed?.footer);
-  chk('#tk-cf-transcript-enabled', cf.transcript?.enabled);
-  set('#tk-cf-transcript-channel', cf.transcript?.channelId);
-  for (const k of ['transcript', 'reopen', 'delete']) {
-    set(`#tk-cf-btn-${k}-label`, cf.buttons?.[k]?.label);
-    set(`#tk-cf-btn-${k}-emoji`, cf.buttons?.[k]?.emoji);
-    set(`#tk-cf-btn-${k}-style`, cf.buttons?.[k]?.style);
-  }
-}
-
-function fillTicketForm(panel) {
-  const set = (id, val) => { const el = document.querySelector(id); if (el) el.value = val ?? ''; };
-  set('#tk-edit-id', panel.id);
-  set('#tk-name', panel.name);
-  set('#tk-message-type', panel.messageType);
-  set('#tk-title', panel.title);
-  set('#tk-description', panel.description);
-  set('#tk-content', panel.content);
-  set('#tk-footer', panel.footerText);
-  set('#tk-thumbnail', panel.thumbnailUrl);
-  set('#tk-image', panel.imageUrl);
-  set('#tk-color', panel.color || '#5865F2');
-  set('#tk-color-text', panel.color || '#5865F2');
-  set('#tk-button-label', panel.buttonLabel);
-  set('#tk-button-emoji', panel.buttonEmoji);
-  set('#tk-button-style', panel.buttonStyle);
-  set('#tk-category', panel.category);
-  set('#tk-ticket-name', panel.ticketName);
-  set('#tk-open-name', panel.openNameTemplate);
-  set('#tk-claimed-name', panel.claimedNameTemplate);
-  set('#tk-closed-name', panel.closedNameTemplate);
-  set('#tk-ticket-category-id', panel.ticketCategoryId);
-  set('#tk-max-open', panel.maxOpenPerUser);
-  set('#tk-welcome', panel.welcomeMessage);
-  set('#tk-close-label', panel.closeButtonLabel);
-  set('#tk-close-emoji', panel.closeButtonEmoji);
-  set('#tk-close-style', panel.closeButtonStyle || 'Danger');
-  set('#tk-claim-label', panel.claimButtonLabel);
-  set('#tk-claim-emoji', panel.claimButtonEmoji);
-  fillCloseFlowForm(panel.closeFlow || {});
-  document.querySelector('#tk-ask-reason').checked = !!panel.askReason;
-  document.querySelector('#tk-enabled').checked = panel.enabled !== false;
-  const supportList = document.querySelector('#tk-support-list');
-  supportList.innerHTML = (panel.supportRoleIds && panel.supportRoleIds.length
-    ? panel.supportRoleIds : [null]
-  ).map(id => ticketRoleRowHTML(id ? { roleId: id } : {}, 'tk-support')).join('');
-  const pingList = document.querySelector('#tk-ping-list');
-  pingList.innerHTML = (panel.pingRoleIds && panel.pingRoleIds.length
-    ? panel.pingRoleIds : [null]
-  ).map(id => ticketRoleRowHTML(id ? { roleId: id } : {}, 'tk-ping')).join('');
-  window.populateRoleSelects();
-  const saveBtn = document.querySelector('#tk-save');
-  saveBtn.textContent = 'Save panel';
-  document.querySelector('#tk-cancel-edit').style.display = '';
-}
-
-function clearTicketForm() {
-  document.querySelector('#tk-edit-id').value = '';
-  document.querySelector('#tk-save').textContent = 'Create panel';
-  document.querySelector('#tk-cancel-edit').style.display = 'none';
-}
-
 async function refreshTicketList() {
   try {
     const data = await api(`/api/guilds/${GUILD_ID}/tickets`);
@@ -255,15 +179,6 @@ function bindTicketCardActions() {
       toast('Panel deleted', 'success');
       refreshTicketList();
     } catch (err) { toast(err.message || 'Failed to delete', 'error'); }
-  });
-
-  action('.tk-edit', async (btn) => {
-    const id = btn.dataset.panel;
-    const panels = (await api(`/api/guilds/${GUILD_ID}/tickets`).catch(() => ({}))).ticketPanels || [];
-    const panel = panels.find(p => String(p.id) === String(id));
-    if (!panel) { toast('Panel not found', 'error'); return; }
-    fillTicketForm(panel);
-    document.getElementById('tab-tickets')?.scrollIntoView({ behavior: 'smooth' });
   });
 
   action('.tk-clone', async (btn) => {
@@ -336,21 +251,14 @@ bindReactionRemovals();
 
 document.getElementById('tk-save')?.addEventListener('click', async (e) => {
   const btn = e.currentTarget;
-  const editId = document.querySelector('#tk-edit-id').value;
   const body = readTicketForm();
   if (!body.name.trim()) { toast('A panel name is required.', 'error'); return; }
   btn.disabled = true;
   const orig = btn.textContent;
   btn.textContent = 'Saving…';
   try {
-    if (editId) {
-      await api(`/api/guilds/${GUILD_ID}/tickets/${editId}`, { method: 'PATCH', body: JSON.stringify(body) });
-      toast('Panel saved', 'success');
-    } else {
-      await api(`/api/guilds/${GUILD_ID}/tickets`, { method: 'POST', body: JSON.stringify(body) });
-      toast('Panel created', 'success');
-    }
-    clearTicketForm();
+    await api(`/api/guilds/${GUILD_ID}/tickets`, { method: 'POST', body: JSON.stringify(body) });
+    toast('Panel created', 'success');
     refreshTicketList();
   } catch (err) {
     toast(err.message || 'Failed to save', 'error');
@@ -360,7 +268,6 @@ document.getElementById('tk-save')?.addEventListener('click', async (e) => {
   }
 });
 
-document.getElementById('tk-cancel-edit')?.addEventListener('click', clearTicketForm);
 bindTicketCardActions();
 
 } // end upcoming/beta lock guard

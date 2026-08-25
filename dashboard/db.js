@@ -1328,6 +1328,16 @@ async function _ticketCount(query, fallback = 0) {
     }
 }
 
+async function _levelingCount(query, fallback = 0) {
+    try {
+        const res = await getLevelingPool().query(query);
+        return Number(res.rows[0]?.count ?? fallback);
+    } catch (err) {
+        console.error('[DASHBOARD DB] leveling stats count failed:', err.message);
+        return fallback;
+    }
+}
+
 async function getPlatformStats(serverCountOverride) {
     const [
         totalServers,
@@ -1335,7 +1345,7 @@ async function getPlatformStats(serverCountOverride) {
         welcomeEnabled,
         autoReactionsEnabled,
         broadcastEnabled,
-        welcomeBanners,
+        totalUsers,
         automodEnabled,
         ticketPanels,
     ] = await Promise.all([
@@ -1346,7 +1356,8 @@ async function getPlatformStats(serverCountOverride) {
         _welcomeCount(`SELECT COUNT(*) FROM welcome_settings WHERE enabled = true`),
         _count(`SELECT COUNT(*) FROM server_settings WHERE auto_reactions_enabled = true AND guild_id <> 'global'`),
         _count(`SELECT COUNT(*) FROM server_settings WHERE receive_broadcasts = true AND guild_id <> 'global'`),
-        _welcomeCount(`SELECT COUNT(*) FROM welcome_settings WHERE banner_url IS NOT NULL AND banner_url <> ''`),
+        // Total unique users the bot has tracked via leveling (across all guilds).
+        _levelingCount(`SELECT COUNT(DISTINCT user_id) FROM user_levels`),
         _automodCount(`SELECT COUNT(*) FROM automod_settings WHERE enabled = true`),
         _ticketCount(`SELECT COUNT(*) FROM ticket_panels WHERE enabled = true`),
     ]);
@@ -1371,7 +1382,7 @@ async function getPlatformStats(serverCountOverride) {
             automod: { count: automodEnabled, percent: pct(automodEnabled, servers) },
             tickets: { count: ticketPanels, percent: pct(ticketPanels, servers) },
         },
-        welcomeBanners,
+        totalUsers,
     };
 }
 
