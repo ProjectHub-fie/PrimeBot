@@ -59,9 +59,9 @@ function loginPage({ errorKey, turnstileSiteKey } = {}) {
             <div class="stat-label">Servers configured</div>
           </div>
           <div class="stat-card">
-            <div class="stat-icon">${svgIcon('image')}</div>
-            <div class="stat-value" id="stat-banners" data-target="0">0</div>
-            <div class="stat-label">Custom welcome banners</div>
+            <div class="stat-icon">${svgIcon('users')}</div>
+            <div class="stat-value" id="stat-users" data-target="0">0</div>
+            <div class="stat-label">Total users</div>
           </div>
           <div class="stat-card">
             <div class="stat-icon">${svgIcon('robot')}</div>

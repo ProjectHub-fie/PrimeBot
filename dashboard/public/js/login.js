@@ -37,10 +37,10 @@ async function loadLoginStats() {
       : (stats.botName ? `${esc(stats.botName)} v${esc(stats.botVersion)}` : 'Live data from the bot database');
   }
   const serversEl = document.getElementById('stat-servers');
-  const bannersEl = document.getElementById('stat-banners');
+  const usersEl = document.getElementById('stat-users');
   const versionEl = document.getElementById('stat-version');
   if (serversEl) animateCount(serversEl, stats.servers || 0);
-  if (bannersEl) animateCount(bannersEl, stats.welcomeBanners || 0);
+  if (usersEl) animateCount(usersEl, stats.totalUsers || 0);
   if (versionEl) versionEl.textContent = stats.botVersion ? `v${esc(stats.botVersion)}` : '—';
 
   const f = stats.features || {};

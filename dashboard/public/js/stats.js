@@ -30,11 +30,14 @@ function renderBotStats(data) {
   const wrap = document.getElementById('stats-bot');
   if (!wrap) return;
   const servers = data.servers ?? 0;
+  const totalUsers = data.totalUsers ?? 0;
   const botName = data.bot?.username || data.botName || 'PrimeBot';
   const features = data.features || {};
+  const usersIcon = window.svgIcon ? window.svgIcon('users') : '👥';
   const cards = [
     statCardHTML('🤖', botName, 'Bot', false),
     statCardHTML('📣', Number(servers).toLocaleString(), 'Servers', true),
+    statCardHTML(usersIcon, Number(totalUsers).toLocaleString(), 'Total users', false),
     statCardHTML('🏷️', esc(data.version || ''), 'Version', false),
   ].join('');
 

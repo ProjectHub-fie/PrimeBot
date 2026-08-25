@@ -772,7 +772,7 @@ function ticketsPage({ guild, user }) {
     </div>
 
     <div class="card">
-      <div class="card-title"><span>Create / edit a panel</span></div>
+      <div class="card-title"><span>Create a panel</span></div>
       <div class="field">
         <label class="field-label" for="tk-name">Panel name</label>
         <input type="text" id="tk-name" maxlength="100" placeholder="Support Ticket" />
@@ -979,9 +979,7 @@ function ticketsPage({ guild, user }) {
         <label class="switch"><input type="checkbox" id="tk-enabled" checked/><span class="slider"></span></label>
       </div>
       <div class="form-actions">
-        <input type="hidden" id="tk-edit-id" value="" />
         <button class="btn btn-primary" id="tk-save">Create panel</button>
-        <button class="btn btn-secondary" id="tk-cancel-edit" style="display:none">Cancel edit</button>
       </div>
     </div>`;
     // Tickets is marked `upcoming: true` in render/guild.js TABS — the page
