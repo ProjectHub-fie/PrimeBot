@@ -31,13 +31,16 @@ function renderBotStats(data) {
   if (!wrap) return;
   const servers = data.servers ?? 0;
   const totalUsers = data.totalUsers ?? 0;
+  // 'bot' = real member count reported live by the bot; 'leveling' = fallback.
+  const liveUsers = data.totalUsersSource === 'bot';
+  const usersLabel = liveUsers ? 'Total members (live)' : 'Total users';
   const botName = data.bot?.username || data.botName || 'PrimeBot';
   const features = data.features || {};
   const usersIcon = window.svgIcon ? window.svgIcon('users') : '👥';
   const cards = [
     statCardHTML('🤖', botName, 'Bot', false),
     statCardHTML('📣', Number(servers).toLocaleString(), 'Servers', true),
-    statCardHTML(usersIcon, Number(totalUsers).toLocaleString(), 'Total users', false),
+    statCardHTML(usersIcon, Number(totalUsers).toLocaleString(), usersLabel, false),
     statCardHTML('🏷️', esc(data.version || ''), 'Version', false),
   ].join('');
 
@@ -58,7 +61,7 @@ function renderBotStats(data) {
   wrap.innerHTML = `
     <div class="stats-band-head">
       <span class="stats-band-title">Bot statistics</span>
-      <span class="stats-band-sub">Server count is fetched live from Discord · feature adoption across configured servers.</span>
+      <span class="stats-band-sub">${liveUsers ? 'Member count is reported live by the running bot across all servers.' : 'Server count is fetched live from Discord · feature adoption across configured servers.'}</span>
     </div>
     <div class="stats-cards">${cards}</div>
     <div class="stats-chart-wrap">
@@ -82,12 +85,16 @@ function nodeRowHTML(n) {
     ? esc(new Date(n.lastHeartbeat).toLocaleString())
     : '—';
   const age = n.ageMs != null ? `${Math.round(n.ageMs / 1000)}s ago` : '—';
+  // Live counts the active bot node reports on its heartbeat.
+  const counts = n.memberCount != null
+    ? ` · ${Number(n.memberCount).toLocaleString()} members in ${Number(n.guildCount ?? 0).toLocaleString()} servers`
+    : '';
   return `
     <div class="node-row ${st.cls}">
       <span class="node-icon">${st.icon}</span>
       <div class="node-main">
         <div class="node-name">${name} ${active}</div>
-        <div class="node-meta">role <code>${role}</code> · last heartbeat ${esc(hb)} (${esc(age)})</div>
+        <div class="node-meta">role <code>${role}</code> · last heartbeat ${esc(hb)} (${esc(age)})${counts}</div>
       </div>
       <span class="node-status-label">${st.label}</span>
     </div>`;

@@ -350,6 +350,15 @@ client.on('shardDisconnect', async (closeEvent, shardId) => {
 const nodeFailover = require('./utils/nodeFailover');
 const failoverEnabled = process.env.BOT_FAILOVER_ENABLED !== 'false';
 
+// Publish the live guild/member counts on each failover heartbeat so the
+// dashboard can show the ACTUAL member count across all guilds (the dashboard
+// runs as a separate process and can't read client.guilds.cache directly).
+// guild.memberCount is maintained by Discord on the cached guild objects.
+nodeFailover.setStatsProvider(() => ({
+    guildCount: client.guilds.cache.size,
+    memberCount: client.guilds.cache.reduce((sum, g) => sum + (g.memberCount || 0), 0),
+}));
+
 // Webhook logger — sends shard-node events to Discord channel.
 // Reads FAILOVER_WEBHOOK_URL from env; silently no-ops when not set.
 const wh = require('./utils/webhookLogger');

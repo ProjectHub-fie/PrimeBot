@@ -1338,6 +1338,34 @@ async function _levelingCount(query, fallback = 0) {
     }
 }
 
+// Live guild/member counts reported by the ACTIVE bot node on its failover
+// heartbeat (bot_node_status.guild_count / member_count). This is the only
+// source of the ACTUAL Discord member count: the dashboard runs as a separate
+// process and can't read the bot's client.guilds.cache. Returns null when no
+// fresh active heartbeat exists (bot offline, failover disabled, or the columns
+// predate this feature) so callers can fall back gracefully.
+async function _liveBotCounts() {
+    try {
+        const res = await getSeasonPool().query(`
+            SELECT guild_count, member_count
+            FROM bot_node_status
+            WHERE active = true
+              AND member_count IS NOT NULL
+              AND NOW() - last_heartbeat < INTERVAL '90 seconds'
+            ORDER BY last_heartbeat DESC
+            LIMIT 1
+        `);
+        const row = (res.rows || [])[0];
+        if (!row) return null;
+        return {
+            guildCount: row.guild_count != null ? Number(row.guild_count) : null,
+            memberCount: Number(row.member_count),
+        };
+    } catch (err) {
+        return null;
+    }
+}
+
 async function getPlatformStats(serverCountOverride) {
     const [
         totalServers,
@@ -1345,9 +1373,10 @@ async function getPlatformStats(serverCountOverride) {
         welcomeEnabled,
         autoReactionsEnabled,
         broadcastEnabled,
-        totalUsers,
+        trackedUsers,
         automodEnabled,
         ticketPanels,
+        liveCounts,
     ] = await Promise.all([
         // Exclude the 'global' sentinel row (global no-prefix grants) — it is
         // not a real guild and must not inflate the adoption stats.
@@ -1357,15 +1386,26 @@ async function getPlatformStats(serverCountOverride) {
         _count(`SELECT COUNT(*) FROM server_settings WHERE auto_reactions_enabled = true AND guild_id <> 'global'`),
         _count(`SELECT COUNT(*) FROM server_settings WHERE receive_broadcasts = true AND guild_id <> 'global'`),
         // Total unique users the bot has tracked via leveling (across all guilds).
+        // Fallback for totalUsers only — see liveCounts below.
         _levelingCount(`SELECT COUNT(DISTINCT user_id) FROM user_levels`),
         _automodCount(`SELECT COUNT(*) FROM automod_settings WHERE enabled = true`),
         _ticketCount(`SELECT COUNT(*) FROM ticket_panels WHERE enabled = true`),
+        _liveBotCounts(),
     ]);
 
     // Use the authoritative server count (guilds the bot is actually in) when
     // available so adoption percentages are relative to the real total, not the
-    // (smaller) set of guilds that have a server_settings row.
-    const servers = serverCountOverride != null ? serverCountOverride : totalServers;
+    // (smaller) set of guilds that have a server_settings row. When the Discord
+    // REST call fails, prefer the active bot node's live guild count over the
+    // lazy DB row count.
+    const servers = serverCountOverride != null
+        ? serverCountOverride
+        : (liveCounts && liveCounts.guildCount != null ? liveCounts.guildCount : totalServers);
+
+    // The ACTUAL member count across all guilds, reported by the live bot.
+    // Falls back to the leveling-tracked distinct user count when the bot
+    // isn't reporting (offline / failover disabled / pre-upgrade rows).
+    const totalUsers = liveCounts ? liveCounts.memberCount : trackedUsers;
 
     // Adoption ratios (guard against divide-by-zero). These drive the donut charts.
     const pct = (n, d) => (d > 0 ? Math.round((n / d) * 100) : 0);
@@ -1383,6 +1423,9 @@ async function getPlatformStats(serverCountOverride) {
             tickets: { count: ticketPanels, percent: pct(ticketPanels, servers) },
         },
         totalUsers,
+        // 'bot' = live member count from the active bot node's heartbeat;
+        // 'leveling' = fallback distinct-count of leveling-tracked users.
+        totalUsersSource: liveCounts ? 'bot' : 'leveling',
     };
 }
 
@@ -2141,6 +2184,10 @@ async function ensureNodeStatusTables() {
             active BOOLEAN NOT NULL DEFAULT false
         )
     `);
+    // Live guild/member counts written by the active bot node's heartbeat
+    // (utils/nodeFailover.js). Self-migrate tables created before these existed.
+    await p.query(`ALTER TABLE bot_node_status ADD COLUMN IF NOT EXISTS guild_count INTEGER`).catch(() => {});
+    await p.query(`ALTER TABLE bot_node_status ADD COLUMN IF NOT EXISTS member_count BIGINT`).catch(() => {});
     await p.query(`
         CREATE TABLE IF NOT EXISTS bot_failover_lock (
             id INTEGER PRIMARY KEY DEFAULT 1,
@@ -2157,7 +2204,7 @@ async function getNodeStats() {
     const p = getSeasonPool();
     const [statusRes, leaseRes] = await Promise.all([
         p.query(`
-            SELECT role, node_name, last_heartbeat, active,
+            SELECT role, node_name, last_heartbeat, active, guild_count, member_count,
                    EXTRACT(EPOCH FROM (NOW() - last_heartbeat)) * 1000 AS age_ms
             FROM bot_node_status
         `).catch(() => ({ rows: [] })),
@@ -2176,6 +2223,8 @@ async function getNodeStats() {
             active: !!row.active,
             lastHeartbeat: row.last_heartbeat,
             ageMs: Math.round(Number(row.age_ms) || 0),
+            guildCount: row.guild_count != null ? Number(row.guild_count) : null,
+            memberCount: row.member_count != null ? Number(row.member_count) : null,
         };
     }
     // Always surface all three roles so the UI renders a stable grid, even when
