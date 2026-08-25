@@ -36,6 +36,15 @@ let heartbeatTimer = null;
 let tableReady = false;
 let leaseTableReady = false;
 
+// Optional provider of live bot runtime stats (guild + member counts) that only
+// the connected Discord client knows. Set via setStatsProvider() from index.js;
+// the values ride on the heartbeat row so the dashboard can show the ACTUAL
+// member count without any bot↔dashboard IPC.
+let statsProvider = null;
+function setStatsProvider(fn) {
+    statsProvider = typeof fn === 'function' ? fn : null;
+}
+
 async function ensureTable() {
     if (tableReady) return;
     await seasonDb.execute(sql`
@@ -46,6 +55,9 @@ async function ensureTable() {
             active BOOLEAN NOT NULL DEFAULT false
         )
     `);
+    // Self-migrate older tables that predate the live-stats columns.
+    await seasonDb.execute(sql`ALTER TABLE bot_node_status ADD COLUMN IF NOT EXISTS guild_count INTEGER`);
+    await seasonDb.execute(sql`ALTER TABLE bot_node_status ADD COLUMN IF NOT EXISTS member_count BIGINT`);
     tableReady = true;
 }
 
@@ -65,13 +77,29 @@ async function ensureLeaseTable() {
 
 async function writeHeartbeat(role, active) {
     await ensureTable();
+    // Live guild/member counts from the connected client, when a provider is
+    // registered (only the ACTIVE node is logged in, so only it has counts).
+    // A provider failure must never break the heartbeat itself.
+    let guildCount = null;
+    let memberCount = null;
+    if (statsProvider) {
+        try {
+            const stats = await statsProvider();
+            if (stats && Number.isFinite(Number(stats.guildCount))) guildCount = Number(stats.guildCount);
+            if (stats && Number.isFinite(Number(stats.memberCount))) memberCount = Number(stats.memberCount);
+        } catch (err) {
+            console.warn('[FAILOVER] stats provider failed (heartbeat continues):', err.message);
+        }
+    }
     await seasonDb.execute(sql`
-        INSERT INTO bot_node_status (role, node_name, last_heartbeat, active)
-        VALUES (${role}, ${NODE_NAME}, NOW(), ${active})
+        INSERT INTO bot_node_status (role, node_name, last_heartbeat, active, guild_count, member_count)
+        VALUES (${role}, ${NODE_NAME}, NOW(), ${active}, ${guildCount}, ${memberCount})
         ON CONFLICT (role) DO UPDATE SET
             node_name = EXCLUDED.node_name,
             last_heartbeat = NOW(),
-            active = EXCLUDED.active
+            active = EXCLUDED.active,
+            guild_count = EXCLUDED.guild_count,
+            member_count = EXCLUDED.member_count
     `);
 }
 
@@ -385,6 +413,7 @@ module.exports = {
     MONITOR_INTERVAL_MS,
     ensureTable,
     writeHeartbeat,
+    setStatsProvider,
     getStatus,
     getPrimaryAgeMs,
     getOtherActiveNode,
