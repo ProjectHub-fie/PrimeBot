@@ -152,6 +152,40 @@ async function getBotGuildCount() {
     }
 }
 
+const BOT_MEMBER_COUNT_TTL_MS = 60_000;
+let _botMemberCountCache = { value: null, expiresAt: 0 };
+
+/** Returns the total member count across all guilds the bot is in, summed
+ *  from each guild's approximate_member_count (the REST equivalent of
+ *  discord.js `guild.memberCount`). Returns null when it can't be determined
+ *  (e.g. DISCORD_TOKEN missing/invalid). Cached like getBotGuildCount. */
+async function getBotMemberCount() {
+    const now = Date.now();
+    if (_botMemberCountCache.value != null && now < _botMemberCountCache.expiresAt) {
+        return _botMemberCountCache.value;
+    }
+    try {
+        let total = 0;
+        let after = '0';
+        // with_counts=true asks Discord to include approximate_member_count on
+        // each guild object (same semantics as discord.js guild.memberCount).
+        for (let i = 0; i < 50; i++) {
+            const url = `${API_BASE}/users/@me/guilds?limit=200&with_counts=true${after !== '0' ? `&after=${after}` : ''}`;
+            const page = await fetchJson(url, { headers: botHeaders() });
+            if (!Array.isArray(page) || page.length === 0) break;
+            total += page.reduce((sum, g) => sum + (Number(g.approximate_member_count) || 0), 0);
+            if (page.length < 200) break; // last page
+            after = page.reduce((m, g) => (g.id > m ? g.id : m), after);
+        }
+        _botMemberCountCache = { value: total, expiresAt: now + BOT_MEMBER_COUNT_TTL_MS };
+        return total;
+    } catch (err) {
+        // Token issues (401) etc. — leave the cache empty so callers fall back.
+        console.warn('[DASHBOARD] getBotMemberCount failed:', err.message);
+        return null;
+    }
+}
+
 /** Get the bot's member object in a guild (for avatar/nickname display). */
 async function getBotMember(guildId, botUserId) {
     const uid = botUserId || process.env.DISCORD_CLIENT_ID;
@@ -304,6 +338,7 @@ module.exports = {
     getUserGuilds,
     getBotGuild,
     getBotGuildCount,
+    getBotMemberCount,
     getBotSelf,
     getBotMember,
     getGuildChannels,

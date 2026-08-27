@@ -1187,6 +1187,9 @@ select:focus {
   backdrop-filter: blur(5px);
 }
 .modal-overlay.hidden { display: none !important; }
+/* Ticket panel editor — wider modal, the whole create/edit form scrolls inside. */
+.modal.tk-editor { width: min(720px, 95vw); }
+.modal.tk-editor .modal-body { max-height: 70vh; overflow-y: auto; }
 .modal.floating-window {
   background: var(--surface-1);
   color: var(--text);
@@ -2004,6 +2007,44 @@ select:focus {
   padding: 18px 12px !important;
   font-style: italic;
 }
+
+/* Website log pagination (10 rows per page) */
+.wlog-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  padding-top: 10px;
+  flex-wrap: wrap;
+}
+
+.wlog-page-btn {
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+  min-width: 30px;
+  transition: background var(--transition), color var(--transition), border-color var(--transition);
+}
+
+.wlog-page-btn:hover:enabled { background: var(--surface-3); color: var(--text); }
+
+.wlog-page-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.wlog-page-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.wlog-ellipsis { color: var(--text-faint); padding: 0 2px; }
 
 /* ── 404 page ──────────────────────────────────────────────────────────────── */
 .notfound-card {

@@ -1,6 +1,7 @@
-/* Tickets page — panel list + create/clone/rename/send/update.
- * Panels cannot be edited after creation — clone or delete + recreate instead.
- * Mirrors the old SPA bindTicketEvents + bindTicketCardActions + refreshTicketList.
+/* Tickets page — panel list + create/clone/rename/send/update/edit.
+ * The editor form lives in the #tk-modal overlay: it opens in "create" mode
+ * from the "Create a panel" button, and in "edit" mode from a panel card's
+ * "Edit" button. Create → POST; Edit → PATCH.
  */
 
 const GUILD_ID = window.guildData?.guildId;
@@ -24,6 +25,9 @@ const TICKET_MESSAGE_TYPES = [
   { value: 'plain', label: 'Plain text message' },
 ];
 
+// null = create mode (POST); a panel object = edit mode (PATCH).
+let editingPanel = null;
+
 function ticketPanelCardHTML(panel) {
   const supportRoles = (panel.supportRoleIds || []).map(id => `<@&${esc(id)}>`).join(', ') || '—';
   const pingRoles = (panel.pingRoleIds || []).map(id => `<@&${esc(id)}>`).join(', ') || '—';
@@ -33,6 +37,7 @@ function ticketPanelCardHTML(panel) {
       <div class="card-title">
         <span><span class="icon">🎫</span> ${esc(panel.name)} <span class="tag ${panel.enabled ? 'on' : 'off'}">#${panel.id}</span></span>
         <span style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn btn-secondary btn-sm tk-edit" data-panel="${panel.id}">Edit</button>
           <button class="btn btn-secondary btn-sm tk-send" data-panel="${panel.id}">Send / Resend</button>
           <button class="btn btn-secondary btn-sm tk-update" data-panel="${panel.id}">Update message</button>
           <button class="btn btn-secondary btn-sm tk-rename" data-panel="${panel.id}">Rename</button>
@@ -148,6 +153,156 @@ function readCloseFlowForm() {
   };
 }
 
+// ── Modal open/close + form fill/reset ─────────────────────────────────────
+
+function closeEditor() {
+  const modal = document.getElementById('tk-modal');
+  if (modal) modal.classList.add('hidden');
+  editingPanel = null;
+}
+
+function setTextValue(id, value) {
+  const el = document.querySelector(id);
+  if (el) el.value = value ?? '';
+}
+
+function setChecked(id, value) {
+  const el = document.querySelector(id);
+  if (el) el.checked = !!value;
+}
+
+function resetTicketForm() {
+  editingPanel = null;
+  setTextValue('#tk-name', '');
+  setTextValue('#tk-message-type', 'embed');
+  setTextValue('#tk-title', '');
+  setTextValue('#tk-description', '');
+  setTextValue('#tk-content', '');
+  setTextValue('#tk-footer', '');
+  setTextValue('#tk-thumbnail', '');
+  setTextValue('#tk-image', '');
+  setTextValue('#tk-color', '#5865F2');
+  setTextValue('#tk-color-text', '#5865F2');
+  setTextValue('#tk-button-label', 'Open Ticket');
+  setTextValue('#tk-button-emoji', '');
+  setTextValue('#tk-button-style', 'Primary');
+  setTextValue('#tk-category', 'general');
+  setTextValue('#tk-ticket-name', '');
+  setTextValue('#tk-open-name', '');
+  setTextValue('#tk-claimed-name', '');
+  setTextValue('#tk-closed-name', '');
+  const supportList = document.querySelector('#tk-support-list');
+  if (supportList) supportList.innerHTML = ticketRoleRowHTML({}, 'tk-support');
+  const pingList = document.querySelector('#tk-ping-list');
+  if (pingList) pingList.innerHTML = ticketRoleRowHTML({}, 'tk-ping');
+  setTextValue('#tk-ticket-category-id', '');
+  setTextValue('#tk-max-open', '1');
+  setChecked('#tk-ask-reason', false);
+  setTextValue('#tk-welcome', '');
+  setTextValue('#tk-close-label', 'Close Ticket');
+  setTextValue('#tk-close-emoji', '🔒');
+  setTextValue('#tk-close-style', 'Danger');
+  setTextValue('#tk-claim-label', '');
+  setTextValue('#tk-claim-emoji', '');
+  // Close flow
+  setTextValue('#tk-cf-yes-label', 'Yes');
+  setTextValue('#tk-cf-yes-emoji', '✅');
+  setTextValue('#tk-cf-yes-style', 'Success');
+  setTextValue('#tk-cf-no-label', 'No');
+  setTextValue('#tk-cf-no-emoji', '✖️');
+  setTextValue('#tk-cf-no-style', 'Danger');
+  setChecked('#tk-cf-embed-enabled', false);
+  setTextValue('#tk-cf-embed-title', '🔒 Ticket Closed');
+  setTextValue('#tk-cf-embed-desc', '');
+  setTextValue('#tk-cf-embed-footer', '{panel} · PrimeBot');
+  setTextValue('#tk-cf-embed-color', '#ED4245');
+  setTextValue('#tk-cf-embed-color-text', '#ED4245');
+  setChecked('#tk-cf-transcript-enabled', false);
+  setTextValue('#tk-cf-transcript-channel', '');
+  for (const key of ['transcript', 'reopen', 'delete']) {
+    setTextValue(`#tk-cf-btn-${key}-label`, key.charAt(0).toUpperCase() + key.slice(1));
+    setTextValue(`#tk-cf-btn-${key}-emoji`, '');
+    setTextValue(`#tk-cf-btn-${key}-style`, 'Primary');
+  }
+  setChecked('#tk-enabled', true);
+  bindReactionRemovals();
+}
+
+function fillTicketForm(panel) {
+  editingPanel = panel;
+  setTextValue('#tk-name', panel.name);
+  setTextValue('#tk-message-type', panel.messageType === 'plain' ? 'plain' : 'embed');
+  setTextValue('#tk-title', panel.title);
+  setTextValue('#tk-description', panel.description);
+  setTextValue('#tk-content', panel.content);
+  setTextValue('#tk-footer', panel.footerText);
+  setTextValue('#tk-thumbnail', panel.thumbnailUrl);
+  setTextValue('#tk-image', panel.imageUrl);
+  setTextValue('#tk-color', panel.color || '#5865F2');
+  setTextValue('#tk-color-text', panel.color || '#5865F2');
+  setTextValue('#tk-button-label', panel.buttonLabel || 'Open Ticket');
+  setTextValue('#tk-button-emoji', panel.buttonEmoji);
+  setTextValue('#tk-button-style', panel.buttonStyle || 'Primary');
+  setTextValue('#tk-category', panel.category || 'general');
+  setTextValue('#tk-ticket-name', panel.ticketName);
+  setTextValue('#tk-open-name', panel.openNameTemplate);
+  setTextValue('#tk-claimed-name', panel.claimedNameTemplate);
+  setTextValue('#tk-closed-name', panel.closedNameTemplate);
+  const supportList = document.querySelector('#tk-support-list');
+  if (supportList) {
+    const roles = panel.supportRoleIds?.length ? panel.supportRoleIds : [null];
+    supportList.innerHTML = roles.map(id => ticketRoleRowHTML({ roleId: id }, 'tk-support')).join('');
+  }
+  const pingList = document.querySelector('#tk-ping-list');
+  if (pingList) {
+    const roles = panel.pingRoleIds?.length ? panel.pingRoleIds : [null];
+    pingList.innerHTML = roles.map(id => ticketRoleRowHTML({ roleId: id }, 'tk-ping')).join('');
+  }
+  setTextValue('#tk-ticket-category-id', panel.ticketCategoryId);
+  setTextValue('#tk-max-open', String(panel.maxOpenPerUser ?? 1));
+  setChecked('#tk-ask-reason', panel.askReason);
+  setTextValue('#tk-welcome', panel.welcomeMessage);
+  setTextValue('#tk-close-label', panel.closeButtonLabel || 'Close Ticket');
+  setTextValue('#tk-close-emoji', panel.closeButtonEmoji ?? '🔒');
+  setTextValue('#tk-close-style', panel.closeButtonStyle || 'Danger');
+  setTextValue('#tk-claim-label', panel.claimButtonLabel);
+  setTextValue('#tk-claim-emoji', panel.claimButtonEmoji);
+  const cf = panel.closeFlow || {};
+  setTextValue('#tk-cf-yes-label', cf.confirmYes?.label ?? 'Yes');
+  setTextValue('#tk-cf-yes-emoji', cf.confirmYes?.emoji ?? '✅');
+  setTextValue('#tk-cf-yes-style', cf.confirmYes?.style ?? 'Success');
+  setTextValue('#tk-cf-no-label', cf.confirmNo?.label ?? 'No');
+  setTextValue('#tk-cf-no-emoji', cf.confirmNo?.emoji ?? '✖️');
+  setTextValue('#tk-cf-no-style', cf.confirmNo?.style ?? 'Danger');
+  setChecked('#tk-cf-embed-enabled', cf.closeEmbed?.enabled);
+  setTextValue('#tk-cf-embed-title', cf.closeEmbed?.title ?? '🔒 Ticket Closed');
+  setTextValue('#tk-cf-embed-desc', cf.closeEmbed?.description);
+  setTextValue('#tk-cf-embed-footer', cf.closeEmbed?.footer);
+  setTextValue('#tk-cf-embed-color', cf.closeEmbed?.color ?? '#ED4245');
+  setTextValue('#tk-cf-embed-color-text', cf.closeEmbed?.color ?? '#ED4245');
+  setChecked('#tk-cf-transcript-enabled', cf.transcript?.enabled);
+  setTextValue('#tk-cf-transcript-channel', cf.transcript?.channelId);
+  for (const key of ['transcript', 'reopen', 'delete']) {
+    setTextValue(`#tk-cf-btn-${key}-label`, cf.buttons?.[key]?.label);
+    setTextValue(`#tk-cf-btn-${key}-emoji`, cf.buttons?.[key]?.emoji);
+    setTextValue(`#tk-cf-btn-${key}-style`, cf.buttons?.[key]?.style ?? 'Primary');
+  }
+  setChecked('#tk-enabled', panel.enabled !== false);
+  bindReactionRemovals();
+}
+
+function openEditor(panel) {
+  if (panel) fillTicketForm(panel); else resetTicketForm();
+  const titleEl = document.getElementById('tk-modal-title');
+  if (titleEl) titleEl.textContent = panel ? `Edit panel — ${panel.name}` : 'Create panel';
+  const saveBtn = document.getElementById('tk-save');
+  if (saveBtn) saveBtn.textContent = panel ? 'Save changes' : 'Create panel';
+  const modal = document.getElementById('tk-modal');
+  if (modal) modal.classList.remove('hidden');
+  window.populateRoleSelects();
+  window.populateChannelSelects();
+}
+
 async function refreshTicketList() {
   try {
     const data = await api(`/api/guilds/${GUILD_ID}/tickets`);
@@ -156,7 +311,7 @@ async function refreshTicketList() {
       const panels = data.ticketPanels || [];
       listEl.innerHTML = panels.length
         ? panels.map(ticketPanelCardHTML).join('')
-        : `<div class="alert alert-warn">No ticket panels yet. Create one below — panels can only be configured from the dashboard.</div>`;
+        : `<div class="alert alert-warn">No ticket panels yet. Create one with the button below — panels can only be configured from the dashboard.</div>`;
       bindTicketCardActions();
     }
   } catch (_) { /* surfaced via toast elsewhere */ }
@@ -170,6 +325,14 @@ function bindTicketCardActions() {
       btn.addEventListener('click', () => fn(btn));
     });
   };
+
+  action('.tk-edit', async (btn) => {
+    const id = btn.dataset.panel;
+    const panels = (await api(`/api/guilds/${GUILD_ID}/tickets`).catch(() => ({}))).ticketPanels || [];
+    const panel = panels.find(p => String(p.id) === String(id));
+    if (!panel) { toast('Could not load this panel.', 'error'); return; }
+    openEditor(panel);
+  });
 
   action('.tk-delete', async (btn) => {
     const id = btn.dataset.panel;
@@ -249,6 +412,14 @@ document.getElementById('tk-ping-add')?.addEventListener('click', () => {
 });
 bindReactionRemovals();
 
+// Modal wiring — open in create/edit mode, close on ×/Cancel/backdrop.
+document.getElementById('tk-create-open')?.addEventListener('click', () => openEditor(null));
+document.getElementById('tk-modal-close')?.addEventListener('click', closeEditor);
+document.getElementById('tk-modal-cancel')?.addEventListener('click', closeEditor);
+document.getElementById('tk-modal')?.addEventListener('click', (e) => {
+  if (e.target === document.getElementById('tk-modal')) closeEditor();
+});
+
 document.getElementById('tk-save')?.addEventListener('click', async (e) => {
   const btn = e.currentTarget;
   const body = readTicketForm();
@@ -256,9 +427,16 @@ document.getElementById('tk-save')?.addEventListener('click', async (e) => {
   btn.disabled = true;
   const orig = btn.textContent;
   btn.textContent = 'Saving…';
+  const editing = editingPanel;
   try {
-    await api(`/api/guilds/${GUILD_ID}/tickets`, { method: 'POST', body: JSON.stringify(body) });
-    toast('Panel created', 'success');
+    if (editing) {
+      await api(`/api/guilds/${GUILD_ID}/tickets/${editing.id}`, { method: 'PATCH', body: JSON.stringify(body) });
+      toast('Panel updated', 'success');
+    } else {
+      await api(`/api/guilds/${GUILD_ID}/tickets`, { method: 'POST', body: JSON.stringify(body) });
+      toast('Panel created', 'success');
+    }
+    closeEditor();
     refreshTicketList();
   } catch (err) {
     toast(err.message || 'Failed to save', 'error');

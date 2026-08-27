@@ -312,6 +312,7 @@ function prefixPage({ guild, user }) {
             <tbody id="wlog-body"><tr><td colspan="4" class="wlog-empty">Loading…</td></tr></tbody>
           </table>
         </div>
+        <div class="wlog-pagination" id="wlog-pagination"></div>
       </div>
     </div>`;
     return guildTab({ guild, user, active: 'prefix', panelHTML, scripts: ['/js/guild-common.js', '/js/settings-basic.js', '/js/general.js'] });
@@ -761,18 +762,29 @@ function ticketsPage({ guild, user }) {
     const panels = guild._config.ticketPanels || [];
     const listHTML = panels.length
         ? '' // cards are rendered client-side after refresh; show a placeholder
-        : `<div class="alert alert-warn">No ticket panels yet. Create one below — panels can only be configured from the dashboard.</div>`;
+        : `<div class="alert alert-warn">No ticket panels yet. Create one with the button below — panels can only be configured from the dashboard.</div>`;
     const styleOpts = TICKET_BUTTON_STYLES.map(s => `<option value="${s.value}">${esc(s.label)}</option>`).join('');
     const typeOpts = TICKET_MESSAGE_TYPES.map(t => `<option value="${t.value}">${esc(t.label)}</option>`).join('');
+    // The editor form lives inside a modal — it only opens after clicking
+    // "Create a panel" (create mode) or a panel card's "Edit" button (edit
+    // mode). The page itself just lists existing panels.
     const panelHTML = `
     <div class="card">
       <div class="card-title"><span><span class="icon">${svgIcon('ticket')}</span> Tickets</span></div>
-      <p class="card-desc">Ticket panels are configurable <strong>only from the dashboard</strong> — slash and prefix ticket commands are disabled. Build a panel (embed or plain message, custom button, support/ping roles, claim button, per-user limits), then <strong>Send</strong> it to a channel and use <strong>Update message</strong> to re-render an existing message by id.</p>
+      <p class="card-desc">Ticket panels are configurable <strong>only from the dashboard</strong> — slash and prefix ticket commands are disabled. Build a panel (embed or plain message, custom button, support/ping roles, claim button, per-user limits), then <strong>Send</strong> it to a channel and use <strong>Update message</strong> to re-render an existing message by id. Existing panels can be changed with <strong>Edit</strong>.</p>
       <div class="rr-list">${listHTML}</div>
+      <div class="form-actions">
+        <button class="btn btn-primary" id="tk-create-open">Create a panel</button>
+      </div>
     </div>
 
-    <div class="card">
-      <div class="card-title"><span>Create a panel</span></div>
+    <div class="modal-overlay hidden" id="tk-modal">
+      <div class="modal floating-window tk-editor">
+        <div class="modal-head">
+          <span><span class="icon">${svgIcon('ticket')}</span> <span id="tk-modal-title">Create panel</span></span>
+          <button class="modal-close" id="tk-modal-close" aria-label="Close">✕</button>
+        </div>
+        <div class="modal-body">
       <div class="field">
         <label class="field-label" for="tk-name">Panel name</label>
         <input type="text" id="tk-name" maxlength="100" placeholder="Support Ticket" />
@@ -978,8 +990,11 @@ function ticketsPage({ guild, user }) {
         <div class="switch-label"><div class="sl-title">Enabled</div><div class="sl-desc">When off, the open button is disabled.</div></div>
         <label class="switch"><input type="checkbox" id="tk-enabled" checked/><span class="slider"></span></label>
       </div>
-      <div class="form-actions">
-        <button class="btn btn-primary" id="tk-save">Create panel</button>
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-secondary" id="tk-modal-cancel">Cancel</button>
+          <button class="btn btn-primary" id="tk-save">Save panel</button>
+        </div>
       </div>
     </div>`;
     // Tickets is marked `upcoming: true` in render/guild.js TABS — the page

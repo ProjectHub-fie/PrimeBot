@@ -31,8 +31,9 @@ function renderBotStats(data) {
   if (!wrap) return;
   const servers = data.servers ?? 0;
   const totalUsers = data.totalUsers ?? 0;
-  // 'bot' = real member count reported live by the bot; 'leveling' = fallback.
-  const liveUsers = data.totalUsersSource === 'bot';
+  // 'bot' = real member count reported by the bot; 'rest' = REST-summed
+  // guild.memberCount; 'leveling' = last-resort distinct-user fallback.
+  const liveUsers = data.totalUsersSource === 'bot' || data.totalUsersSource === 'rest';
   const usersLabel = liveUsers ? 'Total members (live)' : 'Total users';
   const botName = data.bot?.username || data.botName || 'PrimeBot';
   const features = data.features || {};

@@ -1366,7 +1366,10 @@ async function _liveBotCounts() {
     }
 }
 
-async function getPlatformStats(serverCountOverride) {
+// memberCountOverride — the REST-summed "guild.memberCount" across bot guilds
+// (dashboard/discord.js getBotMemberCount). Used when the live bot heartbeat
+// isn't reporting, before the leveling fallback.
+async function getPlatformStats(serverCountOverride, memberCountOverride) {
     const [
         totalServers,
         levelingEnabled,
@@ -1402,10 +1405,16 @@ async function getPlatformStats(serverCountOverride) {
         ? serverCountOverride
         : (liveCounts && liveCounts.guildCount != null ? liveCounts.guildCount : totalServers);
 
-    // The ACTUAL member count across all guilds, reported by the live bot.
-    // Falls back to the leveling-tracked distinct user count when the bot
-    // isn't reporting (offline / failover disabled / pre-upgrade rows).
-    const totalUsers = liveCounts ? liveCounts.memberCount : trackedUsers;
+    // The ACTUAL member count across all guilds. Prefer the live bot's
+    // heartbeat report (guild.memberCount); when the bot isn't reporting
+    // (offline / failover disabled / pre-upgrade rows) fall back to the
+    // REST-summed guild.memberCount, then to the leveling-tracked count.
+    const totalUsers = liveCounts
+        ? liveCounts.memberCount
+        : (memberCountOverride != null ? memberCountOverride : trackedUsers);
+    const totalUsersSource = liveCounts
+        ? 'bot'
+        : (memberCountOverride != null ? 'rest' : 'leveling');
 
     // Adoption ratios (guard against divide-by-zero). These drive the donut charts.
     const pct = (n, d) => (d > 0 ? Math.round((n / d) * 100) : 0);
@@ -1424,8 +1433,9 @@ async function getPlatformStats(serverCountOverride) {
         },
         totalUsers,
         // 'bot' = live member count from the active bot node's heartbeat;
+        // 'rest' = REST-summed guild.memberCount (getBotMemberCount);
         // 'leveling' = fallback distinct-count of leveling-tracked users.
-        totalUsersSource: liveCounts ? 'bot' : 'leveling',
+        totalUsersSource,
     };
 }
 

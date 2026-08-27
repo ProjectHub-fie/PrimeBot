@@ -316,9 +316,11 @@ app.get('/api/stats', async (req, res) => {
         // fetched from Discord via REST. server_settings rows are created
         // lazily and undercount guilds that were never configured. Fall back to
         // the DB count if the REST call fails (e.g. token issue) so the page
-        // never renders a misleading 0.
+        // never renders a misleading 0. getBotMemberCount does the same for
+        // the member count (REST-summed guild.memberCount fallback).
         const restCount = await discord.getBotGuildCount();
-        const stats = await dashboardDb.getPlatformStats(restCount);
+        const restMembers = await discord.getBotMemberCount();
+        const stats = await dashboardDb.getPlatformStats(restCount, restMembers);
         res.json({ ...stats, bot: botSelf, clientId: process.env.DISCORD_CLIENT_ID });
     } catch (err) {
         console.error('[API] /api/stats error:', err.message);
@@ -350,7 +352,8 @@ app.get('/api/stats/bot', requireAuth, async (req, res) => {
     try {
         await resolveBotSelf();
         const restCount = await discord.getBotGuildCount();
-        const stats = await dashboardDb.getPlatformStats(restCount);
+        const restMembers = await discord.getBotMemberCount();
+        const stats = await dashboardDb.getPlatformStats(restCount, restMembers);
         res.json({
             ...stats,
             bot: botSelf,
@@ -1122,6 +1125,7 @@ function parseEmojiForDiscord(emoji) {
 //
 //   GET    .../tickets                         list panels
 //   POST   .../tickets                         create a panel
+//   PATCH  .../tickets/:id                      edit a panel (after creation)
 //   DELETE .../tickets/:id                      delete a panel
 //   POST   .../tickets/:id/clone               clone a panel under a new name
 //   POST   .../tickets/:id/rename              rename a panel
@@ -1196,9 +1200,25 @@ app.post('/api/guilds/:guildId/tickets', requireAuth, requireGuildAdmin, require
     }
 });
 
-// Panels are intentionally NOT editable after creation (no PATCH route) —
-// clone a panel or delete + recreate it instead. The /update endpoint below
-// only re-renders the Discord message; it never changes panel config.
+// Edit an existing panel. The dashboard editor only opens AFTER a panel was
+// created ("Edit" on the panel card) or via the "Create a panel" button; this
+// PATCH persists edits made in that modal.
+app.patch('/api/guilds/:guildId/tickets/:id', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
+    try {
+        const id = parseInt(req.params.id, 10);
+        if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid panel id.' });
+        const body = req.body || {};
+        if ('name' in body && !String(body.name).trim()) {
+            return res.status(400).json({ error: 'A panel name is required.' });
+        }
+        const panel = await dashboardDb.updateTicketPanel(id, body);
+        res.json({ ticketPanel: panel });
+    } catch (err) {
+        console.error('[API] edit ticket panel error:', err.message);
+        ticketPanelError(res, err, 'edit ticket panel');
+    }
+});
+
 app.delete('/api/guilds/:guildId/tickets/:id', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);
