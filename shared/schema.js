@@ -454,6 +454,50 @@ const automodAppeals = pgTable('automod_appeals', {
   createdAt: timestamp('created_at').defaultNow(),
 });
 
+// Appeal / ban-DM subsystem (dedicated APPEAL_DATABASE_URL pool, falling
+// back to DATABASE_URL). The dashboard's Automod tab drives dm_user /
+// use_appeal / ban_embed_fields / appeal_channel_id; the bot's AppealManager
+// sends the banned member an all-fields ban DM when dm_user is on and, when
+// use_appeal is on, attaches an "Appeal ban" button opening a modal whose
+// submission is recorded here and posted to the configured appeal channel.
+const appealSettings = pgTable('appeal_settings', {
+  guildId: varchar('guild_id', { length: 50 }).primaryKey(),
+  dmUser: boolean('dm_user').default(true).notNull(),
+  useAppeal: boolean('use_appeal').default(false).notNull(),
+  appealChannelId: varchar('appeal_channel_id', { length: 50 }),
+  banEmbedFields: jsonb('ban_embed_fields')
+    .default(['server', 'user', 'moderator', 'action', 'reason', 'rule', 'cid', 'time']).notNull(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+const appeals = pgTable('appeals', {
+  id: serial('id').primaryKey(),
+  guildId: varchar('guild_id', { length: 50 }).notNull(),
+  userId: varchar('user_id', { length: 50 }).notNull(),
+  action: varchar('action', { length: 50 }).notNull(),
+  reason: text('reason').default('').notNull(),
+  cid: integer('cid'),
+  status: varchar('status', { length: 20 }).default('pending').notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// Automod embed ledger — every automod log embed gets a per-server CID (the
+// embed number, composite primary key (guild_id, cid)). The embed title becomes
+// "<moderation type> (CID <n>)"; $rmr / $rename (CID) [reason] edits the
+// reason (empty = remove). Lives in the AUTOMOD_DATABASE_URL pool.
+
+const automodEmbeds = pgTable('automod_embeds', {
+  guildId: varchar('guild_id', { length: 50 }).primaryKey().notNull(),
+  cid: integer('cid').primaryKey().notNull(),
+  action: varchar('action', { length: 60 }),
+  ruleType: varchar('rule_type', { length: 40 }),
+  userId: varchar('user_id', { length: 50 }),
+  reason: text('reason').default('').notNull(),
+  messageId: varchar('message_id', { length: 50 }),
+  channelId: varchar('channel_id', { length: 50 }),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
 // Premium Ticket panels — configurable only from the dashboard. A "panel" is
 // the message the bot posts (embed or plain) with an "Open Ticket" button;
 // clicking it creates a ticket *instance* (a private channel/thread). Both the
@@ -687,6 +731,9 @@ module.exports = {
   automodSettings,
   automodWarnings,
   automodAppeals,
+  appealSettings,
+  appeals,
+  automodEmbeds,
   ticketPanels,
   ticketInstances,
   ticketPanelsRelations,

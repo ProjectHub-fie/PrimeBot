@@ -1105,6 +1105,16 @@ function automodPage({ guild, user }) {
         <label class="switch"><input type="checkbox" id="am-dm-enabled" ${s.dmEnabled !== false ? 'checked' : ''}/><span class="slider"></span></label>
       </div>
 
+      <div class="switch-row">
+        <div class="switch-label"><div class="sl-title">DM user</div><div class="sl-desc">Send the banned member a rich ban direct message with all available fields when they are banned.</div></div>
+        <label class="switch"><input type="checkbox" id="am-dm-user" ${s.dmUser !== false ? 'checked' : ''}/><span class="slider"></span></label>
+      </div>
+
+      <div class="switch-row">
+        <div class="switch-label"><div class="sl-title">Use appeal</div><div class="sl-desc">Attach an "Appeal ban" button to the ban DM so members can file an appeal from a floating Discord form.</div></div>
+        <label class="switch"><input type="checkbox" id="am-use-appeal" ${s.useAppeal === true ? 'checked' : ''}/><span class="slider"></span></label>
+      </div>
+
       <div class="field">
         <label class="field-label">Custom DM messages (optional)</label>
         <div class="field-hint">Override the default message sent for each action. Placeholders: {server}, {reason}, {action}, {threshold}. Leave blank to use the default.</div>

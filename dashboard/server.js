@@ -823,7 +823,7 @@ app.patch('/api/guilds/:guildId/automod', requireAuth, requireGuildAdmin, async 
             'enabled', 'logChannelId', 'muteRoleId',
             'exemptRoleIds', 'exemptChannelIds', 'rules',
             'warnThreshold', 'warnAction', 'warnActions',
-            'dmEnabled', 'dmMessages', 'appealChannelId',
+            'dmEnabled', 'dmMessages', 'dmUser', 'useAppeal', 'appealChannelId',
         ];
         const patch = {};
         for (const key of allowed) {
@@ -845,6 +845,8 @@ app.patch('/api/guilds/:guildId/automod', requireAuth, requireGuildAdmin, async 
             patch.warnActions = valid;
         }
         if ('dmEnabled' in patch) patch.dmEnabled = patch.dmEnabled !== false;
+        if ('dmUser' in patch) patch.dmUser = patch.dmUser !== false;
+        if ('useAppeal' in patch) patch.useAppeal = patch.useAppeal === true;
         if ('appealChannelId' in patch) patch.appealChannelId = patch.appealChannelId || null;
         const updated = await dashboardDb.upsertAutomodSettings(req.guild.id, patch);
         recordWebsiteLog(req, 'Updated automod settings');

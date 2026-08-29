@@ -190,6 +190,8 @@ async function saveSettings(kind) {
     warnActions: warnActions.length ? warnActions : ['timeout'],
     dmEnabled: document.getElementById('am-dm-enabled').checked,
     dmMessages,
+    dmUser: document.getElementById('am-dm-user').checked,
+    useAppeal: document.getElementById('am-use-appeal').checked,
     appealChannelId: document.getElementById('am-appeal-channel').value || null,
   };
   await api(`/api/guilds/${GUILD_ID}/automod`, { method: 'PATCH', body: JSON.stringify(body) });
