@@ -116,7 +116,8 @@ const CATALOG = {
         description: 'Moderation, channel management, self-roles, and tickets:',
         commands: [
             { names: ['kick'], args: '@member [reason]', desc: 'Kick a member from the server' },
-            { names: ['ban'], args: '@member [reason] [days]', desc: 'Ban a member from the server' },
+            { names: ['ban'], args: '@member|userid [reason] [days]', desc: 'Ban a member from the server' },
+            { names: ['unban'], args: 'userid [reason]', desc: 'Unban a member by user id' },
             { names: ['warn'], args: '@member [reason]', desc: 'Warn a member' },
             { names: ['unwarn'], args: '@member', desc: 'Remove a member\'s warnings' },
             { names: ['warnings'], args: '[@member]', desc: 'View a member\'s warnings' },

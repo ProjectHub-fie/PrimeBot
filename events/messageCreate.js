@@ -28,6 +28,7 @@ const npEmbed = require("../utils/npEmbed");
 const botRoles = require("../utils/botRoles");
 const devEmbed = require("../utils/devEmbed");
 const { isBetaFeature } = require("../utils/betaFeatureMatcher");
+const resolveUserId = require("../utils/resolveUserId");
 
 /**
  * Try to reply in the channel; if the bot lacks permission, fall back to a DM.
@@ -998,30 +999,57 @@ module.exports = {
                         return message.reply('You need Administrator permission to ban members.');
                     }
 
-                    const target = message.mentions.users.first();
+                    const targetId = resolveUserId(args[0]);
                     const reason = args.slice(1).join(' ') || 'No reason provided';
-                    if (!target) {
-                        return message.reply(`Usage: \`${prefix}ban @member [reason]\``);
+                    if (!targetId) {
+                        return message.reply(`Usage: \`${prefix}ban <@member|userid> [reason]\``);
                     }
 
+                    // Resolve a real User object for the reply/ban-DM; bare ids (the
+                    // member may not be in the guild) fall back to a minimal stub.
+
+                    const target = message.mentions.users.first()
+                        || (targetId ? await client.users.fetch(targetId).catch(() => null) : null);
+                    const userLabel = target?.tag || target?.username || targetId;
+
                     try {
-                        await message.guild.members.ban(target, { reason, deleteMessageSeconds: 0 });
+                        await message.guild.members.ban(targetId, { reason, deleteMessageSeconds: 0 });
 
                         // Ban DM (all-fields embed + optional Appeal button, driven by
                         // the dashboard Automod tab → "DM user" / "Use appeal").
                         client.appealManager?.sendBanDm?.({
                             guild: message.guild,
-                            user: target,
+                            user: target || { id: targetId, username: 'Unknown', tag: targetId },
                             reason,
                             action: 'ban',
                             moderator: message.author,
                             cid: null,
                         }).catch(() => {});
 
-                        return message.reply(`Banned **${target.tag}** for: ${reason}`);
+                        return message.reply(`Banned **${userLabel}** for: ${reason}`);
                     } catch (err) {
                         console.error('[PREFIX BAN] Failed:', err);
                         return message.reply('I could not ban that member.');
+                    }
+                }
+
+                case "unban": {
+                    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+                        return message.reply('You need Administrator permission to unban members.');
+                    }
+
+                    const targetId = resolveUserId(args[0]);
+                    const reason = args.slice(1).join(' ') || 'Unbanned by moderator';
+                    if (!targetId) {
+                        return message.reply(`Usage: \`${prefix}unban <userid> [reason]\``);
+                    }
+
+                    try {
+                        await message.guild.members.unban(targetId, reason);
+                        return message.reply(`✅ Unbanned **${targetId}**. Reason: ${reason}`);
+                    } catch (err) {
+                        console.error('[PREFIX UNBAN] Failed:', err);
+                        return message.reply('I could not unban that member.');
                     }
                 }
 
