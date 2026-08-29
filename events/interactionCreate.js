@@ -628,6 +628,23 @@ module.exports = {
                                 'TicTacToe move button'
                             );
                         }
+                    } else if (action === 'appeal') {
+                        // Ban-DM appeal form (opened from the "Appeal ban" button in a
+                        // banned member's DM). customId: appeal:open:<guildId>:<action>:<cid>
+                        const guildId = params[0] || interacton.guild?.id;
+                        const subAction = params[1] || 'ban';
+                        const cid = /^\d+$/.test(params[2] || '') ? parseInt(params[2], 10) : null;
+                        if (!interaction.client.appealManager?.handleAppealButton) {
+
+                            await safeReply(interaction, { content: 'Appeals are unavailable right now.', ephemeral: true });
+                        } else {
+                            await safeExecute(
+                                interaction.client.appealManager.handleAppealButton.bind(interaction.client.appealManager),
+                                [interaction, guildId, subAction, cid],
+                                null,
+                                'Ban appeal form'
+                            );
+                        }
                     } else if (interaction.customId === 'truth_button') {
                         await safeExecute(
                             client.truthDareManager.handleButtonInteraction.bind(client.truthDareManager),
@@ -940,6 +957,19 @@ module.exports = {
                         null,
                         'Ticket panel rename modal'
                     );
+                } else if (interaction.customId.startsWith('appeal_modal:')) {
+                    const guildId = interaction.customId.slice('appeal_modal:'.length);
+                    const mgr = interaction.client.appealManager;
+                    if (!mgr) {
+                        await safeReply(interaction, { content: 'Appeals are unavailable right now.', ephemeral: true });
+                    } else {
+                        await safeExecute(
+                            mgr.handleAppealSubmit.bind(mgr),
+                            [interaction, guildId],
+                            null,
+                            'Ban appeal submit'
+                        );
+                    }
                 }
                 return;
             }

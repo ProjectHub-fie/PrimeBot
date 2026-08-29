@@ -41,6 +41,8 @@ const CREATE_SETTINGS_SQL = `
         warn_actions        JSONB NOT NULL DEFAULT '["timeout"]',
         dm_enabled          BOOLEAN NOT NULL DEFAULT true,
         dm_messages         JSONB NOT NULL DEFAULT '{}',
+        dm_user              BOOLEAN NOT NULL DEFAULT true,
+        use_appeal           BOOLEAN NOT NULL DEFAULT false,
         appeal_channel_id   VARCHAR(50),
         updated_at          TIMESTAMP DEFAULT NOW()
     )
@@ -56,6 +58,8 @@ const ENSURE_COLUMNS_SQL = `
     ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS warn_actions       JSONB NOT NULL DEFAULT '["timeout"]';
     ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS dm_enabled         BOOLEAN NOT NULL DEFAULT true;
     ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS dm_messages        JSONB NOT NULL DEFAULT '{}';
+    ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS dm_user             BOOLEAN NOT NULL DEFAULT true;
+    ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS use_appeal          BOOLEAN NOT NULL DEFAULT false;
     ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS appeal_channel_id  VARCHAR(50);
 `;
 
@@ -96,6 +100,22 @@ const CREATE_APPEALS_SQL = `
     ALTER TABLE automod_appeals ADD COLUMN IF NOT EXISTS reversed BOOLEAN NOT NULL DEFAULT false;
 `;
 
+const CREATE_EMBEDS_SQL = `
+    CREATE TABLE IF NOT EXISTS automod_embeds (
+        guild_id   VARCHAR(50) NOT NULL,
+        cid        INTEGER      NOT NULL,
+        action      VARCHAR(60),
+        rule_type   VARCHAR(40),
+        user_id     VARCHAR(50),
+        reason      TEXT NOT NULL DEFAULT '',
+        message_id  VARCHAR(50),
+        channel_id   VARCHAR(50),
+        created_at  TIMESTAMP DEFAULT NOW(),
+        PRIMARY KEY (guild_id, cid)
+    );
+    CREATE INDEX IF NOT EXISTS automod_embeds_guild_idx ON automod_embeds (guild_id);
+`;
+
 // In-memory spam tracker (not persisted): userId|guildId -> [{content, ts}]
 const spamWindow = new Map();
 const SPAM_WINDOW_TTL = 60_000;
@@ -118,6 +138,7 @@ class AutomodManager {
         await pool.query(ENSURE_COLUMNS_SQL);
         await pool.query(CREATE_WARNINGS_SQL);
         await pool.query(CREATE_APPEALS_SQL);
+        await pool.query(CREATE_EMBEDS_SQL);
         this._tableReady = true;
     }
 
@@ -213,6 +234,8 @@ class AutomodManager {
             warnActions,
             dmEnabled: row.dm_enabled !== false,
             dmMessages: normalizeDmMessages(row.dm_messages),
+            dmUser: row.dm_user !== false,
+            useAppeal: row.use_appeal === true,
             appealChannelId: row.appeal_channel_id || null,
         };
     }
@@ -230,6 +253,8 @@ class AutomodManager {
             warnActions: ['timeout'],
             dmEnabled: true,
             dmMessages: {},
+            dmUser: true,
+            useAppeal: false,
             appealChannelId: null,
         };
     }
@@ -259,8 +284,8 @@ class AutomodManager {
                 guild_id, enabled, log_channel_id, mute_role_id,
                 exempt_role_ids, exempt_channel_ids, rules,
                 warn_threshold, warn_action, warn_actions,
-                dm_enabled, dm_messages, appeal_channel_id, updated_at
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW())
+                dm_enabled, dm_messages, dm_user, use_appeal, appeal_channel_id, updated_at
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW())
             ON CONFLICT (guild_id) DO UPDATE SET
                 enabled            = EXCLUDED.enabled,
                 log_channel_id     = EXCLUDED.log_channel_id,
@@ -273,6 +298,8 @@ class AutomodManager {
                 warn_actions       = EXCLUDED.warn_actions,
                 dm_enabled         = EXCLUDED.dm_enabled,
                 dm_messages        = EXCLUDED.dm_messages,
+                dm_user            = EXCLUDED.dm_user,
+                use_appeal         = EXCLUDED.use_appeal,
                 appeal_channel_id  = EXCLUDED.appeal_channel_id,
                 updated_at         = NOW()
         `, [
@@ -280,7 +307,7 @@ class AutomodManager {
             JSON.stringify(s.exemptRoleIds), JSON.stringify(s.exemptChannelIds),
             JSON.stringify(s.rules), s.warnThreshold, s.warnAction,
             JSON.stringify(s.warnActions), s.dmEnabled,
-            JSON.stringify(s.dmMessages), s.appealChannelId,
+            JSON.stringify(s.dmMessages), s.dmUser, s.useAppeal, s.appealChannelId,
         ]);
     }
 
@@ -301,6 +328,8 @@ class AutomodManager {
         }
         if ('dmEnabled' in patch)         next.dmEnabled = patch.dmEnabled !== false;
         if ('dmMessages' in patch)        next.dmMessages = normalizeDmMessages(patch.dmMessages);
+        if ('dmUser' in patch)            next.dmUser = patch.dmUser !== false;
+        if ('useAppeal' in patch)        next.useAppeal = patch.useAppeal === true;
         if ('appealChannelId' in patch)   next.appealChannelId = patch.appealChannelId || null;
         this._cache.set(guildId, next);
         this._save(guildId);
@@ -429,7 +458,19 @@ class AutomodManager {
         const ordered = [...actions].sort((a) => (a === 'delete' ? -1 : 0));
         const applied = [];
 
+        // Every automod log embed gets a per-server CID (the embed number, stored in
+        // automod_embeds). Generate it up-front so the ban-DM can reference it and the
+        // embed title becomes "<type> (CID n)".
+        let cid = null;
+        if (settings.logChannelId) {
+            cid = await this._createEmbedRecord({
+                guildId: message.guild.id, channelId: message.channelId,
+                userId: message.author.id, action: actions.join(','), ruleType: rule.type, reason,
+            });
+        }
+
         // Delete the message up-front if a delete action is present.
+
         if (ordered.includes('delete')) {
             await message.delete().catch(() => {});
             applied.push('delete');
@@ -443,6 +484,7 @@ class AutomodManager {
             reason,
             settings,
             ruleType: rule.type,
+            cid,
         };
 
         for (const action of ordered) {
@@ -464,14 +506,20 @@ class AutomodManager {
             { name: 'Responsible moderator', value: this._moderatorLabel(invoker), inline: true },
             { name: 'Reason', value: reason, inline: false },
         ];
+        if (cid) logFields.push({ name: 'CID', value: String(cid), inline: true });
         if (message.content) {
             logFields.push({ name: 'Message', value: truncate(message.content, 1024), inline: false });
         }
-
-        this._logToChannel(message, settings, meta, logFields);
-        logEvent(this.client, message.guild.id, {
+        const sentMsg = await this._logToChannel(message, settings, meta, logFields, cid);
+        if (cid && sentMsg?.id) {
+            await pool.query(
+                `UPDATE automod_embeds SET message_id = $3 WHERE guild_id = $1 AND cid = $2`,
+                [String(message.guild.id), cid, String(sentMsg.id)]
+            ).catch(() => {});
+        }
+        await logEvent(this.client, message.guild.id, {
             type: 'memberUpdate',
-            title: 'Automod action',
+            title: `Automod action (CID ${cid || '—'})`,
             description: `${meta.icon} **${meta.label}** → **${actionLabels}**`,
             fields: logFields,
         });
@@ -521,7 +569,26 @@ class AutomodManager {
                 break;
             case 'ban':
                 await guild.members.ban(author.id, { reason: `Automod: ${reason}` }).catch(() => {});
-                await dm('ban');
+                // Prefer the "Ban DM" flow (all-fields embed + optional Appeal button,
+                // driven by the dashboard Automod tab → "DM user"/"Use appeal"）. Only
+                // fall back to the plain automod DM when the appeal manager is absent or
+                // didn't send (DM off / DM blocked).
+                const appealMgr = this.client?.appealManager;
+                if (appealMgr?.sendBanDm) {
+
+                    const sent = await appealMgr.sendBanDm({
+                        guild,
+                        user: author,
+                        reason,
+                        rule: metaFor(ctx.ruleType)?.label || null,
+                        action: 'ban',
+                        moderator: null,
+                        cid: ctx.cid || null,
+                    }).catch(() => false);
+                    if (!sent) await dm('ban');
+                } else {
+                    await dm('ban');
+                }
                 break;
         }
     }
@@ -575,21 +642,62 @@ class AutomodManager {
         } catch { /* DMs may be closed — fire and forget */ }
     }
 
-    _logToChannel(message, settings, meta, fields) {
+    async _logToChannel(message, settings, meta, fields, cid = null) {
         if (!settings.logChannelId) return;
         const embed = new EmbedBuilder()
             .setColor(0xED4245)
-            .setTitle(`${meta.icon} Automod · ${meta.label}`)
+            .setTitle(cid ? `${meta.icon} Automod · ${meta.label} (CID ${cid})` : `${meta.icon} Automod · ${meta.label}`)
             .setTimestamp();
         for (const f of fields) {
             if (f && f.name && f.value) embed.addFields({ name: f.name, value: String(f.value), inline: !!f.inline });
         }
         embed.setFooter({ text: 'PrimeBot Automod' });
-        this.client.channels.fetch(settings.logChannelId)
-            .then(ch => ch?.send?.({ embeds: [embed] }).catch(() => {}))
-            .catch(() => {});
+        try {
+            const ch = await this.client.channels.fetch(settings.logChannelId);
+            const msg = await ch?.send?.({ embeds: [embed] }).catch(() => null);
+            return msg || null;
+        } catch {
+            return null;
+        }
     }
 
+    /**
+     * Create the automod_embeds ledger row for this enforcement and return the next
+     * per-server CID (the primary key / embed number). The CID is generated lazily:
+     * MAX(cid)+1 within the guild, ensuring monotonically increasing embed numbers.
+     */
+    async _createEmbedRecord({ guildId, channelId = null, userId = null, action = null, ruleType = null, reason = '' }) {
+        await this._ensureTable();
+        try {
+            const res = await pool.query(`
+                INSERT INTO automod_embeds (guild_id, cid, action, rule_type, user_id, reason, channel_id)
+                SELECT $1, COALESCE(MAX(cid), 0) + 1, $2, $3, $4, $5, $6
+                FROM automod_embeds WHERE guild_id = $1
+                RETURNING cid
+            `, [String(guildId), String(action || ''), String(ruleType || ''), String(userId || ''), String(reason || ''), String(channelId || '')]);
+            return res.rows[0] ? Number(res.rows[0].cid) : null;
+        } catch (err) {
+            console.error('[AUTOMOD] Failed to create embed CID:', err.message);
+            return null;
+        }
+    }
+
+    /**
+     * Set/change/remove the persisted reason for an automod embed. `$rmr` /
+     * `$rename (CID) [reason]` and the dashboard's CID pane drive this. An empty
+     * reason *removes* the stored reason.
+     * @returns {Promise<number>} 1 if a row was updated, 0 if the CID didn't exist.
+     */
+    async setEmbedReason(guildId, cid, reason = '') {
+        await this._ensureTable();
+        const cidNum = parseInt(cid, 10);
+        if (!Number.isFinite(cidNum)) return 0;
+        const res = await pool.query(
+            `UPDATE automod_embeds SET reason = $3 WHERE guild_id = $1 AND cid = $2`,
+            [String(guildId), cidNum, String(reason || '' ).slice(0, 1000)]
+        );
+        return res.rowCount || 0;
+    }
     // ─── Manual moderation helpers (used by /warn, /mute, prefix commands) ─────
     //
     // These accept either a discord.js Message (prefix) or a CommandInteraction

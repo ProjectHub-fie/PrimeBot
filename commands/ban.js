@@ -34,6 +34,17 @@ module.exports = {
                 deleteMessageSeconds: deleteDays * 24 * 60 * 60,
             });
 
+            // Ban DM (all-fields embed + optional Appeal button, driven by the
+            // dashboard Automod tab → "DM user" / "Use appeal").
+            interaction.client.appealManager?.sendBanDm?.({
+                guild: interaction.guild,
+                user: member,
+                reason,
+                action: 'ban',
+                moderator: interaction.user,
+                cid: null,
+            }).catch(() => {});
+
             return interaction.reply({ content: `Banned **${member.tag}** for: ${reason}`, ephemeral: true });
         } catch (error) {
             console.error('[BAN] failed:', error);

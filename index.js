@@ -115,6 +115,11 @@ client.betaManager = betaManager;
         warnMember: async () => ({ count: 0, escalated: false, warnThreshold: 3, warnAction: 'timeout' }),
         muteMember: noopAsync, unmuteMember: noopAsync,
     };
+    client.appealManager = {
+        getSettings: () => ({ dmUser: true, useAppeal: false, appealChannelId: null, banEmbedFields: [] }),
+        updateSettings: noop, sendBanDm: async () => false,
+        handleAppealButton: noopAsync, handleAppealSubmit: noopAsync, createAppeal: async () => null,
+    };
     client.reactionRoleManager = {
         getMenuForMessage: () => null, getGuildMenus: () => [],
         getMenuById: () => null, createMenu: noopAsync, updateMenu: noopAsync,
@@ -172,6 +177,14 @@ async function initializeManagers() {
         console.log('[MANAGERS] AutomodManager loaded.');
     } catch (err) {
         console.error('[MANAGERS] Failed to load AutomodManager:', err.message);
+    }
+
+    try {
+        const { AppealManager } = require('./utils/appealManager');
+        client.appealManager = new AppealManager(client);
+        console.log('[MANAGERS] AppealManager loaded.');
+    } catch (err) {
+        console.error('[MANAGERS] Failed to load AppealManager:', err.message);
     }
 
     try {

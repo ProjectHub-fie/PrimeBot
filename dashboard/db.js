@@ -1007,6 +1007,8 @@ async function ensureAutomodTables() {
             warn_actions        JSONB NOT NULL DEFAULT '["timeout"]',
             dm_enabled          BOOLEAN NOT NULL DEFAULT true,
             dm_messages         JSONB NOT NULL DEFAULT '{}',
+            dm_user              BOOLEAN NOT NULL DEFAULT true,
+            use_appeal           BOOLEAN NOT NULL DEFAULT false,
             appeal_channel_id   VARCHAR(50),
             updated_at          TIMESTAMP DEFAULT NOW()
         )
@@ -1021,6 +1023,8 @@ async function ensureAutomodTables() {
     await getAutomodPool().query(`ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS warn_actions       JSONB NOT NULL DEFAULT '["timeout"]'`);
     await getAutomodPool().query(`ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS dm_enabled         BOOLEAN NOT NULL DEFAULT true`);
     await getAutomodPool().query(`ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS dm_messages        JSONB NOT NULL DEFAULT '{}'`);
+    await getAutomodPool().query(`ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS dm_user             BOOLEAN NOT NULL DEFAULT true`);
+    await getAutomodPool().query(`ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS use_appeal          BOOLEAN NOT NULL DEFAULT false`);
     await getAutomodPool().query(`ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS appeal_channel_id  VARCHAR(50)`);
     await getAutomodPool().query(`
         CREATE TABLE IF NOT EXISTS automod_warnings (
@@ -1079,6 +1083,8 @@ function defaultAutomodSettings() {
         warnActions: ['timeout'],
         dmEnabled: true,
         dmMessages: {},
+        dmUser: true,
+        useAppeal: false,
         appealChannelId: null,
     };
 }
@@ -1099,6 +1105,8 @@ function rowToAutomodSettings(row) {
         warnActions,
         dmEnabled: row.dm_enabled !== false,
         dmMessages: normalizeDmMessages(row.dm_messages),
+        dmUser: row.dm_user !== false,
+        useAppeal: row.use_appeal === true,
         appealChannelId: row.appeal_channel_id || null,
     };
 }
@@ -1121,6 +1129,8 @@ async function upsertAutomodSettings(guildId, patch) {
     }
     if ('dmEnabled' in patch)         merged.dmEnabled = patch.dmEnabled !== false;
     if ('dmMessages' in patch)        merged.dmMessages = normalizeDmMessages(patch.dmMessages);
+    if ('dmUser' in patch)            merged.dmUser = patch.dmUser !== false;
+    if ('useAppeal' in patch)        merged.useAppeal = patch.useAppeal === true;
     if ('appealChannelId' in patch)   merged.appealChannelId = patch.appealChannelId || null;
 
     await getAutomodPool().query(`
@@ -1128,8 +1138,8 @@ async function upsertAutomodSettings(guildId, patch) {
             guild_id, enabled, log_channel_id, mute_role_id,
             exempt_role_ids, exempt_channel_ids, rules,
             warn_threshold, warn_action, warn_actions,
-            dm_enabled, dm_messages, appeal_channel_id, updated_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW())
+            dm_enabled, dm_messages, dm_user, use_appeal, appeal_channel_id, updated_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW())
         ON CONFLICT (guild_id) DO UPDATE SET
             enabled            = EXCLUDED.enabled,
             log_channel_id     = EXCLUDED.log_channel_id,
@@ -1142,6 +1152,8 @@ async function upsertAutomodSettings(guildId, patch) {
             warn_actions       = EXCLUDED.warn_actions,
             dm_enabled         = EXCLUDED.dm_enabled,
             dm_messages        = EXCLUDED.dm_messages,
+            dm_user            = EXCLUDED.dm_user,
+            use_appeal         = EXCLUDED.use_appeal,
             appeal_channel_id  = EXCLUDED.appeal_channel_id,
             updated_at         = NOW()
     `, [
@@ -1149,7 +1161,7 @@ async function upsertAutomodSettings(guildId, patch) {
         JSON.stringify(merged.exemptRoleIds), JSON.stringify(merged.exemptChannelIds),
         JSON.stringify(merged.rules), merged.warnThreshold, merged.warnAction,
         JSON.stringify(merged.warnActions), merged.dmEnabled,
-        JSON.stringify(merged.dmMessages), merged.appealChannelId,
+        JSON.stringify(merged.dmMessages), merged.dmUser, merged.useAppeal, merged.appealChannelId,
     ]);
     return getAutomodSettings(guildId);
 }

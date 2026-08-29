@@ -712,8 +712,54 @@ module.exports = {
                     break;
                 }
 
+                case "rmr": {
+                    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+                        return message.reply('You need Administrator permission to edit automod reasons.');
+                    }
+                    if (!/^\d+$/.test(args[0] || '')) {
+                        return message.reply(`Usage: \`${prefix}rmr (CID) [reason]\` — empty reason removes it.`);
+                    }
+                    const cid = parseInt(args[0], 10);
+                    const reason = args.slice(1).join(' ').trim();
+                    const mgr = client?.automodManager;
+                    if (!mgr?.setEmbedReason) {
+                        return message.reply('Automod is unavailable right now.');
+                    }
+                    try {
+                        const updated = await mgr.setEmbedReason(message.guild.id, cid, reason);
+                        return message.reply(updated
+                            ? (reason ? `✅ Updated reason for **CID ${cid}** to: ${reason}` : `✅ Removed reason for **CID ${cid}**.`)
+                            : `❌ No automod embed with **CID ${cid}** was found in this server.`);
+                    } catch (err) {
+                        console.error('[PREFIX RMR] Failed:', err);
+                        return message.reply('I could not update that automod reason.');
+                    }
+                }
+
                 case "rm":
                 case "rename": {
+                    // CID-first: "$rm 42 new reason" / "$rename 42 new reason" edits
+                    // an automod embed's persisted reason (empty reason removes it).
+                    if (/^\d+$/.test(args[0] || '')) {
+                        if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+                            return message.reply('You need Administrator permission to edit automod reasons.');
+                        }
+                        const rmrCid = parseInt(args[0], 10);
+                        const rmrReason = args.slice(1).join(' ').trim();
+                        const rmrMgr = client?.automodManager;
+                        if (!rmrMgr?.setEmbedReason) {
+                            return message.reply('Automod is unavailable right now.');
+                        }
+                        try {
+                            const rmrUpdated = await rmrMgr.setEmbedReason(message.guild.id, rmrCid, rmrReason);
+                            return message.reply(rmrUpdated
+                                ? (rmrReason ? `✅ Updated reason for **CID ${rmrCid}** to: ${rmrReason}` : `✅ Removed reason for **CID ${rmrCid}**.`)
+                                : `❌ No automod embed with **CID ${rmrCid}** was found in this server.`);
+                        } catch (err) {
+                            console.error('[PREFIX RM-RENAME CID] Failed:', err);
+                            return message.reply('I could not update that automod reason.');
+                        }
+                    }
                     if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
                         return message.reply('You need Administrator permission to rename channels.');
                     }
@@ -960,6 +1006,18 @@ module.exports = {
 
                     try {
                         await message.guild.members.ban(target, { reason, deleteMessageSeconds: 0 });
+
+                        // Ban DM (all-fields embed + optional Appeal button, driven by
+                        // the dashboard Automod tab → "DM user" / "Use appeal").
+                        client.appealManager?.sendBanDm?.({
+                            guild: message.guild,
+                            user: target,
+                            reason,
+                            action: 'ban',
+                            moderator: message.author,
+                            cid: null,
+                        }).catch(() => {});
+
                         return message.reply(`Banned **${target.tag}** for: ${reason}`);
                     } catch (err) {
                         console.error('[PREFIX BAN] Failed:', err);
