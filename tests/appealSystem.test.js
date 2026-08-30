@@ -34,7 +34,7 @@ test('sendBanDm attaches an Appeal button when "Use appeal" is on', async () => 
     assert.ok(Array.isArray(payload.components), 'must carry components');
     const row = payload.components[0];
     const btn = row.components[0];
-    assert.strictEqual(btn.data.custom_id, 'appeal:open:G1:ban:7');
+    assert.strictEqual(btn.data.custom_id, 'appeal:open:v2:G1:ban:7');
     assert.strictEqual(btn.data.label, 'Appeal ban');
     assert.ok(payload.embeds?.[0]?.data?.fields?.some(f => f.name === 'CID' && f.value === '7'), 'embed must include the CID field');
 });
@@ -87,3 +87,40 @@ test('AppealManager module parses and sendBanDm builds ban-embed fields from ban
     const fieldNames = payload.embeds?.[0]?.data?.fields?.map(f => f.name) || [];
     assert.deepStrictEqual(fieldNames, ['Server', 'User', 'Responsible moderator', 'Action', 'Reason', 'Rule', 'CID', 'Time']);
 });
+
+// --- parseAppealCustomId (router seam) ---
+const { parseAppealCustomId } = require('../events/interactionCreate');
+
+test('parseAppealCustomId parses v2 customIds (current format)', () => {
+    assert.deepStrictEqual(
+        parseAppealCustomId('appeal:open:v2:1317011851493511228:ban:', null),
+        { guildId: '1317011851493511228', subAction: 'ban', cid: null }
+    );
+    assert.deepStrictEqual(
+        parseAppealCustomId('appeal:open:v2:1317011851493511228:timeout:42', null),
+        { guildId: '1317011851493511228', subAction: 'timeout', cid: 42 }
+    );
+});
+
+test('parseAppealCustomId parses v1 legacy customIds (pre-versioning buttons)', () => {
+    assert.deepStrictEqual(
+        parseAppealCustomId('appeal:open:1317011851493511228:ban:', null),
+        { guildId: '1317011851493511228', subAction: 'ban', cid: null }
+    );
+    assert.deepStrictEqual(
+        parseAppealCustomId('appeal:open:1317011851493511228:ban:9', null),
+        { guildId: '1317011851493511228', subAction: 'ban', cid: 9 }
+    );
+});
+
+test('parseAppealCustomId tolerates old buttons with non-digit cid (no crash, cid null)', () => {
+    assert.deepStrictEqual(
+        parseAppealCustomId('appeal:open:1317011851493511228:ban:', null),
+        { guildId: '1317011851493511228', subAction: 'ban', cid: null }
+    );
+});
+
+test('parseAppealCustomId falls back to fallbackGuildId for non-appeal/empty ids', () => {
+    assert.deepStrictEqual(parseAppealCustomId('other:x', 'FALLBACK'), { guildId: 'FALLBACK', subAction: 'ban', cid: null });
+        assert.deepStrictEqual(parseAppealCustomId('', 'FALLBACK'), { guildId: 'FALLBACK', subAction: 'ban', cid: null });
+    });

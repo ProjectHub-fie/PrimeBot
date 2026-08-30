@@ -375,8 +375,38 @@ async function showCategoryHelpUpdate(interaction, category) {
     });
 }
 
+/**
+ * Parse the customId of an "Appeal ban" button.
+ *
+ * Formats:
+ *   v2 (current): appeal:open:v2:<guildId>:<action>:<cid>
+ *   v1 (legacy, sent before the v2 marker): appeal:open:<guildId>:<action>:<cid>
+ *
+ * The "open" literal shifts the field positions by 1. Both shapes are routed with
+ * the same offset so a stale pre-versioning button (pressed from an old ban DM)
+ * still opens the appeal form for the real guild it was attached to.
+ *
+ * @param {string} customId
+ * @param {string} [fallbackGuildId]
+ * @returns {{guildId: string|null, subAction: string, cid: number|null}}
+ */
+function parseAppealCustomId(customId, fallbackGuildId) {
+    const params = String(customId || '').split(':');
+    if (params[0] !== 'appeal') return { guildId: fallbackGuildId || null, subAction: 'ban', cid: null };
+    // v2 (current): appeal:open:v2:<guildId>:<action>:<cid>
+    // v1 (legacy, sent before the v2 marker): appeal:open:<guildId>:<action>:<cid>
+    // A version marker branches the field layout; a single offset cannot serve both.
+    const isV2 = params[2] === 'v2';
+    const guildId = params[isV2 ? 3 : 2] || fallbackGuildId || null;
+    const subAction = params[isV2 ? 4 : 3] || 'ban';
+    const cidRaw = params[isV2 ? 5 : 4] || '';
+    const cid = /^\d+$/.test(cidRaw) ? parseInt(cidRaw, 10) : null;
+    return { guildId, subAction, cid };
+}
+
 module.exports = {
     name: 'interactionCreate',
+    parseAppealCustomId,
 
     async execute(interaction, client) {
         try {
@@ -629,11 +659,12 @@ module.exports = {
                             );
                         }
                     } else if (action === 'appeal') {
-                        // Ban-DM appeal form (opened from the "Appeal ban" button in a
-                        // banned member's DM). customId: appeal:open:<guildId>:<action>:<cid>
-                        const guildId = params[0] || interacton.guild?.id;
-                        const subAction = params[1] || 'ban';
-                        const cid = /^\d+$/.test(params[2] || '') ? parseInt(params[2], 10) : null;
+                        // Ban-DM appeal form (opened from the "Appeal ban" button in a banned member's DM).
+                        // customId: appeal:open:v2:<guildId>:<action>:<cid> (v1 legacy: no version marker).
+                        const parsed = parseAppealCustomId(interaction.customId, interaction.guild?.id);
+                        const guildId = parsed.guildId;
+                        const subAction = parsed.subAction;
+                        const cid = parsed.cid;
                         if (!interaction.client.appealManager?.handleAppealButton) {
 
                             await safeReply(interaction, { content: 'Appeals are unavailable right now.', ephemeral: true });

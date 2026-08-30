@@ -252,7 +252,7 @@ class AppealManager {
         const components = [];
         if (settings.useAppeal) {
             const btn = new ButtonBuilder()
-                .setCustomId(`appeal:open:${guild.id}:${action || 'ban'}:${cid || ''}`)
+                .setCustomId(`appeal:open:v2:${guild.id}:${action || 'ban'}:${cid || ''}`)
                 .setLabel('Appeal ban')
                 .setEmoji('📨')
                 .setStyle(ButtonStyle.Primary);
