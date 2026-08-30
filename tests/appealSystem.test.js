@@ -67,3 +67,23 @@ test('handleAppealButton submits a modal with guild + action + CID in the custom
     assert.ok(showed);
     assert.ok(showed.data.custom_id.startsWith('appeal_modal:G1'));
 });
+
+test('AppealManager module parses and sendBanDm builds ban-embed fields from banEmbedFields', async () => {
+    // Regression: commit 19a2c71 corrupted this loop into `for ( (constk ...` which
+    // threw a SyntaxError killingthe whole module, so NO ban DM/appeal button
+    // was ever sent (the runtime fallback stub returned false) regardless of the
+    // dashboard's "DM user" / "Use appeal" switches.o
+    const mgr = fresh({ dmUser: true, useAppeal: true, appealChannelId: 'CH', banEmbedFields: ['server', 'user', 'reason'] });
+    let payload = null;
+    const ok = await mgr.sendBanDm({
+        guild: { id: 'G1', name: 'Test Server' },
+        user: { id: 'U1', tag: 'tester#1234', send: async (p) => { payload = p; } },
+        reason: 'spam',
+        action: 'ban',
+        cid: 7,
+    });
+    assert.strictEqual(ok, true);
+    assert.ok(payload, 'DM must be sent');
+    const fieldNames = payload.embeds?.[0]?.data?.fields?.map(f => f.name) || [];
+    assert.deepStrictEqual(fieldNames, ['Server', 'User', 'Responsible moderator', 'Action', 'Reason', 'Rule', 'CID', 'Time']);
+});
