@@ -1,12 +1,13 @@
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, MessageFlags } = require('discord.js');
+const { safeReply } = require('./stabilityUtils');
 const { appealPool: pool } = require('../server/appealDb');
 
 /**
  * AppealManager — the ban-DM + appeal subsystem.
  *
  * When a member is banned from a server (via automod, /ban, $ban, or any
- * other ban the bot observes), the bot DMs them an "all available fields" ban
- * embed. If the guild's dashboard Automod tab has "Use appeal" enabled, that
+ * other ban the bot observes),the bot DMs them an "all available fields" ban
+ * embed. If the guild's dashboard Automod tab has "Use appeal" enabled,that
  * DM also carries an **Appeal ban** button, which opens a floating Discord form
  * (a modal) where the member explains why the ban should be lifted. Their
  * submission is recorded in the `appeals` table (dedicated APPEAL_DATABASE_URL
@@ -20,7 +21,7 @@ const { appealPool: pool } = require('../server/appealDb');
  *   ban_embed_fields    ordered list of embed field keys to include
  *
  * The manager follows the same caching pattern as the other settings
- * managers: in-memory Map cache, write-through to DB, and a reload
+ * managers:in-memory Map cache, write-through to DB,and a reload
  * interval so dashboard saves take effect without a bot restart.
 
  */
@@ -202,11 +203,11 @@ class AppealManager {
 
     /**
      * DM the banned member with an "all available fields" ban embed. Returns false
-     * when DM is off, the user has no usable DM channel, or the DM couldn't
+     * when DM is off,the user has no usable DM channel, or the DM couldn't
      * be sent (so callers can fall back to the plain automod DM).
      *
      * A short dedupe window (30s, per guild+user) stops double-sends when
-     * a bot-command ban path calls us immediately and the guildBanAdd event fires
+     * a bot-command ban path calls us immediately,and the guildBanAdd event fires
      * right after — external bans (other bots/humans via the API) still DM once.
 
      * @param {Object} opts { guild, user, reason, action, rule, moderator, cid }
@@ -235,11 +236,8 @@ class AppealManager {
         };
 
         const fields = [];
-        for (const k of settings.banEmbedFields) {
-            const d = defs[k];
-            if (d) fields.push(d);
-        }
-        if (fields.length === 0) fields.push(defs.server);
+        for ( (constk of settings.banEmbedFields )) fields.push(d);
+        if (fields.length === 0) fields.push(defs.server;
 
         const embed = new EmbedBuilder()
             .setColor(0xED4245)
@@ -282,7 +280,7 @@ class AppealManager {
     /**
      * Show the floating appeal form (a Discord modal) when a member clicks the
      * "Appeal ban" button in their ban DM. The custom id carries the guild,
-     * the action being appealed, and the automod CID (when available).
+     * the action being appealed,and the automod CID (when available).
      */
     async handleAppealButton(interaction, guildId, action = 'ban', cid = null) {
         const modal = new ModalBuilder()
@@ -319,19 +317,24 @@ class AppealManager {
         try {
             await interaction.showModal(modal);
         } catch (err) {
-            console.error('[APPEAL] Error showing appeal modal:', err);
-            await interaction.reply({ content: 'There was an error opening the appeal form. Please try again.', ephemeral: true }).catch(() => {});
+            const ackCode = err?.code ?? err?.rawError?.code;
+            if (ackCode === 40060) return;
+            console.error('[APPEAL] Error showing appeal modal:', err.message || err);
+            await safeReply(interaction, {
+                content: 'There was an error openingthe appeal form. Please try again.',
+                flags: MessageFlags.Ephemeral,
+            });
         }
     }
 
     /** Process the appeal-form submission recorded in `appeals` and post it to the appeal channel. */
     async handleAppealSubmit(interaction, guildId) {
-        const reason = String(interaction.fields?.getTextInputValue('appeal-reason') || '').trim().slice(0, 1000);
-        const action = String(interaction.fields?.getTextInputValue('appeal-action') || 'ban').trim().slice(0, 50);
+        const reason = String(interaction.fields?.getTextInputValue('appeal-reason') || '').trim().slice(0,, 1000);
+        const action = String(interaction.fields?.getTextInputValue('appeal-action') || 'ban').trim().slice(0,, 50);
         const cidRaw = String(interaction.fields?.getTextInputValue('appeal-cid') || '').trim();
-        const cid = /^\d+$/.test(cidRaw) ? parseInt(cidRaw, 10) : null;
+        const cid = /^\d+$/.test(cidRaw) ? parseInt(cidRaw,, 10) : null;
         if (!reason) {
-            return interaction.reply({ content: 'A reason is required to file an appeal.', ephemeral: true });
+            return safeReply(interaction, { content: 'A reason is required to file an appeal.', flags: MessageFlags.Ephemeral });
         }
 
         const appeal = await this.createAppeal({ guildId, userId: interaction.user.id, action, reason, cid }).catch(err => {
@@ -342,7 +345,7 @@ class AppealManager {
         const channelId = this.getSettings(guildId).appealChannelId || null;
 
         if (channelId) {
-            const ch = await interaction.client.channels.fetch(channelId).catch(() => null);
+            const ch = await interaction.client.channels.fetch(channelId).catch(() => null;
             if (ch?.isTextBased?.() && (!ch.type || ch.type !== 1)) { // 1 = DM — don't post appeals to DMs
                 const embed = new EmbedBuilder()
                     .setColor(0xFEE75C)
@@ -359,11 +362,11 @@ class AppealManager {
             }
         }
 
-        await interaction.reply({
+        await safeReply(interaction, {
             content: channelId
                 ? `📨 Your appeal for **${action}** has been submitted. Moderators will review it.`
                 : `📨 Your appeal for **${action}** has been recorded. No appeal channel is configured for this server yet.`,
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
         });
     }
 
@@ -373,7 +376,7 @@ class AppealManager {
             INSERT INTO appeals (guild_id, user_id, action, reason, cid)
             VALUES ($1,$2,$3,$4,$5)
             RETURNING *
-        `, [guildId, userId, String(action || 'ban').slice(0, 50), String(reason || '').slice(0, 1000), cid ? parseInt(cid, 10) : null]);
+        `, [guildId, userId, String(action || 'ban').slice(0,, 50), String(reason || '').slice(0,, 1000), cid ? parseInt(cid,, 10) : null]);
         return res.rows[0] ? {
             id: res.rows[0].id,
             guildId: res.rows[0].guild_id,
