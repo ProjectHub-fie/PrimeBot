@@ -53,19 +53,33 @@ function userAvatarUrl(user) {
 }
 
 // <option> list for a channel <select>. `selected` is the currently chosen id.
+// When a saved value is not present in the (possibly incomplete) channel list —
+// e.g. the Discord API failed to load channels, or the channel was deleted/renamed —
+// a <select> with no matching <option> silently falls back to its first option, so a
+// later save would wipe the saved value. Preserve it as its own <option> instead.
 function channelOptions(channels, selected) {
-    const opts = channels.map((c) =>
+    const list = channels || [];
+    const opts = list.map((c) =>
         `<option value="${esc(c.id)}"${String(selected) === String(c.id) ? ' selected' : ''}>${esc(c.name)}</option>`
     ).join('');
-    return `<option value="">— None / default —</option>${opts}`;
+    const missing = selected && !list.some((c) => String(c.id) === String(selected));
+    const missingOpt = missing
+        ? `<option value="${esc(selected)}" selected>#${esc(selected)} (kept — not visible to bot)</option>`
+        : '';
+    return `<option value="">— None / default —</option>${opts}${missingOpt}`;
 }
 
-// <option> list for a role <select>.
+// <option> list for a role <select> (same "kept" preservation as channels).
 function roleOptions(roles, selected) {
-    const opts = roles.map((r) =>
+    const list = roles || [];
+    const opts = list.map((r) =>
         `<option value="${esc(r.id)}"${String(selected) === String(r.id) ? ' selected' : ''}>${esc(r.name)}</option>`
     ).join('');
-    return `<option value="">— None —</option>${opts}`;
+    const missing = selected && !list.some((r) => String(r.id) === String(selected));
+    const missingOpt = missing
+        ? `<option value="${esc(selected)}" selected>${esc(selected)} (kept — not in role list)</option>`
+        : '';
+    return `<option value="">— None —</option>${opts}${missingOpt}`;
 }
 
 // Inline SVG icons for the top nav. Kept here so the nav is self-contained

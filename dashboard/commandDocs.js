@@ -401,6 +401,17 @@ const METADATA = {
         description: 'Enable, disable or check beta features for this server (the server must already be on the developer-approved allowed list).',
         usage: ['beta <enable|disable|status>'],
     },
+    rmr: {
+        category: 'Moderation', permission: MODERATE_MEMBERS,
+        description: 'Edit or clear the stored reason for an automod enforcement embed (CID) so the dashboard/ban-DM reason can be corrected after the fact.',
+        usage: ['rmr <CID> [reason]', 'rmr <CID> (empty reason clears)'],
+        note: 'Empty reason removes the stored reason',
+    },
+    appealchannel: {
+        category: 'Moderation', permission: MODERATE_MEMBERS,
+        description: "View or set the server's automod appeal channel (where filed appeals are posted for moderators). Use `off` to clear.",
+        usage: ['appealchannel [#channel|channelId]', 'appealchannel off'],
+    },
 };
 
 /**

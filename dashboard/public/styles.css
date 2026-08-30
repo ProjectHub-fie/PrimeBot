@@ -2316,3 +2316,38 @@ select:focus {
   padding: 40px 16px;
 }
 .doc-hidden { display: none !important; }
+/* === Mobile polish === */
+/* Hide the PrimeBot brand (logo + "PrimeBot" wordmark + "Dashboard" sub)
+   from the sticky header on phones so the scrollable top nav gets the whole row. */
+@media (max-width: 760px) {
+  .brand { display: none; }
+}
+
+/* Compact the login screen + tighten common page chrome on small screens. */
+@media (max-width: 640px) {
+  .container { padding-top: 20px; }
+  .login-wrap { padding: 26px 14px 30px; }
+  .login-hero { width: 64px; height: 64px; border-radius: 17px; margin-bottom: 12px; }
+  .login-hero .ico { width: 34px; height: 34px; }
+  .login-title { font-size: 25px; margin-bottom: 4px; letter-spacing: -0.02em; }
+  .login-sub { font-size: 13.5px; margin-bottom: 18px; max-width: 100%; }
+  .login-actions { flex-direction: column; align-items: stretch; margin-bottom: 14px; }
+  .login-actions .btn, .login-actions + .btn { width: 100%; justify-content: center; }
+  .feature-grid { grid-template-columns: 1fr; margin: 20px auto 0; }
+  .stats-band { padding: 16px 14px; margin: 26px auto 0; }
+  .stats-band-head { flex-direction: column; align-items: flex-start; gap: 5px; margin-bottom: 12px; }
+  .stats-cards { gap: 9px; }
+  .stat-value { font-size: 22px; }
+  .donut-grid { gap: 9px; }
+  .donut { width: 68px; height: 68px; }
+  .page-head { margin-bottom: 16px; }
+  .card { padding: 16px 14px; }
+  .card-title { font-size: 15.5px; }
+  .guild-header-card { padding: 16px 14px; }
+  .guild-header-card .guild-icon { width: 46px; height: 46px; }
+  .settings-nav { top: 0; }
+  .settings-nav .menu-item { padding: 8px 10px; }
+  .wlog-wrap, .badge-table-wrap { border-radius: 8px; }
+  .footer { padding: 16px 14px; flex-direction: column; gap: 6px; }
+  .footer-links { margin-left: 0; }
+}
