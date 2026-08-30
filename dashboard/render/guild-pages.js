@@ -1124,7 +1124,7 @@ function automodPage({ guild, user }) {
       <div class="field">
         <label class="field-label" for="am-appeal-channel">Appeal channel (optional)</label>
         <select id="am-appeal-channel" data-channel-select>${channelOptions(guild._channels, s.appealChannelId)}</select>
-        <div class="field-hint">New appeals filed via <code>/appeal</code> are posted here for moderators to review.</div>
+        <div class="field-hint">New appeals filed via <code>/appeal</code> or the ban-DM form are posted here for moderators to review. If left unset, appeals fall back to the automod log channel (and you can set it anytime with <code>$appealchannel #channel</code> or <code>/automod set appeal_channel</code>).</div>
       </div>
     </div>
 

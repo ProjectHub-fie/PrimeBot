@@ -458,16 +458,14 @@ class AutomodManager {
         const ordered = [...actions].sort((a) => (a === 'delete' ? -1 : 0));
         const applied = [];
 
-        // Every automod log embed gets a per-server CID (the embed number, stored in
-        // automod_embeds). Generate it up-front so the ban-DM can reference it and the
-        // embed title becomes "<type> (CID n)".
-        let cid = null;
-        if (settings.logChannelId) {
-            cid = await this._createEmbedRecord({
-                guildId: message.guild.id, channelId: message.channelId,
-                userId: message.author.id, action: actions.join(','), ruleType: rule.type, reason,
-            });
-        }
+        // Every automod action gets a per-server CID (the embed number, stored in
+        // automod_embeds). Generate it up-front — regardless of whether a log channel
+        // is configured yet — so the CID is always recorded in the ledger (and shown
+        // in the ban-DM, dashboard CID pane, etc.), never silently missing.
+        let cid = await this._createEmbedRecord({
+            guildId: message.guild.id, channelId: message.channelId,
+            userId: message.author.id, action: actions.join(','), ruleType: rule.type, reason,
+        });
 
         // Delete the message up-front if a delete action is present.
 

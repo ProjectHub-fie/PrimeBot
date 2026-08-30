@@ -6,6 +6,7 @@ const {
     StringSelectMenuBuilder,
     PermissionsBitField,
     PermissionFlagsBits,
+    ChannelType,
 } = require("discord.js");
 const net = require("net");
 const config = require("../config");
@@ -1120,6 +1121,35 @@ module.exports = {
                         console.error('[PREFIX MUTE] Failed:', err);
                         return message.reply('I could not mute that member.');
                     }
+                }
+
+                case "appealchannel":
+                case "appealchannelid": {
+                    // `$appealchannel [#channel|channelId]` / `$appealchannel off`
+                    // — set (or clear) the automod appeal channel from a command, since
+                    // the dashboard selector can be empty when the bot can't see channels.
+
+                    if (!message.member.permissions.has(PermissionFlagsBits.ManageGuild)) {
+
+                        return message.reply('You need Manage Server permission to set the appeal channel.');
+                    }
+                    const raw = (args[0]||'').trim().toLowerCase();
+                    const clear = !raw || ['off','none','null','clear','remove','0'].includes(raw);
+                    if (!clear) {
+                        const m = /^<#(\d+)>$/.exec(args[0]|| '');
+                        const cid = m ? m[1] : (/^\d{15,22}$/.test(raw) ? raw : null);
+                        if (!cid) {
+                            return message.reply(`Usage: \`${prefix}appealchannel #channel\` or \`${prefix}appealchannel <channelId>\`; use \`${prefix}appealchannel off\` to clear.`);
+                        }
+                        const ch = await client.channels.fetch(cid).catch(() => null);
+                        if (!ch || !ch.isTextBased?.() || ch.type === ChannelType.DM) {
+                            return message.reply('That is not a text channel I can post appeals to.');
+                        }
+                        await client.automodManager.updateSettings(message.guild.id, { appealChannelId: cid });
+                        return message.reply(`📨 Appeal channel set to <#${cid}> — new ban appeals will be posted there.`);
+                    }
+                    await client.automodManager.updateSettings(message.guild.id, { appealChannelId: null });
+                    return message.reply('📨 Appeal channel cleared — appeals will fall back to the automod log channel (if set).');
                 }
 
                 case "unmute": {

@@ -156,6 +156,7 @@ class AppealManager {
                 dmUser: typeof automod.dmUser === 'undefined' ? (base.dmUser !== false) : automod.dmUser !== false,
                 useAppeal: typeof automod.useAppeal === 'undefined' ? (base.useAppeal === true) : automod.useAppeal === true,
                 appealChannelId: automod.appealChannelId ?? base.appealChannelId ?? null,
+                logChannelId: automod.logChannelId ?? base.logChannelId ?? null,
             };
         }
         return base;
@@ -340,12 +341,31 @@ class AppealManager {
             return safeReply(interaction, { content: 'A reason is required to file an appeal.', flags: MessageFlags.Ephemeral });
         }
 
-        const appeal = await this.createAppeal({ guildId, userId: interaction.user.id, action, reason, cid }).catch(err => {
-            console.error('[APPEAL] Failed to record appeal:', err.message);
-            return null;
-        });
+        // Record the appeal in `automod_appeals` (the table the dashboard Appeals
+        // box and /appeal list|approve|deny read), so a ban-DM modal submission shows
+        // up immediately instead of vanishing into the legacy `appeals` table.
+        // Degrade to the legacy table if the automod manager/DB isn't available.
+        let appeal = null;
+        const am = this.client?.automodManager;
+        if (am?.submitAppeal) {
+            appeal = await am.submitAppeal({ guildId, userId: interaction.user.id, action, reason }).catch(err => {
+                console.error('[APPEAL] Failed to record appeal in automod_appeals:', err.message);
+                return null;
+            });
+        }
+        if (!appeal) {
+            appeal = await this.createAppeal({ guildId, userId: interaction.user.id, action, reason, cid }).catch(err => {
+                console.error('[APPEAL] Failed to record appeal:', err.message);
+                return null;
+            });
+        }
 
-        const channelId = this.getSettings(guildId).appealChannelId || null;
+        // Deliver to the server: prefer the explicit appeal channel, fall back to the
+        // automod log channel (so an appeal is never lost just because nobody picked
+        // an appeal channel selector).
+        const settings = this.getSettings(guildId);
+        const channelId = settings.appealChannelId || settings.logChannelId || null;
+        let delivered = channelId ? null : false;
 
         if (channelId) {
             const ch = await interaction.client.channels.fetch(channelId).catch(() => null);
@@ -361,14 +381,17 @@ class AppealManager {
                     )
                     .setFooter({ text: `Appeal #${appeal?.id || '?'}` })
                     .setTimestamp();
-                await ch.send({ embeds: [embed] }).catch(() => {});
+                const sent = await ch.send({ embeds: [embed] }).catch(() => null);
+                delivered = Boolean(sent);
             }
         }
 
         await safeReply(interaction, {
-            content: channelId
-                ? `📨 Your appeal for **${action}** has been submitted. Moderators will review it.`
-                : `📨 Your appeal for **${action}** has been recorded. No appeal channel is configured for this server yet.`,
+            content: delivered
+                ? `📨 Your appeal for **${action}** has been submitted and posted to <#${channelId}>. Moderators will review it.`
+                : channelId
+                    ? `📨 Your appeal for **${action}** has been recorded, but it could not be posted to <#${channelId}>.`
+                    : `📨 Your appeal for **${action}** has been recorded. No appeal channel is configured for this server yet.`,
             flags: MessageFlags.Ephemeral,
         });
     }
