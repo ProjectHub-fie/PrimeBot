@@ -64,10 +64,12 @@ module.exports = {
                 const appeal = await manager.submitAppeal({
                     guildId, userId: interaction.user.id, action, reason,
                 });
-                // Post to the configured appeal channel (if any) for moderators.
+                // Post to the configured appeal channel — or the automod log
+                // channel as fallback — for moderators.
                 const settings = manager.getSettings(guildId);
-                if (settings.appealChannelId) {
-                    const ch = await interaction.client.channels.fetch(settings.appealChannelId).catch(() => null);
+                const channelId = settings.appealChannelId || settings.logChannelId || null;
+                if (channelId) {
+                    const ch = await interaction.client.channels.fetch(channelId).catch(() => null);
                     if (ch && ch.isTextBased?.() && ch.type !== ChannelType.DM) {
                         const embed = new EmbedBuilder()
                             .setColor(0xFEE75C)
@@ -82,7 +84,9 @@ module.exports = {
                     }
                 }
                 return interaction.reply({
-                    content: `📨 Your appeal (**#${appeal.id}**) for **${action}** has been submitted. Moderators will review it.`,
+                    content: channelId
+                        ? `📨 Your appeal (**#${appeal.id}**) for **${action}** has been submitted and posted to <#${channelId}>. Moderators will review it.`
+                        : `📨 Your appeal (**#${appeal.id}**) for **${action}** has been recorded. No appeal channel is configured for this server yet.`,
                     ephemeral: true,
                 });
             } catch (err) {
