@@ -285,7 +285,7 @@ class AutomodManager {
                 exempt_role_ids, exempt_channel_ids, rules,
                 warn_threshold, warn_action, warn_actions,
                 dm_enabled, dm_messages, dm_user, use_appeal, appeal_channel_id, updated_at
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW())
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,NOW())
             ON CONFLICT (guild_id) DO UPDATE SET
                 enabled            = EXCLUDED.enabled,
                 log_channel_id     = EXCLUDED.log_channel_id,

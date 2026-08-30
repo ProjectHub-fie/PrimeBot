@@ -100,7 +100,12 @@ const METADATA = {
     ban: {
         category: 'Moderation', permission: ADMINISTRATOR,
         description: 'Ban a member from the server.',
-        usage: ['ban @member [reason]'],
+        usage: ['ban <@member|userid> [reason]'],
+    },
+    unban: {
+        category: 'Moderation', permission: ADMINISTRATOR,
+        description: 'Unban a member by user id.',
+        usage: ['unban <userid> [reason]'],
     },
     warn: {
         category: 'Moderation', permission: MODERATE_MEMBERS,
