@@ -15,14 +15,27 @@
 const guildDataEl = document.getElementById('guild-data');
 const guildData = guildDataEl ? JSON.parse(guildDataEl.textContent) : { guildId: '', channels: [], roles: [] };
 
+function preserveSelected(sel, current) {
+  if (current && !sel.querySelector(`option[value="${CSS.escape(current)}"]`)) {
+    const isChannel = sel.hasAttribute('data-channel-select');
+    const option = document.createElement('option');
+    option.value = current;
+    option.textContent = isChannel ? `#${current} (kept — not visible to bot)` : `${current} (kept — not in role list)`;
+    option.selected = true;
+    sel.appendChild(option);
+  }
+}
+
 function populateChannelSelects() {
   const opts = (guildData.channels || []).map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
   document.querySelectorAll('select[data-channel-select]').forEach(sel => {
     const current = sel.value;
     // Preserve a leading "— None —"-style option if present.
+
     const first = sel.querySelector('option[value=""]');
     sel.innerHTML = (first ? first.outerHTML : '<option value="">— None / default —</option>') + opts;
     if (current) sel.value = current;
+    preserveSelected(sel, current);
   });
 }
 
@@ -33,6 +46,7 @@ function populateRoleSelects() {
     const placeholder = sel.dataset.placeholder || '— None —';
     sel.innerHTML = `<option value="">${esc(placeholder)}</option>` + opts;
     if (current) sel.value = current;
+    preserveSelected(sel, current);
   });
 }
 

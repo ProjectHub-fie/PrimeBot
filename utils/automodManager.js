@@ -652,9 +652,14 @@ class AutomodManager {
         embed.setFooter({ text: 'PrimeBot Automod' });
         try {
             const ch = await this.client.channels.fetch(settings.logChannelId);
-            const msg = await ch?.send?.({ embeds: [embed] }).catch(() => null);
+            if (!ch || typeof ch.send !== 'function') {
+                console.error(`[AUTOMOD] Log channel ${settings.logChannelId} is not a sendable channel (it may have been deleted/renamed). Skipping automod log.`);
+                return null;
+            }
+            const msg = await ch.send({ embeds: [embed] });
             return msg || null;
-        } catch {
+        } catch (err) {
+            console.error('[AUTOMOD] Automod log delivery failed:', err.message);
             return null;
         }
     }
@@ -665,8 +670,8 @@ class AutomodManager {
      * MAX(cid)+1 within the guild, ensuring monotonically increasing embed numbers.
      */
     async _createEmbedRecord({ guildId, channelId = null, userId = null, action = null, ruleType = null, reason = '' }) {
-        await this._ensureTable();
         try {
+            await this._ensureTable();
             const res = await pool.query(`
                 INSERT INTO automod_embeds (guild_id, cid, action, rule_type, user_id, reason, channel_id)
                 SELECT $1, COALESCE(MAX(cid), 0) + 1, $2, $3, $4, $5, $6

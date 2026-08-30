@@ -123,6 +123,8 @@ const CATALOG = {
             { names: ['warnings'], args: '[@member]', desc: 'View a member\'s warnings' },
             { names: ['mute'], args: '@member [duration]', desc: 'Mute a member' },
             { names: ['unmute'], args: '@member', desc: 'Unmute a member' },
+            { names: ['rmr'], args: '<CID> [reason]', desc: 'Edit or clear the reason on an automod embed (Moderate Members)' },
+            { names: ['appealchannel', 'appealchannelid'], args: '[#channel|off]', desc: 'View or set the automod appeal channel (Moderate Members)' },
             { names: ['purge'], args: '<count|user @member|between id1 id2|messages count>', desc: 'Bulk-delete messages' },
             { names: ['lock'], args: '[#channel]', desc: 'Lock a channel (Admin)' },
             { names: ['unlock'], args: '[#channel]', desc: 'Unlock a channel (Admin)' },
@@ -150,6 +152,7 @@ const CATALOG = {
             { names: ['level-disable', 'leveldisable', 'leveling-disable', 'levelingoff'], desc: 'Disable the leveling system' },
             { names: ['level-channel', 'levelchannel'], args: '#channel', desc: 'Set the level-up notification channel' },
             { names: ['level-multiplier', 'levelmultiplier'], args: '[number]', desc: 'Set the XP multiplier' },
+            { names: ['dev'], args: '[@user]', desc: 'PrimeBot staff-role service (owner assigns/modifies/removes roles)' },
         ],
     },
 
