@@ -777,235 +777,266 @@ function ticketsPage({ guild, user }) {
         <button class="btn btn-primary" id="tk-create-open">Create a panel</button>
       </div>
     </div>
+    `;
 
-    <div class="modal-overlay hidden" id="tk-modal">
-      <div class="modal floating-window tk-editor">
-        <div class="modal-head">
-          <span><span class="icon">${svgIcon('ticket')}</span> <span id="tk-modal-title">Create panel</span></span>
-          <button class="modal-close" id="tk-modal-close" aria-label="Close">✕</button>
+        // Tickets is live — no upcoming gate anymore (TABS upcoming: false)..
+    const wrappedPanelHTML = panelHTML;
+    return guildTab({ guild, user, active: 'tickets', panelHTML: wrappedPanelHTML, scripts: ['/js/guild-common.js', '/js/tickets.js'] });
+}
+
+// ── Ticket panel full-page editor (horizontal SPA-style tabs) ─────────────
+//
+// Reached from:
+//   - "Create a panel": the dashboard auto-creates an "Untitled-N" panel and
+//     the client redirects here (/guild/:guildId/tickets/:id/edit)` so the admin
+//     starts configuring immediately (there's no "edit before create" step).
+//   - a panel card's "Edit" button:the same edit page.
+//
+// The editor is a real page (not a modal, like the old flow). It renders a
+// horizontal tab bar — Panel, Buttons, Message, Permission, Logging,
+// Animation, Transcript, Input — each tab holding a group of controls, SPA
+// style (clicking a tab swaps the visible panel client-side, no page reload).
+// The first six tabs mirror the old modal's fields; Logging + Animation are
+// placeholders ("settings available soon") so the tab bar is future-proof.
+//
+// Quick actions (Send/Resend,, Update message,, Clone,, Rename,, Delete) live
+// at the top of the page, beside the "Back to panels" link; each posts to its
+// existing /api/... endpoint and refreshes the panel row client-side.
+
+const TICKET_EDITOR_TABS = [
+    { key: 'panel',       label: 'Panel',       icon: 'settings' },
+    { key: 'buttons',      label: 'Buttons',      icon: 'sliders' },
+    { key: 'message',      label: 'Message',      icon: 'message' },
+    { key: 'permission',   label: 'Permission',   icon: 'shield' },
+    { key: 'logging',       label: 'Logging',       icon: 'scroll' },
+    { key: 'animation',     label: 'Animation',     icon: 'playCircle' },
+    { key: 'transcript',   label: 'Transcript',   icon: 'receipt' },
+    { key: 'input',         label: 'Input',         icon: 'type' },
+];
+
+function ticketField(label, forId, inner, hint = '') {
+    return `
+    <div class="field">
+      <label class="field-label" for="${forId}">${label}</label>
+      ${inner}
+      ${hint ? `<div class="field-hint">${hint}</div>` : ''}
+    </div>`;
+}
+
+function ticketEditorTabsHTML(panel) {
+    const styleOpts = TICKET_BUTTON_STYLES.map(s => `<option value="${s.value}">${esc(s.label)}</option>`).join('');
+    const typeOpts = TICKET_MESSAGE_TYPES.map(t => `<option value="${t.value}">${esc(t.label)}</option>`).join('');
+    const p = panel || {};
+    const cf = p.closeFlow || {};
+    const val = (v, d = '') => v == null ? d : esc(String(v));
+    const chk = (v) => v ? 'checked' : '';
+    const roleRow = (list, cls) => {
+        const ids = Array.isArray(list) && list.length ? list : [null];
+        return ids.map(id => ticketRoleRowHTML(id ? { roleId: id } : {}, cls)).join('');
+    };
+
+    // Tab 1 — Panel: identity, enabled, message type, name templates.
+
+    const panelTab = `
+      ${ticketField('Panel name', 'tk-name', `<input type="text" id="tk-name" maxlength="100" value="${val(p.name, 'Support Ticket')}" placeholder="Support Ticket" />`, 'Unique per server. Shown as the ticket title and in the dashboard list.')}
+      <div class="switch-row">
+        <div class="switch-label"><div class="sl-title">Enabled</div><div class="sl-desc">When off, the open ticket button on the panel message is disabled.</div></div>
+        <label class="switch"><input type="checkbox" id="tk-enabled" ${chk(p.enabled !== false)}/><span class="slider"></span></label>
+      </div>
+      ${ticketField('Message type', 'tk-message-type', `<select id="tk-message-type">${typeOpts}</select>`, 'Embed (rich) or plain text. The open-ticket button is always attached.')}
+      ${ticketField('Ticket category label', 'tk-category', `<input type="text" id="tk-category" maxlength="50" value="${val(p.category, 'general')}" placeholder="general" />`)}
+    `;
+
+    // Tab 2 — Buttons: open/close/claim + close-flow confirm + post-close..
+    const btnRow = (keyprefix, labelText, defLabel, defEmoji, defStyle) => `
+      <div class="field">
+        <label class="field-label">${labelText}</label>
+        <div class="reaction-row" style="display:flex;gap:6px;flex-wrap:wrap">
+          <input type="text" id="${keyprefix}-label" maxlength="80" value="${val(cfButtonLabel(keyprefix, p, defLabel), defLabel)}" placeholder="${defLabel}" style="flex:2" />
+          <input type="text" id="${keyprefix}-emoji" maxlength="100" value="${val(cfButtonEmoji(keyprefix, p, defEmoji), defEmoji)}" placeholder="${defEmoji}" style="flex:1" />
+          <select id="${keyprefix}-style" style="flex:1">${styleOpts}</select>
         </div>
-        <div class="modal-body">
-      <div class="field">
-        <label class="field-label" for="tk-name">Panel name</label>
-        <input type="text" id="tk-name" maxlength="100" placeholder="Support Ticket" />
-        <div class="field-hint">Unique per server. Shown as the ticket title and in the dashboard list.</div>
+      </div>`;
+    const buttonsTab = `
+      <div class="card-title" style="margin-top:8px"><span>Open button</span></div>
+      ${ticketField('Open button label', 'tk-button-label', `<input type="text" id="tk-button-label" maxlength="80" value="${val(p.buttonLabel, 'Open Ticket')}" />`)}
+      ${ticketField('Open button emoji (optional)', 'tk-button-emoji', `<input type="text" id="tk-button-emoji" maxlength="100" value="${val(p.buttonEmoji)}" placeholder="🎫" />`)}
+      ${ticketField('Open button style', 'tk-button-style', `<select id="tk-button-style">${styleOpts}</select>`)}
+      <div class="card-title" style="margin-top:8px"><span>Close button</span></div>
+      ${ticketField('Close button label', 'tk-close-label', `<input type="text" id="tk-close-label" maxlength="80" value="${val(p.closeButtonLabel, 'Close Ticket')}" />`)}
+      ${ticketField('Close button emoji (optional)', 'tk-close-emoji', `<input type="text" id="tk-close-emoji" maxlength="100" value="${val(p.closeButtonEmoji, '🔒')}" />`)}
+      ${ticketField('Close button colour', 'tk-close-style', `<select id="tk-close-style">${styleOpts}</select>`)}
+      <div class="card-title" style="margin-top:8px"><span>Claim button (optional — leave blank for none)</span></div>
+      ${ticketField('Claim button label', 'tk-claim-label', `<input type="text" id="tk-claim-label" maxlength="80" value="${val(p.claimButtonLabel)}" placeholder="Claim" />`)}
+      ${ticketField('Claim button emoji (optional)', 'tk-claim-emoji', `<input type="text" id="tk-claim-emoji" maxlength="100" value="${val(p.claimButtonEmoji)}" placeholder="✋" />`)}
+      <div class="card-title" style="margin-top:8px"><span>Close flow — Yes / No confirmation buttons</span></div>
+      <p class="card-hint">When a member presses <strong>Close</strong>, a <strong>Yes / No</strong> confirmation row is shown. Customize both buttons below.</p>
+      ${ticketField('Yes (confirm) button', '', `<div class="reaction-row" style="display:flex;gap:6px;flex-wrap:wrap">
+          <input type="text" id="tk-cf-yes-label" maxlength="80" value="${val(cf.confirmYes?.label, 'Yes')}" placeholder="Yes" style="flex:2" />
+          <input type="text" id="tk-cf-yes-emoji" maxlength="100" value="${val(cf.confirmYes?.emoji, '✅')}" placeholder="✅" style="flex:1" />
+          <select id="tk-cf-yes-style" style="flex:1">${styleOpts}</select>
+        </div>`)}
+      ${ticketField('No (cancel) button', '', `<div class="reaction-row" style="display:flex;gap:6px;flex-wrap:wrap">
+          <input type="text" id="tk-cf-no-label" maxlength="80" value="${val(cf.confirmNo?.label, 'No')}" placeholder="No" style="flex:2" />
+          <input type="text" id="tk-cf-no-emoji" maxlength="100" value="${val(cf.confirmNo?.emoji, '✖️')}" placeholder="✖️" style="flex:1" />
+          <select id="tk-cf-no-style" style="flex:1">${styleOpts}</select>
+        </div>`)}
+      <div class="card-title" style="margin-top:8px"><span>Post-close buttons (Transcript / Reopen / Delete)</span></div>
+      <p class="card-hint">Revealed after the ticket is closed (next to the close embed). Every button label/emoji/colour is editable below.</p>
+      ${['transcript', 'reopen', 'delete'].map((key, i) => {
+          const labels = { transcript: 'Transcript', reopen: 'Reopen', delete: 'Delete' };
+          const emojis = { transcript: '📝', reopen: '🔓', delete: '🗑️' };
+          const b = cf.buttons?.[key] || {};
+          return ticketField(`${labels[key]} button`, '', `<div class="reaction-row" style="display:flex;gap:6px;flex-wrap:wrap">
+            <input type="text" id="tk-cf-btn-${key}-label" maxlength="80" value="${val(b.label, labels[key])}" placeholder="${labels[key]}" style="flex:2" />
+            <input type="text" id="tk-cf-btn-${key}-emoji" maxlength="100" value="${val(b.emoji, emojis[key])}" placeholder="${emojis[key]}" style="flex:1" />
+            <select id="tk-cf-btn-${key}-style" style="flex:1">${styleOpts}</select>
+          </div>`);
+      }).join('')}
+    `;
+
+    // Tab 3 — Message: embed fields + content + welcome message + color..
+    const messageTab = `
+      ${ticketField('Embed title', 'tk-title', `<input type="text" id="tk-title" maxlength="255" value="${val(p.title)}" placeholder="🎫 Support Tickets" />`)}
+      ${ticketField('Embed description', 'tk-description', `<textarea id="tk-description" placeholder="Click the button below to open a support ticket.">${val(p.description)}</textarea>`)}
+      ${ticketField('Content / @mentions (above embed,, or plain body)', 'tk-content', `<textarea id="tk-content" placeholder="Optional: @support or any text shown above the embed / as the plain body.">${val(p.content)}</textarea>`)}
+      ${ticketField('Embed footer text', 'tk-footer', `<input type="text" id="tk-footer" maxlength="255" value="${val(p.footerText)}" placeholder="PrimeBot · Tickets" />`)}
+      ${ticketField('Thumbnail image URL', 'tk-thumbnail', `<input type="text" id="tk-thumbnail" value="${val(p.thumbnailUrl)}" placeholder="https://…/icon.png" />`)}
+      ${ticketField('Large image URL', 'tk-image', `<input type="text" id="tk-image" value="${val(p.imageUrl)}" placeholder="https://…/banner.png" />`)}
+      ${ticketField('Embed color', '', `<div class="color-field">
+          <input type="color" id="tk-color" value="${val(p.color, '#5865F2')}" />
+          <input type="text" id="tk-color-text" value="${val(p.color, '#5865F2')}" style="flex:1" />
+        </div>`)}
+      ${ticketField('In-ticket welcome message', 'tk-welcome', `<textarea id="tk-welcome" placeholder="Welcome to your support ticket! Please describe your issue.">${val(p.welcomeMessage)}</textarea>`)}
+      <div class="switch-row">
+        <div class="switch-label"><div class="sl-title">Show a close embed</div><div class="sl-desc">Optional red embed shown after the ticket is closed (before the action buttons).</div></div>
+        <label class="switch"><input type="checkbox" id="tk-cf-embed-enabled" ${chk(cf.closeEmbed?.enabled)}/><span class="slider"></span></label>
       </div>
-      <div class="field">
-        <label class="field-label" for="tk-message-type">Message type</label>
-        <select id="tk-message-type">${typeOpts}</select>
-        <div class="field-hint">Embed (rich) or plain text. The open-ticket button is always attached.</div>
-      </div>
-      <div class="field">
-        <label class="field-label" for="tk-title">Embed title</label>
-        <input type="text" id="tk-title" maxlength="255" placeholder="🎫 Support Tickets" />
-      </div>
-      <div class="field">
-        <label class="field-label" for="tk-description">Embed description</label>
-        <textarea id="tk-description" placeholder="Click the button below to open a support ticket."></textarea>
-      </div>
-      <div class="field">
-        <label class="field-label" for="tk-content">Content / @mentions (above embed, or plain body)</label>
-        <textarea id="tk-content" placeholder="Optional: @support or any text shown above the embed / as the plain body."></textarea>
-      </div>
-      <div class="field">
-        <label class="field-label" for="tk-footer">Embed footer text</label>
-        <input type="text" id="tk-footer" maxlength="255" placeholder="PrimeBot · Tickets" />
-      </div>
-      <div class="field">
-        <label class="field-label" for="tk-thumbnail">Thumbnail image URL</label>
-        <input type="text" id="tk-thumbnail" placeholder="https://…/icon.png" />
-      </div>
-      <div class="field">
-        <label class="field-label" for="tk-image">Large image URL</label>
-        <input type="text" id="tk-image" placeholder="https://…/banner.png" />
-      </div>
-      <div class="field">
-        <label class="field-label">Embed color</label>
-        <div class="color-field">
-          <input type="color" id="tk-color" value="#5865F2" />
-          <input type="text" id="tk-color-text" value="#5865F2" style="flex:1" />
-        </div>
-      </div>
-      <div class="field">
-        <label class="field-label" for="tk-button-label">Open button label</label>
-        <input type="text" id="tk-button-label" maxlength="80" value="Open Ticket" />
-      </div>
-      <div class="field">
-        <label class="field-label" for="tk-button-emoji">Open button emoji (optional)</label>
-        <input type="text" id="tk-button-emoji" maxlength="100" placeholder="🎫" />
-      </div>
-      <div class="field">
-        <label class="field-label" for="tk-button-style">Open button style</label>
-        <select id="tk-button-style">${styleOpts}</select>
-      </div>
-      <div class="field">
-        <label class="field-label" for="tk-category">Ticket category label</label>
-        <input type="text" id="tk-category" maxlength="50" value="general" />
-      </div>
-      <div class="field">
-        <label class="field-label" for="tk-ticket-name">Ticket channel name (optional)</label>
-        <input type="text" id="tk-ticket-name" maxlength="100" placeholder="Defaults to ticket-username" />
-      </div>
-      <div class="field">
-        <label class="field-label" for="tk-open-name">Channel name when OPEN</label>
-        <input type="text" id="tk-open-name" maxlength="100" placeholder="(open) {name}" />
-        <div class="field-hint">Template applied when a ticket opens/reopens. Placeholders: {name} (ticket name or username), {username}, {id}, {panel}. Blank = no rename.</div>
-      </div>
-      <div class="field">
-        <label class="field-label" for="tk-claimed-name">Channel name when CLAIMED</label>
-        <input type="text" id="tk-claimed-name" maxlength="100" placeholder="(solved) {name}" />
-        <div class="field-hint">Template applied when support claims the ticket. Same placeholders. Blank = no rename.</div>
-      </div>
-      <div class="field">
-        <label class="field-label" for="tk-closed-name">Channel name when CLOSED</label>
-        <input type="text" id="tk-closed-name" maxlength="100" placeholder="(closed) {name}" />
-        <div class="field-hint">Template applied when the ticket is closed (visible for archived threads). Same placeholders. Blank = no rename.</div>
-      </div>
+      ${ticketField('Close embed title', 'tk-cf-embed-title', `<input type="text" id="tk-cf-embed-title" maxlength="255" value="${val(cf.closeEmbed?.title, '🔒 Ticket Closed')}" />`)}
+      ${ticketField('Close embed description', 'tk-cf-embed-desc', `<textarea id="tk-cf-embed-desc" placeholder="This ticket was closed by {moderator} at {time}.">${val(cf.closeEmbed?.description)}</textarea>`, 'Placeholders: {time} {timestamp} {author} {moderator} {panel} {reason}. {timestamp} renders as a Discord relative-time tag.')}
+      ${ticketField('Close embed footer text', 'tk-cf-embed-footer', `<input type="text" id="tk-cf-embed-footer" maxlength="255" value="${val(cf.closeEmbed?.footer, '{panel} · PrimeBot')}" />`)}
+      ${ticketField('Close embed colour (default red)', '', `<div class="color-field">
+          <input type="color" id="tk-cf-embed-color" value="${val(cf.closeEmbed?.color, '#ED4245')}" />
+          <input type="text" id="tk-cf-embed-color-text" value="${val(cf.closeEmbed?.color, '#ED4245')}" style="flex:1" />
+        </div>`)}
+    `;
+
+    // Tab 4 — Permission: support/ping roles, per-user limit, reason.,
+    const permissionTab = `
       <div class="field">
         <label class="field-label">Support roles (can see tickets)</label>
-        <div class="reactions-list" id="tk-support-list">${ticketRoleRowHTML({}, 'tk-support')}</div>
+        <div class="reactions-list" id="tk-support-list">${roleRow(p.supportRoleIds, 'tk-support')}</div>
         <button class="btn btn-secondary" id="tk-support-add">+ Add role</button>
       </div>
       <div class="field">
         <label class="field-label">Ping roles (mentioned on open)</label>
-        <div class="reactions-list" id="tk-ping-list">${ticketRoleRowHTML({}, 'tk-ping')}</div>
+        <div class="reactions-list" id="tk-ping-list">${roleRow(p.pingRoleIds, 'tk-ping')}</div>
         <button class="btn btn-secondary" id="tk-ping-add">+ Add role</button>
       </div>
-      <div class="field">
-        <label class="field-label" for="tk-ticket-category-id">Discord channel category ID (optional)</label>
-        <input type="text" id="tk-ticket-category-id" placeholder="123456789012345678" />
-        <div class="field-hint">Created ticket channels open under this category. Leave blank to use the current channel / threads.</div>
-      </div>
-      <div class="field">
-        <label class="field-label" for="tk-max-open">Max open tickets per user</label>
-        <input type="number" id="tk-max-open" min="0" value="1" />
-      </div>
+      ${ticketField('Max open tickets per user', 'tk-max-open', `<input type="number" id="tk-max-open" min="0" value="${val(p.maxOpenPerUser, '1')}" />`)}
+      ${ticketField('Ticket category ID (Discord channel category, optional)', 'tk-ticket-category-id', `<input type="text" id="tk-ticket-category-id" value="${val(p.ticketCategoryId)}" placeholder="123456789012345678" />`, 'Created ticket channels open under this category. Leave blank to use the current channel / threads.')}
       <div class="switch-row">
-        <div class="switch-label"><div class="sl-title">Ask for reason on open</div><div class="sl-desc">Prompt the member for a reason (captured on the ticket). Note: requires a follow-up flow; the button still opens a ticket.</div></div>
-        <label class="switch"><input type="checkbox" id="tk-ask-reason"/><span class="slider"></span></label>
+        <div class="switch-label"><div class="sl-title">Ask for reason on open</div><div class="sl-desc">Prompt the member for a reason (captured on the ticket).</div></div>
+        <label class="switch"><input type="checkbox" id="tk-ask-reason" ${chk(p.askReason)}/><span class="slider"></span></label
       </div>
-      <div class="field">
-        <label class="field-label" for="tk-welcome">In-ticket welcome message</label>
-        <textarea id="tk-welcome" placeholder="Welcome to your support ticket! Please describe your issue."></textarea>
-      </div>
-      <div class="field">
-        <label class="field-label" for="tk-close-label">Close button label</label>
-        <input type="text" id="tk-close-label" maxlength="80" value="Close Ticket" />
-      </div>
-      <div class="field">
-        <label class="field-label" for="tk-close-emoji">Close button emoji (optional)</label>
-        <input type="text" id="tk-close-emoji" maxlength="100" value="🔒" />
-      </div>
-      <div class="field">
-        <label class="field-label" for="tk-close-style">Close button colour</label>
-        <select id="tk-close-style">${styleOpts}</select>
-      </div>
-      <div class="field">
-        <label class="field-label" for="tk-claim-label">Claim button label (optional — leave blank for no claim button)</label>
-        <input type="text" id="tk-claim-label" maxlength="80" placeholder="Claim" />
-      </div>
-      <div class="field">
-        <label class="field-label" for="tk-claim-emoji">Claim button emoji (optional)</label>
-        <input type="text" id="tk-claim-emoji" maxlength="100" placeholder="✋" />
-      </div>
+    `;
 
-      <div class="card-title" style="margin-top:8px"><span>Close flow — confirmation, close embed &amp; post-close buttons</span></div>
-      <p class="card-hint">When a member presses <strong>Close</strong>, a <strong>Yes / No</strong> confirmation row is shown. <strong>Yes</strong> closes the ticket and (optionally) posts an editable red embed, then reveals <strong>Transcript / Reopen / Delete</strong> buttons. Every button below has a configurable label, emoji, and colour.</p>
-      <div class="field">
-        <label class="field-label">Yes (confirm) button</label>
-        <div class="reaction-row" style="display:flex;gap:6px;flex-wrap:wrap">
-          <input type="text" id="tk-cf-yes-label" maxlength="80" value="Yes" placeholder="Yes" style="flex:2" />
-          <input type="text" id="tk-cf-yes-emoji" maxlength="100" value="✅" placeholder="✅" style="flex:1" />
-          <select id="tk-cf-yes-style" style="flex:1">${styleOpts}</select>
-        </div>
-      </div>
-      <div class="field">
-        <label class="field-label">No (cancel) button</label>
-        <div class="reaction-row" style="display:flex;gap:6px;flex-wrap:wrap">
-          <input type="text" id="tk-cf-no-label" maxlength="80" value="No" placeholder="No" style="flex:2" />
-          <input type="text" id="tk-cf-no-emoji" maxlength="100" value="✖️" placeholder="✖️" style="flex:1" />
-          <select id="tk-cf-no-style" style="flex:1">${styleOpts}</select>
-        </div>
-      </div>
-      <div class="switch-row">
-        <div class="switch-label"><div class="sl-title">Show a close embed</div><div class="sl-desc">Optional red embed shown after the ticket is closed (before the action buttons). Edit its text below.</div></div>
-        <label class="switch"><input type="checkbox" id="tk-cf-embed-enabled"/><span class="slider"></span></label>
-      </div>
-      <div class="field">
-        <label class="field-label" for="tk-cf-embed-title">Close embed title</label>
-        <input type="text" id="tk-cf-embed-title" maxlength="255" value="🔒 Ticket Closed" />
-      </div>
-      <div class="field">
-        <label class="field-label" for="tk-cf-embed-desc">Close embed description</label>
-        <textarea id="tk-cf-embed-desc" placeholder="This ticket was closed by {moderator} at {time}."></textarea>
-        <div class="field-hint">Placeholders: {time} {timestamp} {author} {moderator} {panel} {reason}. {timestamp} renders as a Discord relative-time tag.</div>
-      </div>
-      <div class="field">
-        <label class="field-label" for="tk-cf-embed-footer">Close embed footer text</label>
-        <input type="text" id="tk-cf-embed-footer" maxlength="255" value="{panel} · PrimeBot" />
-      </div>
-      <div class="field">
-        <label class="field-label">Close embed colour (default red)</label>
-        <div class="color-field">
-          <input type="color" id="tk-cf-embed-color" value="#ED4245" />
-          <input type="text" id="tk-cf-embed-color-text" value="#ED4245" style="flex:1" />
-        </div>
-      </div>
+    // Tab 5 — Logging + Tab  ��� Animation.: placeholder "available soon".
+    const comingSoonTab = (title) => `
+      <div class="card-title"><span>${title}</span></div>
+      <div class="alert alert-warn">${title} settings are coming soon. More bar tabs will be available here. Settings will be available soon.</div>
+    `;
+    const loggingTab = comingSoonTab('Logging');
+    const animationTab = comingSoonTab('Animation');
 
+    // Tab 7 — Transcript: transcript channel + toggles.
+
+    const transcriptTab = `
       <div class="switch-row">
         <div class="switch-label"><div class="sl-title">Save transcripts to a channel</div><div class="sl-desc">Optional. When the Transcript button is pressed, the ticket's messages are saved to this channel.</div></div>
-        <label class="switch"><input type="checkbox" id="tk-cf-transcript-enabled"/><span class="slider"></span></label>
+        <label class="switch"><input type="checkbox" id="tk-cf-transcript-enabled" ${chk(cf.transcript?.enabled)}/><span class="slider"></span></label>
       </div>
-      <div class="field">
-        <label class="field-label" for="tk-cf-transcript-channel">Transcript channel ID</label>
-        <input type="text" id="tk-cf-transcript-channel" placeholder="123456789012345678" />
-        <div class="field-hint">Dashboard-only. The channel PrimeBot posts ticket transcripts to.</div>
-      </div>
+      ${ticketField('Transcript channel ID', 'tk-cf-transcript-channel', `<input type="text" id="tk-cf-transcript-channel" value="${val(cf.transcript?.channelId)}" placeholder="123456789012345678" />`, 'Dashboard-only. The channel PrimeBot posts ticket transcripts to.')}
+    `;
 
-      <div class="field">
-        <label class="field-label">Transcript button</label>
-        <div class="reaction-row" style="display:flex;gap:6px;flex-wrap:wrap">
-          <input type="text" id="tk-cf-btn-transcript-label" maxlength="80" value="Transcript" placeholder="Transcript" style="flex:2" />
-          <input type="text" id="tk-cf-btn-transcript-emoji" maxlength="100" value="📝" placeholder="📝" style="flex:1" />
-          <select id="tk-cf-btn-transcript-style" style="flex:1">${styleOpts}</select>
-        </div>
-      </div>
-      <div class="field">
-        <label class="field-label">Reopen button</label>
-        <div class="reaction-row" style="display:flex;gap:6px;flex-wrap:wrap">
-          <input type="text" id="tk-cf-btn-reopen-label" maxlength="80" value="Reopen" placeholder="Reopen" style="flex:2" />
-          <input type="text" id="tk-cf-btn-reopen-emoji" maxlength="100" value="🔓" placeholder="🔓" style="flex:1" />
-          <select id="tk-cf-btn-reopen-style" style="flex:1">${styleOpts}</select>
-        </div>
-      </div>
-      <div class="field">
-        <label class="field-label">Delete button</label>
-        <div class="reaction-row" style="display:flex;gap:6px;flex-wrap:wrap">
-          <input type="text" id="tk-cf-btn-delete-label" maxlength="80" value="Delete" placeholder="Delete" style="flex:2" />
-          <input type="text" id="tk-cf-btn-delete-emoji" maxlength="100" value="🗑️" placeholder="🗑️" style="flex:1" />
-          <select id="tk-cf-btn-delete-style" style="flex:1">${styleOpts}</select>
-        </div>
-      </div>
-      <div class="switch-row">
-        <div class="switch-label"><div class="sl-title">Enabled</div><div class="sl-desc">When off, the open button is disabled.</div></div>
-        <label class="switch"><input type="checkbox" id="tk-enabled" checked/><span class="slider"></span></label>
-      </div>
-        </div>
-        <div class="modal-actions">
-          <button class="btn btn-secondary" id="tk-modal-cancel">Cancel</button>
-          <button class="btn btn-primary" id="tk-save">Save panel</button>
-        </div>
-      </div>
+    // Tab 8 — Input: channel-name templates (open/claimed/closed) + ticket name.
+
+    const inputTab = `
+      ${ticketField('Ticket channel name (optional)', 'tk-ticket-name', `<input type="text" id="tk-ticket-name" maxlength="100" value="${val(p.ticketName)}" placeholder="Defaults to ticket-username" />`)}
+      ${ticketField('Channel name when OPEN', 'tk-open-name', `<input type="text" id="tk-open-name" maxlength="100" value="${val(p.openNameTemplate)}" placeholder="(open) {name}" />`, 'Template applied when a ticket opens/reopens. Placeholders: {name} (ticket name or username), {username}, {id}, {panel}. Blank = no rename.')}
+      ${ticketField('Channel name when CLAIMED', 'tk-claimed-name', `<input type="text" id="tk-claimed-name" maxlength="100" value="${val(p.claimedNameTemplate)}" placeholder="(solved) {name}" />`, 'Template applied when support claims the ticket. Same placeholders. Blank = no rename.')}
+      ${ticketField('Channel name when CLOSED', 'tk-closed-name', `<input type="text" id="tk-closed-name" maxlength="100" value="${val(p.closedNameTemplate)}" placeholder="(closed) {name}" />`, 'Template applied when the ticket is closed. Same placeholders. Blank = no rename.')}
+    `;
+
+    const tabPanels = [
+        { key: 'panel',       html: panelTab },
+        { key: 'buttons',      html: buttonsTab },
+        { key: 'message',      html: messageTab },
+        { key: 'permission',   html: permissionTab },
+        { key: 'logging',       html: loggingTab },
+        { key: 'animation',     html: animationTab },
+        { key: 'transcript',   html: transcriptTab },
+        { key: 'input',         html: inputTab },
+    ];
+
+    const tabBar = `
+    <div class="tk-editor-tabs" role="tablist">
+      ${TICKET_EDITOR_TABS.map((t, i) => `
+        <button type="button" class="tk-editor-tab${i === 0 ? ' active' : ''}" data-tab="${t.key}" role="tab" aria-selected="${i === 0 ? 'true' : 'false'}">
+          ${svgIcon(t.icon)}<span>${esc(t.label)}</span>
+        </button>`).join('')}
     </div>`;
-    // Tickets is marked `upcoming: true` in render/guild.js TABS — the page
-    // renders the "Coming Soon……" overlay for ALL servers (upcoming takes
-    // priority over beta). The underlying editor markup is kept (blurred) so
-    // flipping the flag off later re-enables the feature with no rewrite.
-    // Developer/owner-role viewers bypass the gate and get the real editor.
-    const wrappedPanelHTML = guild._bypassUpcoming
-        ? panelHTML
-        : upcomingOverlayWrap(panelHTML, { icon: 'ticket', title: 'Tickets' });
-    return guildTab({ guild, user, active: 'tickets', panelHTML: wrappedPanelHTML, scripts: ['/js/guild-common.js', '/js/tickets.js'] });
+    const tabContent = tabPanels.map((t, i) => `
+      <section class="tab-panel${i === 0 ? ' active' : ''}" data-tab-panel="${t.key}">${t.html}</section>
+    `).join('');
+
+    return { tabBar, tabContent };
+}
+
+// Helper shortcuts for close-flow button defaults (server render).
+function cfButtonLabel(key, panel, fallback) {
+    const cf = (panel && panel.closeFlow) || {};
+    if (key === 'transcript' || key === 'reopen' || key === 'delete') {
+        const b = cf.buttons?.[key];
+        if (b) return b.label || fallback;
+        return fallback;
+    }
+    return fallback;
+}
+function cfButtonEmoji(key, panel, fallback) {
+    const cf = (panel && panel.closeFlow) || {};
+    if (key === 'transcript' || key === 'reopen' || key === 'delete') {
+        const b = cf.buttons?.[key];
+        if (b) return b.emoji || fallback;
+        return fallback;
+;
+    }
+    return fallback;
+;
+}
+
+function ticketEditPage({ guild, user }) {
+    const panel = guild._ticketPanel;
+    const { tabBar, tabContent } = ticketEditorTabsHTML(panel);
+    const id = panel.id;
+    const pageHTML = `
+    <div class="ticket-editor-top">
+      <a class="btn btn-secondary btn-sm" href="/guild/${esc(guild.id)}/tickets">← Back to panels</a>
+      <div class="ticket-editor-actions">
+        <button class="btn btn-secondary btn-sm tk-send" data-panel="${id}">Send / Resend</button>
+        <button class="btn btn-secondary btn-sm tk-update" data-panel="${id}">Update message</button>
+        <button class="btn btn-secondary btn-sm tk-clone" data-panel="${id}">Clone</button>
+        <button class="btn btn-secondary btn-sm tk-rename" data-panel="${id}">Rename</button>
+        <button class="btn btn-secondary btn-sm tk-delete" data-panel="${id}">Delete</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span><span class="icon">${svgIcon('ticket')}</span> ${esc(panel.name || 'Support Ticket')} <span class="tag ${panel.enabled ? 'on' : 'off'}">#${id}</span></span></div>
+      <p class="card-desc">Editing ticket panel — every tab below saves with the <strong>Save changes</strong> bar.</p>
+      ${tabBar}
+      <div class="tk-editor-panels">${tabContent}</div>
+    </div>`;
+    return guildTab({ guild, user, active: 'tickets', panelHTML: pageHTML, scripts: ['/js/guild-common.js', '/js/ticket-editor.js'] });
 }
 
 // ── Automod ─────────────────────────────────────────────────────────────────
@@ -1228,7 +1259,7 @@ function liveGiveawaysPage({ guild, user }) {
 
 module.exports = {
     welcomePage, levelingPage, badgesPage, prefixPage, roleRewardsPage, autoResponderPage, reactionsPage, broadcastPage,
-    birthdaysPage, loggingPage, reactionRolesPage, ticketsPage, automodPage, eventsPage,
+    birthdaysPage, loggingPage, reactionRolesPage, ticketsPage, ticketEditPage, automodPage, eventsPage,
     livePollsPage, liveGiveawaysPage,
     TABS,
 };

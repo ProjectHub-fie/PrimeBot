@@ -26,26 +26,32 @@ function fakeGuild() {
     };
 }
 
-test('ticketsPage: no inline editor card — Create button + hidden modal', () => {
+test('ticketsPage: no inline editor form — Create button opens the edit flow', () => {
     const html = guildPages.ticketsPage({ guild: fakeGuild(), user: null });
     assert.ok(html.includes('id="tk-create-open"'), 'Create a panel button exists');
-    assert.ok(html.includes('id="tk-modal"'), 'editor lives in a modal');
-    assert.ok(html.includes('modal-overlay hidden'), 'modal starts hidden');
-    // The editor form is inside the modal body, not as a page-level card.
-    assert.ok(/id=["']tk-modal["'][\s\S]*id=["']tk-save["']/.test(html), 'editor form is within #tk-modal');
-    assert.ok(!html.includes('Create a panel</span>'), 'no inline "Create a panel" card');
+    // Editing happens on a dedicated full-page editor, not an inline modal..
+    assert.ok(!html.includes('id="tk-modal"'), 'no modal editor on the list page');
+
+    // The Create button posts to the quick-create endpoint and redirects —
+    // verified in the client test. The quick-create API route lives in server.
+    const fs = require('fs');
+    const path = require('path');
+    const client = fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'public', 'js', 'tickets.js'), 'utf8');
+    assert.ok(client.includes('/tickets/quickcreate'), 'Create button uses the quick-create endpoint');
+    assert.ok(client.includes('/edit`'), 'Create button redirects to the edit page');
 });
 
-test('ticketsPage: Edit/POST/PATCH endpoints are wired (client buttons)', () => {
+test('ticketsPage: Edit button navigates to the full-page editor + PATCH endpoint wired', () => {
     const fs = require('fs');
     const path = require('path');
     const client = fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'public', 'js', 'tickets.js'), 'utf8');
     assert.ok(client.includes('.tk-edit'), 'Edit button handler');
-    assert.ok(client.includes("method: 'PATCH'"), 'edit saves via PATCH');
-    assert.ok(client.includes('editingPanel'), 'tracks editing vs create mode');
+    assert.ok(client.includes('tickets/${id}/edit`'), 'Edit navigates to the edit page');
 
     const server = fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'server.js'), 'utf8');
-    assert.ok(/app\.patch\('\/api\/guilds\/:guildId\/tickets\/:id'/.test(server), 'PATCH endpoint exists');
+    assert.ok(/guild\/:guildId\/tickets\/:panelId\/edit/.test(server), 'edit page route exists');
+    assert.ok(/api\/guilds\/:guildId\/tickets\/:id'/.test(server), 'PATCH endpoint exists');
+    assert.ok(/tickets\/quickcreate/.test(server), 'quick-create endpoint exists');
 });
 
 test('updateTicketPanel persists field edits (PATCH backing)', async () => {

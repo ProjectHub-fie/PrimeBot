@@ -87,7 +87,8 @@ class AppealManager {
     }
 
     _startReloadInterval() {
-        const ms = parseInt(process.env.SETTINGS_RELOAD_INTERVAL_MS, 10) || 30000;
+        const ms = parseInt(process.env.SETTINGS_RELOAD_INTERVAL_MS, 10) || 60000;
+        const refreshMs = parseInt(process.env.SETTINGS_REFRESH_INTERVAL_MS, 10) || 15000;
         setInterval(() => {
             this._loadAll().catch(err =>
                 console.error('[APPEAL] Background reload failed:', err.message)
@@ -97,7 +98,7 @@ class AppealManager {
             this._refreshFromDatabase().catch(err =>
                 console.error('[APPEAL] Refresh failed:', err.message)
             );
-        }, 5000).unref?.();
+        }, refreshMs).unref?.();
     }
 
     async _refreshFromDatabase() {

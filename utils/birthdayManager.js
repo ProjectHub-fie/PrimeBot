@@ -5,7 +5,7 @@ const ms = require('ms');
 
 // How often the manager re-reads the tables so dashboard edits (settings,
 // custom embed image, added/removed birthdays) take effect without a restart.
-const RELOAD_INTERVAL_MS = Math.max(1000, Number(process.env.BIRTHDAY_RELOAD_INTERVAL_MS) || 5000);
+const RELOAD_INTERVAL_MS = Math.max(1000, Number(process.env.BIRTHDAY_RELOAD_INTERVAL_MS) || 30000);
 
 // Hardcoded fallback image shown on the `/birthday list` / `$birthday list`
 // embed. A dashboard-configured custom embed image URL (embed_image_url)

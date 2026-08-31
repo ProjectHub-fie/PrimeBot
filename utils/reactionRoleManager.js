@@ -90,7 +90,8 @@ class ReactionRoleManager {
     }
 
     _startReloadInterval() {
-        const ms = parseInt(process.env.SETTINGS_RELOAD_INTERVAL_MS, 10) || 30000;
+        const ms = parseInt(process.env.SETTINGS_RELOAD_INTERVAL_MS, 10) || 60000;
+        const refreshMs = parseInt(process.env.SETTINGS_REFRESH_INTERVAL_MS, 10) || 15000;
         this._reloadTimer = setInterval(() => {
             this._loadAll().catch(err =>
                 console.error('[REACTION ROLES] Background reload failed:', err.message)
@@ -106,7 +107,7 @@ class ReactionRoleManager {
             this._refreshFromDatabase().catch(err =>
                 console.error('[REACTION ROLES] Refresh failed:', err.message)
             );
-        }, 5000);
+        }, refreshMs);
         this._refreshTimer.unref?.();
     }
 

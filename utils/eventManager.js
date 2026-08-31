@@ -69,7 +69,7 @@ const VALID_ACTIONS = new Set([
 const VALID_TARGET_TYPES = new Set(['channel', 'role', 'user']);
 
 // How often the scheduler wakes to fire due tasks / start events.
-const EXEC_INTERVAL_MS = parseInt(process.env.EVENT_EXEC_INTERVAL_MS, 10) || 5000;
+const EXEC_INTERVAL_MS = parseInt(process.env.EVENT_EXEC_INTERVAL_MS, 10) || 10000;
 
 class EventManager {
     constructor(client = null) {
@@ -96,7 +96,8 @@ class EventManager {
     }
 
     _startReloadInterval() {
-        const ms = parseInt(process.env.SETTINGS_RELOAD_INTERVAL_MS, 10) || 30000;
+        const ms = parseInt(process.env.SETTINGS_RELOAD_INTERVAL_MS, 10) || 60000;
+        const refreshMs = parseInt(process.env.SETTINGS_REFRESH_INTERVAL_MS, 10) || 15000;
         this._reloadTimer = setInterval(() => {
             this._loadAll().catch(err => console.error('[EVENTS] Background reload failed:', err.message));
         }, ms);

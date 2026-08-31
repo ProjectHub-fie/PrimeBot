@@ -150,7 +150,8 @@ class AutomodManager {
     }
 
     _startReloadInterval() {
-        const ms = parseInt(process.env.SETTINGS_RELOAD_INTERVAL_MS, 10) || 30000;
+        const ms = parseInt(process.env.SETTINGS_RELOAD_INTERVAL_MS, 10) || 60000;
+        const refreshMs = parseInt(process.env.SETTINGS_REFRESH_INTERVAL_MS, 10) || 15000;
         setInterval(() => {
             this._loadAll().catch(err =>
                 console.error('[AUTOMOD] Background reload failed:', err.message)
@@ -160,7 +161,7 @@ class AutomodManager {
             this._refreshFromDatabase().catch(err =>
                 console.error('[AUTOMOD] Refresh failed:', err.message)
             );
-        }, 5000).unref?.();
+        }, refreshMs).unref?.();
     }
 
     /**
@@ -170,7 +171,7 @@ class AutomodManager {
      * Marks each reversed appeal so it is processed only once.
      */
     _startAppealReversalPoller() {
-        const ms = parseInt(process.env.APPEAL_POLL_INTERVAL_MS, 10) || 15000;
+        const ms = parseInt(process.env.APPEAL_POLL_INTERVAL_MS, 10) || 30000;
         setInterval(() => {
             this._processApprovedAppeals().catch(err =>
                 console.error('[AUTOMOD] Appeal reversal poll failed:', err.message)

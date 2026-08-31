@@ -56,7 +56,8 @@ class LoggingSettingsManager {
 
     /** Re-read the table periodically so dashboard saves reach the bot. */
     _startReloadInterval() {
-        const ms = parseInt(process.env.SETTINGS_RELOAD_INTERVAL_MS, 10) || 30000;
+        const ms = parseInt(process.env.SETTINGS_RELOAD_INTERVAL_MS, 10) || 60000;
+        const refreshMs = parseInt(process.env.SETTINGS_REFRESH_INTERVAL_MS, 10) || 15000;
         this._reloadTimer = setInterval(() => {
             this._loadAll().catch(err =>
                 console.error('[LOGGING SETTINGS] Background reload failed:', err.message)
@@ -72,7 +73,7 @@ class LoggingSettingsManager {
             this._refreshFromDatabase().catch(err =>
                 console.error('[LOGGING SETTINGS] Refresh failed:', err.message)
             );
-        }, 5000);
+        }, refreshMs);
         this._refreshTimer.unref?.();
     }
 
