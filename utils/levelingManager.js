@@ -95,10 +95,11 @@ class LevelingManager {
             this._loadRoleRewards().catch(err =>
                 console.error('[LEVELING] Role rewards refresh failed:', err.message)
             );
-        }, 5000);
+        }, refreshMs);
         this._roleRewardsTimer.unref?.();
 
-        const ms = parseInt(process.env.SETTINGS_RELOAD_INTERVAL_MS, 10) || 30000;
+        const ms = parseInt(process.env.SETTINGS_RELOAD_INTERVAL_MS, 10) || 60000;
+        const refreshMs = parseInt(process.env.SETTINGS_REFRESH_INTERVAL_MS, 10) || 15000;
         this._roleRewardsReloadTimer = setInterval(() => {
             this._loadRoleRewards().catch(err =>
                 console.error('[LEVELING] Role rewards background reload failed:', err.message)

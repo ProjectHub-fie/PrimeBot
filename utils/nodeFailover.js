@@ -28,7 +28,7 @@ const NODE_NAME = process.env.NODE_NAME || (
                           'NR0008'
 );
 
-const HEARTBEAT_INTERVAL_MS = 15000;
+const HEARTBEAT_INTERVAL_MS = parseInt(process.env.FAILOVER_HEARTBEAT_INTERVAL_MS, 10) || 30000;
 const FAILOVER_THRESHOLD_MS = 45000;
 const MONITOR_INTERVAL_MS = 10000;
 

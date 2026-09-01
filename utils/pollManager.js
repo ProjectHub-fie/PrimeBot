@@ -125,7 +125,7 @@ class PollManager {
     // ─── Public API ───────────────────────────────────────────────────────────
 
     startCheckingPolls() {
-        setInterval(() => this.checkPolls(), 10000);
+        setInterval(() => this.checkPolls(), 30000);
         console.log('[POLLS] Poll checking system started.');
     }
 

@@ -34,13 +34,14 @@ test('eventsPage renders the real editor when guild._bypassUpcoming is set', () 
     assert.ok(html.includes('id="ev-form"'), 'real editor form must render');
 });
 
-test('ticketsPage renders the Coming Soon overlay for ordinary users', () => {
+test('ticketsPage renders directly for ordinary users (no upcoming overlay)', () => {
     const html = guildPages.ticketsPage({ guild: fakeGuild(false), user: null });
-    assert.ok(html.includes('upcoming-locked-wrap locked'), 'expected the locked overlay');
+    assert.ok(!html.includes('upcoming-locked-wrap locked'), 'no locked overlay — tickets is live');
+    assert.ok(html.includes('id="tk-create-open"'), 'create button renders');
 });
 
-test('ticketsPage renders the real editor when guild._bypassUpcoming is set', () => {
+test('ticketsPage renders the same for bypass users (harmonized)', () => {
     const html = guildPages.ticketsPage({ guild: fakeGuild(true), user: null });
-    assert.ok(!html.includes('upcoming-locked-wrap locked'), 'overlay should be skipped');
-    assert.ok(html.includes('id="tk-save"'), 'real panel editor form must render');
+    assert.ok(!html.includes('upcoming-locked-wrap locked'), 'no locked overlay');
+    assert.ok(html.includes('id="tk-create-open"'), 'create button renders');
 });

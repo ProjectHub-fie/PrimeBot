@@ -76,7 +76,7 @@ module.exports = {
         defaultDuration: 24 * 60 * 60 * 1000, // 24 hours in milliseconds
         reactionEmoji: '🎉', // Emoji used for giveaway reactions
         winnerCount: 1, // Default number of winners
-        checkInterval: 10000, // Check for ended giveaways every 10 seconds
+        checkInterval: 30000, // Check for ended giveaways every 30 seconds
     },
     
     // Leveling system configuration

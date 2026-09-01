@@ -1,4 +1,6 @@
-const config = require('../config');
+const config = require("../config");
+const SETTINGS_RELOAD_INTERVAL_MS = parseInt(process.env.SETTINGS_RELOAD_INTERVAL_MS, 10) || 60000;
+const SETTINGS_REFRESH_INTERVAL_MS = parseInt(process.env.SETTINGS_REFRESH_INTERVAL_MS,  10) ||  15000;
 const { pool } = require('../server/db');
 const { normalizeGuildPrefix } = require('./prefixHelper');
 
@@ -86,12 +88,11 @@ class ServerSettingsManager {
      */
     _startReloadInterval() {
         if (this._reloadTimer) return;
-        const ms = parseInt(process.env.SETTINGS_RELOAD_INTERVAL_MS, 10) || 30000;
         this._reloadTimer = setInterval(() => {
             this.loadSettings().catch(err =>
                 console.error('[SERVER SETTINGS] Background reload failed:', err.message)
             );
-        }, ms);
+        }, SETTINGS_RELOAD_INTERVAL_MS);
         this._reloadTimer.unref?.();
         this._startRefreshLoop();
     }
@@ -104,7 +105,7 @@ class ServerSettingsManager {
             this._refreshFromDatabase().catch(err =>
                 console.error('[SERVER SETTINGS] Refresh failed:', err.message)
             );
-        }, 5000);
+        }, SETTINGS_REFRESH_INTERVAL_MS);
         this._refreshTimer.unref?.();
     }
 

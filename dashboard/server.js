@@ -30,6 +30,7 @@ const dashboardDb = require('./db');
 const constants = require('./constants');
 const pages = require('./render/pages');
 const guildPages = require('./render/guild-pages');
+const L = require('./render/layout');
 
 // Allow a dedicated token for dashboard REST calls; fall back to DISCORD_TOKEN.
 if (!process.env.DASHBOARD_BOT_TOKEN && process.env.DISCORD_TOKEN) {
@@ -1188,7 +1189,7 @@ app.get('/api/guilds/:guildId/tickets', requireAuth, requireGuildAdmin, async (r
     }
 });
 
-app.post('/api/guilds/:guildId/tickets', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
+app.post('/api/guilds/:guildId/tickets', requireAuth, requireGuildAdmin,  async (req, res) => {
     try {
         const body = req.body || {};
         if (!body.name || !String(body.name).trim()) {
@@ -1202,10 +1203,21 @@ app.post('/api/guilds/:guildId/tickets', requireAuth, requireGuildAdmin, require
     }
 });
 
-// Edit an existing panel. The dashboard editor only opens AFTER a panel was
-// created ("Edit" on the panel card) or via the "Create a panel" button; this
-// PATCH persists edits made in that modal.
-app.patch('/api/guilds/:guildId/tickets/:id', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
+// One-click "Create a panel" button: creates an Untitled-N panel instantly, so
+// the admin lands on the new panel's edit page instead of filling out a form first.
+app.post('/api/guilds/:guildId/tickets/quickcreate', requireAuth, requireGuildAdmin,  async (req, res) => {
+    try {
+        const panel = await dashboardDb.quickCreateTicketPanel(req.guild.id, req.user.id);
+        res.json({ ticketPanel: panel });
+    } catch (err) {
+        console.error('[API] quick-create ticket panel error:', err.message);
+        ticketPanelError(res, err, 'create ticket panel');
+    }
+});
+// Edit an existing panel. The editor only opens AFTER a panel was created
+// ("Edit" on the panel card, or via the "Create a panel" button); this
+// PATCH persists edits made in that full-page editor.
+    app.patch('/api/guilds/:guildId/tickets/:id', requireAuth, requireGuildAdmin,  async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);
         if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid panel id.' });
@@ -1221,7 +1233,7 @@ app.patch('/api/guilds/:guildId/tickets/:id', requireAuth, requireGuildAdmin, re
     }
 });
 
-app.delete('/api/guilds/:guildId/tickets/:id', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
+app.delete('/api/guilds/:guildId/tickets/:id', requireAuth, requireGuildAdmin,  async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);
         if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid panel id.' });
@@ -1238,7 +1250,7 @@ app.delete('/api/guilds/:guildId/tickets/:id', requireAuth, requireGuildAdmin, r
     }
 });
 
-app.post('/api/guilds/:guildId/tickets/:id/clone', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
+app.post('/api/guilds/:guildId/tickets/:id/clone', requireAuth, requireGuildAdmin,  async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);
         if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid panel id.' });
@@ -1251,7 +1263,7 @@ app.post('/api/guilds/:guildId/tickets/:id/clone', requireAuth, requireGuildAdmi
     }
 });
 
-app.post('/api/guilds/:guildId/tickets/:id/rename', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
+app.post('/api/guilds/:guildId/tickets/:id/rename', requireAuth, requireGuildAdmin,  async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);
         if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid panel id.' });
@@ -1266,7 +1278,7 @@ app.post('/api/guilds/:guildId/tickets/:id/rename', requireAuth, requireGuildAdm
 
 // Send the panel to a channel: post the panel message via REST and store the
 // resulting channel/message id on the panel so the bot can later "update" it.
-app.post('/api/guilds/:guildId/tickets/:id/send', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
+app.post('/api/guilds/:guildId/tickets/:id/send', requireAuth, requireGuildAdmin,  async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);
         if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid panel id.' });
@@ -1284,7 +1296,7 @@ app.post('/api/guilds/:guildId/tickets/:id/send', requireAuth, requireGuildAdmin
 
 // Re-render an existing panel message by id (the "update panel" button). The
 // messageId may be the panel's stored one or a new one supplied in the body.
-app.post('/api/guilds/:guildId/tickets/:id/update', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
+app.post('/api/guilds/:guildId/tickets/:id/update', requireAuth, requireGuildAdmin,  async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);
         if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid panel id.' });
@@ -1630,6 +1642,30 @@ app.get('/guild/:guildId/automod', requireAuth, requireGuildAdminPage, (req, res
     res.type('html').send(guildPages.automodPage({ guild: req.guild, user: req.user })));
 app.get('/guild/:guildId/tickets', requireAuth, requireGuildAdminPage, (req, res) =>
     res.type('html').send(guildPages.ticketsPage({ guild: req.guild, user: req.user })));
+// Full-page ticket panel editor — reached from "Create a panel" (after an
+// Untitled-N panel is auto-created) or a panel card's "Edit" button. Renders
+// a horizontal SPA-style tab bar (Panel, Buttons, Message, Permission,
+// Logging, Animation, Transcript, Input) with the editor form split across
+// the tab panels, so editing before creation isn't needed anymore.
+app.get('/guild/:guildId/tickets/:panelId/edit', requireAuth, requireGuildAdminPage, async (req, res) => {
+    try {
+        const panelId = parseInt(req.params.panelId, 10);
+        if (!Number.isFinite(panelId)) {
+            return res.status(404).type('html').send(pages.notFoundPage({ user: req.session && req.session.user }));
+        }
+        const panels = await dashboardDb.getTicketPanels(req.guild.id);
+        const panel = panels.find(p => p.id === panelId);
+        if (!panel) {
+            return res.status(404).type('html').send(pages.notFoundPage({ user: req.session && req.session.user }));
+        }
+        req.guild._ticketPanel = panel;
+        res.type('html').send(guildPages.ticketEditPage({ guild: req.guild, user: req.user }));
+    } catch (err) {
+        console.error('[ROUTE] ticket edit page error:', err.message);
+        const body = `<div class="card"><div class="alert alert-error">Failed to load ticket panel.</div><p><a href="/guild/${L.esc(req.params.guildId)}/tickets">← Back to tickets</a></p></div>`;
+        res.status(500).type('html').send(L.render({ title: 'PrimeBot · Error', body, user: req.session && req.session.user }));
+    }
+});
 app.get('/guild/:guildId/events', requireAuth, requireGuildAdminPage, (req, res) =>
     res.type('html').send(guildPages.eventsPage({ guild: req.guild, user: req.user })));
 app.get('/guild/:guildId/live/polls', requireAuth, requireGuildAdminPage, (req, res) =>

@@ -1749,6 +1749,13 @@ async function createTicketPanel(guildId, data) {
     return _fetchTicketPanel(res.rows[0].id);
 }
 
+// One-click "Create a panel": creates an Untitled-N panel with all defaults,
+// then the client redirects to its new edit page (/guild/:guildId/tickets/:id/edit)..
+async function quickCreateTicketPanel(guildId, creatorId) {
+    const name = await nextUntitledPanelName(guildId);
+    return createTicketPanel(guildId, { name, createdBy: creatorId || null });
+}
+
 async function updateTicketPanel(id, patch) {
     await ensureTicketTables();
     const current = await _fetchTicketPanel(id);
@@ -1802,12 +1809,22 @@ async function deleteTicketPanel(id) {
 // a bare second "(copy)" otherwise).
 function uniqueCloneName(baseName, panels) {
     let n = 1;
-    while (panels.some((p) => p.name === cloneNameFor(baseName, n))) n += 1;
+    while (panels.some(p => p.name === cloneNameFor(baseName, n))) n +=   1;
     return cloneNameFor(baseName, n);
 }
 
 function cloneNameFor(baseName, n) {
     return n === 1 ? `${baseName} (copy)` : `${baseName} (copy ${n})`;
+}
+
+// Next free "Untitled-N" panel name for the one-click "Create a panel" flow.
+// The button creates instantly (POST → redirect to the edit page) so admins
+// don't have to type a name before they can start configuring the panel.
+async function nextUntitledPanelName(guildId) {
+    const panels = await getTicketPanels(guildId);
+    let n = 1;
+    while (panels.some(p => p.name === `Untitled-${n}`)) n +=   1;
+    return n === 1 ? 'Untitled-1' : `Untitled-${n}`;
 }
 
 async function cloneTicketPanel(id, newName) {
@@ -2301,6 +2318,8 @@ module.exports = {
     decideAutomodAppeal,
     getTicketPanels,
     createTicketPanel,
+    quickCreateTicketPanel,
+    nextUntitledPanelName,
     updateTicketPanel,
     deleteTicketPanel,
     cloneTicketPanel,
