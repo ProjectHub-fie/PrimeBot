@@ -1,5 +1,6 @@
 const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionFlagsBits } = require('discord.js');
 const config = require('../config');
+const { scheduleComponentExpiry } = require('../utils/stabilityUtils');
 
 // ── Help menu "animation" ───────────────────────────────────────────────────
 // Discord embeds can't truly animate, so we simulate a loading animation by
@@ -145,6 +146,8 @@ async function showMainHelp(interaction) {
         embeds: [mainEmbed],
         components: [categoryButtons, adminButton]
     });
+    const sent = await interaction.fetchReply().catch(() => null);
+    scheduleComponentExpiry(sent || interaction.message || { editReply: () => {} });
 }
 
 /**
@@ -270,6 +273,8 @@ async function showCategoryHelp(interaction, category) {
         embeds: [categoryEmbed],
         components: [backButton]
     });
+    const sent = await interaction.fetchReply().catch(() => null);
+    scheduleComponentExpiry(sent || interaction.message || { editReply: () => {} });
 }
 
 // Export the functions for use in interaction handling

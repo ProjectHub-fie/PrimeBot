@@ -1,5 +1,6 @@
 const { EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const config = require('../config');
+const { scheduleComponentExpiry } = require('./stabilityUtils');
 
 // ───────────────────────────────────────────────────────────────────────────
 // Prefix command catalog — single source of truth for `$help` / `$commands`
@@ -288,10 +289,12 @@ async function showPrefixCategoryHelp(message, category, prefix) {
     if (category && CATALOG[category]) {
         return message.reply({ embeds: [categoryEmbed(category, prefix)] });
     }
-    return message.reply({
+    const sent = await message.reply({
         embeds: [mainMenuEmbed(prefix, message.client)],
         components: [categorySelectRow(), navigationButtonsRow()],
     });
+    scheduleComponentExpiry(sent);
+    return sent;
 }
 
 // Select-menu interaction (`category_select_prefix`). Updates in place.
@@ -313,6 +316,7 @@ async function showPrefixCategoryMenuHelp(interaction, category, prefix) {
         );
     try {
         await interaction.update({ embeds: [embed], components: [backSelect, navButtons] });
+        scheduleComponentExpiry(interaction.message);
     } catch (err) {
         if (!interaction.replied && !interaction.deferred) {
             await interaction.reply({ embeds: [embed], components: [backSelect, navButtons], ephemeral: true }).catch(() => {});
