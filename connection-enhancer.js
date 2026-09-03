@@ -6,7 +6,7 @@
  */
 
 const { Client } = require('discord.js');
-const { safeInterval, timeout, withRetry } = require('./utils/stabilityUtils');
+const { safeInterval, timeout, withRetry, reconnectDelayFor } = require('./utils/stabilityUtils');
 
 /**
  * Enhance a Discord.js client with improved connection handling
@@ -16,9 +16,12 @@ function enhanceConnection(client) {
     // Store original login method
     const originalLogin = client.login;
     
+    // Track reconnection attempts for the progressive delay schedule.
+    client._reconnectAttempt = 0;
+
     // Replace with enhanced version
     client.login = async function(token) {
-        return withRetry(
+        const result = await withRetry(
             () => originalLogin.call(this, token),
             {
                 maxRetries: 5,
@@ -30,6 +33,18 @@ function enhanceConnection(client) {
                 }
             }
         );
+        client._reconnectAttempt = 0; // successful login — reset backoff
+        return result;
+    };
+
+    // Reconnect with the progressive delay schedule (see utils/stabilityUtils.js).
+    const scheduleReconnect = (client) => {
+        client._reconnectAttempt++;
+        const delay = reconnectDelayFor(client._reconnectAttempt);
+        console.log(`Attempting to reconnect in ${Math.round(delay / 1000)}s (retry #${client._reconnectAttempt})...`);
+        setTimeout(() => {
+            client.login(process.env.DISCORD_TOKEN).catch(console.error);
+        }, delay);
     };
     
     // Add more robust reconnection handling
@@ -41,11 +56,7 @@ function enhanceConnection(client) {
         } else if ([4004, 4010, 4011, 4012, 4013].includes(event.code)) {
             console.error('Authentication error. Please check your bot token and permissions.');
         } else {
-            console.log('Attempting to reconnect...');
-            // Reconnect with exponential backoff
-            setTimeout(() => {
-                client.login(process.env.DISCORD_TOKEN).catch(console.error);
-            }, 5000);
+            scheduleReconnect(client);
         }
     });
     
@@ -54,9 +65,7 @@ function enhanceConnection(client) {
         if (client.ws.status === 0) {
             console.log('WebSocket connection is down, attempting to reconnect...');
             client.destroy();
-            setTimeout(() => {
-                client.login(process.env.DISCORD_TOKEN).catch(console.error);
-            }, 5000);
+            scheduleReconnect(client);
         }
     }, 60000);
     wsMonitor.start();
@@ -82,9 +91,7 @@ function enhanceConnection(client) {
         if (now - lastHeartbeatAck > 3 * 60 * 1000) { // 3 minutes without heartbeat
             console.warn('No heartbeat received for 3 minutes, reconnecting...');
             client.destroy();
-            setTimeout(() => {
-                client.login(process.env.DISCORD_TOKEN).catch(console.error);
-            }, 5000);
+            scheduleReconnect(client);
         }
     }, 60000);
     heartbeatMonitor.start();

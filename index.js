@@ -4,6 +4,7 @@ const { Client, GatewayIntentBits, Collection, ActivityType, Options } = require
 const fs = require('fs');
 const path = require('path');
 const { resolveDiscordToken } = require('./utils/tokenResolver');
+const { reconnectDelayFor } = require('./utils/stabilityUtils');
 require('dotenv').config();
 
 // Detect secondary/standby role BEFORE initialising any managers so we can
@@ -403,6 +404,10 @@ async function stepDown(reason) {
 // lease before calling us, so we skip the pre-login check (but still confirm
 // after login to catch any race between our acquire and our login).
 let connectingBot = false;
+// Reconnection attempts use a progressive delay schedule
+// (5s, 10s, 20s, 30s, 60s, 2m, 5m, then every 5m —
+// see utils/stabilityUtils.js reconnectDelayFor). Reset after a successful login.
+let reconnectAttempt = 0;
 async function connectBot(leaseAlreadyAcquired = false) {
     if (connectingBot) {
         console.warn('[FAILOVER] connectBot already in progress — skipping duplicate call.');
@@ -468,6 +473,7 @@ async function connectBot(leaseAlreadyAcquired = false) {
 
         global.botActive = true;
         steppingDown = false; // clear any stale flag from a previous cycle
+        reconnectAttempt = 0; // successful login — reset the backoff schedule
     } catch (error) {
         connectingBot = false;
         console.error('[ERROR] Failed to login to Discord:', error);
@@ -476,8 +482,11 @@ async function connectBot(leaseAlreadyAcquired = false) {
             console.error('❌ Invalid Discord token. Please check your DISCORD_TOKEN/BOT_TOKEN/TOKEN/CLIENT_TOKEN in secrets.');
             process.exit(1);
         }
-        console.log('Attempting to reconnect in 5 seconds...');
-        setTimeout(() => connectBot(false), 5000);
+        reconnectAttempt++;
+        const delay = reconnectDelayFor(reconnectAttempt);
+        const mins = (delay / 1000 / 60).toFixed(1).replace(/\.0$/, '');
+        console.log(`Attempting to reconnect in ${delay >= 60000 ? `${mins} minutes` : `${delay / 1000} seconds`} (retry #${reconnectAttempt})...`);
+        setTimeout(() => connectBot(false), delay);
         return;
     }
     connectingBot = false;

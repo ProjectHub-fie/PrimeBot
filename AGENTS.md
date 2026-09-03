@@ -266,6 +266,19 @@ A second gating layer alongside beta. Any tab in `render/guild.js` `TABS` can ca
 - **Tickets is upcoming too:** the 🎫 Tickets tab is `upcoming: true` (same overlay + SOON badge as Events). `ticketsPage` wraps its panel in `upcomingOverlayWrap(...)` unless `guild._bypassUpcoming`; `public/js/tickets.js` early-exits on `.upcoming-locked-wrap.locked`. Tests: `tests/upcomingBypass.test.js` covers both eventsPage and ticketsPage.
 - **Event Management:** the 📅 Events tab is now `upcoming: true` (it was previously beta-gated). It stays visible in the sidebar (discoverable) but shows the "Coming Soon……" overlay for every server.
 - **CSS:** `.soon-badge`, `.upcoming-locked-wrap`, `.upcoming-locked-overlay`, `.upcoming-graphic`, `.upcoming-title` in `dashboard/public/styles.css`.
+- **Tickets tab panel list refreshes on page load:** `ticketsPage` renders an empty `.rr-list` placeholder server-side — panel cards are rendered client-side by `dashboard/public/js/tickets.js` `refreshTicketList()`. The script calls `refreshTicketList()` once on load (right after `bindTicketCardActions()`, inside the upcoming/beta lock guard), so existing panels appear in the tab without any interaction. If someone reports "created panels don't show in Tickets tab", check they're on the un-locked page (no `.upcoming-locked-wrap.locked`/`.beta-locked-wrap.locked`) and that `refreshTicketList()` runs — previously it was only called by the Create/Resend flflows, so a page-load never populated the list.
+
+## Reconnect delay schedule (progressive backoff)
+
+Bot reconnect attempts use a progressive delay schedule instead of a fixed 5s: 1st→5s, 2nd→10s, 3rd→20s, 4th→30s, 5th→60s, 6th→2m, 7th→5m, then every 5m.
+
+- **Single source of truth:** `utils/stabilityUtils.js` exports `RECONNECT_DELAYS` + `reconnectDelayFor(retryCount)` (1-based; counts above the schedule cap at the final 5-minute delay; non-positive counts return the first delay).
+  It is consumed by:
+   - `index.js` `connectBot()` — a `reconnectAttempt` counter increments on each failed login; the counter resets to `0` after a successful login (so a transient blip doesn't permanently stretch the backoff; and the reconnect log prints the humanized delay + `(retry #N)`).
+  - `connection-enhancer.js` (optional wrapper, currently disabled in index.js — but kept working in case it's re-enabled):disconnect, ws-monitor, and heartbeat-monitor reconnect sites all route through a local `scheduleReconnect()` (uses the same `reconnectDelayFor` and resets the per-client counter after a successful login).
+
+- **Tests:** `tests/reconnectAndTicketList.test.js` — 6 cases: schedule array, `reconnectDelayFor` edge cases (0, -1, 99), index.js uses serial + resets counter; connection-enhancer has no remaining hardcoded `5000` reconnect delays and all 3 reconnect sites use scheduleReconnect, tickets.js refreshes on load, and a vm browser-sandbox asserts server-fetched panels render into `.rr-list` on page load.
+
 
 ## 404 page (graphical catch-all)
 
