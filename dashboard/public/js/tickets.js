@@ -166,4 +166,9 @@ function bindTicketCardActions() {
 
 bindTicketCardActions();
 
+// The page renders an empty .rr-list when the server-side config contains
+// panels (cards are rendered client-side — see ticketsPage), so refresh
+// once on load so existing panels actually appear in the tab.
+refreshTicketList();
+
 } // end upcoming/beta lock guard

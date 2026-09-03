@@ -169,6 +169,37 @@ async function withRetry(fn, options = {}) {
 }
 
 /**
+ * Reconnect delay schedule (ms) for bot reconnection attempts.
+ *
+ *  1st retry:  5 seconds
+ *  2nd retry: 10 seconds
+ *  3rd retry: 20 seconds
+ *  4th retry:  30 seconds
+ *  5th retry:  60 seconds
+ *  6th retry:  2 minutes (120s)
+ *  7th retry:  5 minutes (300s)
+ *  Then:       every 5 minutes
+ *
+ * `reconnectDelayFor(retryCount)` returns the delay for a given retry
+ * (1-based); counts above the schedule cap at the final 5-minute delay).
+ */
+const RECONNECT_DELAYS = [
+    5000,   // 1st retry:  5 seconds
+    10000,  // 2nd retry: 10 seconds
+    20000,  // 3rd retry:  20 seconds
+    30000,  // 4th retry:  30 seconds
+    60000,  // 5th retry:  60 seconds
+    120000,  // 6th retry:  2 minutes
+    300000,  // 7th retry:  5 minutes
+]; // subsequent retries: every 5 minutes (300000 ms)
+
+function reconnectDelayFor(retryCount) {
+    const n = Number(retryCount) || 0;
+    if (n <= 0) return RECONNECT_DELAYS[0];
+    return RECONNECT_DELAYS[Math.min(n, RECONNECT_DELAYS.length) - 1];
+}
+
+/**
  * Determine if an error is retryable
  * @param {Error} error - The error to check
  * @returns {boolean} Whether the error is retryable
@@ -195,5 +226,7 @@ module.exports = {
     safeInterval,
     timeout,
     withRetry,
-    isRetryableError
+    isRetryableError,
+    RECONNECT_DELAYS,
+    reconnectDelayFor
 };
