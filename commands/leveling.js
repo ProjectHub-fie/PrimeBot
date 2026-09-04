@@ -514,7 +514,7 @@ async function handleLeaderboardCommand(interaction, client) {
     
     try {
         // Get leaderboard data (top 100 users)
-        const leaderboard = client.levelingManager.getLeaderboard(guild.id, 100);
+        const leaderboard = await client.levelingManager.getLeaderboard(guild.id, 100);
         
         if (!leaderboard || leaderboard.length === 0) {
             return interaction.editReply({
@@ -792,92 +792,91 @@ async function handleSettingsCommand(interaction, client) {
  */
 async function handleAwardCommand(interaction, client) {
     const { guild, options } = interaction;
-    
+
     // Get target user and XP amount
-    const targetUser = options.getUser('user');
-    const amount = options.getInteger('amount');
-    
+    const targetUser = options.getUser("user");
+    const amount = options.getInteger("amount");
+
     await interaction.deferReply({ ephemeral: true });
-    
+
     try {
-        // Get or create guild data
-        if (!client.levelingManager.userLevels.has(guild.id)) {
-            client.levelingManager.userLevels.set(guild.id, new Map());
-        }
-        
-        const guildData = client.levelingManager.userLevels.get(guild.id);
-        
-        // Get or create user data
-        if (!guildData.has(targetUser.id)) {
-            guildData.set(targetUser.id, {
-                xp: 0,
-                level: 0,
-                messages: 0,
-                lastMessage: Date.now(),
-                badges: []
+        const oldProfile = await client.levelingManager.getUserProfile(guild.id, targetUser.id);
+        const oldLevel = oldProfile?.level ?? 0;
+        const oldMessages = oldProfile?.messages ?? 0;
+        const oldXp = oldProfile?.xp ?? 0;
+
+        // Persist the XP bump via the DB-backed manager.
+        const awarded = await client.levelingManager.awardXPDirect(guild.id, targetUser.id, amount);
+
+        if (!awarded) {
+            return interaction.editReply({
+                content: "❌ An error occurred while awarding XP.",
+                ephemeral: true
             });
         }
-        
-        const userData = guildData.get(targetUser.id);
-        
-        // Store old level for comparison
-        const oldLevel = userData.level;
-        
-        // Add XP
-        userData.xp += amount;
-        
-        // Recalculate level based on XP
-        const oldMessages = userData.messages;
-        userData.messages += Math.floor(amount / 15); // Rough estimate of messages based on XP
-        const newLevel = client.levelingManager.calculateLevel(userData.messages);
-        userData.level = newLevel;
-        
-        // Save data
-        client.levelingManager.saveLevels();
-        
-        // Create response embed
+
+        // Recompute level/messages to match the DB model (level is message-based).
+        const newMessages = oldMessages + Math.floor(amount / 15); // Rough estimate of messages based on XP
+        const newLevel = client.levelingManager.calculateLevel(newMessages);
+
+        // Persist the recomputed level/messages too, so rank/level stay consistent with XP awarded.
+        const setResult = await client.levelingManager.setLevel(guild.id, targetUser.id, newLevel);
+
+        if (!setResult.success) {
+            console.error("[LEVELING] XP awarded but level sync failed:", setResult.message);
+        }
+
+        const userData = { xp: oldXp + amount, level: newLevel, messages: newMessages };
+        const newBadges = [];
+
+        // Check for new badges if user leveled up (DB-backed,, correct signature).
+        if (newLevel > oldLevel) {
+            const levelBadges = await client.levelingManager.checkForNewBadges(
+                guild.id,
+                targetUser.id,
+                oldLevel,
+                newLevel
+            );
+            newBadges.push(...levelBadges);
+        }
+
         const embed = new EmbedBuilder()
             .setColor(config.colors.success)
-            .setTitle('✅ XP Awarded')
+            .setTitle("✅ XP Awarded")
             .setDescription(`Successfully awarded **${amount} XP** to ${targetUser}.`)
             .addFields(
-                { name: 'Previous XP', value: `${userData.xp - amount} XP`, inline: true },
-                { name: 'New XP', value: `${userData.xp} XP`, inline: true },
-                { name: 'Previous Level', value: `Level ${oldLevel}`, inline: true },
-                { name: 'New Level', value: `Level ${newLevel}`, inline: true },
-                { name: 'Previous Messages', value: `${oldMessages}`, inline: true },
-                { name: 'New Messages', value: `${userData.messages}`, inline: true }
+                { name: "Previous XP", value: `${oldXp} XP`, inline: true },
+                { name: "New XP", value: `${userData.xp} XP`, inline: true },
+                { name: "Previous Level", value: `Level ${oldLevel}`, inline: true },
+                { name: "New Level", value: `Level ${newLevel}`, inline: true },
+                { name: "Previous Messages", value: `${oldMessages}`, inline: true },
+                { name: "New Messages", value: `${userData.messages}`, inline: true }
             )
-            .setFooter({ text: `Version ${config.version}`, iconURL: this.client?.user?.displayAvatarURL() || client?.user?.displayAvatarURL() }).setTimestamp();
-        
-        // Check if user leveled up
+            .setFooter({ text: `Version ${config.version}` }).setTimestamp();
+
         if (newLevel > oldLevel) {
             embed.addFields({
-                name: '🎉 Level Up!',
+                name: "🎉 Level Up!",
                 value: `User leveled up from **Level ${oldLevel}** to **Level ${newLevel}**!`
             });
-            
-            // Check for new badges
-            const newBadges = client.levelingManager.checkForNewBadges(userData, oldLevel, newLevel);
-            
-            // Add badge information if new badges were earned
+
             if (newBadges.length > 0) {
-                const badgeList = newBadges.map(badge => 
+                const badgeList = newBadges.map(badge =>
                     `${badge.emoji} **${badge.name}** - ${badge.description}`
-                ).join('\n');
-                
+                ).join("\n");
+
                 embed.addFields({
-                    name: '🏅 New Badge' + (newBadges.length > 1 ? 's' : '') + ' Earned!',
+                    name: "🏅 New Badge" + (newBadges.length > 1 ? "s" : "") + " Earned!",
                     value: badgeList
                 });
             }
         }
-        
+
         interaction.editReply({ embeds: [embed], ephemeral: true });
     } catch (error) {
-        console.error('[LEVELING] Error awarding XP:', error);
+        console.error("[LEVELING] Error awarding XP:", error);
         interaction.editReply({
-            content: '❌ An error occurred while awarding XP.',
+            content: "❌ An error occurred while awarding XP.",
             ephemeral: true
         });
     }

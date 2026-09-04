@@ -2807,54 +2807,46 @@ module.exports = {
                         return;
                     }
                     
-                    // Calculate messages needed for this level
+                    // Get the user's current level before the update (for badge checks).
+                    const oldProfile = await client.levelingManager.getUserProfile(message.guild.id, targetSetUser.id);
+                    const oldLevel = oldProfile?.level ?? 0;
                     const messagesNeeded = client.levelingManager.calculateRequiredMessages(newLevel);
-                    
-                    // Get or create guild data
-                    if (!client.levelingManager.userLevels.has(message.guild.id)) {
-                        client.levelingManager.userLevels.set(message.guild.id, new Map());
+
+                    // Persist the new level to the DB-backed leveling manager.
+
+                    const setLevelResult = await client.levelingManager.setLevel(
+                        message.guild.id,
+                        targetSetUser.id,
+                        newLevel
+                    );
+
+                    if (!setLevelResult.success) {
+                        message.reply('Error: ' + setLevelResult.message);
+                        return;
                     }
-                    
-                    const guildData = client.levelingManager.userLevels.get(message.guild.id);
-                    
-                    // Get or create user data
-                    if (!guildData.has(targetSetUser.id)) {
-                        guildData.set(targetSetUser.id, {
-                            xp: 0,
-                            level: 0,
-                            messages: 0,
-                            lastMessage: Date.now(),
-                            badges: []
-                        });
-                    }
-                    
-                    const userData = guildData.get(targetSetUser.id);
-                    
-                    // Store the old level for badge check
-                    const oldLevel = userData.level;
-                    
-                    // Update user data
-                    userData.level = newLevel;
-                    userData.messages = messagesNeeded;
-                    userData.xp = newLevel * 100; // Simplified XP calculation
-                    
+
                     // Initialize variables to track badge updates
+                    const userData = { xp: newLevel * 100, level: newLevel, messages: messagesNeeded };
                     let newBadges = [];
-                    
-                    // Check for new badges if level increased
+
+                    // Check for new badges if level increased (DB-backed, correct signature).
                     if (newLevel > oldLevel) {
-                        newBadges = client.levelingManager.checkForNewBadges(userData, oldLevel, newLevel);
-                        
+                        newBadges = await client.levelingManager.checkForNewBadges(
+                            message.guild.id,
+                            targetSetUser.id,
+                            oldLevel,
+                            newLevel
+                        );
+
                         // Log badge updates
                         if (newBadges.length > 0) {
-                            console.log(`[LEVELING] User ${targetSetUser.tag} earned ${newBadges.length} new badges from level update`);
+                            console.log('[LEVELING] User ' + targetSetUser.tag + ' earned ' + newBadges.length + ' new badges from level update');
                         }
                     }
-                    
-                    // Save data - critical to ensure changes are persisted
-                    client.levelingManager.saveLevels();
-                    console.log(`[LEVELING] Saved level data for ${targetSetUser.tag}: Level ${newLevel}, Messages: ${messagesNeeded}, XP: ${userData.xp}`);
-                    
+
+                    // Changes are persisted inside setLevel); log for traceability.
+
+                    console.log('[LEVELING] Saved level data for ' + targetSetUser.tag + ': Level ' + newLevel + ', Messages: ' + messagesNeeded + ', XP: ' + userData.xp);
                     // Create detailed confirmation embed
                     const setLevelEmbed = new EmbedBuilder()
                         .setColor(config.colors.success)
@@ -3052,34 +3044,31 @@ module.exports = {
                         return;
                     }
                     
-                    // Check if user exists in leveling system
-                    if (!client.levelingManager.userLevels.has(message.guild.id) || 
-                        !client.levelingManager.userLevels.get(message.guild.id).has(targetRevokeBadgeUser.id)) {
-                        message.reply("This user has no badges or is not in the leveling system.");
-                        return;
-                    }
-                    
-                    // Get user data
-                    const guildBadgeData = client.levelingManager.userLevels.get(message.guild.id);
-                    const userBadgeData = guildBadgeData.get(targetRevokeBadgeUser.id);
-                    
-                    // Find the badge to revoke
-                    const badgeIndex = userBadgeData.badges.findIndex(badge => badge.id === badgeIdToRevoke);
-                    
-                    if (badgeIndex === -1) {
+                    // Get the user's profile from the DB-backed manager.
+                    const revokeBadgeProfile = await client.levelingManager.getUserProfile(
+                        message.guild.id,
+                        targetRevokeBadgeUser.id
+                    );
+
+                    const revokedBadge = revokeBadgeProfile?.badges?.find(badge => badge.badgeId === badgeIdToRevoke);
+
+                    if (!revokedBadge) {
                         message.reply("This user does not have this badge.");
                         return;
                     }
-                    
-                    // Store badge info before removing
-                    const revokedBadge = userBadgeData.badges[badgeIndex];
-                    
-                    // Remove the badge
-                    userBadgeData.badges.splice(badgeIndex, 1);
-                    
-                    // Save changes
-                    client.levelingManager.saveLevels();
-                    
+
+                    // Remove the badge via the DB-backed manager (needs the row's badgeType).
+                    const revokeResult = await client.levelingManager.revokeBadge({
+                        guildId: message.guild.id,
+                        userId: targetRevokeBadgeUser.id,
+                        badgeType: revokedBadge.badgeType,
+                        badgeId: badgeIdToRevoke
+                    });
+
+                    if (!revokeResult.success) {
+                        message.reply(`Error: ${revokeResult.message}`);
+                        return;
+                    }
                     // Create success embed
                     const revokeEmbed = new EmbedBuilder()
                         .setColor(config.colors.error)

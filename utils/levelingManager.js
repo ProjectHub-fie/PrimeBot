@@ -914,6 +914,56 @@ class LevelingManager {
     }
 
     /**
+     * Create the paginated XP leaderboard embed.
+     * @param {string} guildId - Guild ID
+     * @param {number} [page=1] - 1-based page number
+     * @returns {Promise<Object|null>} { embed, maxPage, currentPage }
+     */
+    async createLeaderboardEmbed(guildId, page = 1) {
+        try {
+            const leaderboard = await this.getLeaderboard(guildId, 100);
+            if (!leaderboard || leaderboard.length === 0) return null;
+
+            const usersPerPage = 10;
+            const totalPages = Math.ceil(leaderboard.length / usersPerPage);
+            const validPage = Math.max(1, Math.min(parseInt(page, 10) || 1, totalPages));
+            const startIndex = (validPage - 1) * usersPerPage;
+            const pageUsers = leaderboard.slice(startIndex, startIndex + usersPerPage);
+
+            const embed = new EmbedBuilder()
+                .setColor(config.colors.primary)
+                .setTitle(`🏆 ${this.client.guilds.cache.get(guildId)?.name || 'Server'} XP Leaderboard`)
+                .setDescription(`Top members ranked by experience points`)
+                .setFooter({
+                    text: `Page ${validPage}/${totalPages} • ${leaderboard.length} members ranked • Version ${config.version}`,
+                    iconURL: this.client.user?.displayAvatarURL()
+                })
+                .setTimestamp();
+
+            let leaderboardText = '';
+            for (let i = 0; i < pageUsers.length; i++) {
+                const entry = pageUsers[i];
+                const position = startIndex + i + 1;
+                const medal = position === 1 ? '🥇 ' : position === 2 ? '🥈 ' : position === 3 ? '🥉 ' : '';
+
+                let displayName = 'Unknown User';
+                try {
+                    const member = await this.client.guilds.resolve(guildId).members.fetch(entry.userId);
+                    displayName = member?.displayName || 'Unknown User';
+                } catch { /* member left / fetch failed */ }
+                leaderboardText += `**${medal}${position}.** ${displayName}\n`;
+                leaderboardText += `➜ Level ${entry.level} • ${entry.xp} XP • ${entry.messages} messages\n\n`;
+            }
+            embed.setDescription(leaderboardText);
+
+            return { embed, maxPage: totalPages, currentPage: validPage };
+        } catch (error) {
+            console.error('[LEVELING] Error creating leaderboard embed:', error);
+            return null;
+        }
+    }
+
+    /**
      * Create profile embed for a user
      * @param {string} guildId - Guild ID
      * @param {string} userId - User ID
@@ -1039,6 +1089,222 @@ class LevelingManager {
         } catch (error) {
             console.error('[LEVELING] Error creating badges embed:', error);
             return null;
+        }
+    }
+
+    /**
+     * Set a user's level directly (dev function), persisting to the DB.
+     * Level->messages mapping uses calculateRequiredMessages; XP uses the
+     * legacy simplified `level * 100` formula so existing $set-level behavior is kept.
+     * @param {string} guildId - Guild ID
+     * @param {string} userId - User ID
+     * @param {number} level - New level to set
+     * @returns {Promise<Object>} { success, message }
+     */
+    async setLevel(guildId, userId, level) {
+        if (!this.dbReady) return { success: false, message: 'Database not ready' };
+
+        try {
+            const messagesForLevel = this.calculateRequiredMessages(level);
+            const userData = await this.getUserProfile(guildId, userId);
+
+            if (userData) {
+                await this.db.update(this.schema.userLevels)
+                    .set({
+                        level: level,
+                        messages: messagesForLevel,
+                        xp: level * 100, // Simplified XP calculation (matches legacy dev formula)
+                        updatedAt: new Date()
+                    })
+                    .where(and(
+                        eq(this.schema.userLevels.guildId, guildId),
+                        eq(this.schema.userLevels.userId, userId)
+                    ));
+            } else {
+                await this.db.insert(this.schema.userLevels).values({
+                    guildId: guildId,
+                    userId: userId,
+                    xp: level * 100,
+                    level: level,
+                    messages: messagesForLevel,
+                    lastMessage: new Date(),
+                    createdAt: new Date(),
+                    updatedAt: new Date()
+                });
+            }
+
+            return { success: true, message: 'Level set successfully' };
+        } catch (error) {
+            console.error('[LEVELING] Error setting level:', error);
+            return { success: false, message: 'An error occurred' };
+        }
+    }
+
+    /**
+     * Get all leveling rows for a guild (used by role/badge sync).
+     * @param {string} guildId - Guild ID
+     * @returns {Promise<Array>} User row objects
+     */
+    async getGuildUserLevels(guildId) {
+        if (!this.dbReady) return [];
+        try {
+            const rows = await this.db.select()
+                .from(this.schema.userLevels)
+                .where(eq(this.schema.userLevels.guildId, guildId));
+            return rows;
+        } catch (error) {
+            console.error('[LEVELING] Error getting guild user levels:', error);
+            return [];
+        }
+    }
+
+    /**
+     * Get all badges for a guild (used by role/badge sync).
+     * @param {string} guildId - Guild ID
+     * @returns {Promise<Array>} Badge row objects
+     */
+    async getGuildBadges(guildId) {
+        if (!this.dbReady) return [];
+        try {
+            const rows = await this.db.select()
+                .from(this.schema.userBadges)
+                .where(eq(this.schema.userBadges.guildId, guildId));
+            return rows;
+        } catch (error) {
+            console.error('[LEVELING] Error getting guild badges:', error);
+            return [];
+        }
+    }
+
+    /**
+     * Legacy-shape shim: assemble a guild-level data object matching the
+     * old in-memory shape so /sync keeps working against the DB store.
+
+     * @param {string} guildId - Guild ID
+     * @returns {Promise<Object|null>} { roleRewards, users }
+     */
+    async getGuildData(guildId) {
+        if (!this.dbReady) return null;
+        try {
+            const roleRewards = {};
+            for (const rw of this.getRoleRewards(guildId)) {
+                roleRewards[rw.level] = rw.roleId;
+            }
+            const users = {};
+            const userRows = await this.getGuildUserLevels(guildId);
+const badgeRows = await this.getGuildBadges(guildId);
+            const badgesByUser = {};
+            for (const b of badgeRows) {
+                if (!badgesByUser[b.userId]) badgesByUser[b.userId] = [];
+                badgesByUser[b.userId].push(b.badgeId);
+            }
+            for (const row of userRows) {
+                users[row.userId] = {
+                    xp: row.xp ?? 0,
+                    level: row.level ?? 0,
+                    messages: row.messages ?? 0,
+                    badges: badgesByUser[row.userId] || []
+                };
+            }
+            return { roleRewards, users };
+        } catch (error) {
+            console.error('[LEVELING] Error assembling guild data:', error);
+            return null;
+        }
+    }
+
+    /**
+     * Legacy-shape shim: return a single user's leveling data (or null).
+     * @param {string} guildId - Guild ID
+     * @param {string} userId - User ID
+     * @returns {Promise<Object|null>} User data object
+     */
+    async getUserData(guildId, userId) {
+        try {
+            const profile = await this.getUserProfile(guildId, userId);
+            if (!profile) return null;
+            const badges = (profile.badges || []).map(b => b.badgeId);
+            return {
+                xp: profile.xp ?? 0,
+                level: profile.level ?? 0,
+                messages: profile.messages ?? 0,
+                badges: badges.map(b => b.badgeId)
+            };
+        } catch (error) {
+            console.error('[LEVELING] Error getting user data:', error);
+            return null;
+        }
+    }
+
+    /**
+     * Legacy-shape shim: persist a guild-level data object back to the DB.
+     * The /sync module mutates user data richly; this reconciles the DB rows
+     * from the supplied map (upsert each user; replace their badges).
+     * @param {string} guildId - Guild ID
+     * @param {Object} guildData - { users: { userId: { level, messages, xp, badges } } } }
+     * @returns {Promise<boolean>} Success status
+     */
+    async saveGuildData(guildId, guildData) {
+        if (!this.dbReady || !guildData?.users) return false;
+        try {
+            for (const [userId, u] of Object.entries(guildData.users)) {
+                const existing = await this.db.select()
+                    .from(this.schema.userLevels)
+                    .where(and(
+                        eq(this.schema.userLevels.guildId, guildId),
+                        eq(this.schema.userLevels.userId, userId)
+                    ))
+                    .limit(1);
+                if (existing.length === 0) {
+                    await this.db.insert(this.schema.userLevels).values({
+                        guildId: guildId,
+                        userId: userId,
+                        xp: u.xp ?? 0,
+                        level: u.level ?? 0,
+                        messages: u.messages ?? 0,
+                        lastMessage: new Date(),
+                        createdAt: new Date(),
+                        updatedAt: new Date()
+                    });
+                } else {
+                    await this.db.update(this.schema.userLevels)
+                        .set({
+                            xp: u.xp ?? 0,
+                            level: u.level ?? 0,
+                            messages: u.messages ?? 0,
+                            updatedAt: new Date()
+                        })
+                        .where(and(
+                            eq(this.schema.userLevels.guildId, guildId),
+                            eq(this.schema.userLevels.userId, userId)
+                        ));
+                }
+
+                // Replace the user's badges with the supplied id list (best-effort).
+                if (Array.isArray(u.badges)) {
+                    await this.db.delete(this.schema.userBadges)
+
+                            .where(and(
+                                eq(this.schema.userBadges.guildId, guildId),
+                                eq(this.schema.userBadges.userId, userId)
+                            ));
+                    for (const badgeId of u.badges) {
+                        await this.db.insert(this.schema.userBadges).values({
+                            guildId: guildId,
+                            userId: userId,
+                            badgeId: badgeId,
+                            badgeName: badgeId,
+                            badgeType: 'milestone',
+                            earnedAt: new Date(),
+                            createdAt: new Date()
+                        });
+                    }
+                }
+            }
+            return true;
+        } catch (error) {
+            console.error('[LEVELING] Error saving guild data:', error);
+            return false;
         }
     }
 
