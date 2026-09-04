@@ -134,7 +134,7 @@ async function handleRoleSync(interaction, client) {
     await interaction.deferReply();
     
     const guild = interaction.guild;
-    const guildData = client.levelingManager.getGuildData(guild.id);
+    const guildData = await client.levelingManager.getGuildData(guild.id);
     
     if (!guildData || !guildData.roleRewards || Object.keys(guildData.roleRewards).length === 0) {
         return interaction.editReply({
@@ -216,7 +216,7 @@ async function handleBadgeSync(interaction, client) {
     await interaction.deferReply();
     
     const guild = interaction.guild;
-    const guildData = client.levelingManager.getGuildData(guild.id);
+    const guildData = await client.levelingManager.getGuildData(guild.id);
     
     if (!guildData) {
         return interaction.editReply({
@@ -262,7 +262,7 @@ async function handleBadgeSync(interaction, client) {
             // Update user data if new badges were awarded
             if (newBadges > 0) {
                 userData.badges = userBadges;
-                client.levelingManager.saveGuildData(guild.id, guildData);
+                await client.levelingManager.saveGuildData(guild.id, guildData);
                 syncedUsers++;
             }
             
@@ -343,7 +343,7 @@ async function handleUserSync(interaction, client) {
     
     await interaction.deferReply();
     
-    const userData = client.levelingManager.getUserData(interaction.guild.id, targetUser.id);
+    const userData = await client.levelingManager.getUserData(interaction.guild.id, targetUser.id);
     
     if (!userData) {
         return interaction.editReply({
@@ -355,7 +355,7 @@ async function handleUserSync(interaction, client) {
     const userLevel = userData.level || 1;
     
     // Sync roles
-    const guildData = client.levelingManager.getGuildData(interaction.guild.id);
+    const guildData = await client.levelingManager.getGuildData(interaction.guild.id);
     if (guildData && guildData.roleRewards) {
         for (const [level, roleId] of Object.entries(guildData.roleRewards)) {
             if (userLevel >= parseInt(level)) {
@@ -387,7 +387,7 @@ async function handleUserSync(interaction, client) {
     // Save updated badges
     if (syncActions.some(action => action.includes('badge'))) {
         userData.badges = userBadges;
-        client.levelingManager.saveGuildData(interaction.guild.id, guildData);
+        await client.levelingManager.saveGuildData(interaction.guild.id, guildData);
     }
     
     const resultEmbed = new EmbedBuilder()
@@ -456,7 +456,7 @@ async function handleSyncConfig(interaction, client) {
  */
 async function handleSyncStatus(interaction, client) {
     const serverSettings = client.serverSettingsManager.getGuildSettings(interaction.guild.id);
-    const guildData = client.levelingManager.getGuildData(interaction.guild.id);
+    const guildData = await client.levelingManager.getGuildData(interaction.guild.id);
     
     const syncSettings = serverSettings.sync || {};
     const roleRewards = guildData?.roleRewards || {};
