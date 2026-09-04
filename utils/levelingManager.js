@@ -91,15 +91,14 @@ class LevelingManager {
         if (this._roleRewardsTimer) return;
         // 5s refresh + ~30s full re-read, mirroring the welcome settings pattern,
         // so dashboard-created rewards reach the bot without a restart.
+        const ms = parseInt(process.env.SETTINGS_RELOAD_INTERVAL_MS, 10) || 60000;
+        const refreshMs = parseInt(process.env.SETTINGS_REFRESH_INTERVAL_MS, 10) || 15000;
         this._roleRewardsTimer = setInterval(() => {
             this._loadRoleRewards().catch(err =>
                 console.error('[LEVELING] Role rewards refresh failed:', err.message)
             );
         }, refreshMs);
         this._roleRewardsTimer.unref?.();
-
-        const ms = parseInt(process.env.SETTINGS_RELOAD_INTERVAL_MS, 10) || 60000;
-        const refreshMs = parseInt(process.env.SETTINGS_REFRESH_INTERVAL_MS, 10) || 15000;
         this._roleRewardsReloadTimer = setInterval(() => {
             this._loadRoleRewards().catch(err =>
                 console.error('[LEVELING] Role rewards background reload failed:', err.message)
