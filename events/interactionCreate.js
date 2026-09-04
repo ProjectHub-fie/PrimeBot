@@ -1,4 +1,4 @@
-const { safeReply, safeExecute } = require('../utils/stabilityUtils');
+const { safeReply, safeExecute, scheduleComponentExpiry } = require('../utils/stabilityUtils');
 const interactionDebugger = require('../utils/interactionDebugger');
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const config = require('../config');
@@ -77,6 +77,7 @@ async function showMainHelpUpdate(interaction) {
         embeds: [mainEmbed],
         components: [categoryButtons, adminButton]
     });
+    scheduleComponentExpiry(interaction.message);
 }
 
 /**
@@ -226,6 +227,7 @@ async function showSashHelp(interaction, page) {
         );
 
         await interaction.update({ embeds: [mainEmbed], components: [catButtons, adminRow] });
+        scheduleComponentExpiry(interaction.message);
         return;
     }
 
@@ -250,6 +252,7 @@ async function showSashHelp(interaction, page) {
         .setTimestamp();
 
     await interaction.update({ embeds: [embed], components: [backButton] });
+    scheduleComponentExpiry(interaction.message);
 }
 
 /**
@@ -376,6 +379,7 @@ async function showCategoryHelpUpdate(interaction, category) {
         embeds: [categoryEmbed],
         components: [backButton]
     });
+    scheduleComponentExpiry(interaction.message);
 }
 
 /**
@@ -775,6 +779,7 @@ module.exports = {
                                 embeds: [mainMenuEmbed(pfx, interaction.client)],
                                 components: [categorySelectRow(), navigationButtonsRow()],
                             });
+                            scheduleComponentExpiry(interaction.message);
                         } catch (_) {}
                         return;
                     } else if (interaction.customId === 'categories_prefix_help') {

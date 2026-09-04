@@ -1,5 +1,6 @@
 const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const config = require('../config');
+const { scheduleComponentExpiry } = require('../utils/stabilityUtils');
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -96,6 +97,8 @@ async function showCategorySelector(interaction) {
         embeds: [mainEmbed],
         components: [categorySelect, actionButtons]
     });
+    const sent = await interaction.fetchReply().catch(() => null);
+    scheduleComponentExpiry(sent || interaction.message || { editReply: () => {} });
 }
 
 /**
@@ -287,6 +290,7 @@ async function showCategoryDetails(interaction, category) {
         embeds: [categoryEmbed],
         components: [backSelect, navigationButtons]
     });
+    scheduleComponentExpiry(interaction.message);
 }
 
 /**

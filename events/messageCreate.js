@@ -11,6 +11,7 @@ const {
 const net = require("net");
 const config = require("../config");
 const nodeFailover = require("../utils/nodeFailover");
+const { scheduleComponentExpiry } = require("../utils/stabilityUtils");
 
 // Measures TCP connection time (ms) to a host:port within a 3s timeout.
 // Returns null if unreachable or timed out.
@@ -262,6 +263,9 @@ module.exports = {
                             components: components || [] 
                         });
                         
+                        // Strip buttons after 60s so the menu doesn't stay clickable forever.
+                        scheduleComponentExpiry(reply);
+
                         // Set up collector for button interactions
                         if (components && totalPages > 1) {
                             const filter = i => 
@@ -1220,9 +1224,12 @@ module.exports = {
                     const menuEmbed = mainMenuEmbed(prefix, client);
                     if (animMsg) {
                         await animMsg.edit({ embeds: [menuEmbed], components: [categorySelectRow(), navigationButtonsRow()] }).catch(() => {});
+                        scheduleComponentExpiry(animMsg);
                         return;
                     }
-                    return message.reply({ embeds: [menuEmbed], components: [categorySelectRow(), navigationButtonsRow()] });
+                    const sentHelp = await message.reply({ embeds: [menuEmbed], components: [categorySelectRow(), navigationButtonsRow()] });
+                    scheduleComponentExpiry(sentHelp);
+                    return sentHelp;
                 }
                 case "giveaway":
                     // Show giveaway command help
@@ -2645,13 +2652,16 @@ module.exports = {
                         ] : []
                     });
                     
+                    // Strip pagination buttons after 60s so stale controls don't linger.
+                    scheduleComponentExpiry(loadingLbMessage);
+
                     // Handle pagination if there are multiple pages
                     if (leaderboardData.maxPage > 1) {
                         const filter = i => 
                             (i.customId === 'lb_prev_page' || i.customId === 'lb_next_page') && 
                             i.user.id === message.author.id;
                             
-                        const collector = leaderboardReply.createMessageComponentCollector({ 
+                        const collector = loadingLbMessage.createMessageComponentCollector({ 
                             filter, 
                             time: 300000 // 5 minutes
                         });
@@ -2704,7 +2714,7 @@ module.exports = {
                                         currentPage
                                     );
                                     
-                                    await reply.edit({
+                                    await loadingLbMessage.edit({
                                         embeds: [fallbackLeaderboardData.embed],
                                         components: fallbackLeaderboardData.maxPage > 1 ? [
                                             new ActionRowBuilder().addComponents(
@@ -2729,7 +2739,7 @@ module.exports = {
                         
                         collector.on('end', () => {
                             // Remove components when collector expires
-                            leaderboardReply.edit({ components: [] }).catch(console.error);
+                            loadingLbMessage.edit({ components: [] }).catch(console.error);
                         });
                     }
                     break;

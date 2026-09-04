@@ -169,6 +169,36 @@ async function withRetry(fn, options = {}) {
 }
 
 /**
+ * Schedule a message's interactive components (buttons / select menus)
+ * to be removed after `ttlMs`, reverting the message to a plain embed
+ * without repeated components. This keeps frequently-updated menus
+ * (e.g. $help / $commands / sash help / /help / /categories, emoji
+ * lists, leaderboards) from sitting forever with stale clickable controls,
+ * cutting down needless component interactions and avoiding Discord rate
+ * limits from long-lived component messages.
+ *
+ * - Interaction replies (`interaction.message`) are edited via `editReply`
+ *   so an already-acknowledged interaction can still be updated;
+ * - Plain channel messages are edited directly via `edit`.
+ * - Any failure (missing permission, deleted message, duplicate clean)
+ *   is swallowed silently, since the original call already succeeded.
+ */
+const MESSAGE_COMPONENT_TTL_MS = 60000; // 60 seconds
+
+function scheduleComponentExpiry(message, ttlMs = MESSAGE_COMPONENT_TTL_MS){
+    if (!message) return;
+    const timer = setTimeout(() => {
+        try {
+            if (typeof message.deleted === 'boolean' && message.deleted) return;
+            const hasEditReply = typeof message.editReply === 'function';
+            const edit = hasEditReply ? message.editReply.bind(message) : (typeof message.edit === 'function' ? message.edit.bind(message) : null);
+            if (edit) edit({ components: [] }).catch(() => {});
+        } catch (_) {}
+    }, ttlMs);
+    if (typeof timer.unref === 'function') timer.unref();
+}
+
+/**
  * Reconnect delay schedule (ms) for bot reconnection attempts.
  *
  *  1st retry:  5 seconds
@@ -220,6 +250,8 @@ function isRetryableError(error) {
 }
 
 module.exports = {
+    MESSAGE_COMPONENT_TTL_MS,
+    scheduleComponentExpiry,
     safeExecute,
     safeReply,
     safeAccess,
