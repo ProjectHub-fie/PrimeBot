@@ -516,6 +516,8 @@ const ticketPanels = pgTable('ticket_panels', {
   color: varchar('color', { length: 20 }).default('#5865F2'),
   thumbnailUrl: text('thumbnail_url'),
   imageUrl: text('image_url'),
+  authorName: varchar('author_name', { length: 255 }),
+  authorIconUrl: text('author_icon_url'),
   footerText: varchar('footer_text', { length: 255 }),
   content: text('content'),
   buttonLabel: varchar('button_label', { length: 80 }).default('Open Ticket').notNull(),

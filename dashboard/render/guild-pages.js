@@ -863,9 +863,7 @@ function ticketEditorTabsHTML(panel) {
       </div>`;
     const buttonsTab = `
       <div class="card-title" style="margin-top:8px"><span>Open button</span></div>
-      ${ticketField('Open button label', 'tk-button-label', `<input type="text" id="tk-button-label" maxlength="80" value="${val(p.buttonLabel, 'Open Ticket')}" />`)}
-      ${ticketField('Open button emoji (optional)', 'tk-button-emoji', `<input type="text" id="tk-button-emoji" maxlength="100" value="${val(p.buttonEmoji)}" placeholder="🎫" />`)}
-      ${ticketField('Open button style', 'tk-button-style', `<select id="tk-button-style">${styleOpts}</select>`)}
+      <p class="card-hint">The open-ticket button is edited directly on the panel embed — see the <strong>Message</strong> tab's embed builder.</p>
       <div class="card-title" style="margin-top:8px"><span>Close button</span></div>
       ${ticketField('Close button label', 'tk-close-label', `<input type="text" id="tk-close-label" maxlength="80" value="${val(p.closeButtonLabel, 'Close Ticket')}" />`)}
       ${ticketField('Close button emoji (optional)', 'tk-close-emoji', `<input type="text" id="tk-close-emoji" maxlength="100" value="${val(p.closeButtonEmoji, '🔒')}" />`)}
@@ -899,18 +897,15 @@ function ticketEditorTabsHTML(panel) {
       }).join('')}
     `;
 
-    // Tab 3 — Message: embed fields + content + welcome message + color..
+    // Tab 3 — Message: panel embed builder (fields live on the embed.,
+    // Ticket Tool "Panel Embed Settings" style) + in-ticket welcome message +
+    // close embed along the bottom.
     const messageTab = `
-      ${ticketField('Embed title', 'tk-title', `<input type="text" id="tk-title" maxlength="255" value="${val(p.title)}" placeholder="🎫 Support Tickets" />`)}
-      ${ticketField('Embed description', 'tk-description', `<textarea id="tk-description" placeholder="Click the button below to open a support ticket.">${val(p.description)}</textarea>`)}
-      ${ticketField('Content / @mentions (above embed,, or plain body)', 'tk-content', `<textarea id="tk-content" placeholder="Optional: @support or any text shown above the embed / as the plain body.">${val(p.content)}</textarea>`)}
-      ${ticketField('Embed footer text', 'tk-footer', `<input type="text" id="tk-footer" maxlength="255" value="${val(p.footerText)}" placeholder="PrimeBot · Tickets" />`)}
-      ${ticketField('Thumbnail image URL', 'tk-thumbnail', `<input type="text" id="tk-thumbnail" value="${val(p.thumbnailUrl)}" placeholder="https://…/icon.png" />`)}
-      ${ticketField('Large image URL', 'tk-image', `<input type="text" id="tk-image" value="${val(p.imageUrl)}" placeholder="https://…/banner.png" />`)}
-      ${ticketField('Embed color', '', `<div class="color-field">
-          <input type="color" id="tk-color" value="${val(p.color, '#5865F2')}" />
-          <input type="text" id="tk-color-text" value="${val(p.color, '#5865F2')}" style="flex:1" />
-        </div>`)}
+      <div class="card-title"><span>Panel embed</span></div>
+      <p class="card-hint">Edit the panel message directly on the embed — each embed region holds its own field(s), Ticket Tool style. Type and the builder updates the live Discord render inline.</p>
+      ${ticketEmbedBuilderHTML(p, styleOpts)}
+      <div class="card-title" style="margin-top:14px"><span>In-ticket messages</span></div>
+      <p class="card-hint">Shown inside a ticket once opened (not on the panel message).</p>
       ${ticketField('In-ticket welcome message', 'tk-welcome', `<textarea id="tk-welcome" placeholder="Welcome to your support ticket! Please describe your issue.">${val(p.welcomeMessage)}</textarea>`)}
       <div class="switch-row">
         <div class="switch-label"><div class="sl-title">Show a close embed</div><div class="sl-desc">Optional red embed shown after the ticket is closed (before the action buttons).</div></div>
@@ -1019,36 +1014,90 @@ function cfButtonEmoji(key, panel, fallback) {
 ;
 }
 
-// Live Discord-style embed preview shown beside the editor fields ("edit in
-// embed"). Mirrors the client renderer in ticket-editor.js so the server-render
-// initial state matches what the live re-render will produce..
-function ticketPreviewHTML(p = {}) {
+// ℹ️ Embed-builder markup — Ticket Tool "Panel Embed Settings" pattern.
+// The panel embed's editing fields live ON the embed itself: each embed region
+// (content, author, title, description, thumbnail, image, footer, color,
+// open button) has its field label + input control(s) attached to that region, with a
+// tiny Discord-styled live render of the region right below the input — so the editor
+// "shows as the embed" instead of a detached live-preview pane. Mirrored by the
+// client renderer in ticket-editor.js (renderTicketPreview), which updates only the
+// live output nodes on input (preserving the input focus — inputs are never rebuilt).
+function ticketEmbedBuilderHTML(p = {}, styleOpts) {
     const esca = (v, d = '') => v == null ? d : esc(String(v));
-    const isPlain = p.messageType === 'plain';
     const color = /^#[0-9a-fA-F]{6}$/.test(p.color || '') ? p.color : '#5865F2';
-    const buttonStyle = p.buttonStyle || 'Primary';
-    const styleClass = buttonStyle.toLowerCase();
-    const body = isPlain
-        ? `<div class="tk-preview-plain">${esca(p.content || p.description || 'Click the button below to open a support ticket.')}</div>`
-        : `
-      <div class="tk-preview-embed">
-        <div class="tk-preview-embed-bar" style="background:${esc(color)}"></div>
-        <div class="tk-preview-embed-body">
-          ${p.title ? `<div class="tk-preview-embed-title">${esca(p.title)}</div>` : ''}
-          ${p.description ? `<div class="tk-preview-embed-desc">${esca(p.description)}</div>` : ''}
-          ${p.thumbnailUrl ? `<div class="tk-preview-embed-thumb-wrap"><img class="tk-preview-embed-thumb" src="${esc(p.thumbnailUrl)}" alt="" /></div>` : ''}
-          ${p.imageUrl ? `<div class="tk-preview-embed-img-wrap"><img class="tk-preview-embed-img" src="${esc(p.imageUrl)}" alt="" /></div>` : ''}
-          <div class="tk-preview-embed-footer">
-            ${p.footerText ? `<span class="tk-preview-embed-footer-text">${esca(p.footerText)}</span>` : ''}
-            <span class="tk-preview-embed-time">now</span>
+    const styleClass = (p.buttonStyle || 'Primary').toLowerCase();
+    const btnEmoji = p.buttonEmoji ? `<span class="edb-btn-emoji">${esc(p.buttonEmoji)}</span>` : '';
+    const authorIcon = p.authorIconUrl
+        ? `<img id="edb-author-icon" class="edb-author-icon" src="${esc(p.authorIconUrl)}" alt="" />`
+        : `<img id="edb-author-icon" class="edb-author-icon hidden" alt="" />`;
+    const thumbHTML = p.thumbnailUrl
+        ? `<img id="edb-thumb" class="edb-thumb" src="${esc(p.thumbnailUrl)}" alt="" />`
+        : `<img id="edb-thumb" class="edb-thumb hidden" alt="" />`;
+    const imageHTML = p.imageUrl
+        ? `<img id="edb-image" class="edb-image" src="${esc(p.imageUrl)}" alt="" />`
+        : `<img id="edb-image" class="edb-image hidden" alt="" />`;
+    return `
+    <div class="tk-embed-builder">
+      <div class="edb-region edb-content">
+        <div class="edb-field-head"><label class="edb-label" for="tk-content">Content (above the embed / plain body)</label></div>
+        <textarea id="tk-content" placeholder="Optional: @support or any text shown above the embed / as the plain body.">${esca(p.content)}</textarea>
+        <div class="edb-live edb-live-content" id="edb-content">${esca(p.content)}</div>
+      </div>
+      <div class="tk-preview-embed edb-preview-embed">
+        <div class="tk-preview-embed-bar edb-region-color" id="edb-bar" style="background:${esc(color)}">
+          <div class="edb-field-head"><label class="edb-label" for="tk-color">Embed color</label></div>
+          <div class="color-field edb-color-fields">
+            <input type="color" id="tk-color" value="${esc(color)}" />
+            <input type="text" id="tk-color-text" value="${esc(color)}" style="flex:1" />
           </div>
         </div>
-      </div>`;
-    return `
-    <div class="tk-preview-discord">
-      ${p.content ? `<div class="tk-preview-content-line">${esca(p.content)}</div>` : ''}
-      ${body}
-      <div class="tk-preview-button tk-preview-button-${esc(styleClass)}">${p.buttonEmoji ? esc(p.buttonEmoji) + ' ' : ''}${esca(p.buttonLabel, 'Open Ticket')}</div>
+        <div class="tk-preview-embed-body">
+          <div class="edb-region edb-author">
+            <div class="edb-field-head"><label class="edb-label">Author</label></div>
+            <div class="edb-duo">
+              <input type="text" id="tk-author-name" maxlength="255" value="${esca(p.authorName)}" placeholder="Author name — e.g. the support team" />
+              <input type="text" id="tk-author-icon" value="${esca(p.authorIconUrl)}" placeholder="Author icon URL" />
+            </div>
+            <div class="edb-live edb-live-author" id="edb-author">${authorIcon}<span id="edb-author-name">${esca(p.authorName)}</span></div>
+          </div>
+          <div class="edb-region edb-title">
+            <div class="edb-field-head"><label class="edb-label" for="tk-title">Title</label></div>
+            <input type="text" id="tk-title" maxlength="255" value="${esca(p.title)}" placeholder="🎫 Support Tickets" />
+            <div class="edb-live edb-live-title" id="edb-title">${esca(p.title)}</div>
+          </div>
+          <div class="edb-region edb-desc">
+            <div class="edb-field-head"><label class="edb-label" for="tk-description">Embed Text</label></div>
+            <textarea id="tk-description" placeholder="Click the button below to open a support ticket.">${esca(p.description)}</textarea>
+            <div class="edb-live edb-live-desc" id="edb-desc">${esca(p.description)}</div>
+          </div>
+          <div class="edb-region edb-thumb">
+            <div class="edb-field-head"><label class="edb-label" for="tk-thumbnail">Thumbnail image URL</label></div>
+            <input type="text" id="tk-thumbnail" value="${esca(p.thumbnailUrl)}" placeholder="https://…/icon.png" />
+            <div class="edb-live edb-live-thumb">${thumbHTML}</div>
+          </div>
+          <div class="edb-region edb-image">
+            <div class="edb-field-head"><label class="edb-label" for="tk-image">Large image URL</label></div>
+            <input type="text" id="tk-image" value="${esca(p.imageUrl)}" placeholder="https://…/banner.png" />
+            <div class="edb-live edb-live-image">${imageHTML}</div>
+          </div>
+          <div class="edb-region edb-footer">
+            <div class="edb-field-head"><label class="edb-label" for="tk-footer">Embed footer text</label></div>
+            <input type="text" id="tk-footer" maxlength="255" value="${esca(p.footerText)}" placeholder="PrimeBot · Tickets" />
+            <div class="edb-live edb-live-footer" id="edb-footer"><span class="tk-preview-embed-footer-text">${esca(p.footerText)}</span><span class="tk-preview-embed-time">now</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="edb-region edb-button">
+        <div class="edb-field-head"><label class="edb-label">Open ticket button</label></div>
+        <div class="edb-triple">
+          <input type="text" id="tk-button-label" maxlength="80" value="${esca(p.buttonLabel, 'Open Ticket')}" placeholder="Open Ticket" />
+          <input type="text" id="tk-button-emoji" maxlength="100" value="${esca(p.buttonEmoji)}" placeholder="🎫" />
+          <select id="tk-button-style">${styleOpts}</select>
+        </div>
+        <div class="edb-live edb-live-button">
+          <div class="tk-preview-button tk-preview-button-${esc(styleClass)}" id="edb-button">${btnEmoji}<span id="edb-button-label">${esca(p.buttonLabel, 'Open Ticket')}</span></div>
+        </div>
+      </div>
     </div>`;
 }
 
@@ -1069,20 +1118,9 @@ function ticketEditPage({ guild, user }) {
     </div>
     <div class="card">
       <div class="card-title"><span><span class="icon">${svgIcon('ticket')}</span> ${esc(panel.name || 'Support Ticket')} <span class="tag ${panel.enabled ? 'on' : 'off'}">#${id}</span></span></div>
-      <p class="card-desc">Editing ticket panel — edit directly in the embed preview on the right. Every tab below saves with the <strong>Save changes</strong> bar.</p>
-      <div class="tk-editor-grid">
-        <div class="tk-editor-form-col">
-          ${tabBar}
-          <div class="tk-editor-panels">${tabContent}</div>
-        </div>
-        <div class="tk-editor-preview-col">
-          <div class="card tk-live-preview-card">
-            <div class="card-title"><span><span class="icon">${svgIcon('eye')}</span> Live embed preview</span></div>
-            <p class="card-desc">Updates as you type — what members see in Discord.</p>
-            <div id="tk-live-preview">${ticketPreviewHTML(panel)}</div>
-          </div>
-        </div>
-      </div>
+      <p class="card-desc">Editing ticket panel — the <strong>Message</strong> tab is an embed builder where each embed region holds its own editing fields (Ticket Tool style). Every tab saves with the <strong>Save changes</strong> bar.</p>
+      ${tabBar}
+      <div class="tk-editor-panels">${tabContent}</div>
     </div>`;
     return guildTab({ guild, user, active: 'tickets', panelHTML: pageHTML, scripts: ['/js/guild-common.js', '/js/ticket-editor.js'] });
 }

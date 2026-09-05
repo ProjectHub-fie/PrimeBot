@@ -2382,7 +2382,11 @@ select:focus {
 .tk-editor-tab.active .ico { color: #fff; }
 .tk-editor-panels .tab-panel { padding-top: 2px; }
 
-/* Ticket editor: embed-builder two-column layout */
+/* Ticket editor: embed-builder (Ticket Tool "Panel Embed Settings" style).
+ * The panel embed's editing fields live ON the embed — each embed region's field
+ * controls sit above a tiny Discord-styled live render of that region, so editing
+ * "shows as the embed" instead of a detached live-preview pane.
+ */
 .tk-editor-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(280px, 430px);
@@ -2393,7 +2397,82 @@ select:focus {
 .tk-live-preview-card { background: var(--surface-2); }
 .tk-live-preview-card .card-title { font-size: 15px; }
 
-/* Discord-style live preview */
+/* Embed-builder regions (fields attached to embed sections). */
+.tk-embed-builder {
+  display: flex; flex-direction: column; gap:  10px;
+  background: #313338;
+  border-radius:  10px;
+  padding:  12px;
+  box-shadow: inset  0 1px 0 rgba(255, 255, 255,  0.04);
+}
+.edb-region {
+  display: flex; flex-direction: column; gap:  5px;
+  background: rgba(0, 0, 0,  0.18);
+  border:  1px solid rgba(255, 255, 255,  0.06);
+  border-radius:  8px;
+  padding:  8px 10px;
+}
+.edb-field-head { display: flex; align-items: center; justify-content: space-between; }
+.edb-label {
+  font-size:  10.5px; font-weight:  600; letter-spacing:  0.07em;
+  text-transform: uppercase; color: #949ba4;
+}
+.edb-region input[type="text"],
+.edb-region textarea,
+.edb-region select {
+  font-size:  12.5px; color: #e9ecf3;
+  background: rgba(0, 0, 0,  0.25);
+  border:  1px solid rgba(255, 255, 255,  0.10);
+  border-radius:  6px;
+  padding:  5px 8px;
+  outline: none;
+}
+.edb-region input:focus,
+.edb-region textarea:focus,
+.edb-region select:focus { border-color: rgba(88, 101, 242,  0.7); }
+.edb-duo { display: grid; grid-template-columns:  1fr 1fr; gap:  6px; }
+.edb-triple { display: grid; grid-template-columns:  1fr 1fr auto; gap:  6px; }
+
+/* Live Discord-styled output of each embed region (inside the builder). */
+.edb-live {
+  min-height:  18px;
+  font-size:  12.5px; line-height:  1.4;
+  color: #c7cbcf;
+  border-radius:  6px;
+  padding:  3px 2px;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+.edb-live.empty,
+.edb-live.edb-empty { color: #6a7078; font-style: italic; }
+  .edb-live:empty::after { content: ' — empty —'; color: #6a7078; font-style: italic; font-size: 11px; }
+.edb-live-content,
+.edb-live-title { color: #e9ecf3; font-weight:  600; font-size:  13.5px; }
+.edb-live-desc { white-space: pre-wrap; }
+.edb-live-author { display: flex; align-items: center; gap:  6px; font-size:  12.5px; font-weight:  600; color: #e9ecf3; }
+.edb-author-icon { width:  18px; height:  18px; border-radius:  50%; object-fit: cover; }
+.edb-thumb { width:  64px; height:  64px; border-radius:  8px; object-fit: cover; float: right; }
+.edb-image { width:  100%; max-height:  200px; border-radius:  8px; object-fit: cover;; }
+.edb-live-footer { display: flex; gap:  6px; align-items: center; color: #8f949e; font-size:  11.5px; }
+.edb-live-footer .tk-preview-embed-time::before { content: ' • '; }
+
+/* The embed region wrapper: keep the Discord embed look (bar + body). */
+.edb-preview-embed { margin-top:  2px; }
+.edb-region-color {
+  flex:  0 0 auto;
+  display: flex; flex-direction: column; gap:  6px;
+  padding:  8px; border-radius:  4px;
+}
+.edb-color-fields { display: flex; gap:  6px; align-items: center; }
+.edb-color-fields input[type="color"] { width:  34px; height:  30px; padding:  2px; border-radius:  6px; background: rgba(0, 0, 0,  0.2); border:  1px solid rgba(255, 255, 255,  0.1); }
+.edb-color-fields input[type="text"] { font-size:  12.5px; color: #e9ecf3; background: rgba(0, 0,,0,  0.25); border:  1px solid rgba(255, 255, 255,  0.10); border-radius:  6px; padding:  5px 8px; }
+
+/* Open-ticket button region (live output beneath its fields). */
+.edb-live-button { display: flex; }
+.edb-btn-emoji { display: inline-flex; }
+.edb-live-button .tk-preview-button { font-size:  12.5px; padding:  6px 12px; }
+
+/* Discord-style live preview (kept for backward-compat/output helpers). */
 .tk-preview-discord {
   display: flex; flex-direction: column; gap:  8px;
   background: #313338;
@@ -2456,4 +2535,7 @@ select:focus {
   .tk-editor-grid { grid-template-columns:  1fr; }
   .tk-editor-preview-col { position: static; }
   .tk-live-preview-card { order: -1; }
+  .edb-duo,
+  .edb-triple { grid-template-columns:  1fr; }
+  .edb-triple { display: flex; flex-direction: column; align-items: stretch; }
 }

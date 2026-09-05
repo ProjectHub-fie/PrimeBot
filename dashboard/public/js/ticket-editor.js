@@ -60,6 +60,8 @@ function readTicketForm() {
   return {
     name: q('#tk-name').trim() || 'Support Ticket',
     messageType: q('#tk-message-type') || 'embed',
+    authorName: q('#tk-author-name').trim() || null,
+    authorIconUrl: q('#tk-author-icon').trim() || null,
     title: q('#tk-title').trim() || null,
     description: q('#tk-description').trim() || null,
     content: q('#tk-content').trim() || null,
@@ -183,42 +185,110 @@ function bindQuickActions() {
   }));
 }
 
-// ── Live embed preview ("edit in embed") ───────────────────────────────────
-// Re-renders the Discord-style preview beside the form as the user types. Matches
-// the server-render initial state in guild-pages.js ticketPreviewHTML.
+// ── Embed-builder live output ("fields show as the embed") ────────────────────
+// The Ticket Tool-style builder renders each embed region's editing field(s)
+// attached to the region, with a tiny Discord-styled live render beneath the input.
+// On input we update ONLY the live output nodes — the input controls are never
+// rebuilt, so the field you're typing in keeps focus. Mirrors the server-render
+// initial state in guild-pages.js ticketEmbedBuilderHTML.
 function renderTicketPreview() {
     const q = id => document.querySelector(id)?.value ?? '';
-    const isPlain = (q('#tk-message-type') || 'embed') === 'plain';
+    const authorName = q('#tk-author-name').trim();
+    const authorIcon = q('#tk-author-icon').trim();
+    const title = q('#tk-title').trim();
+    const desc = q('#tk-description').trim();
+    const content = q('#tk-content').trim();
+    const footer = q('#tk-footer').trim();
+    const thumb = q('#tk-thumbnail').trim();
+    const image = q('#tk-image').trim();
     const color = /^#[0-9a-fA-F]{6}$/.test(q('#tk-color') || '') ? q('#tk-color') : '#5865F2';
-    const styleClass = (q('#tk-button-style') || 'Primary').toLowerCase();
     const btnEmoji = q('#tk-button-emoji');
     const btnLabel = q('#tk-button-label') || 'Open Ticket';
-    const hasThumb = !!q('#tk-thumbnail').trim();
-    const hasImage = !!q('#tk-image').trim();
-    const body = isPlain
-        ? `<div class="tk-preview-plain">${esc(q('#tk-content') || q('#tk-description') || 'Click the button below to open a support ticket.')}</div>`
-        : `
-      <div class="tk-preview-embed">
-        <div class="tk-preview-embed-bar" style="background:${esc(color)}"></div>
-        <div class="tk-preview-embed-body">
-          ${q('#tk-title') ? `<div class="tk-preview-embed-title">${esc(q('#tk-title'))}</div>` : ''}
-          ${q('#tk-description') ? `<div class="tk-preview-embed-desc">${esc(q('#tk-description'))}</div>` : ''}
-          ${hasThumb ? `<div class="tk-preview-embed-thumb-wrap"><img class="tk-preview-embed-thumb" src="${esc(q('#tk-thumbnail'))}" alt="" /></div>` : ''}
-          ${hasImage ? `<div class="tk-preview-embed-img-wrap"><img class="tk-preview-embed-img" src="${esc(q('#tk-image'))}" alt="" /></div>` : ''}
-          <div class="tk-preview-embed-footer">
-            ${q('#tk-footer') ? `<span class="tk-preview-embed-footer-text">${esc(q('#tk-footer'))}</span>` : ''}
-            <span class="tk-preview-embed-time">now</span>
-          </div>
-        </div>
-      </div>`;
-    const host = document.getElementById('tk-live-preview');
-    if (!host) return;
-    host.innerHTML = `
-    <div class="tk-preview-discord">
-      ${q('#tk-content') ? `<div class="tk-preview-content-line">${esc(q('#tk-content'))}</div>` : ''}
-      ${body}
-      <div class="tk-preview-button tk-preview-button-${esc(styleClass)}">${btnEmoji ? esc(btnEmoji) + ' ' : ''}${esc(btnLabel)}</div>
-    </div>`;
+    const styleClass = (q('#tk-button-style') || 'Primary').toLowerCase();
+    const setText = (id, text) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (text) {
+            el.textContent = text;
+            el.classList.remove('hidden');
+            if (el.classList.contains('edb-empty')) el.classList.remove('edb-empty');
+        } else {
+            el.textContent = '';
+            el.classList.add('edb-empty');
+        }
+    };
+    const setImg = (id, src) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (src) {
+            el.src = src;
+            el.classList.remove('hidden');
+        } else {
+            el.removeAttribute('src');
+            el.classList.add('hidden');
+        }
+    };
+
+    // Content / plain body (above the embed).
+    setText('edb-content', content);
+
+    // Author row — icon + name (or a placeholder when empty).
+    const authorEl = document.getElementById('edb-author');
+    if (authorEl) {
+        const nameEl = document.getElementById('edb-author-name');
+        if (nameEl) {
+            nameEl.textContent = authorName;
+            nameEl.classList.toggle('edb-empty', !authorName);
+        }
+        const iconEl = document.getElementById('edb-author-icon');
+        if (iconEl) {
+            if (authorIcon) {
+                iconEl.src = authorIcon;
+                iconEl.classList.remove('hidden');
+            } else {
+                iconEl.removeAttribute('src');
+                iconEl.classList.add('hidden');
+            }
+        }
+        authorEl.classList.toggle('edb-empty', !authorName && !authorIcon);
+    }
+
+    // Title / description / footer live rows.
+    setText('edb-title', title);
+    setText('edb-desc', desc);
+    setText('edb-footer', footer);
+
+    // Thumbnail + large image.
+    setImg('edb-thumb', thumb);
+    setImg('edb-image', image);
+
+    // Embed color bar.
+    const bar = document.getElementById('edb-bar');
+    if (bar) bar.style.background = color;
+
+    // Open-ticket button (label + emoji + style class).
+    const btn = document.getElementById('edb-button');
+    if (btn) {
+        const labelEl = document.getElementById('edb-button-label');
+        if (labelEl) labelEl.textContent = btnLabel;
+        let emojiEl = btn.querySelector('.edb-btn-emoji');
+        if (btnEmoji) {
+            if (!emojiEl) {
+                emojiEl = document.createElement('span');
+                emojiEl.className = 'edb-btn-emoji';
+                btn.insertBefore(emojiEl, btn.firstChild);
+            }
+            emojiEl.textContent = btnEmoji;
+        } else if (emojiEl) {
+            emojiEl.remove();
+        }
+        btn.classList.remove(
+            'tk-preview-button-primary', 'tk-preview-button-secondary',
+            'tk-preview-button-success', 'tk-preview-button-danger', 'tk-preview-button-link'
+        );
+        btn.classList.add(`tk-preview-button-${styleClass}`);
+        btn.classList.toggle('edb-empty', !btnEmoji && !btnLabel);
+    }
 }
 
 let _previewTimer = null;
@@ -227,12 +297,12 @@ function scheduleTicketPreview() {
     _previewTimer = setTimeout(renderTicketPreview, 60);
 }
 
-// Re-render when any editor field changes (live WYSIWYG). Event delegation
-// covers fields spawned later (e.g. nothing needed here — all inputs exist at load).
-const _tkGrid = document.querySelector('.tk-editor-grid');
-if (_tkGrid) {
-    _tkGrid.addEventListener('input', scheduleTicketPreview);
-    _tkGrid.addEventListener('change', scheduleTicketPreview);
+// Re-render when any editor field changes (live WYSIWYG builder). Event
+// delegation covers every input on every tab — including the embed builder).
+const _tkPanels = document.querySelector('.tk-editor-panels');
+if (_tkPanels) {
+    _tkPanels.addEventListener('input', scheduleTicketPreview);
+    _tkPanels.addEventListener('change', scheduleTicketPreview);
 }
 
 // ── Init ─────────────────────────────────────────────────────────────────────
