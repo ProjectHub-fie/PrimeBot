@@ -29,7 +29,7 @@ const TABS = [
   { key: 'birthdays',      label: 'Birthdays',       icon: 'cake' },
   { key: 'logging',        label: 'Logging',         icon: 'scroll' },
   { key: 'automod',        label: 'Automod',         icon: 'shield' },
-  { key: 'tickets',        label: 'Tickets',         icon: 'ticket',   upcoming: false },
+  { key: 'tickets',        label: 'Tickets',         icon: 'ticket',   upcoming: true },
   { key: 'live/polls',     label: 'Live Polls',      icon: 'barChart' },
   { key: 'live/giveaways', label: 'Live Giveaways',  icon: 'gift' },
   { key: 'events',         label: 'Events',          icon: 'calendar',  upcoming: true },

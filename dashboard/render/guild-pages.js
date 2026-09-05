@@ -779,8 +779,12 @@ function ticketsPage({ guild, user }) {
     </div>
     `;
 
-        // Tickets is live — no upcoming gate anymore (TABS upcoming: false)..
-    const wrappedPanelHTML = panelHTML;
+        // Tickets is gated behind the "upcoming" (Coming Soon) feature gate —
+    // it stays hidden/locked until the developer says to release it (TABS
+    // upcoming: true). Developer/owner-role viewers bypass via _bypassUpcoming.
+    const wrappedPanelHTML = guild._bypassUpcoming
+        ? panelHTML
+        : upcomingOverlayWrap(panelHTML, { icon: 'ticket', title: 'Tickets' });
     return guildTab({ guild, user, active: 'tickets', panelHTML: wrappedPanelHTML, scripts: ['/js/guild-common.js', '/js/tickets.js'] });
 }
 
@@ -1015,6 +1019,39 @@ function cfButtonEmoji(key, panel, fallback) {
 ;
 }
 
+// Live Discord-style embed preview shown beside the editor fields ("edit in
+// embed"). Mirrors the client renderer in ticket-editor.js so the server-render
+// initial state matches what the live re-render will produce..
+function ticketPreviewHTML(p = {}) {
+    const escq = (v, d = '') => v == null ? d : esc(String(v));
+    const isPlain = p.messageType === 'plain';
+    const color = /^#[0-9a-fA-F]{6}$/.test(p.color || '') ? p.color : '#5865F2';
+    const buttonStyle = p.buttonStyle || 'Primary';
+    const styleClass = buttonStyle.toLowerCase();
+    const body = isPlain
+        ? `<div class="tk-preview-plain">${esca(p.content || p.description || 'Click the button below to open a support ticket.')}</div>`
+        : `
+      <div class="tk-preview-embed">
+        <div class="tk-preview-embed-bar" style="background:${esc(color)}"></div>
+        <div class="tk-preview-embed-body">
+          ${p.title ? `<div class="tk-preview-embed-title">${esca(p.title)}</div>` : ''}
+          ${p.description ? `<div class="tk-preview-embed-desc">${esca(p.description)}</div>` : ''}
+          ${p.thumbnailUrl ? `<div class="tk-preview-embed-thumb-wrap"><img class="tk-preview-embed-thumb" src="${esc(p.thumbnailUrl)}" alt="" /></div>` : ''}
+          ${p.imageUrl ? `<div class="tk-preview-embed-img-wrap"><img class="tk-preview-embed-img" src="${esc(p.imageUrl)}" alt="" /></div>` : ''}
+          <div class="tk-preview-embed-footer">
+            ${p.footerText ? `<span class="tk-preview-embed-footer-text">${esca(p.footerText)}</span>` : ''}
+            <span class="tk-preview-embed-time">now</span>
+          </div>
+        </div>
+      </div>`;
+    return `
+    <div class="tk-preview-discord">
+      ${p.content ? `<div class="tk-preview-content-line">${esca(p.content)}</div>` : ''}
+      ${body}
+      <div class="tk-preview-button tk-preview-button-${esc(styleClass)}">${p.buttonEmoji ? esc(p.buttonEmoji) + ' ' : ''}${esca(p.buttonLabel, 'Open Ticket')}</div>
+    </div>`;
+}
+
 function ticketEditPage({ guild, user }) {
     const panel = guild._ticketPanel;
     const { tabBar, tabContent } = ticketEditorTabsHTML(panel);
@@ -1032,9 +1069,20 @@ function ticketEditPage({ guild, user }) {
     </div>
     <div class="card">
       <div class="card-title"><span><span class="icon">${svgIcon('ticket')}</span> ${esc(panel.name || 'Support Ticket')} <span class="tag ${panel.enabled ? 'on' : 'off'}">#${id}</span></span></div>
-      <p class="card-desc">Editing ticket panel — every tab below saves with the <strong>Save changes</strong> bar.</p>
-      ${tabBar}
-      <div class="tk-editor-panels">${tabContent}</div>
+      <p class="card-desc">Editing ticket panel — edit directly in the embed preview on the right. Every tab below saves with the <strong>Save changes</strong> bar.</p>
+      <div class="tk-editor-grid">
+        <div class="tk-editor-form-col">
+          ${tabBar}
+          <div class="tk-editor-panels">${tabContent}</div>
+        </div>
+        <div class="tk-editor-preview-col">
+          <div class="card tk-live-preview-card">
+            <div class="card-title"><span><span class="icon">${svgIcon('eye')}</span> Live embed preview</span></div>
+            <p class="card-desc">Updates as you type — what members see in Discord.</p>
+            <div id="tk-live-preview">${ticketPreviewHTML(panel)}</div>
+          </div>
+        </div>
+      </div>
     </div>`;
     return guildTab({ guild, user, active: 'tickets', panelHTML: pageHTML, scripts: ['/js/guild-common.js', '/js/ticket-editor.js'] });
 }

@@ -2351,3 +2351,109 @@ select:focus {
   .footer { padding: 16px 14px; flex-direction: column; gap: 6px; }
   .footer-links { margin-left: 0; }
 }
+
+/* Ticket panel editor: horizontal tabs (green active glow / blue idle) */
+.tk-editor-tabs {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  margin-bottom: 18px;
+}
+.tk-editor-tab {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 10px 14px;
+  font-size: 13px; font-weight: 600;
+  font-family: var(--font-body);
+  color: var(--text-dim);
+  background: var(--surface-2);
+  border: 1px solid rgba(88, 101, 242, 0.35);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: 0 0 14px rgba(88, 101, 242, 0.22);
+  transition: color var(--transition), background var(--transition), border-color var(--transition), box-shadow var(--transition), transform var(--transition);
+}
+.tk-editor-tab .ico { width: 17px; height: 17px; color: var(--accent-strong); flex: 0 0 auto; }
+.tk-editor-tab:hover { color: var(--text); border-color: rgba(88, 101, 242, 0.55); box-shadow: 0 0 18px rgba(88, 101, 242, 0.32); }
+.tk-editor-tab.active {
+  color: #fff;
+  background: linear-gradient(135deg, #27b97c, #3ecf8e);
+  border-color: rgba(62, 207, 142, 0.6);
+  box-shadow:  0 0 20px rgba(62, 207, 142, 0.45), inset  0 1px 0 rgba(255, 255, 255, 0.25);
+}
+.tk-editor-tab.active .ico { color: #fff; }
+.tk-editor-panels .tab-panel { padding-top: 2px; }
+
+/* Ticket editor: embed-builder two-column layout */
+.tk-editor-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 430px);
+  gap:  22px;
+  align-items: start;
+}
+.tk-editor-preview-col { position: sticky; top: 18px; }
+.tk-live-preview-card { background: var(--surface-2); }
+.tk-live-preview-card .card-title { font-size: 15px; }
+
+/* Discord-style live preview */
+.tk-preview-discord {
+  display: flex; flex-direction: column; gap:  8px;
+  background: #313338;
+  border-radius:  10px;
+  padding:  16px;
+  box-shadow: inset  0 1px 0 rgba(255, 255, 255,  0.04);
+}
+.tk-preview-content-line {
+  background: #2b2d31;
+  color: #dcddde;
+  font-size:  13px;
+  line-height:  1.45;
+  border-radius:  8px;
+  padding:  8px 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.tk-preview-plain {
+  background: #2b2d31;
+  color: #dcddde;
+  font-size:  13.5px;
+  line-height:  1.5;
+  border-radius:  8px;
+  padding:  10px 12px;
+  white-space: pre-wrap;
+}
+.tk-preview-embed {
+  display: flex;
+  gap:  12px;
+  background: #2b2d31;
+  border-radius:  4px;
+  padding:  12px 16px;
+}
+.tk-preview-embed-bar { width:  4px; border-radius: 2px; background: #5865F2; flex:  0 0 auto; }
+.tk-preview-embed-body { min-width: 0; flex:  1 1 auto; }
+.tk-preview-embed-title { color: #e9ecf3; font-size:  15px; font-weight:  700; line-height:  1.3; margin-bottom:  4px; }
+.tk-preview-embed-desc { color: #c7cbcf; font-size:  13px; line-height:  1.45; margin-bottom:  8px; white-space: pre-wrap; overflow-wrap: break-word; }
+.tk-preview-embed-thumb-wrap { float: right; margin:  2px 0 8px 12px; }
+.tk-preview-embed-thumb { width:  80px; height:  80px; border-radius:  8px; object-fit: cover;; }
+.tk-preview-embed-img-wrap { margin:  4px 0; }
+.tk-preview-embed-img { width:  100%; max-height:  260px; border-radius:  8px; object-fit: cover;; }
+.tk-preview-embed-footer { color: #8f949e; font-size:  11.5px; line-height:  1.4; margin-top:  8px; display: flex; gap:  6px; align-items: center; }
+.tk-preview-embed-footer-text + .tk-preview-embed-time::before { content: ' • '; }
+
+/* Discord button (open) in the preview */
+.tk-preview-button {
+  display: inline-flex; align-items: center; justify-content: center; gap:  7px;
+  font-size:  13px; font-weight:  600;
+  padding:  9px 15px;
+  border-radius:  4px;
+  align-self: flex-start;
+}
+.tk-preview-button-primary { background: #5865F2; color: #fff; }
+.tk-preview-button-secondary { background: #4E5058; color: #fff; }
+.tk-preview-button-success { background: #248046; color: #fff; }
+.tk-preview-button-danger { background: #DA373C; color: #fff; }
+.tk-preview-button-link { background: transparent; color: #00A8FC; text-decoration: underline; }
+
+@media (max-width:  980px) {
+  .tk-editor-grid { grid-template-columns:  1fr; }
+  .tk-editor-preview-col { position: static; }
+  .tk-live-preview-card { order: -1; }
+}

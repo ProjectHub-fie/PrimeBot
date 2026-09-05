@@ -216,7 +216,7 @@ class BirthdayManager {
         // image on every birthday embed for this server.
         if (guildData.imageUrl) embed.setImage(guildData.imageUrl);
 
-        await channel.send({ content: `🎂 <@${userId}>`, embeds: [embed] });
+        await channel.send({ content: '@everyone', embeds: [embed] });
 
         if (guildData.role) {
             try {

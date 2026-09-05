@@ -183,6 +183,58 @@ function bindQuickActions() {
   }));
 }
 
+// ── Live embed preview ("edit in embed") ───────────────────────────────────
+// Re-renders the Discord-style preview beside the form as the user types. Matches
+// the server-render initial state in guild-pages.js ticketPreviewHTML.
+function renderTicketPreview() {
+    const q = id => document.querySelector(id)?.value ?? '';
+    const isPlain = (q('#tk-message-type') || 'embed') === 'plain';
+    const color = /^#[0-9a-fA-F]{6}$/.test(q('#tk-color') || '') ? q('#tk-color') : '#5865F2';
+    const styleClass = (q('#tk-button-style') || 'Primary').toLowerCase();
+    const btnEmoji = q('#tk-button-emoji');
+    const btnLabel = q('#tk-button-label') || 'Open Ticket';
+    const hasThumb = !!q('#tk-thumbnail').trim();
+    const hasImage = !!q('#tk-image').trim();
+    const body = isPlain
+        ? `<div class="tk-preview-plain">${esc(q('#tk-content') || q('#tk-description') || 'Click the button below to open a support ticket.')}</div>`
+        : `
+      <div class="tk-preview-embed">
+        <div class="tk-preview-embed-bar" style="background:${esc(color)}"></div>
+        <div class="tk-preview-embed-body">
+          ${q('#tk-title') ? `<div class="tk-preview-embed-title">${esc(q('#tk-title'))}</div>` : ''}
+          ${q('#tk-description') ? `<div class="tk-preview-embed-desc">${esc(q('#tk-description'))}</div>` : ''}
+          ${hasThumb ? `<div class="tk-preview-embed-thumb-wrap"><img class="tk-preview-embed-thumb" src="${esc(q('#tk-thumbnail'))}" alt="" /></div>` : ''}
+          ${hasImage ? `<div class="tk-preview-embed-img-wrap"><img class="tk-preview-embed-img" src="${esc(q('#tk-image'))}" alt="" /></div>` : ''}
+          <div class="tk-preview-embed-footer">
+            ${q('#tk-footer') ? `<span class="tk-preview-embed-footer-text">${esc(q('#tk-footer'))}</span>` : ''}
+            <span class="tk-preview-embed-time">now</span>
+          </div>
+        </div>
+      </div>`;
+    const host = document.getElementById('tk-live-preview');
+    if (!host) return;
+    host.innerHTML = `
+    <div class="tk-preview-discord">
+      ${q('#tk-content') ? `<div class="tk-preview-content-line">${esc(q('#tk-content'))}</div>` : ''}
+      ${body}
+      <div class="tk-preview-button tk-preview-button-${esc(styleClass)}">${btnEmoji ? esc(btnEmoji) + ' ' : ''}${esc(btnLabel)}</div>
+    </div>`;
+}
+
+let _previewTimer = null;
+function scheduleTicketPreview() {
+    clearTimeout(_previewTimer);
+    _previewTimer = setTimeout(renderTicketPreview, 60);
+}
+
+// Re-render when any editor field changes (live WYSIWYG). Event delegation
+// covers fields spawned later (e.g. nothing needed here — all inputs exist at load).
+const _tkGrid = document.querySelector('.tk-editor-grid');
+if (_tkGrid) {
+    _tkGrid.addEventListener('input', scheduleTicketPreview);
+    _tkGrid.addEventListener('change', scheduleTicketPreview);
+}
+
 // ── Init ─────────────────────────────────────────────────────────────────────
 bindEditorTabs();
 bindQuickActions();
@@ -209,3 +261,6 @@ window.populateChannelSelects();
 
 window.saveBar.register(saveTicketPanel);
 window.saveBar.track(document.body);
+
+// Paint the live preview once (and whenever the form is mutated — bound above).
+renderTicketPreview();
