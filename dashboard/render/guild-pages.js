@@ -1023,7 +1023,7 @@ function cfButtonEmoji(key, panel, fallback) {
 // embed"). Mirrors the client renderer in ticket-editor.js so the server-render
 // initial state matches what the live re-render will produce..
 function ticketPreviewHTML(p = {}) {
-    const escq = (v, d = '') => v == null ? d : esc(String(v));
+    const esca = (v, d = '') => v == null ? d : esc(String(v));
     const isPlain = p.messageType === 'plain';
     const color = /^#[0-9a-fA-F]{6}$/.test(p.color || '') ? p.color : '#5865F2';
     const buttonStyle = p.buttonStyle || 'Primary';
