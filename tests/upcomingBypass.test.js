@@ -1,8 +1,8 @@
-// The Events page normally renders the "Coming Soon" overlay for everyone.
-// Users holding a developer/owner bot role bypass the gate: the dashboard sets
-// guild._bypassUpcoming (dashboard/auth.js) and eventsPage must then render the
-// real editor instead of the locked overlay. The same gating applies to the
-// Tickets page (both are `upcoming: true` in render/guild.js TABS).
+// The Events and Tickets pages normally render the "Coming Soon" overlay for
+// everyone (both are `upcoming: true` in render/guild.js TABS. Users holding
+// a developer/owner bot role bypass the gate: the dashboard sets
+// guild._bypassUpcoming (dashboard/auth.js)and eventsPage / ticketsPage must
+// then render the real editor instead of the locked overlay.
 
 const { test } = require('node:test');
 const assert = require('node:assert');
@@ -34,14 +34,13 @@ test('eventsPage renders the real editor when guild._bypassUpcoming is set', () 
     assert.ok(html.includes('id="ev-form"'), 'real editor form must render');
 });
 
-test('ticketsPage renders directly for ordinary users (no upcoming overlay)', () => {
+test('ticketsPage renders the Coming Soon overlay for ordinary users', () => {
     const html = guildPages.ticketsPage({ guild: fakeGuild(false), user: null });
-    assert.ok(!html.includes('upcoming-locked-wrap locked'), 'no locked overlay — tickets is live');
-    assert.ok(html.includes('id="tk-create-open"'), 'create button renders');
+    assert.ok(html.includes('upcoming-locked-wrap locked'), 'expected the locked overlay — tickets is gated until release');
 });
 
-test('ticketsPage renders the same for bypass users (harmonized)', () => {
+test('ticketsPage renders the real panel list when guild._bypassUpcoming is set', () => {
     const html = guildPages.ticketsPage({ guild: fakeGuild(true), user: null });
-    assert.ok(!html.includes('upcoming-locked-wrap locked'), 'no locked overlay');
+    assert.ok(!html.includes('upcoming-locked-wrap locked'), 'overlay should be skipped for bypass users');
     assert.ok(html.includes('id="tk-create-open"'), 'create button renders');
 });
