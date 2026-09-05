@@ -87,7 +87,7 @@ test('updateTicketPanel persists field edits (PATCH backing)', async () => {
     const params = update.params;
     assert.equal(params[1], 'Billing', 'name updated');
     assert.equal(params[5], 'new', 'title updated');
-    assert.equal(params[34], false, 'enabled updated');
+    assert.equal(params[36], false, 'enabled updated');
 });
 
 test('updateTicketPanel on a missing panel throws a friendly not-found', async () => {

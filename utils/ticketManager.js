@@ -204,6 +204,8 @@ const DEFAULT_PANEL = {
     description: 'Click the button below to open a support ticket.',
     color: '#5865F2',
     content: '',
+    authorName: '',
+    authorIconUrl: '',
     buttonLabel: 'Open Ticket',
     buttonStyle: 'Primary',
     buttonEmoji: '🎫',
@@ -269,6 +271,8 @@ class TicketPanelManager {
             `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS claimed_name_template VARCHAR(100)`,
             `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS closed_name_template  VARCHAR(100)`,
             `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS close_flow            JSONB`,
+            `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS author_name           VARCHAR(255)`,
+            `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS author_icon_url       TEXT`,
             `ALTER TABLE ticket_instances ADD COLUMN IF NOT EXISTS panel_id     INTEGER REFERENCES ticket_panels(id) ON DELETE SET NULL`,
             `ALTER TABLE ticket_instances ADD COLUMN IF NOT EXISTS reason       TEXT`,
             `ALTER TABLE ticket_instances ADD COLUMN IF NOT EXISTS status       VARCHAR(20) NOT NULL DEFAULT 'open'`,
@@ -392,6 +396,8 @@ class TicketPanelManager {
             color: row.color || '#5865F2',
             thumbnailUrl: row.thumbnail_url || null,
             imageUrl: row.image_url || null,
+            authorName: row.author_name || null,
+            authorIconUrl: row.author_icon_url || null,
             footerText: row.footer_text || null,
             content: row.content || null,
             buttonLabel: row.button_label || 'Open Ticket',
@@ -593,7 +599,8 @@ class TicketPanelManager {
     _panelFields() {
         return {
             name: 1, channelId: 1, messageId: 1, messageType: 1, title: 1, description: 1,
-            color: 1, thumbnailUrl: 1, imageUrl: 1, footerText: 1, content: 1,
+            color: 1, thumbnailUrl: 1, imageUrl: 1, authorName: 1, authorIconUrl: 1,
+            footerText: 1, content: 1,
             buttonLabel: 1, buttonStyle: 1, buttonEmoji: 1, category: 1, ticketName: 1,
             supportRoleIds: 1, pingRoleIds: 1, ticketCategoryId: 1, cooldownSeconds: 1,
             maxOpenPerUser: 1, askReason: 1, reasonPlaceholder: 1, welcomeMessage: 1,
@@ -618,7 +625,7 @@ class TicketPanelManager {
         out.maxOpenPerUser = Math.max(0, parseInt(out.maxOpenPerUser, 10) || 1);
         out.askReason = !!out.askReason;
         out.enabled = out.enabled !== false;
-        for (const f of ['buttonEmoji', 'closeButtonEmoji', 'claimButtonEmoji', 'thumbnailUrl', 'imageUrl']) {
+        for (const f of ['buttonEmoji', 'closeButtonEmoji', 'claimButtonEmoji', 'thumbnailUrl', 'imageUrl', 'authorName', 'authorIconUrl']) {
             if (out[f] != null) out[f] = String(out[f]).trim() || null;
         }
         // Button labels: trim to null when empty/whitespace. An empty label
@@ -658,6 +665,11 @@ class TicketPanelManager {
             .setColor(panel.color || '#5865F2')
             .setTitle(panel.title || '🎫 Support Tickets')
             .setDescription(panel.description || 'Click the button below to open a support ticket.');
+        if (panel.authorName) {
+            const author = { name: panel.authorName };
+            if (panel.authorIconUrl) author.iconURL = panel.authorIconUrl;
+            embed.setAuthor(author);
+        }
         if (panel.thumbnailUrl) embed.setThumbnail(panel.thumbnailUrl);
         if (panel.imageUrl) embed.setImage(panel.imageUrl);
         if (panel.footerText) embed.setFooter({ text: panel.footerText });

@@ -1530,6 +1530,8 @@ async function ensureTicketTables() {
         ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS closed_name_template   VARCHAR(100);
         ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS close_button_style    VARCHAR(20) DEFAULT 'Danger';
         ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS close_flow            JSONB;
+        ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS author_name         VARCHAR(255);
+        ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS author_icon_url     TEXT;
     `);
 }
 
@@ -1609,6 +1611,8 @@ function ticketRowToPanel(row) {
         color: row.color || '#5865F2',
         thumbnailUrl: row.thumbnail_url || null,
         imageUrl: row.image_url || null,
+        authorName: row.author_name || null,
+        authorIconUrl: row.author_icon_url || null,
         footerText: row.footer_text || null,
         content: row.content || null,
         buttonLabel: row.button_label || 'Open Ticket',
@@ -1643,7 +1647,9 @@ function ticketRowToPanel(row) {
 function normalizeTicketPanel(data, keepUndefined = false) {
     const defaults = {
         name: 'Support Ticket', messageType: 'embed', title: null, description: null,
-        color: '#5865F2', thumbnailUrl: null, imageUrl: null, footerText: null,
+        color: '#5865F2', thumbnailUrl: null, imageUrl: null,
+        authorName: null, authorIconUrl: null,
+        footerText: null,
         content: null, buttonLabel: 'Open Ticket', buttonStyle: 'Primary',
         buttonEmoji: null, category: 'general', ticketName: null,
         supportRoleIds: [], pingRoleIds: [], ticketCategoryId: null,
@@ -1662,6 +1668,8 @@ function normalizeTicketPanel(data, keepUndefined = false) {
     out.buttonStyle = VALID_TICKET_BUTTON_STYLES.has(out.buttonStyle) ? out.buttonStyle : 'Primary';
     out.closeButtonStyle = VALID_TICKET_BUTTON_STYLES.has(out.closeButtonStyle) ? out.closeButtonStyle : 'Danger';
     out.color = /^#[0-9a-fA-F]{6}$/.test(out.color) ? out.color : '#5865F2';
+    out.authorName = out.authorName == null ? null : String(out.authorName).trim().slice(0, 255) || null;
+    out.authorIconUrl = out.authorIconUrl == null ? null : String(out.authorIconUrl).trim() || null;
     out.supportRoleIds = Array.isArray(out.supportRoleIds) ? out.supportRoleIds.map(String) : [];
     out.pingRoleIds = Array.isArray(out.pingRoleIds) ? out.pingRoleIds.map(String) : [];
     out.cooldownSeconds = Math.max(0, parseInt(out.cooldownSeconds, 10) || 0);
@@ -1677,7 +1685,8 @@ function normalizeTicketPanel(data, keepUndefined = false) {
 
 const TICKET_PANEL_FIELDS = {
     name: 1, channelId: 1, messageId: 1, messageType: 1, title: 1, description: 1,
-    color: 1, thumbnailUrl: 1, imageUrl: 1, footerText: 1, content: 1,
+    color: 1, thumbnailUrl: 1, imageUrl: 1, authorName: 1, authorIconUrl: 1,
+    footerText: 1, content: 1,
     buttonLabel: 1, buttonStyle: 1, buttonEmoji: 1, category: 1, ticketName: 1,
     supportRoleIds: 1, pingRoleIds: 1, ticketCategoryId: 1, cooldownSeconds: 1,
     maxOpenPerUser: 1, askReason: 1, reasonPlaceholder: 1, welcomeMessage: 1,
@@ -1721,19 +1730,19 @@ async function createTicketPanel(guildId, data) {
         res = await getTicketPool().query(`
             INSERT INTO ticket_panels (
                 guild_id, name, channel_id, message_id, message_type, title, description,
-                color, thumbnail_url, image_url, footer_text, content, button_label,
+                color, thumbnail_url, image_url, author_name, author_icon_url, footer_text, content, button_label,
                 button_style, button_emoji, category, ticket_name, support_role_ids,
                 ping_role_ids, ticket_category_id, cooldown_seconds, max_open_per_user,
                 ask_reason, reason_placeholder, welcome_message, close_button_label,
                 close_button_emoji, close_button_style, claim_button_label, claim_button_emoji,
                 open_name_template, claimed_name_template, closed_name_template,
                 close_flow, enabled, created_by, created_at, updated_at
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,NOW(),NOW())
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,NOW(),NOW())
             RETURNING id
         `, [
             guildId, p.name, p.channelId || null, p.messageId || null, p.messageType,
-            p.title, p.description, p.color, p.thumbnailUrl, p.imageUrl, p.footerText,
-            p.content, p.buttonLabel, p.buttonStyle, p.buttonEmoji, p.category,
+            p.title, p.description, p.color, p.thumbnailUrl, p.imageUrl, p.authorName, p.authorIconUrl,
+            p.footerText, p.content, p.buttonLabel, p.buttonStyle, p.buttonEmoji, p.category,
             p.ticketName, JSON.stringify(p.supportRoleIds), JSON.stringify(p.pingRoleIds),
             p.ticketCategoryId, p.cooldownSeconds, p.maxOpenPerUser, p.askReason,
             p.reasonPlaceholder, p.welcomeMessage, p.closeButtonLabel,
@@ -1770,19 +1779,20 @@ async function updateTicketPanel(id, patch) {
             UPDATE ticket_panels SET
                 name = $2, channel_id = $3, message_id = $4, message_type = $5,
                 title = $6, description = $7, color = $8, thumbnail_url = $9,
-                image_url = $10, footer_text = $11, content = $12, button_label = $13,
-                button_style = $14, button_emoji = $15, category = $16, ticket_name = $17,
-                support_role_ids = $18, ping_role_ids = $19, ticket_category_id = $20,
-                cooldown_seconds = $21, max_open_per_user = $22, ask_reason = $23,
-                reason_placeholder = $24, welcome_message = $25, close_button_label = $26,
-                close_button_emoji = $27, close_button_style = $28, claim_button_label = $29, claim_button_emoji = $30,
-                open_name_template = $31, claimed_name_template = $32, closed_name_template = $33,
-                close_flow = $34, enabled = $35, updated_at = NOW()
+                image_url = $10, author_name = $11, author_icon_url = $12, footer_text = $13,
+                content = $14, button_label = $15,
+                button_style = $16, button_emoji = $17, category = $18, ticket_name = $19,
+                support_role_ids = $20, ping_role_ids = $21, ticket_category_id = $22,
+                cooldown_seconds = $23, max_open_per_user = $24, ask_reason = $25,
+                reason_placeholder = $26, welcome_message = $27, close_button_label = $28,
+                close_button_emoji = $29, close_button_style = $30, claim_button_label = $31, claim_button_emoji = $32,
+                open_name_template = $33, claimed_name_template = $34, closed_name_template = $35,
+                close_flow = $36, enabled = $37, updated_at = NOW()
             WHERE id = $1
         `, [
             id, p.name, p.channelId || null, p.messageId || null, p.messageType,
-            p.title, p.description, p.color, p.thumbnailUrl, p.imageUrl, p.footerText,
-            p.content, p.buttonLabel, p.buttonStyle, p.buttonEmoji, p.category,
+            p.title, p.description, p.color, p.thumbnailUrl, p.imageUrl, p.authorName, p.authorIconUrl,
+            p.footerText, p.content, p.buttonLabel, p.buttonStyle, p.buttonEmoji, p.category,
             p.ticketName, JSON.stringify(p.supportRoleIds), JSON.stringify(p.pingRoleIds),
             p.ticketCategoryId, p.cooldownSeconds, p.maxOpenPerUser, p.askReason,
             p.reasonPlaceholder, p.welcomeMessage, p.closeButtonLabel,
