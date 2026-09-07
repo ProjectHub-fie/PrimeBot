@@ -57,6 +57,7 @@ const CREATE_TABLE_SQL = `
         close_button_style     VARCHAR(20) DEFAULT 'Danger',
         claim_button_label     VARCHAR(80),
         claim_button_emoji     VARCHAR(100),
+        claim_button_style     VARCHAR(20) DEFAULT 'Secondary',
         close_flow             JSONB,
         enabled             BOOLEAN NOT NULL DEFAULT true,
         created_by          VARCHAR(50),
@@ -222,6 +223,7 @@ const DEFAULT_PANEL = {
     closeButtonStyle: 'Danger',
     claimButtonLabel: '',
     claimButtonEmoji: '',
+    claimButtonStyle: 'Secondary',
     // Status-based channel name templates. Empty/null → no rename for that state.
     openNameTemplate: '(open) {name}',
     claimedNameTemplate: '(solved) {name}',
@@ -267,6 +269,7 @@ class TicketPanelManager {
             `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS close_button_style VARCHAR(20) DEFAULT 'Danger'`,
             `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS claim_button_label VARCHAR(80)`,
             `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS claim_button_emoji VARCHAR(100)`,
+            `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS claim_button_style VARCHAR(20) DEFAULT 'Secondary'`,
             `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS open_name_template   VARCHAR(100)`,
             `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS claimed_name_template VARCHAR(100)`,
             `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS closed_name_template  VARCHAR(100)`,
@@ -418,6 +421,7 @@ class TicketPanelManager {
             closeButtonStyle: row.close_button_style || 'Danger',
             claimButtonLabel: row.claim_button_label || null,
             claimButtonEmoji: row.claim_button_emoji || null,
+            claimButtonStyle: row.claim_button_style || 'Secondary',
             openNameTemplate: row.open_name_template != null ? row.open_name_template : null,
             claimedNameTemplate: row.claimed_name_template != null ? row.claimed_name_template : null,
             closedNameTemplate: row.closed_name_template != null ? row.closed_name_template : null,
@@ -491,10 +495,10 @@ class TicketPanelManager {
                 button_style, button_emoji, category, ticket_name, support_role_ids,
                 ping_role_ids, ticket_category_id, cooldown_seconds, max_open_per_user,
                 ask_reason, reason_placeholder, welcome_message, close_button_label,
-                close_button_emoji, close_button_style, claim_button_label, claim_button_emoji,
+                close_button_emoji, close_button_style, claim_button_label, claim_button_emoji, claim_button_style,
                 open_name_template, claimed_name_template, closed_name_template,
                 close_flow, enabled, created_by, created_at, updated_at
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,NOW(),NOW())
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,NOW(),NOW())
             RETURNING id
         `, [
             guildId, panel.name, panel.channelId || null, panel.messageId || null,
@@ -506,7 +510,7 @@ class TicketPanelManager {
             panel.cooldownSeconds, panel.maxOpenPerUser,
             panel.askReason, panel.reasonPlaceholder, panel.welcomeMessage,
             panel.closeButtonLabel, panel.closeButtonEmoji, panel.closeButtonStyle,
-            panel.claimButtonLabel, panel.claimButtonEmoji,
+            panel.claimButtonLabel, panel.claimButtonEmoji, panel.claimButtonStyle,
             panel.openNameTemplate, panel.claimedNameTemplate, panel.closedNameTemplate,
             JSON.stringify(panel.closeFlow || {}),
             panel.enabled, panel.createdBy || null,
@@ -535,9 +539,9 @@ class TicketPanelManager {
                 support_role_ids = $18, ping_role_ids = $19, ticket_category_id = $20,
                 cooldown_seconds = $21, max_open_per_user = $22, ask_reason = $23,
                 reason_placeholder = $24, welcome_message = $25, close_button_label = $26,
-                close_button_emoji = $27, close_button_style = $28, claim_button_label = $29, claim_button_emoji = $30,
-                open_name_template = $31, claimed_name_template = $32, closed_name_template = $33,
-                close_flow = $34, enabled = $35, updated_at = NOW()
+                close_button_emoji = $27, close_button_style = $28, claim_button_label = $29, claim_button_emoji = $30, claim_button_style = $31,
+                open_name_template = $32, claimed_name_template = $33, closed_name_template = $34,
+                close_flow = $35, enabled = $36, updated_at = NOW()
             WHERE id = $1
         `, [
             id, norm.name, norm.channelId || null, norm.messageId || null, norm.messageType,
@@ -548,7 +552,7 @@ class TicketPanelManager {
             norm.cooldownSeconds, norm.maxOpenPerUser, norm.askReason,
             norm.reasonPlaceholder, norm.welcomeMessage,
             norm.closeButtonLabel, norm.closeButtonEmoji, norm.closeButtonStyle,
-            norm.claimButtonLabel, norm.claimButtonEmoji,
+            norm.claimButtonLabel, norm.claimButtonEmoji, norm.claimButtonStyle,
             norm.openNameTemplate, norm.claimedNameTemplate, norm.closedNameTemplate,
             JSON.stringify(norm.closeFlow || {}),
             norm.enabled,
@@ -606,7 +610,8 @@ class TicketPanelManager {
             maxOpenPerUser: 1, askReason: 1, reasonPlaceholder: 1, welcomeMessage: 1,
             closeButtonLabel: 1, closeButtonEmoji: 1, closeButtonStyle: 1,
             claimButtonLabel: 1,
-            claimButtonEmoji: 1, openNameTemplate: 1, claimedNameTemplate: 1,
+            claimButtonEmoji: 1,
+            claimButtonStyle: 1, openNameTemplate: 1, claimedNameTemplate: 1,
             closedNameTemplate: 1, closeFlow: 1, enabled: 1, createdBy: 1,
         };
     }
@@ -618,6 +623,7 @@ class TicketPanelManager {
         out.messageType = VALID_MESSAGE_TYPES.has(out.messageType) ? out.messageType : 'embed';
         out.buttonStyle = VALID_BUTTON_STYLES.has(out.buttonStyle) ? out.buttonStyle : 'Primary';
         out.closeButtonStyle = VALID_BUTTON_STYLES.has(out.closeButtonStyle) ? out.closeButtonStyle : 'Danger';
+        out.claimButtonStyle = VALID_BUTTON_STYLES.has(out.claimButtonStyle) ? out.claimButtonStyle : 'Secondary';
         out.color = /^#[0-9a-fA-F]{6}$/.test(out.color) ? out.color : '#5865F2';
         out.supportRoleIds = Array.isArray(out.supportRoleIds) ? out.supportRoleIds.map(String) : [];
         out.pingRoleIds = Array.isArray(out.pingRoleIds) ? out.pingRoleIds.map(String) : [];
@@ -691,7 +697,7 @@ class TicketPanelManager {
             const claimBtn = new ButtonBuilder()
                 .setCustomId('ticketpanel:claim')
                 .setLabel(panel.claimButtonLabel)
-                .setStyle(ButtonStyle.Secondary);
+                .setStyle(ButtonStyle[panel.claimButtonStyle] || ButtonStyle.Secondary);
             if (panel.claimButtonEmoji) claimBtn.setEmoji(panel.claimButtonEmoji);
             extra.push(claimBtn);
         }

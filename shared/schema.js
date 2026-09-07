@@ -539,6 +539,8 @@ const ticketPanels = pgTable('ticket_panels', {
   claimButtonEmoji: varchar('claim_button_emoji', { length: 100 }),
   // Initial Close button colour (label/emoji are columns above).
   closeButtonStyle: varchar('close_button_style', { length: 20 }).default('Danger'),
+  // Claim button colour (label/emoji are columns above).
+  claimButtonStyle: varchar('claim_button_style', { length: 20 }).default('Secondary'),
   // Ticket channel name templates per status (open/claimed/closed).
   openNameTemplate: varchar('open_name_template', { length: 100 }),
   claimedNameTemplate: varchar('claimed_name_template', { length: 100 }),

@@ -813,9 +813,8 @@ const TICKET_EDITOR_TABS = [
     { key: 'message',      label: 'Message',      icon: 'message' },
     { key: 'permission',   label: 'Permission',   icon: 'shield' },
     { key: 'logging',       label: 'Logging',       icon: 'scroll' },
-    { key: 'animation',     label: 'Animation',     icon: 'playCircle' },
     { key: 'transcript',   label: 'Transcript',   icon: 'receipt' },
-    { key: 'input',         label: 'Input',         icon: 'type' },
+    { key: 'claim',         label: 'Claim',         icon: 'hand' },
 ];
 
 function ticketField(label, forId, inner, hint = '') {
@@ -851,50 +850,55 @@ function ticketEditorTabsHTML(panel) {
       ${ticketField('Ticket category label', 'tk-category', `<input type="text" id="tk-category" maxlength="50" value="${val(p.category, 'general')}" placeholder="general" />`)}
     `;
 
-    // Tab 2 — Buttons: open/close/claim + close-flow confirm + post-close..
-    const btnRow = (keyprefix, labelText, defLabel, defEmoji, defStyle) => `
-      <div class="field">
-        <label class="field-label">${labelText}</label>
-        <div class="reaction-row" style="display:flex;gap:6px;flex-wrap:wrap">
-          <input type="text" id="${keyprefix}-label" maxlength="80" value="${val(cfButtonLabel(keyprefix, p, defLabel), defLabel)}" placeholder="${defLabel}" style="flex:2" />
-          <input type="text" id="${keyprefix}-emoji" maxlength="100" value="${val(cfButtonEmoji(keyprefix, p, defEmoji), defEmoji)}" placeholder="${defEmoji}" style="flex:1" />
-          <select id="${keyprefix}-style" style="flex:1">${styleOpts}</select>
-        </div>
-      </div>`;
+    // Tab 2 — Buttons: every panel button configured through a Ticket Tool
+    // style builder. Each button is a chip; tapping one slides its embed-builder
+    // panel open (label / emoji / colour, like the Message tab's embed regions);
+    // tapping again slides it shut. Open is fixed (its fields live on the embed
+    // builder on the Message tab); the rest are editable here.
+    const TB_BUTTON_CHIPS = [
+        { key: 'open',      label: 'Open',        from: () => ({ label: p.buttonLabel || 'Open Ticket', emoji: p.buttonEmoji || null, style: p.buttonStyle || 'Primary' }), hint: 'The open-ticket button lives on the panel message. Its label/emoji/colour are edited on the <strong>Message</strong> tab embed builder.' },
+        { key: 'close',     label: 'Close',       from: () => ({ label: p.closeButtonLabel || 'Close Ticket', emoji: p.closeButtonEmoji || null, style: p.closeButtonStyle || 'Danger' }), hint: 'Shown inside an open ticket. Pressing it reveals the confirm/cancel row.' },
+        { key: 'confirm',   label: 'Confirm',     from: () => cf.confirmYes, hint: 'The "Yes" half of the close confirmation. Confirms closing the ticket.' },
+        { key: 'cancel',    label: 'Cancel',      from: () => cf.confirmNo, hint: 'The "No" half of the close confirmation. Restores the open control message.' },
+        { key: 'reopen',   label: 'Re-open',     from: () => cf.buttons?.reopen, hint: 'Post-close action: re-opens the closed ticket.' },
+        { key: 'claim',     label: 'Claim',       from: () => ({ label: p.claimButtonLabel || null, emoji: p.claimButtonEmoji || null, style: p.claimButtonStyle || 'Secondary' }), hint: 'Optional. Grants the current support member sole responsibility; leave blank for none.' },
+        { key: 'delete',    label: 'Delete',      from: () => cf.buttons?.delete, hint: 'Post-close action: permanently deletes the closed ticket channel.' },
+        { key: 'transcript', label: 'Transcript', from: () => cf.buttons?.transcript, hint: 'Post-close action: saves the ticket messages to the Transcript tab channel.' },
+    ];
+    const tbBtnSpec = (b, defLabel = '') => {
+        if (!b) return { label: defLabel, emoji: null, style: 'Primary' };
+        return { label: b.label || defLabel, emoji: b.emoji || null, style: b.style || 'Primary' };
+    };
+    const tbDefaultEmoji = { close: '🔒', confirm: '✅', cancel: '✖️', reopen: '🔓', claim: '✋', delete: '🗑️', transcript: '📝' };
     const buttonsTab = `
-      <div class="card-title" style="margin-top:8px"><span>Open button</span></div>
-      <p class="card-hint">The open-ticket button is edited directly on the panel embed — see the <strong>Message</strong> tab's embed builder.</p>
-      <div class="card-title" style="margin-top:8px"><span>Close button</span></div>
-      ${ticketField('Close button label', 'tk-close-label', `<input type="text" id="tk-close-label" maxlength="80" value="${val(p.closeButtonLabel, 'Close Ticket')}" />`)}
-      ${ticketField('Close button emoji (optional)', 'tk-close-emoji', `<input type="text" id="tk-close-emoji" maxlength="100" value="${val(p.closeButtonEmoji, '🔒')}" />`)}
-      ${ticketField('Close button colour', 'tk-close-style', `<select id="tk-close-style">${styleOpts}</select>`)}
-      <div class="card-title" style="margin-top:8px"><span>Claim button (optional — leave blank for none)</span></div>
-      ${ticketField('Claim button label', 'tk-claim-label', `<input type="text" id="tk-claim-label" maxlength="80" value="${val(p.claimButtonLabel)}" placeholder="Claim" />`)}
-      ${ticketField('Claim button emoji (optional)', 'tk-claim-emoji', `<input type="text" id="tk-claim-emoji" maxlength="100" value="${val(p.claimButtonEmoji)}" placeholder="✋" />`)}
-      <div class="card-title" style="margin-top:8px"><span>Close flow — Yes / No confirmation buttons</span></div>
-      <p class="card-hint">When a member presses <strong>Close</strong>, a <strong>Yes / No</strong> confirmation row is shown. Customize both buttons below.</p>
-      ${ticketField('Yes (confirm) button', '', `<div class="reaction-row" style="display:flex;gap:6px;flex-wrap:wrap">
-          <input type="text" id="tk-cf-yes-label" maxlength="80" value="${val(cf.confirmYes?.label, 'Yes')}" placeholder="Yes" style="flex:2" />
-          <input type="text" id="tk-cf-yes-emoji" maxlength="100" value="${val(cf.confirmYes?.emoji, '✅')}" placeholder="✅" style="flex:1" />
-          <select id="tk-cf-yes-style" style="flex:1">${styleOpts}</select>
-        </div>`)}
-      ${ticketField('No (cancel) button', '', `<div class="reaction-row" style="display:flex;gap:6px;flex-wrap:wrap">
-          <input type="text" id="tk-cf-no-label" maxlength="80" value="${val(cf.confirmNo?.label, 'No')}" placeholder="No" style="flex:2" />
-          <input type="text" id="tk-cf-no-emoji" maxlength="100" value="${val(cf.confirmNo?.emoji, '✖️')}" placeholder="✖️" style="flex:1" />
-          <select id="tk-cf-no-style" style="flex:1">${styleOpts}</select>
-        </div>`)}
-      <div class="card-title" style="margin-top:8px"><span>Post-close buttons (Transcript / Reopen / Delete)</span></div>
-      <p class="card-hint">Revealed after the ticket is closed (next to the close embed). Every button label/emoji/colour is editable below.</p>
-      ${['transcript', 'reopen', 'delete'].map((key, i) => {
-          const labels = { transcript: 'Transcript', reopen: 'Reopen', delete: 'Delete' };
-          const emojis = { transcript: '📝', reopen: '🔓', delete: '🗑️' };
-          const b = cf.buttons?.[key] || {};
-          return ticketField(`${labels[key]} button`, '', `<div class="reaction-row" style="display:flex;gap:6px;flex-wrap:wrap">
-            <input type="text" id="tk-cf-btn-${key}-label" maxlength="80" value="${val(b.label, labels[key])}" placeholder="${labels[key]}" style="flex:2" />
-            <input type="text" id="tk-cf-btn-${key}-emoji" maxlength="100" value="${val(b.emoji, emojis[key])}" placeholder="${emojis[key]}" style="flex:1" />
-            <select id="tk-cf-btn-${key}-style" style="flex:1">${styleOpts}</select>
-          </div>`);
-      }).join('')}
+      <p class="card-hint">Every button PrimeBot shows in front of members — each chip slides open (like the embed builder) letting you edit its label, emoji, and colour. Tap the header to open; tap again to close.</p>
+      <div class="tk-buttons-builder">
+        ${TB_BUTTON_CHIPS.map(c => {
+            const v = tbBtnSpec(c.from(), c.label);
+            const emoji = v.emoji ? `<span class="tk-btn-chip-emoji">${esc(v.emoji)}</span>` : '';
+            return `
+            <div class="tk-btn-chip" data-btn-key="${c.key}">
+              <button type="button" class="tk-btn-chip-head tk-btn-trigger" data-btn-trigger="${c.key}" aria-expanded="false">
+                <span class="tk-btn-chip-name">${esc(c.label)}</span>
+                <span class="tk-btn-chip-live" data-btn-live="${c.key}">${emoji}<span class="tk-btn-chip-label">${esc(v.label || '(none)')}</span></span>
+                <span class="tk-btn-chip-chev">${svgIcon('chevronDown')}</span>
+              </button>
+              <div class="tk-btn-dropdown" data-btn-panel="${c.key}">
+                ${(c.key === 'open')
+                    ? `<div class="field-hint">${c.hint}</div>`
+                    : `
+                  <div class="tk-btn-fields">
+                    <div class="edb-duo">
+                      ${ticketField('Label', `tk-btn-${c.key}-label`, `<input type="text" id="tk-btn-${c.key}-label" maxlength="80" value="${val(v.label)}" placeholder="${esc(c.label)}" />`)}
+                      ${ticketField('Emoji (optional)', `tk-btn-${c.key}-emoji`, `<input type="text" id="tk-btn-${c.key}-emoji" maxlength="100" value="${val(v.emoji)}" placeholder="${esc(tbDefaultEmoji[c.key] || '')}" />`)}
+                    </div>
+                    ${ticketField('Colour', `tk-btn-${c.key}-style`, `<select id="tk-btn-${c.key}-style">${styleOpts}</select>`)}
+                    ${c.hint ? `<div class="field-hint">${c.hint}</div>` : ''}
+                  </div>`}
+              </div>
+            </div>`;
+        }).join('')}
+      </div>
     `;
 
     // Tab 3 — Message: panel embed builder (fields live on the embed.,
@@ -940,16 +944,14 @@ function ticketEditorTabsHTML(panel) {
       </div>
     `;
 
-    // Tab 5 — Logging + Tab  ��� Animation.: placeholder "available soon".
+    // Tab 5 — Logging: placeholder "available soon".
     const comingSoonTab = (title) => `
       <div class="card-title"><span>${title}</span></div>
       <div class="alert alert-warn">${title} settings are coming soon. More bar tabs will be available here. Settings will be available soon.</div>
     `;
     const loggingTab = comingSoonTab('Logging');
-    const animationTab = comingSoonTab('Animation');
 
-    // Tab 7 — Transcript: transcript channel + toggles.
-
+    // Tab 6 — Transcript: transcript channel + toggles.
     const transcriptTab = `
       <div class="switch-row">
         <div class="switch-label"><div class="sl-title">Save transcripts to a channel</div><div class="sl-desc">Optional. When the Transcript button is pressed, the ticket's messages are saved to this channel.</div></div>
@@ -958,9 +960,9 @@ function ticketEditorTabsHTML(panel) {
       ${ticketField('Transcript channel ID', 'tk-cf-transcript-channel', `<input type="text" id="tk-cf-transcript-channel" value="${val(cf.transcript?.channelId)}" placeholder="123456789012345678" />`, 'Dashboard-only. The channel PrimeBot posts ticket transcripts to.')}
     `;
 
-    // Tab 8 — Input: channel-name templates (open/claimed/closed) + ticket name.
+    // Tab 7 — Claim: claim properties + channel-name templates (open/claimed/closed) + ticket name.
 
-    const inputTab = `
+    const claimTab = `
       ${ticketField('Ticket channel name (optional)', 'tk-ticket-name', `<input type="text" id="tk-ticket-name" maxlength="100" value="${val(p.ticketName)}" placeholder="Defaults to ticket-username" />`)}
       ${ticketField('Channel name when OPEN', 'tk-open-name', `<input type="text" id="tk-open-name" maxlength="100" value="${val(p.openNameTemplate)}" placeholder="(open) {name}" />`, 'Template applied when a ticket opens/reopens. Placeholders: {name} (ticket name or username), {username}, {id}, {panel}. Blank = no rename.')}
       ${ticketField('Channel name when CLAIMED', 'tk-claimed-name', `<input type="text" id="tk-claimed-name" maxlength="100" value="${val(p.claimedNameTemplate)}" placeholder="(solved) {name}" />`, 'Template applied when support claims the ticket. Same placeholders. Blank = no rename.')}
@@ -973,9 +975,8 @@ function ticketEditorTabsHTML(panel) {
         { key: 'message',      html: messageTab },
         { key: 'permission',   html: permissionTab },
         { key: 'logging',       html: loggingTab },
-        { key: 'animation',     html: animationTab },
         { key: 'transcript',   html: transcriptTab },
-        { key: 'input',         html: inputTab },
+        { key: 'claim',         html: claimTab },
     ];
 
     const tabBar = `

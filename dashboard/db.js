@@ -1494,6 +1494,7 @@ async function ensureTicketTables() {
             close_button_style     VARCHAR(20) DEFAULT 'Danger',
             claim_button_label     VARCHAR(80),
             claim_button_emoji     VARCHAR(100),
+            claim_button_style     VARCHAR(20) DEFAULT 'Secondary',
             close_flow             JSONB,
             enabled             BOOLEAN NOT NULL DEFAULT true,
             created_by          VARCHAR(50),
@@ -1529,6 +1530,7 @@ async function ensureTicketTables() {
         ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS claimed_name_template VARCHAR(100);
         ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS closed_name_template   VARCHAR(100);
         ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS close_button_style    VARCHAR(20) DEFAULT 'Danger';
+        ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS claim_button_style   VARCHAR(20) DEFAULT 'Secondary';
         ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS close_flow            JSONB;
         ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS author_name         VARCHAR(255);
         ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS author_icon_url     TEXT;
@@ -1633,6 +1635,7 @@ function ticketRowToPanel(row) {
         closeButtonStyle: row.close_button_style || 'Danger',
         claimButtonLabel: row.claim_button_label || null,
         claimButtonEmoji: row.claim_button_emoji || null,
+        claimButtonStyle: row.claim_button_style || 'Secondary',
         openNameTemplate: row.open_name_template != null ? row.open_name_template : null,
         claimedNameTemplate: row.claimed_name_template != null ? row.claimed_name_template : null,
         closedNameTemplate: row.closed_name_template != null ? row.closed_name_template : null,
@@ -1657,7 +1660,7 @@ function normalizeTicketPanel(data, keepUndefined = false) {
         reasonPlaceholder: 'Briefly describe your issue',
         welcomeMessage: null, closeButtonLabel: 'Close Ticket',
         closeButtonEmoji: '🔒', closeButtonStyle: 'Danger',
-        claimButtonLabel: null, claimButtonEmoji: null,
+        claimButtonLabel: null, claimButtonEmoji: null, claimButtonStyle: 'Secondary',
         openNameTemplate: null, claimedNameTemplate: null, closedNameTemplate: null,
         closeFlow: null,
         enabled: true, channelId: null, messageId: null,
@@ -1667,6 +1670,7 @@ function normalizeTicketPanel(data, keepUndefined = false) {
     out.messageType = VALID_TICKET_MESSAGE_TYPES.has(out.messageType) ? out.messageType : 'embed';
     out.buttonStyle = VALID_TICKET_BUTTON_STYLES.has(out.buttonStyle) ? out.buttonStyle : 'Primary';
     out.closeButtonStyle = VALID_TICKET_BUTTON_STYLES.has(out.closeButtonStyle) ? out.closeButtonStyle : 'Danger';
+    out.claimButtonStyle = VALID_TICKET_BUTTON_STYLES.has(out.claimButtonStyle) ? out.claimButtonStyle : 'Secondary';
     out.color = /^#[0-9a-fA-F]{6}$/.test(out.color) ? out.color : '#5865F2';
     out.authorName = out.authorName == null ? null : String(out.authorName).trim().slice(0, 255) || null;
     out.authorIconUrl = out.authorIconUrl == null ? null : String(out.authorIconUrl).trim() || null;
@@ -1692,7 +1696,8 @@ const TICKET_PANEL_FIELDS = {
     maxOpenPerUser: 1, askReason: 1, reasonPlaceholder: 1, welcomeMessage: 1,
     closeButtonLabel: 1, closeButtonEmoji: 1, closeButtonStyle: 1,
     claimButtonLabel: 1,
-    claimButtonEmoji: 1, openNameTemplate: 1, claimedNameTemplate: 1,
+    claimButtonEmoji: 1,
+    claimButtonStyle: 1, openNameTemplate: 1, claimedNameTemplate: 1,
     closedNameTemplate: 1, closeFlow: 1, enabled: 1, createdBy: 1,
 };
 
@@ -1734,10 +1739,10 @@ async function createTicketPanel(guildId, data) {
                 button_style, button_emoji, category, ticket_name, support_role_ids,
                 ping_role_ids, ticket_category_id, cooldown_seconds, max_open_per_user,
                 ask_reason, reason_placeholder, welcome_message, close_button_label,
-                close_button_emoji, close_button_style, claim_button_label, claim_button_emoji,
+                close_button_emoji, close_button_style, claim_button_label, claim_button_emoji, claim_button_style,
                 open_name_template, claimed_name_template, closed_name_template,
                 close_flow, enabled, created_by, created_at, updated_at
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,NOW(),NOW())
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,NOW(),NOW())
             RETURNING id
         `, [
             guildId, p.name, p.channelId || null, p.messageId || null, p.messageType,
@@ -1746,7 +1751,7 @@ async function createTicketPanel(guildId, data) {
             p.ticketName, JSON.stringify(p.supportRoleIds), JSON.stringify(p.pingRoleIds),
             p.ticketCategoryId, p.cooldownSeconds, p.maxOpenPerUser, p.askReason,
             p.reasonPlaceholder, p.welcomeMessage, p.closeButtonLabel,
-            p.closeButtonEmoji, p.closeButtonStyle, p.claimButtonLabel, p.claimButtonEmoji,
+            p.closeButtonEmoji, p.closeButtonStyle, p.claimButtonLabel, p.claimButtonEmoji, p.claimButtonStyle,
             p.openNameTemplate, p.claimedNameTemplate, p.closedNameTemplate,
             JSON.stringify(p.closeFlow || {}),
             p.enabled, p.createdBy || null,
@@ -1785,9 +1790,9 @@ async function updateTicketPanel(id, patch) {
                 support_role_ids = $20, ping_role_ids = $21, ticket_category_id = $22,
                 cooldown_seconds = $23, max_open_per_user = $24, ask_reason = $25,
                 reason_placeholder = $26, welcome_message = $27, close_button_label = $28,
-                close_button_emoji = $29, close_button_style = $30, claim_button_label = $31, claim_button_emoji = $32,
-                open_name_template = $33, claimed_name_template = $34, closed_name_template = $35,
-                close_flow = $36, enabled = $37, updated_at = NOW()
+                close_button_emoji = $29, close_button_style = $30, claim_button_label = $31, claim_button_emoji = $32, claim_button_style = $33,
+                open_name_template = $34, claimed_name_template = $35, closed_name_template = $36,
+                close_flow = $37, enabled = $38, updated_at = NOW()
             WHERE id = $1
         `, [
             id, p.name, p.channelId || null, p.messageId || null, p.messageType,
@@ -1796,7 +1801,7 @@ async function updateTicketPanel(id, patch) {
             p.ticketName, JSON.stringify(p.supportRoleIds), JSON.stringify(p.pingRoleIds),
             p.ticketCategoryId, p.cooldownSeconds, p.maxOpenPerUser, p.askReason,
             p.reasonPlaceholder, p.welcomeMessage, p.closeButtonLabel,
-            p.closeButtonEmoji, p.closeButtonStyle, p.claimButtonLabel, p.claimButtonEmoji,
+            p.closeButtonEmoji, p.closeButtonStyle, p.claimButtonLabel, p.claimButtonEmoji, p.claimButtonStyle,
             p.openNameTemplate, p.claimedNameTemplate, p.closedNameTemplate,
             JSON.stringify(p.closeFlow || {}),
             p.enabled,
