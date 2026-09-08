@@ -71,7 +71,7 @@ test('updateTicketPanel persists field edits (PATCH backing)', async () => {
                     cooldown_seconds: 0, max_open_per_user: 1, ask_reason: false,
                     reason_placeholder: 'x', welcome_message: null,
                     close_button_label: 'Close', close_button_emoji: null, close_button_style: 'Danger',
-                    claim_button_label: null, claim_button_emoji: null,
+                    claim_button_label: null, claim_button_emoji: null, claim_button_style: 'Secondary',
                     open_name_template: null, claimed_name_template: null, closed_name_template: null,
                     close_flow: {}, enabled: true, created_by: 'u', created_at: null, updated_at: null,
                 }],
@@ -87,7 +87,7 @@ test('updateTicketPanel persists field edits (PATCH backing)', async () => {
     const params = update.params;
     assert.equal(params[1], 'Billing', 'name updated');
     assert.equal(params[5], 'new', 'title updated');
-    assert.equal(params[36], false, 'enabled updated');
+    assert.equal(params[37], false, 'enabled updated');
 });
 
 test('updateTicketPanel on a missing panel throws a friendly not-found', async () => {

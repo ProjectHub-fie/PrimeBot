@@ -57,6 +57,24 @@ function collectTicketRoles(listSelector, roleClass) {
 
 function readTicketForm() {
   const q = id => document.querySelector(id)?.value ?? '';
+  const chk = id => document.querySelector(id)?.checked ?? false;
+  const btn = (key, extra = {}) => ({
+    label: q(`#tk-btn-${key}-label`) ?? null,
+    emoji: q(`#tk-btn-${key}-emoji`) ?? null,
+    style: q(`#tk-btn-${key}-style`) || 'Primary',
+    ...extra,
+  });
+  const roleGroup = (prefix) => {
+    const enabled = Boolean(document.querySelector(`.trole-${prefix}-enabled`)?.checked ?? false);
+    return {
+      enabled,
+      channelName: document.querySelector(`.trole-${prefix}-name`)?.value.trim() || null,
+      addRoleId: document.querySelector(`.trole-${prefix}-add`)?.value.trim() || null,
+      removeRoleId: document.querySelector(`.trole-${prefix}-remove`)?.value.trim() || null,
+      showUserName: !!document.querySelector(`.trole-${prefix}-user`)?.checked,
+      showCount: !!document.querySelector(`.trole-${prefix}-count`)?.checked,
+    };
+  };
   return {
     name: q('#tk-name').trim() || 'Support Ticket',
     messageType: q('#tk-message-type') || 'embed',
@@ -69,9 +87,9 @@ function readTicketForm() {
     thumbnailUrl: q('#tk-thumbnail').trim() || null,
     imageUrl: q('#tk-image').trim() || null,
     color: q('#tk-color') || '#5865F2',
-    buttonLabel: q('#tk-button-label') || 'Open Ticket',
-    buttonEmoji: q('#tk-button-emoji') || null,
-    buttonStyle: q('#tk-button-style') || 'Primary',
+    buttonLabel: document.querySelector('#tk-button-label')?.value.trim() || 'Open Ticket',
+    buttonEmoji: document.querySelector('#tk-button-emoji')?.value.trim() || null,
+    buttonStyle: document.querySelector('#tk-button-style')?.value || 'Primary',
     category: q('#tk-category') || 'general',
     ticketName: q('#tk-ticket-name') || null,
     openNameTemplate: q('#tk-open-name') || null,
@@ -81,53 +99,39 @@ function readTicketForm() {
     pingRoleIds: collectTicketRoles('#tk-ping-list', 'tk-ping-role'),
     ticketCategoryId: q('#tk-ticket-category-id') || null,
     maxOpenPerUser: parseInt(q('#tk-max-open'), 10) || 1,
-    askReason: document.querySelector('#tk-ask-reason')?.checked ?? false,
+    askReason: chk('#tk-ask-reason'),
     welcomeMessage: q('#tk-welcome') || null,
-    closeButtonLabel: q('#tk-close-label') || 'Close Ticket',
-    closeButtonEmoji: q('#tk-close-emoji') || '🔒',
-    closeButtonStyle: q('#tk-close-style') || 'Danger',
-    claimButtonLabel: q('#tk-claim-label') || null,
-    claimButtonEmoji: q('#tk-claim-emoji') || null,
-    closeFlow: readCloseFlowForm(),
-    enabled: document.querySelector('#tk-enabled')?.checked ?? true,
-  };
-}
-
-function readCloseFlowForm() {
-  const q = id => document.querySelector(id)?.value ?? '';
-  const chk = id => document.querySelector(id)?.checked ?? false;
-  const btn = (key) => ({
-    label: q(`#tk-cf-btn-${key}-label`) || key.charAt(0).toUpperCase() + key.slice(1),
-    emoji: q(`#tk-cf-btn-${key}-emoji`) || null,
-    style: q(`#tk-cf-btn-${key}-style`) || 'Primary',
-  });
-  return {
-    confirmYes: {
-      label: q('#tk-cf-yes-label') || 'Yes',
-      emoji: q('#tk-cf-yes-emoji') || null,
-      style: q('#tk-cf-yes-style') || 'Success',
+    closeButtonLabel: q('#tk-btn-close-label') || 'Close Ticket',
+    closeButtonEmoji: q('#tk-btn-close-emoji') || '🔒',
+    closeButtonStyle: q('#tk-btn-close-style') || 'Danger',
+    claimButtonLabel: q('#tk-btn-claim-label') || null,
+    claimButtonEmoji: q('#tk-btn-claim-emoji') || null,
+    claimButtonStyle: q('#tk-btn-claim-style') || 'Secondary',
+    roleSettings: {
+      open: roleGroup('open'),
+      close: roleGroup('close'),
     },
-    confirmNo: {
-      label: q('#tk-cf-no-label') || 'No',
-      emoji: q('#tk-cf-no-emoji') || null,
-      style: q('#tk-cf-no-style') || 'Danger',
+    closeFlow: {
+      confirmYes: btn('confirm'),
+      confirmNo: btn('cancel'),
+      closeEmbed: {
+        enabled: chk('#tk-cf-embed-enabled'),
+        title: q('#tk-cf-embed-title') || 'Ticket Closed',
+        description: q('#tk-cf-embed-desc') || null,
+        color: q('#tk-cf-embed-color') || '#ED4245',
+        footer: q('#tk-cf-embed-footer') || null,
+      },
+      transcript: {
+        enabled: chk('#tk-cf-transcript-enabled'),
+        channelId: q('#tk-cf-transcript-channel') || null,
+      },
+      buttons: {
+        transcript: btn('transcript'),
+        reopen: btn('reopen'),
+        delete: btn('delete'),
+      },
     },
-    closeEmbed: {
-      enabled: chk('#tk-cf-embed-enabled'),
-      title: q('#tk-cf-embed-title') || 'Ticket Closed',
-      description: q('#tk-cf-embed-desc') || null,
-      color: q('#tk-cf-embed-color') || '#ED4245',
-      footer: q('#tk-cf-embed-footer') || null,
-    },
-    transcript: {
-      enabled: chk('#tk-cf-transcript-enabled'),
-      channelId: q('#tk-cf-transcript-channel') || null,
-    },
-    buttons: {
-      transcript: btn('transcript'),
-      reopen: btn('reopen'),
-      delete: btn('delete'),
-    },
+    enabled: chk('#tk-enabled'),
   };
 }
 
@@ -139,6 +143,76 @@ async function saveTicketPanel() {
   // Keep the page's heading + panel-id chip fresh after a rename.
 
   if (window.refreshPanelActions) window.refreshPanelActions();
+}
+
+// ── Button chips (slide open / slide shut embed-builder dropdowns) ────────
+// Each Buttons-tab chip owns a collapsible builder panel. Tapping the header
+// slides it open with a CSS transition (grid-template-rows trick); tapping it
+// again (or another chip) slides it shut. Fields stay mounted (only height
+// animates) so focus is preserved while typing. The chip's live label/emoji
+// preview updates as you type, mirroring the embed builder's live regions.
+function bindButtonsBuilder() {
+  const heads = document.querySelectorAll('.tk-btn-trigger');
+  if (!heads.length) return;
+  const panels = {};
+  document.querySelectorAll('.tk-btn-dropdown').forEach(d => { panels[d.dataset.btnPanel] = d; });
+  const toggle = (key, open) => {
+    const panel = panels[key];
+    if (!panel) return;
+    const chip = document.querySelector(`.tk-btn-chip[data-btn-key="${key}"]`);
+    const head = document.querySelector(`.tk-btn-trigger[data-btn-trigger="${key}"]`);
+    const shouldOpen = open ?? panel.classList.contains('open') === false;
+    panel.classList.toggle('open', shouldOpen);
+    panel.style.height = shouldOpen ? panel.scrollHeight + 'px' : '0px';
+    chip?.classList.toggle('open', shouldOpen);
+    head?.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
+  };
+  heads.forEach(head => head.addEventListener('click', () => {
+    const key = head.dataset.btnTrigger;
+    toggle(key);
+  }));
+  // Only one chip open at a time (accordion feel, Ticket Tool style).
+  heads.forEach(head => head.addEventListener('click', () => {
+    const key = head.dataset.btnTrigger;
+    if (!panelIsOpen(key)) return;
+    heads.forEach(h => { if (h.dataset.btnTrigger !== key) toggle(h.dataset.btnTrigger, false); });
+  }));
+  const panelIsOpen = (key) => panels[key]?.classList.contains('open') ?? false;
+  // Re-measure heights when a dropdown's fields reflow (e.g. after a save
+  // re-renders the page, or the embed builder re-layouts).
+  window.addEventListener('resize', () => {
+    Object.values(panels).forEach(p => { if (p.classList.contains('open')) p.style.height = p.scrollHeight + 'px'; });
+  });
+}
+
+// Live chip preview: update the button chip's label/emoji as you type in its
+// fields (mirrors the embed-builder live rows).
+const BTN_CHIP_KEYS = ['open', 'close', 'confirm', 'cancel', 'reopen', 'claim', 'delete', 'transcript'];
+function renderButtonsChips() {
+  for (const key of BTN_CHIP_KEYS) {
+    const live = document.querySelector(`.tk-btn-chip-live[data-btn-live="${key}"]`);
+    if (!live) continue;
+    const label = document.querySelector(`#tk-btn-${key}-label`)?.value?.trim();
+    const emoji = document.querySelector(`#tk-btn-${key}-emoji`)?.value?.trim();
+    const labelEl = live.querySelector('.tk-btn-chip-label');
+    if (labelEl) labelEl.textContent = label || (key === 'open' ? 'Open' : key.charAt(0).toUpperCase() + key.slice(1));
+    let emojiEl = live.querySelector('.tk-btn-chip-emoji');
+    if (emoji) {
+      if (!emojiEl) {
+        emojiEl = document.createElement('span');
+        emojiEl.className = 'tk-btn-chip-emoji';
+        live.insertBefore(emojiEl, labelEl); // labelEl is always present
+      }
+      emojiEl.textContent = emoji;
+    } else if (emojiEl) {
+      emojiEl.remove();
+    }
+  }
+}
+let _btnChipTimer = null;
+function scheduleButtonsChips() {
+  clearTimeout(_btnChipTimer);
+  _btnChipTimer = setTimeout(renderButtonsChips, 40);
 }
 
 // ── Quick actions (Send / Resend, Update, Clone, Rename, Delete ────────
@@ -303,11 +377,15 @@ const _tkPanels = document.querySelector('.tk-editor-panels');
 if (_tkPanels) {
     _tkPanels.addEventListener('input', scheduleTicketPreview);
     _tkPanels.addEventListener('change', scheduleTicketPreview);
+    _tkPanels.addEventListener('input', scheduleButtonsChips);
+    _tkPanels.addEventListener('change', scheduleButtonsChips);
 }
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 bindEditorTabs();
+bindButtonsBuilder();
 bindQuickActions();
+renderButtonsChips();
 
 document.getElementById('tk-support-add')?.addEventListener('click', () => {
   const ml = document.querySelector('#tk-support-list');
@@ -328,6 +406,32 @@ bindColorSync('tk-color', 'tk-color-text');
 bindColorSync('tk-cf-embed-color', 'tk-cf-embed-color-text');
 window.populateRoleSelects();
 window.populateChannelSelects();
+
+// Pre-fill the Role tab's add/remove selects from the panel's saved role settings.
+
+function preselectTicketRoleSettings() {
+  const node = document.getElementById('panel-data');
+  if (!node || !node.textContent) return;
+  let parsed = null;
+  try { parsed = JSON.parse(node.textContent); } catch (_) { return; }
+  const rs = (parsed || {}).panel?.roleSettings || {};
+  if (rs.open) {
+    const o = rs.open;
+    const oa = document.querySelector('.trole-open-add');
+    if (oa && o.addRoleId) oa.value = o.addRoleId;
+    const orm = document.querySelector('.trole-open-remove');
+    if (orm && o.removeRoleId) orm.value = o.removeRoleId;
+  }
+  if (rs.close) {
+    const c = rs.close;
+    const ca = document.querySelector('.trole-close-add');
+    if (ca && c.addRoleId) ca.value = c.addRoleId;
+    const crm = document.querySelector('.trole-close-remove');
+    if (crm && c.removeRoleId) crm.value = c.removeRoleId;
+  }
+}
+
+preselectTicketRoleSettings();
 
 window.saveBar.register(saveTicketPanel);
 window.saveBar.track(document.body);

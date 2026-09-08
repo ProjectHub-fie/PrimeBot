@@ -2539,3 +2539,70 @@ select:focus {
   .edb-triple { grid-template-columns:  1fr; }
   .edb-triple { display: flex; flex-direction: column; align-items: stretch; }
 }
+
+/* Ticket Buttons tab — configurable button chips withd slide open / slide shut
+   dropdowns (Ticket Tool style). A chip header shows the button name + a live
+   label/emoji preview + a chevron; tapping it slides its builder panel open
+   (grid-template-rows height transition) and again closes it. */
+.tk-buttons-builder {
+  display: flex; flex-direction: column; gap:  8px; margin-top:  6px;
+}
+.tk-btn-chip {
+  border:  1px solid rgba(255, 255, 255, 0.10);
+  border-radius:  8px;
+  background: rgba(255, 255, 255, 0.025);
+  overflow: hidden;
+  transition: border-color  0.15s ease, background  0.15s ease;
+}
+.tk-btn-chip:hover { border-color: rgba(88, 101, 242, 0.45); }
+.tk-btn-chip.open { border-color: rgba(88, 101, 242,  0.55); background: rgba(88, 101, 242, 0.06); }
+.tk-btn-chip-head {
+  display: flex; align-items: center; gap:  10px;
+  width:  100%;
+  background: none;
+  border: none;
+  padding:  10px 12px;
+  color: #e9ecf3;
+  font: inherit;
+  font-weight:  600;
+  font-size:  13.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.tk-btn-chip-name {
+  min-width:  92px;
+  color: #c7cbcf;
+  font-size:  12.5px;
+  text-transform: capitalize;
+  letter-spacing:  0.4px;
+}
+.tk-btn-chip-live {
+  display: flex; align-items: center; gap:  6px;
+  flex:   1;
+  font-weight:  600;
+  color: #e9ecf3;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.tk-btn-chip-emoji { font-size:  15px; }
+.tk-btn-chip-label { overflow: hidden; text-overflow: ellipsis; }
+.tk-btn-chip-label.empty { color: #6a7078; font-style: italic; font-weight:  500; }
+.tk-btn-chip-chev {
+  color: #6a7078;
+  transition: transform  0.22s ease, color  0.15s ease;
+}
+.tk-btn-chip.open .tk-btn-chip-chev { transform: rotate(180deg); color: #e9ecf3; }
+.tk-btn-chip-head:focus-visible {
+  outline: none;
+  box-shadow:  0 0 0  2px rgba(88, 101, 242,  0.35);
+  border-radius:  8px;
+}
+.tk-btn-dropdown {
+  height:  0;
+  overflow: hidden;
+  transition: height  0.28s cubic-bezier(0.22,  1,  0.36,  1);
+}
+.tk-btn-dropdown > .tk-btn-fields { padding:  2px 12px 12px; }
+.tk-btn-dropdown > .field-hint { padding:  0 12px 12px; }
+.tk-btn-fields .field { margin-bottom:  10px; }
