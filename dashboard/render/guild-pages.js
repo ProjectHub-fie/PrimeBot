@@ -1158,7 +1158,7 @@ function ticketEditPage({ guild, user }) {
     </div>
     <div class="card">
       <div class="card-title"><span><span class="icon">${svgIcon('ticket')}</span> ${esc(panel.name || 'Support Ticket')} <span class="tag ${panel.enabled ? 'on' : 'off'}">#${id}</span></span></div>
-      <p class="card-desc">Editing ticket panel — the <strong>Message</strong> tab is an embed builder where each embed region holds its own editing fields (Ticket Tool style). Every tab saves with the <strong>Save changes</strong> bar.</p>
+      <p class="card-desc">Editing ticket panel.</p>
       ${tabBar}
       <div class="tk-editor-panels">${tabContent}</div>
     </div>`;
