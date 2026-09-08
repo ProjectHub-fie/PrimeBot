@@ -31,6 +31,7 @@ const botRoles = require("../utils/botRoles");
 const devEmbed = require("../utils/devEmbed");
 const { isBetaFeature } = require("../utils/betaFeatureMatcher");
 const resolveUserId = require("../utils/resolveUserId");
+const CountingManager = require("../utils/countingManager");
 
 /**
  * Try to reply in the channel; if the bot lacks permission, fall back to a DM.
@@ -442,10 +443,21 @@ module.exports = {
             
             // Check for no-prefix mode if in a guild and not using prefix
             if (message.guild && !isUsingPrefix) {
-                isNoPrefixCommand = client.serverSettingsManager.hasNoPrefixMode(
-                    message.guild.id,
-                    message.author.id
-                );
+                // Counting games own the channel: a bare count (number, or the bot's
+                // count-target reply) must reach the counting manager, NOT the
+                // no-prefix command parser. Otherwise `1` / `4` would be parsed
+                // as "$1" / "$4" commands. A count is a pure number (optionally
+                // the bot's "count to X" mention target); anything else (words,
+                // e.g. $cstart, $calc) stays a no-prefix command.
+
+                const countingChannel = client.countingManager.isCountingChannel(message.channel.id);
+                const bareCount = countingChannel && CountingManager.isBareCount(message.content);
+                if (!bareCount) {
+                    isNoPrefixCommand = client.serverSettingsManager.hasNoPrefixMode(
+                        message.guild.id,
+                        message.author.id
+                    );
+                }
                 
                 // If user has no-prefix mode, process the message as a command
                 if (isNoPrefixCommand) {
