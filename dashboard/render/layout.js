@@ -196,8 +196,21 @@ function render(opts) {
     <span class="footer-links"><a href="/privacy">Privacy Policy</a> · <a href="/terms">Terms of Service</a></span>
   </footer>
   <div id="toast" class="toast toast-hidden"></div>
+  <button id="back-to-top" class="back-to-top" type="button" aria-label="Back to top" title="Back to top">${svgIcon('arrowUp')}</button>
   <script src="/js/icons.js"></script>
   <script src="/js/common.js"></script>
+  <script>
+    // Floating "back to top" control — appears after scrolling down and
+    // smooth-scrolls back to the top when clicked. Runs on every page.
+    (function () {
+      const btn = document.getElementById('back-to-top');
+      if (!btn) return;
+      const onScroll = () => btn.classList.toggle('visible', window.scrollY > 420);
+      onScroll();
+      window.addEventListener('scroll', onScroll, { passive: true });
+      btn.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+    })();
+  </script>
   ${scriptTags}
   ${idleScript}
   ${logoutScript}

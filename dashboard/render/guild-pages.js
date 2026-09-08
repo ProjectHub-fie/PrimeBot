@@ -1083,14 +1083,15 @@ function ticketEmbedBuilderHTML(p = {}, styleOpts) {
         <textarea id="tk-content" placeholder="Optional: @support or any text shown above the embed / as the plain body.">${esca(p.content)}</textarea>
         <div class="edb-live edb-live-content" id="edb-content">${esca(p.content)}</div>
       </div>
-      <div class="tk-preview-embed edb-preview-embed">
-        <div class="tk-preview-embed-bar edb-region-color" id="edb-bar" style="background:${esc(color)}">
-          <div class="edb-field-head"><label class="edb-label" for="tk-color">Embed color</label></div>
-          <div class="color-field edb-color-fields">
-            <input type="color" id="tk-color" value="${esc(color)}" />
-            <input type="text" id="tk-color-text" value="${esc(color)}" style="flex:1" />
-          </div>
+      <div class="edb-region edb-region-color">
+        <div class="edb-field-head"><label class="edb-label" for="tk-color">Embed color</label></div>
+        <div class="color-field edb-color-fields">
+          <input type="color" id="tk-color" value="${esc(color)}" />
+          <input type="text" id="tk-color-text" value="${esc(color)}" style="flex:1" />
         </div>
+      </div>
+      <div class="tk-preview-embed edb-preview-embed">
+        <div class="tk-preview-embed-bar edb-region-color" id="edb-bar" style="background:${esc(color)}" aria-hidden="true"></div>
         <div class="tk-preview-embed-body">
           <div class="edb-region edb-author">
             <div class="edb-field-head"><label class="edb-label">Author</label></div>

@@ -1687,6 +1687,20 @@ app.get('/health', (req, res) => {
     res.json({ ok: true, name: constants.BOT_NAME, version: constants.BOT_VERSION });
 });
 
+// ── HTTP error pages (400/401/403/408/429/500/502) ──────────────────────────
+// Friendly server-rendered counterparts to the graphical 404 — same design
+// family. JSON clients get a plain {error} body instead.
+const HTTP_ERROR_CODES = [400,  401,  403,  408,  429,  500,  502];
+function renderHttpError(req, res, code) {
+    const user = req.session && req.session.user;
+    if (req.accepts('html')) return res.status(code).type('html').send(pages.errorPage({ code, user }));
+    res.status(code).json({ error: 'error_page' });
+}
+for (const code of HTTP_ERROR_CODES) {
+    app.get(`/error/${code}`, (req, res) => renderHttpError(req, res, code));
+    app.get(`/${code}`, (req, res) => renderHttpError(req, res, code));
+}
+
 // ── 404 / error handlers ────────────────────────────────────────────────────
 
 app.use((req, res) => {
@@ -1696,7 +1710,9 @@ app.use((req, res) => {
 
 app.use((err, req, res, next) => {
     console.error('[SERVER] Unhandled error:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    if (res.headersSent) return next(err);
+    const status = Number.isInteger(err.status) && err.status >= 400 && err.status <= 502 ? err.status : 500;
+    renderHttpError(req, res, status);
 });
 
 // ── Boot ────────────────────────────────────────────────────────────────────

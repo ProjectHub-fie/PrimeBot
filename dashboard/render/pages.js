@@ -452,12 +452,45 @@ function termsPage({ user } = {}) {
     return render({ title: 'PrimeBot · Terms of Service', body, user, login: !user });
 }
 
-// ── 404 ────────────────────────────────────────────────────────────────────
+// ── 404 / HTTP error pages ──────────────────────────────────────────────────
 //
 // Catch-all for any unknown path. On Vercel every request is routed to the
 // serverless handler (vercel.json `routes` → /dashboard/server.js), so a broken
 // or mistyped link lands here. Renders a friendly graphical 404 with a link
-// back to the dashboard root.
+// back to the dashboard root. The same design family is reused for the other
+// HTTP error pages (400/401/403/408/429/500/502) so every error route shares
+// one look.
+
+const HTTP_ERROR_PAGES = {
+    400: { title: 'Bad Request', message: 'The request could not be understood — something was malformed or missing. Go back and try again.' },
+    401: { title: 'Unauthorized', message: 'You need to sign in with Discord to view this page. Head back to the dashboard and log in to continue.' },
+    403: { title: 'Forbidden', message: 'You don\u2019t have permission to view this page. It may be restricted to server admins or the PrimeBot team.' },
+    408: { title: 'Request Timeout', message: 'The server waited too long for the request and gave up. Check your connection and try again.' },
+    429: { title: 'Too Many Requests', message: 'You\u2019ve been sending requests a little too quickly. Wait a moment and try again.' },
+    500: { title: 'Internal Server Error', message: 'Something went wrong on our side. The team has been notified — please try again shortly.' },
+    502: { title: 'Bad Gateway', message: 'The upstream service returned an invalid response. This is usually temporary — please try again in a moment.' },
+};
+
+function errorPage({ code = 500, user } = {}) {
+    const info = HTTP_ERROR_PAGES[code] || HTTP_ERROR_PAGES[500];
+    const body = `
+    <div class="notfound-card">
+      <div class="notfound-graphic" aria-hidden="true">
+        <div class="notfound-404 notfound-http">
+          <span>${esc(code)}</span>
+        </div>
+        <div class="notfound-orb"></div>
+      </div>
+      <h1 class="notfound-title">${esc(info.title)}</h1>
+      <p class="notfound-text">${esc(info.message)}</p>
+      <div class="notfound-actions">
+        <a class="btn btn-primary" href="/">${svgIcon('arrowLeft')} Back to dashboard</a>
+        <a class="btn btn-secondary" href="/docs">${svgIcon('book')} Read the docs</a>
+      </div>
+      <p class="notfound-hint">If you think this is a mistake, let us know in our <a href="https://discord.gg/gd7UNSfX86" target="_blank" rel="noopener">support server</a>.</p>
+    </div>`;
+    return render({ title: `PrimeBot · ${code} ${info.title}`, body, user });
+}
 
 function notFoundPage({ user } = {}) {
     const body = `
@@ -479,4 +512,4 @@ function notFoundPage({ user } = {}) {
     return render({ title: 'PrimeBot · 404 Not found', body, user });
 }
 
-module.exports = { loginPage, docsPage, statsPage, livePollsPage, liveGiveawaysPage, overviewPage, notFoundPage, guildCardHTML, privacyPage, termsPage };
+module.exports = { loginPage, docsPage, statsPage, livePollsPage, liveGiveawaysPage, overviewPage, notFoundPage, errorPage, guildCardHTML, privacyPage, termsPage };
