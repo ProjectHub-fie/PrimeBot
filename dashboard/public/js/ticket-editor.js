@@ -64,6 +64,17 @@ function readTicketForm() {
     style: q(`#tk-btn-${key}-style`) || 'Primary',
     ...extra,
   });
+  const roleGroup = (prefix) => {
+    const enabled = Boolean(document.querySelector(`.trole-${prefix}-enabled`)?.checked ?? false);
+    return {
+      enabled,
+      channelName: document.querySelector(`.trole-${prefix}-name`)?.value.trim() || null,
+      addRoleId: document.querySelector(`.trole-${prefix}-add`)?.value.trim() || null,
+      removeRoleId: document.querySelector(`.trole-${prefix}-remove`)?.value.trim() || null,
+      showUserName: !!document.querySelector(`.trole-${prefix}-user`)?.checked,
+      showCount: !!document.querySelector(`.trole-${prefix}-count`)?.checked,
+    };
+  };
   return {
     name: q('#tk-name').trim() || 'Support Ticket',
     messageType: q('#tk-message-type') || 'embed',
@@ -96,6 +107,10 @@ function readTicketForm() {
     claimButtonLabel: q('#tk-btn-claim-label') || null,
     claimButtonEmoji: q('#tk-btn-claim-emoji') || null,
     claimButtonStyle: q('#tk-btn-claim-style') || 'Secondary',
+    roleSettings: {
+      open: roleGroup('open'),
+      close: roleGroup('close'),
+    },
     closeFlow: {
       confirmYes: btn('confirm'),
       confirmNo: btn('cancel'),
@@ -391,6 +406,32 @@ bindColorSync('tk-color', 'tk-color-text');
 bindColorSync('tk-cf-embed-color', 'tk-cf-embed-color-text');
 window.populateRoleSelects();
 window.populateChannelSelects();
+
+// Pre-fill the Role tab's add/remove selects from the panel's saved role settings.
+
+function preselectTicketRoleSettings() {
+  const node = document.getElementById('panel-data');
+  if (!node || !node.textContent) return;
+  let parsed = null;
+  try { parsed = JSON.parse(node.textContent); } catch (_) { return; }
+  const rs = (parsed || {}).panel?.roleSettings || {};
+  if (rs.open) {
+    const o = rs.open;
+    const oa = document.querySelector('.trole-open-add');
+    if (oa && o.addRoleId) oa.value = o.addRoleId;
+    const orm = document.querySelector('.trole-open-remove');
+    if (orm && o.removeRoleId) orm.value = o.removeRoleId;
+  }
+  if (rs.close) {
+    const c = rs.close;
+    const ca = document.querySelector('.trole-close-add');
+    if (ca && c.addRoleId) ca.value = c.addRoleId;
+    const crm = document.querySelector('.trole-close-remove');
+    if (crm && c.removeRoleId) crm.value = c.removeRoleId;
+  }
+}
+
+preselectTicketRoleSettings();
 
 window.saveBar.register(saveTicketPanel);
 window.saveBar.track(document.body);

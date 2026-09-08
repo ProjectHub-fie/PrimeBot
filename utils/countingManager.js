@@ -102,7 +102,7 @@ class CountingManager {
 
         if (number !== expectedNumber) {
             game.failCount++;
-            await message.react('❌');
+            await message.react('❌').catch(() => {});
             const embed = new EmbedBuilder()
                 .setColor('#FF0000')
                 .setTitle('❌ Wrong Number!')
@@ -112,7 +112,7 @@ class CountingManager {
                     { name: '📊 Fail Count', value: `${game.failCount}`, inline: true }
                 )
                 .setTimestamp();
-            await message.channel.send({ embeds: [embed] });
+            await message.channel.send({ embeds: [embed] }).catch(() => {});
             game.currentNumber = game.startNumber - 1;
             game.lastUserId = null;
             this.counting.set(channelId, game);
@@ -122,13 +122,13 @@ class CountingManager {
 
         if (game.lastUserId === message.author.id) {
             game.failCount++;
-            await message.react('❌');
+            await message.react('❌').catch(() => {});
             const embed = new EmbedBuilder()
                 .setColor('#FFA500')
                 .setTitle('⚠️ No Consecutive Counting!')
                 .setDescription(`You can't count twice in a row! Count resets to **${game.startNumber}**!`)
                 .setTimestamp();
-            await message.channel.send({ embeds: [embed] });
+            await message.channel.send({ embeds: [embed] }).catch(() => {});
             game.currentNumber = game.startNumber - 1;
             game.lastUserId = null;
             this.counting.set(channelId, game);
@@ -142,12 +142,16 @@ class CountingManager {
         game.participants[message.author.id]++;
         if (number > game.highestNumber) game.highestNumber = number;
 
-        await message.react('✅');
+        await message.react('✅').catch(() => {});
         this.counting.set(channelId, game);
         await this.saveCounting(channelId);
 
         if (number >= game.goalNumber) {
-            await this.handleGameWin(message, game, channelId);
+            try {
+                await this.handleGameWin(message, game, channelId);
+            } catch (err) {
+                console.error('[COUNTING] Win handler failed:', err.message);
+            }
         }
 
         return true; // message was handled — stop further processing (XP, auto-react)
@@ -173,7 +177,7 @@ class CountingManager {
             )
             .setTimestamp();
 
-        await message.channel.send({ embeds: [embed] });
+        await message.channel.send({ embeds: [embed] }).catch(() => {});
 
         game.goalNumber *= 2;
         game.currentNumber = 0;

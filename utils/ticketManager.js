@@ -4,6 +4,7 @@ const {
     ModalBuilder, TextInputBuilder, TextInputStyle,
 } = require('discord.js');
 const { ticketPool } = require('../server/ticketDb');
+const { trolePool, ensureTicketRoleTable } = require('../server/troleDb');
 
 /**
  * Premium ticket panels ŌĆö configurable ONLY from the dashboard.
@@ -239,6 +240,7 @@ class TicketPanelManager {
         this._byMessage = new Map();   // `${guildId}:${channelId}:${messageId}` -> panel
         this._byGuild = new Map();    // guildId -> Set<panelId>
         this._byChannel = new Map();  // channelId -> ticket instance (open tickets)
+        this._roleSettings = new Map();  // panelId -> ticket role add/remove settings (TROLE pool)
         this._tableReady = false;
         this._init().catch(err =>
             console.error('[TICKETS] Init failed:', err.message)
@@ -338,10 +340,58 @@ class TicketPanelManager {
             this._byMessage.clear();
             this._byGuild.clear();
             for (const panel of panels) this._indexPanel(panel);
+            await this._loadRoleSettings();
             await this._loadInstances();
             console.log(`[TICKETS] Loaded ${panels.length} ticket panels.`);
         } catch (err) {
             console.error('[TICKETS] Failed to load panels:', err.message);
+        }
+    }
+
+    /**
+     * Load the per-panel role add/remove settings (TROLE_DATABASE_URL pool).
+     * Dashboard saves land here and the manager re-reads on every cache reload,
+     * so changes apply to open/close without a bot restart. Failures degrade
+     * to an empty map (role mix features simply stay off..
+     */
+    async _loadRoleSettings() {
+        try {
+            await ensureTicketRoleTable();
+            const res = await trolePool.query('SELECT * FROM ticket_role_settings');
+            this._roleSettings.clear();
+            for (const row of res.rows) {
+                this._roleSettings.set(String(row.panel_id), {
+                    open:  { enabled: !!row.open_enabled, channelName: row.open_name || null, showUserName: !!row.open_show_user, showCount: !!row.open_show_count, addRoleId: row.open_add_role || null, removeRoleId: row.open_remove_role || null },
+                    close: { enabled: !!row.close_enabled, channelName: row.close_name || null, showUserName: !!row.close_show_user, showCount: !!row.close_show_count, addRoleId: row.close_add_role || null, removeRoleId: row.close_remove_role || null },
+                });
+            }
+        } catch (err) {
+            console.error('[TICKETS] Failed to load role settings:', err.message);
+            this._roleSettings.clear();
+        }
+    }
+
+    /** Per-panel ticket role settings (never throws). */
+    getRoleSettings(panelId) {
+        const s = this._roleSettings.get(String(panelId));
+        return s || { open:  { enabled: false, channelName: null, showUserName: false, showCount: false, addRoleId: null, removeRoleId: null }, close: { enabled: false, channelName: null, showUserName: false, showCount: false, addRoleId: null, removeRoleId: null } };
+    }
+
+    // Apply the given group's add/remove role to the ticket opener (fire-and-forget).
+    async _applyRoleSettings(panel, member, group) {
+        if (!panel || !member) return;
+        const s = this.getRoleSettings(panel.id);
+        const g = s[group];
+        if (!g || !g.enabled) return;
+        try {
+            if (g.removeRoleId && member.roles?.cache?.has(g.removeRoleId)) {
+                await member.roles.remove(g.removeRoleId).catch(() => {});
+            }
+            if (g.addRoleId && g.addRoleId !== g.removeRoleId) {
+                await member.roles.add(g.addRoleId).catch(() => {});
+            }
+        } catch (err) {
+            console.error(`[TICKETS] Role ${group} for panel ${panel.id}:`, err.message);
         }
     }
 
@@ -786,23 +836,27 @@ class TicketPanelManager {
      * {id} (opener id), {panel} (panel.name). Returns null when the template
      * is empty/null (= "don't rename for this state").
      */
-    _renderTicketName(template, panel, opener) {
+    _renderTicketName(template, panel, opener, opts = {}) {
         if (!template) return null;
-        const username = opener?.username || opener?.displayName || 'user';
-        const nameBase = panel?.ticketName || username;
+        const showUser = opts.showUserName !== false;
+        const showCount = opts.showCount !== false;
+        const username = showUser ? (opener?.username || opener?.displayName || 'user') : '';
+        const nameBase = panel?.ticketName || (showUser ? username : '');
+        const count = showCount ? Number(opts.count) || 0 : '';
         let out = String(template)
             .replace(/\{name\}/g, nameBase)
             .replace(/\{username\}/g, username)
-            .replace(/\{id\}/g, opener?.id || '')
-            .replace(/\{panel\}/g, panel?.name || '');
+            .replace(/\{id\}/g, showUser ? (opener?.id || '') : '')
+            .replace(/\{panel\}/g, panel?.name || '')
+            .replace(/\{count\}/g, String(count));
         // Discord channel names: lowercase, no spaces, max 100 chars.
         out = out.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-_]/g, '').slice(0, 100);
         return out || null;
     }
 
     /** Apply a status name template to a ticket channel (fire-and-forget). */
-    async _setTicketName(channel, template, panel, opener) {
-        const name = this._renderTicketName(template, panel, opener);
+    async _setTicketName(channel, template, panel, opener, opts = {}) {
+        const name = this._renderTicketName(template, panel, opener, opts);
         if (!name || !channel) return;
         try {
             const current = channel.name;
@@ -811,6 +865,24 @@ class TicketPanelManager {
         } catch (err) {
             console.error('[TICKETS] Failed to rename ticket channel:', err.message);
         }
+    }
+
+    /**
+     * Resolve the effective channel-name template + attribute opts for a state.
+     * Prefers the panel's Ticket-tab role settings (TROLE pool) when that state's
+     * toggle is on; otherwise falls back to the legacy per-state template.
+
+    _troleNameState(panel, state, fallbackTemplate) {
+        const s = this.getRoleSettings(panel?.id);
+        const g = s?.[state];
+        if (g && g.enabled) {
+            return {
+                template: g.channelName || null,
+                showUserName: g.showUserName !== false,
+                showCount: g.showCount !== false,
+            };
+        }
+        return { template: fallbackTemplate || null, showUserName: false, showCount: false };
     }
 
     /** Post the panel to a channel. */
@@ -917,6 +989,10 @@ class TicketPanelManager {
             };
             await this._saveInstance(instance);
             this._byChannel.set(ticketChannel.id, instance);
+
+            // Apply the panel's "on open" role add/remove to the ticket author.
+
+            await this._applyRoleSettings(panel, member, 'open');
 
             return interaction.reply({
                 content: `Your ticket has been opened: ${ticketChannel}`,
@@ -1052,6 +1128,10 @@ class TicketPanelManager {
             // Apply the closed-status channel name template.
             if (panel) {
                 await this._setTicketName(interaction.channel, panel.closedNameTemplate, panel, opener);
+                // Apply the panel's "on close" role add/remove to the ticket author.
+
+                const openerMember = await interaction.guild.members.fetch(instance.userId).catch(() => null);
+                await this._applyRoleSettings(panel, openerMember, 'close');
             }
         } catch (err) {
             console.error('[TICKETS] Error closing ticket:', err);

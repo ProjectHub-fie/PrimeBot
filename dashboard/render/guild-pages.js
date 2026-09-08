@@ -15,11 +15,12 @@ const { guildDataScript, guildHeaderHTML, tabNavHTML, TABS } = require('./guild'
 const { LOG_EVENTS, AUTOMOD_RULES, AUTOMOD_ACTIONS, BADGE_CATALOG } = constants;
 
 // Wrap guild-tab body in the shared shell (header + tabs + data blob + page JS).
-function guildTab({ guild, active, panelHTML, scripts, title, user }) {
+function guildTab({ guild, active, panelHTML, scripts, title, user, panel: _panel }) {
     const body = `
     ${guildHeaderHTML(guild)}
     ${tabNavHTML(guild.id, active)}
     ${panelHTML}
+    ${_panel ? `<script type="application/json" id="panel-data">${JSON.stringify({ panel: _panel, roles: guild._roles || [] }).replace(/</g, '\\u003c')}</script>` : ''}
     ${guildDataScript({ guildId: guild.id, channels: guild._channels || [], roles: guild._roles || [] })}`;
     return render({
         title: title || `PrimeBot · ${guild.name}`,
@@ -809,6 +810,7 @@ function ticketsPage({ guild, user }) {
 
 const TICKET_EDITOR_TABS = [
     { key: 'panel',       label: 'Panel',       icon: 'settings' },
+    { key: 'ticket',       label: 'Ticket',      icon: 'role' },
     { key: 'buttons',      label: 'Buttons',      icon: 'sliders' },
     { key: 'message',      label: 'Message',      icon: 'message' },
     { key: 'permission',   label: 'Permission',   icon: 'shield' },
@@ -831,6 +833,7 @@ function ticketEditorTabsHTML(panel) {
     const typeOpts = TICKET_MESSAGE_TYPES.map(t => `<option value="${t.value}">${esc(t.label)}</option>`).join('');
     const p = panel || {};
     const cf = p.closeFlow || {};
+    const panelRole = p.roleSettings || {};
     const val = (v, d = '') => v == null ? d : esc(String(v));
     const chk = (v) => v ? 'checked' : '';
     const roleRow = (list, cls) => {
@@ -944,14 +947,49 @@ function ticketEditorTabsHTML(panel) {
       </div>
     `;
 
-    // Tab 5 — Logging: placeholder "available soon".
+    // Tab 2 — Ticket: per-state channel name templates (open/close, with
+    // "show count / user" attribute checkboxes) + automatic role add/remove boxes.
+
+    // Each group is its own card wit a radio switch (off by default) to turn the
+    // whole behavior on, and the dashboard's role selectors.
+
+    const ticketNameField = (prefix, label, current, placeholder) => `
+      <div class="trole-group">
+        <div class="trole-header">
+          <div class="trole-title">${label}</div>
+          <label class="switch"><input type="checkbox" class="trole-${prefix}-enabled" ${chk(panelRole?.[prefix]?.enabled)}/><span class="slider"></span></label>
+        </div>
+        ${ticketField(`Ticket channel name (${prefix})`, `tk-${prefix}-role-name`, `<input type="text" class="trole-${prefix}-name" maxlength="100" value="${val(panelRole?.[prefix]?.channelName || p[`${prefix}NameTemplate`] || '')}" placeholder="${placeholder}" />`, `Placeholders: {name} (ticket name or username), {username}, {id}, {panel}, {count} (how many open tickets the user has). Blank = no rename.`)}
+        <div class="trole-attrs">
+          <label class="check"><input type="checkbox" class="trole-${prefix}-user" ${chk(panelRole?.[prefix]?.showUserName)}/> Show user name</label>
+          <label class="check"><input type="checkbox" class="trole-${prefix}-count" ${chk(panelRole?.[prefix]?.showCount)}/> Show count</label>
+        </div>
+        <div class="trole-row">
+          <div class="trole-col">
+            <label class="field-label">Role to add on ${prefix}</label>
+            <select class="trole-${prefix}-add" data-role-select data-exclude-unassignable></select>
+          </div>
+          <div class="trole-col">
+            <label class="field-label">Role to remove on ${prefix}</label>
+            <select class="trole-${prefix}-remove" data-role-select data-exclude-unassignable></select>
+          </div>
+        </div>
+      </div>
+    `;
+    const roleTab = `
+      <p class="card-hint">Set the ticket channel's name when a ticket is <strong>opened</strong> or <strong>closed</strong> (opt-in via each card's switch), and automatically give/remove roles from the ticket author in each state. Each toggle must be switched on before its fields apply.</p>
+      ${ticketNameField('open', 'When ticket opens', 'Open ticket name', '(open) {name}')}
+      ${ticketNameField('close', 'When ticket closes', 'Close ticket name', '(closed) {name}')}
+    `;
+
+    // Tab 6 — Logging: placeholder "available soon".
     const comingSoonTab = (title) => `
       <div class="card-title"><span>${title}</span></div>
       <div class="alert alert-warn">${title} settings are coming soon. More bar tabs will be available here. Settings will be available soon.</div>
     `;
     const loggingTab = comingSoonTab('Logging');
 
-    // Tab 6 — Transcript: transcript channel + toggles.
+    // Tab 7 — Transcript: transcript channel + toggles.
     const transcriptTab = `
       <div class="switch-row">
         <div class="switch-label"><div class="sl-title">Save transcripts to a channel</div><div class="sl-desc">Optional. When the Transcript button is pressed, the ticket's messages are saved to this channel.</div></div>
@@ -971,6 +1009,7 @@ function ticketEditorTabsHTML(panel) {
 
     const tabPanels = [
         { key: 'panel',       html: panelTab },
+        { key: 'ticket',      html: roleTab },
         { key: 'buttons',      html: buttonsTab },
         { key: 'message',      html: messageTab },
         { key: 'permission',   html: permissionTab },
@@ -1123,7 +1162,7 @@ function ticketEditPage({ guild, user }) {
       ${tabBar}
       <div class="tk-editor-panels">${tabContent}</div>
     </div>`;
-    return guildTab({ guild, user, active: 'tickets', panelHTML: pageHTML, scripts: ['/js/guild-common.js', '/js/ticket-editor.js'] });
+    return guildTab({ guild, user, active: 'tickets', panelHTML: pageHTML, panel, scripts: ['/js/guild-common.js', '/js/ticket-editor.js'] });
 }
 
 // ── Automod ─────────────────────────────────────────────────────────────────

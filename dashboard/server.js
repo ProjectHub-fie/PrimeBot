@@ -1226,6 +1226,12 @@ app.post('/api/guilds/:guildId/tickets/quickcreate', requireAuth, requireGuildAd
             return res.status(400).json({ error: 'A panel name is required.' });
         }
         const panel = await dashboardDb.updateTicketPanel(id, body);
+        // Per-panel ticket role add/remove settings (Role tab.) Saved through the
+        // dedicated TROLE_DATABASE_URL pool so they reach the bot's manager.
+        if (body.roleSettings) {
+            await dashboardDb.updateTicketRoleSettings(id, req.guild.id, body.roleSettings);
+            panel.roleSettings = await dashboardDb.getTicketRoleSettings(id) || panel.roleSettings;
+        }
         res.json({ ticketPanel: panel });
     } catch (err) {
         console.error('[API] edit ticket panel error:', err.message);
@@ -1658,6 +1664,8 @@ app.get('/guild/:guildId/tickets/:panelId/edit', requireAuth, requireGuildAdminP
         if (!panel) {
             return res.status(404).type('html').send(pages.notFoundPage({ user: req.session && req.session.user }));
         }
+        const roleSettings = await dashboardDb.getTicketRoleSettings(panelId);
+        if (roleSettings) panel.roleSettings = roleSettings;
         req.guild._ticketPanel = panel;
         res.type('html').send(guildPages.ticketEditPage({ guild: req.guild, user: req.user }));
     } catch (err) {

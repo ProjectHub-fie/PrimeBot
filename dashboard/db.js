@@ -1819,6 +1819,141 @@ async function deleteTicketPanel(id) {
     return true;
 }
 
+// ── Ticket role settings (TROLE_DATABASE_URL) ───────────────────────────
+// Per-panel role add/remove on open / on close. Stored in the dedicated
+// `ticket_role_settings` table in the TROLE pool (server/troleDb.js) so the
+// bot's TicketPanelManager and the dashboard share the same rows through the
+// TROLE_DATABASE_URL env var (falls back to DATABASE_URL..
+let trolePool = null;
+function getTrolePool() {
+    if (trolePool) return trolePool;
+
+    try {
+        trolePool = require('../server/troleDb').trolePool;
+    } catch (err) {
+        console.error('[DASHBOARD DB] troleDb unavailable:', err.message);
+        trolePool = { query: async () => { throw new Error('Ticket role database not configured'); } };
+    }
+    return trolePool;
+}
+
+const TROLE_DEFAULTS = Object.freeze({
+    open:  { enabled: false, channelName: null, showUserName: false, showCount: false, addRoleId: null, removeRoleId: null },
+    close: { enabled: false, channelName: null, showUserName: false, showCount: false, addRoleId: null, removeRoleId: null },
+});
+
+function ticketRoleRowToSettings(row) {
+    const g = (enabled, name, showUser, showCount, add, remove) => ({
+        enabled: !!enabled,
+        channelName: name || null,
+        showUserName: !!showUser,
+        showCount: !!showCount,
+        addRoleId: add || null,
+        removeRoleId: remove || null,
+    });
+    return {
+        open:  g(row.open_enabled, row.open_name, row.open_show_user, row.open_show_count, row.open_add_role, row.open_remove_role),
+        close: g(row.close_enabled, row.close_name, row.close_show_user, row.close_show_count, row.close_add_role, row.close_remove_role),
+    };
+}
+
+function normalizeTicketRoleSettings(settings = {}) {
+    const o = settings.open || {};
+    const c = settings.close || {};
+    return {
+        open:  {
+            enabled: !!o.enabled,
+            channelName: o.channelName || null,
+            showUserName: !!o.showUserName,
+            showCount: !!o.showCount,
+            addRoleId: o.addRoleId || null,
+            removeRoleId: o.removeRoleId || null,
+        },
+        close: {
+            enabled: !!c.enabled,
+            channelName: c.channelName || null,
+            showUserName: !!c.showUserName,
+            showCount: !!c.showCount,
+            addRoleId: c.addRoleId || null,
+            removeRoleId: c.removeRoleId || null,
+        },
+    };
+}
+
+async function ensureTicketRoleTable() {
+    await getTrolePool().query(`
+        CREATE TABLE IF NOT EXISTS ticket_role_settings (
+            id              SERIAL PRIMARY KEY,
+            panel_id        INTEGER NOT NULL UNIQUE,
+            guild_id        VARCHAR(50) NOT NULL,
+            open_enabled   BOOLEAN NOT NULL DEFAULT false,
+            open_name       VARCHAR(100),
+            open_show_user  BOOLEAN NOT NULL DEFAULT false,
+            open_show_count BOOLEAN NOT NULL DEFAULT false,
+            open_add_role   VARCHAR(50),
+            open_remove_role VARCHAR(50),
+            close_enabled   BOOLEAN NOT NULL DEFAULT false,
+            close_name       VARCHAR(100),
+            close_show_user  BOOLEAN NOT NULL DEFAULT false,
+            close_show_count BOOLEAN NOT NULL DEFAULT false,
+            close_add_role   VARCHAR(50),
+            close_remove_role VARCHAR(50),
+            created_at      TIMESTAMP DEFAULT NOW(),
+            updated_at      TIMESTAMP DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS ticket_role_settings_guild_idx
+            ON ticket_role_settings (guild_id);
+    `);
+}
+
+async function getTicketRoleSettings(panelId) {
+    try {
+        await ensureTicketRoleTable();
+        const res = await getTrolePool().query('SELECT * FROM ticket_role_settings WHERE panel_id = $1', [panelId]);
+        if (res.rows.length === 0) return null;
+        return ticketRoleRowToSettings(res.rows[0]);
+    } catch (err) {
+        console.error('[DASHBOARD DB] ticket role settings read failed:', err.message);
+        return null;
+    }
+}
+
+/** Upsert a panel's role settings. Returns the normalized settings back. */
+async function updateTicketRoleSettings(panelId, guildId, settings = {}) {
+    const s = normalizeTicketRoleSettings(settings);
+    await ensureTicketRoleTable();
+    await getTrolePool().query(`
+        INSERT INTO ticket_role_settings (
+            panel_id, guild_id, open_enabled, open_name, open_show_user, open_show_count,
+            open_add_role, open_remove_role,
+            close_enabled, close_name, close_show_user, close_show_count,
+            close_add_role, close_remove_role, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
+        ON CONFLICT (panel_id) DO UPDATE SET
+            guild_id = EXCLUDED.guild_id,
+            open_enabled = EXCLUDED.open_enabled,
+            open_name = EXCLUDED.open_name,
+            open_show_user = EXCLUDED.open_show_user,
+            open_show_count = EXCLUDED.open_show_count,
+            open_add_role = EXCLUDED.open_add_role,
+            open_remove_role = EXCLUDED.open_remove_role,
+            close_enabled = EXCLUDED.close_enabled,
+            close_name = EXCLUDED.close_name,
+            close_show_user = EXCLUDED.close_show_user,
+            close_show_count = EXCLUDED.close_show_count,
+            close_add_role = EXCLUDED.close_add_role,
+            close_remove_role = EXCLUDED.close_remove_role,
+            updated_at = NOW()
+    `, [
+        panelId, String(guildId),
+        s.open.enabled, s.open.channelName, s.open.showUserName, s.open.showCount,
+        s.open.addRoleId, s.open.removeRoleId,
+        s.close.enabled, s.close.channelName, s.close.showUserName, s.close.showCount,
+        s.close.addRoleId, s.close.removeRoleId,
+    ]);
+    return s;
+}
+
 // Pick "(copy)", "(copy 2)", ... — the first default clone name that isn't
 // already taken by another panel in the guild (the unique index would reject
 // a bare second "(copy)" otherwise).
@@ -2339,6 +2474,8 @@ module.exports = {
     deleteTicketPanel,
     cloneTicketPanel,
     renameTicketPanel,
+    getTicketRoleSettings,
+    updateTicketRoleSettings,
     getGuildConfig,
     getPlatformStats,
     getLivePolls,

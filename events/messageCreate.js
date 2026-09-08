@@ -2553,6 +2553,7 @@ module.exports = {
                             return message.reply("There is no active counting game in this channel.");
                         }
                     }
+                    break;
                     
                 case "chelp":
                     // Send counting help embed
