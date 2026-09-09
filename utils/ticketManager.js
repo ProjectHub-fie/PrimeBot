@@ -5,6 +5,8 @@ const {
 } = require('discord.js');
 const { ticketPool } = require('../server/ticketDb');
 const { trolePool, ensureTicketRoleTable } = require('../server/troleDb');
+const ticketClaimService = require('./ticketClaimService');
+const ticketPerms = require('./ticketPermissions');
 
 /**
  * Premium ticket panels ŌĆö configurable ONLY from the dashboard.
@@ -80,6 +82,8 @@ const CREATE_TABLE_SQL = `
         reason              TEXT,
         status              VARCHAR(20) NOT NULL DEFAULT 'open',
         claimed_by          VARCHAR(50),
+        claimed_at          BIGINT,
+        claim_history       JSONB,
         created_at          BIGINT NOT NULL,
         closed_at           BIGINT,
         closed_by           VARCHAR(50),
@@ -136,6 +140,18 @@ const CLOSE_BTN_KEYS = ['transcript', 'reopen', 'delete'];
 /** Coerce a value to one of the valid button styles. */
 function _coerceStyle(v, fallback = 'Primary') {
     return VALID_BUTTON_STYLES.has(v) ? v : fallback;
+}
+
+/** Parse a JSONB value into an array (safe: malformed → []). */
+function _safeParseJsonArray(raw) {
+    if (!raw) return [];
+    if (Array.isArray(raw)) return raw;
+    try {
+        const arr = JSON.parse(String(raw));
+        return Array.isArray(arr) ? arr : [];
+    } catch {
+        return [];
+    }
 }
 
 /** Normalize a single button spec { label, emoji, style }. */
@@ -282,6 +298,8 @@ class TicketPanelManager {
             `ALTER TABLE ticket_instances ADD COLUMN IF NOT EXISTS reason       TEXT`,
             `ALTER TABLE ticket_instances ADD COLUMN IF NOT EXISTS status       VARCHAR(20) NOT NULL DEFAULT 'open'`,
             `ALTER TABLE ticket_instances ADD COLUMN IF NOT EXISTS claimed_by   VARCHAR(50)`,
+            `ALTER TABLE ticket_instances ADD COLUMN IF NOT EXISTS claimed_at   BIGINT`,
+            `ALTER TABLE ticket_instances ADD COLUMN IF NOT EXISTS claim_history JSONB`,
         ];
         for (const sql of adds) {
             await ticketPool.query(sql).catch(() => {});
@@ -497,6 +515,8 @@ class TicketPanelManager {
             reason: row.reason || null,
             status: row.status || 'open',
             claimedBy: row.claimed_by || null,
+            claimedAt: row.claimed_at ? Number(row.claimed_at) : null,
+            claimHistory: _safeParseJsonArray(row.claim_history),
             createdAt: Number(row.created_at),
             closedAt: row.closed_at ? Number(row.closed_at) : null,
             closedBy: row.closed_by || null,
@@ -733,24 +753,45 @@ class TicketPanelManager {
         return { content: panel.content || null, embeds: [embed], components: [row] };
     }
 
-    /** Build the in-ticket control message (close/claim/rename buttons). */
-    buildControlMessage(panel, opener) {
+    /** Build the in-ticket control message (close/claim/unclaim/transfer/rename buttons). */
+    buildControlMessage(panel, opener, instance = null) {
         const closeBtn = new ButtonBuilder()
             .setCustomId('ticketpanel:close')
             .setLabel(panel.closeButtonLabel || 'Close Ticket')
             .setStyle(ButtonStyle[panel.closeButtonStyle] || ButtonStyle.Danger);
         if (panel.closeButtonEmoji) closeBtn.setEmoji(panel.closeButtonEmoji);
         const rows = [new ActionRowBuilder().addComponents(closeBtn)];
-        // Claim + Rename go in a second row (or first row if no claim button).
+        // Claim management lives in a second row — but only when the panel
+        // has a claim button configured (claimButtonLabel non-empty; the dashboard
+        // uses a null/empty label to hide the claim feature entirely).
+        // Soft-claim: other support staff can still view/reply — these
+        // buttons only manage ownership.
+
         const extra = [];
-        if (panel.claimButtonLabel) {
-            const claimBtn = new ButtonBuilder()
-                .setCustomId('ticketpanel:claim')
-                .setLabel(panel.claimButtonLabel)
-                .setStyle(ButtonStyle[panel.claimButtonStyle] || ButtonStyle.Secondary);
-            if (panel.claimButtonEmoji) claimBtn.setEmoji(panel.claimButtonEmoji);
-            extra.push(claimBtn);
+        const claimEnabled = !!(panel && panel.claimButtonLabel);
+        const claimedBy = claimEnabled && instance && instance.claimedBy ? String(instance.claimedBy) : null;
+        if (claimEnabled) {
+            if (claimedBy) {
+                extra.push(new ButtonBuilder()
+                    .setCustomId('ticketpanel:unclaim')
+                    .setLabel('Unclaim')
+                    .setStyle(ButtonStyle.Secondary)
+                    .setEmoji('✋'));
+                extra.push(new ButtonBuilder()
+                    .setCustomId('ticketpanel:transfer')
+                    .setLabel('Transfer')
+                    .setStyle(ButtonStyle.Secondary)
+                    .setEmoji('🔄'));
+            } else {
+                const claimBtn = new ButtonBuilder()
+                    .setCustomId('ticketpanel:claim')
+                    .setLabel(panel.claimButtonLabel || 'Claim Ticket')
+                    .setStyle(ButtonStyle[panel.claimButtonStyle] || ButtonStyle.Secondary);
+                if (panel.claimButtonEmoji) claimBtn.setEmoji(panel.claimButtonEmoji);
+                extra.push(claimBtn);
+            }
         }
+
         const renameBtn = new ButtonBuilder()
             .setCustomId('ticketpanel:rename')
             .setLabel('Rename')
@@ -766,8 +807,27 @@ class TicketPanelManager {
                 { name: '📂 Category', value: panel.category || 'general', inline: true },
                 { name: '🕐 Opened', value: `<t:${Math.floor(Date.now() / 1000)}:R>`, inline: true },
                 { name: '👤 Opened by', value: `${opener}`, inline: true },
-            )
-            .setTimestamp();
+            );
+
+        // Claim status block — unclaimed shows "⚪ Unclaimed / Nobody"; a
+        // claimed ticket shows the claimant (mention) + claimed-at timestamp.
+
+        const claimedBy2 = instance && instance.claimedBy ? String(instance.claimedBy) : null;
+        if (claimedBy2) {
+            const claimedAtSec = instance && instance.claimedAt ? Math.floor(Number(instance.claimedAt) / 1000) : null;
+            embed.addFields(
+                { name: '🔵 Claim Status', value: 'Claimed', inline: true },
+                { name: '👤 Claimed By', value: `<@${claimedBy2}>`, inline: true },
+            );
+            if (claimedAtSec) embed.addFields({ name: '🕐 Claimed At', value: `<t:${claimedAtSec}:R>`, inline: true });
+        } else {
+            embed.addFields(
+                { name: '⚪ Claim Status', value: 'Unclaimed', inline: true },
+                { name: '👤 Claimed By', value: 'Nobody', inline: true },
+            );
+        }
+
+        embed.setTimestamp();
         return { embeds: [embed], components: rows };
     }
 
@@ -1045,6 +1105,8 @@ class TicketPanelManager {
                 reason: reason || null,
                 status: 'open',
                 claimedBy: null,
+                claimedAt: null,
+                claimHistory: [],
                 createdAt: Date.now(),
             };
             await this._saveInstance(instance);
@@ -1128,8 +1190,8 @@ class TicketPanelManager {
     }
 
     /** Build the open-state control payload for restore-after-cancel/reopen. */
-    _openControlPayload(panel, opener) {
-        const base = this.buildControlMessage(panel || {}, opener);
+    _openControlPayload(panel, opener, instance = null) {
+        const base = this.buildControlMessage(panel || {}, opener, instance);
         return base;
     }
 
@@ -1341,35 +1403,196 @@ class TicketPanelManager {
         }
     }
 
+    /** Claim the ticket for the invoking staff member (atomic + permission-checked). */
     async handleClaim(interaction) {
         const channelId = interaction.channel.id;
+
         const instance = this.getInstanceByChannel(channelId) || await this._fetchInstanceByChannel(channelId);
         if (!instance) {
             return interaction.reply({ content: 'This is not a valid ticket channel.', ephemeral: true });
         }
-        const isAdmin = interaction.member?.permissions?.has(PermissionFlagsBits.Administrator);
-        const isSupport = await this._isSupportMember(interaction, instance);
-        if (!isAdmin && !isSupport) {
-            return interaction.reply({ content: 'Only support staff or administrators can claim this ticket.', ephemeral: true });
+        const panel = this._panelForInstance(instance);
+        const allowed = await ticketPerms.canClaimTicket(interaction.guild, interaction.member, panel, instance);
+        if (!allowed) {
+            return interaction.reply({ content: 'You do not have permission to claim tickets.', ephemeral: true });
         }
+        await interaction.deferReply({ ephemeral: true });
         try {
-            instance.claimedBy = interaction.user.id;
-            await this._saveInstance(instance);
-            // Apply the claimed-status channel name template.
-            const panel = instance.panelId ? this.getPanelById(instance.panelId) : null;
+            const claim = await ticketClaimService.claimTicket(channelId, interaction.user.id, { performedBy: interaction.user.id });
+            if (!claim) {
+                const fresh = await ticketClaimService.getTicketClaim(channelId);
+                if (fresh && fresh.claimedBy && String(fresh.claimedBy) !== String(interaction.user.id)) {
+
+                    return interaction.editReply({ content: `This ticket is already claimed by <@${fresh.claimedBy}>.` });
+                }
+                return interaction.editReply({ content: 'The ticket could not be claimed. Please try again.', ephemeral: true });
+            }
+            // Reflect the new claim state in the in-memory instance.
+            instance.claimedBy = claim.claimedBy;
+            instance.claimedAt = claim.claimedAt;
+            instance.claimHistory = claim.claimHistory;
+            this._byChannel.set(channelId, instance);
+            // Apply the claimed-status channel name template..
             if (panel) {
                 const openerMember = await interaction.guild.members.fetch(instance.userId).catch(() => null);
                 const opener = openerMember?.user || { id: instance.userId, username: openerMember?.displayName };
                 await this._setTicketName(interaction.channel, panel.claimedNameTemplate, panel, opener);
             }
+            // Update the control message in place (claim state + buttons swap)..
+            const payload = this._openControlPayload(panel, await this._resolveOpener(interaction, instance), instance);
+            await interaction.channel?.messages?.fetch(instance.controlMessageId).then(m => m.edit(payload).catch(() => {}));
             const embed = new EmbedBuilder()
                 .setColor('#5865F2')
-                .setDescription(`This ticket has been claimed by ${interaction.user}.`)
+                .setDescription(`🎫 Ticket Claimed
+
+This ticket has been claimed by ${interaction.user}.
+The claimed moderator is now the primary staff member responsible for handling this ticket.`)
                 .setTimestamp();
-            await interaction.reply({ embeds: [embed] });
+            await interaction.editReply({ embeds: [embed] });
         } catch (err) {
             console.error('[TICKETS] Error claiming ticket:', err);
-            return interaction.reply({ content: 'There was an error claiming this ticket.', ephemeral: true });
+            return interaction.editReply({ content: 'There was an error claiming this ticket. Please try again.', ephemeral: true });
+        }
+    }
+
+    /** Unclaim a claimed ticket (claimant always; admin/ticket managers force). */
+    async handleUnclaim(interaction) {
+        const channelId = interaction.channel.id;
+        const instance = this.getInstanceByChannel(channelId) || await this._fetchInstanceByChannel(channelId);
+        if (!instance) {
+            return interaction.reply({ content: 'This is not a valid ticket channel.', ephemeral: true });
+        }
+        const panel = this._panelForInstance(instance);
+        const perm = await ticketPerms.canUnclaimTicket(interaction.guild, interaction.member, panel, instance);
+        if (!perm.allowed) {
+            const text = perm.reason === 'ticket_closed' ? 'This ticket is already closed.' : perm.reason === 'claim_other' ? 'You can only unclaim tickets assigned to you.' : 'You do not have permission to unclaim this ticket.';
+            return interaction.reply({ content: text, ephemeral: true });
+        }
+        await interaction.deferReply({ ephemeral: true });
+        try {
+            const claimerId = perm.force ? null : instance.claimedBy;
+            const res = await ticketClaimService.unclaimTicket(channelId, claimerId, { performedBy: interaction.user.id, force: !!perm.force });
+            if (!res) {
+                const fresh = await ticketClaimService.getTicketClaim(channelId)
+                if (!fresh || fresh.status !== 'open') return interaction.editReply({ content: 'This ticket is already closed.', ephemeral: true });
+                if (fresh.claimedBy) return interaction.editReply({ content: `This ticket is already claimed by <@${fresh.claimedBy}>.` });
+                return interaction.editReply({ content: 'The ticket could not be updated. Please try again.', ephemeral: true });
+            }
+            instance.claimedBy = null;
+            instance.claimedAt = null;
+            instance.claimHistory = res.claimHistory;
+            this._byChannel.set(channelId, instance);
+            const opener = await this._resolveOpener(interaction, instance);
+            const payload = this._openControlPayload(panel, opener, instance);
+            await interaction.channel?.messages?.fetch(instance.controlMessageId).then(m => m.edit(payload).catch(() => {}));
+            const embed = new EmbedBuilder()
+                .setColor('#ED4245')
+                .setDescription(`🎫 Ticket Unclaimed
+
+This ticket is now available for another staff member to handle.`)
+                .setTimestamp();
+            await interaction.editReply({ embeds: [embed] });
+        } catch (err) {
+            console.error('[TICKETS] Error unclaiming ticket:', err);
+            return interaction.editReply({ content: 'There was an error unclaiming this ticket. Please try again.', ephemeral: true });
+        }
+    }
+
+    /** Transfer/resassign a claim via a short modal (current claimer or force). */
+    async handleTransferPrompt(interaction) {
+        const channelId = interaction.channel.id;
+        const instance = this.getInstanceByChannel(channelId) || await this._fetchInstanceByChannel(channelId);
+        if (!instance) {
+            return interaction.reply({ content: 'This is not a valid ticket channel.', ephemeral: true });
+        }
+        const panel = this._panelForInstance(instance);
+        const perm = await ticketPerms.canTransferTicketClaim(interaction.guild, interaction.member, panel, instance);
+        if (!perm.allowed) {
+            return interaction.reply({ content: perm.reason === 'claim_other' ? 'Only the current claimer or administrators can transfer this ticket.' : 'You do not have permission to transfer this ticket.', ephemeral: true });
+        }
+        const modal = new ModalBuilder()
+            .setCustomId('ticketpanel:transfer')
+            .setTitle('Transfer Claim');
+        const input = new TextInputBuilder()
+            .setCustomId('transfer-target')
+            .setLabel('New staff member ID / mention')
+            .setStyle(TextInputStyle.Short)
+            .setPlaceholder('Paste the Discord user ID of the new staff member');
+        modal.addComponents(new ActionRowBuilder().addComponents(input));
+        try {
+            await interaction.showModal(modal);
+        } catch (err) {
+            console.error('[TICKETS] Error showing transfer modal:', err);
+            return interaction.reply({ content: 'There was an error openingthe transfer form.', ephemeral: true });
+        }
+    }
+
+    /** Process the transfer modal submission (atomic + perm-checked). */
+    async handleTransferSubmit(interaction) {
+        const channelId = interaction.channel.id;
+        const instance = this.getInstanceByChannel(channelId) || await this._fetchInstanceByChannel(channelId);
+        if (!instance) {
+            return interaction.reply({ content: 'This is not a valid ticket channel.', ephemeral: true });
+        }
+        const panel = this._panelForInstance(instance);
+        const perm = await ticketPerms.canTransferTicketClaim(interaction.guild, interaction.member, panel, instance);
+        if (!perm.allowed) {
+            return interaction.reply({ content: perm.reason === 'claim_other' ? 'Only the current claimer or administrators can transfer this ticket.' : 'You do not have permission to transfer this ticket.', ephemeral: true });
+        }
+        let raw = interaction.fields?.getTextInputValue('transfer-target');
+        if (raw == null) raw = interaction.fields?.get('transfer-target')?.value;
+        const match = String(raw || '').trim().match(/(\d{6,25})/);
+        const toStaffId = match ? match[1] : null;
+        if (!toStaffId) {
+            return interaction.reply({ content: 'Please provide a valid Discord user ID or mention.', ephemeral: true });
+        }
+        if (instance.claimedBy && String(instance.claimedBy) === toStaffId) {
+            return interaction.reply({ content: 'That user already owns the claim on this ticket.', ephemeral: true });
+        }
+        // The target must be a support-capable member (same panel role config).
+        try {
+            const targetMember = await interaction.guild.members.fetch(toStaffId).catch(() => null);
+            if (targetMember) {
+                const targetPerm = await ticketPerms.canManageTicket(interaction.guild, targetMember, panel);
+                if (!targetPerm) {
+                    return interaction.reply({ content: 'The selected user is not authorized to handle tickets.', ephemeral: true });
+                }
+            }
+        } catch (err) {
+            // Ignore resolution errors — fall through to the atomic transfer (it
+            // re-checks state and only succeeds when the claim is still owned by
+            // which we expect); the timestamp + history still record properly.
+
+        }
+        await interaction.deferReply({ ephemeral: true });
+        try {
+            const prevClaimer = instance.claimedBy || null;
+            const res = await ticketClaimService.transferTicketClaim(channelId, prevClaimer, toStaffId, { performedBy: interaction.user.id, force: !!perm.force });
+            if (!res) {
+                const fresh = await ticketClaimService.getTicketClaim(channelId)
+                if (!fresh || fresh.status !== 'open') return interaction.editReply({ content: 'This ticket is already closed.', ephemeral: true });
+                if (!fresh.claimedBy) return interaction.editReply({ content: 'This ticket is unclaimed — claim it first before transferring.', ephemeral: true });
+                return interaction.editReply({ content: `This ticket is now claimed by <@${fresh.claimedBy}>.`, ephemeral: true });
+            }
+            instance.claimedBy = res.claimedBy;
+            instance.claimedAt = res.claimedAt;
+            instance.claimHistory = res.claimHistory;
+
+            this._byChannel.set(channelId, instance);
+            const opener = await this._resolveOpener(interaction, instance);
+            const payload = this._openControlPayload(panel, opener, instance);
+            await interaction.channel?.messages?.fetch(instance.controlMessageId).then(m => m.edit(payload).catch(() => {}));
+            const embed = new EmbedBuilder()
+                .setColor('#5865F2')
+                .setDescription(`🎫 Ticket Reassigned
+
+Previous Staff: ${prevClaimer ? `<@${prevClaimer}>` : 'Nobody'}
+New Staff: <@${toStaffId}>`)
+                .setTimestamp();
+            await interaction.editReply({ embeds: [embed] });
+        } catch (err) {
+            console.error('[TICKETS] Error transferring ticket claim:', err);
+            return interaction.editReply({ content: 'There was an error transferring this ticket. Please try again.', ephemeral: true });
         }
     }
 
@@ -1461,11 +1684,14 @@ class TicketPanelManager {
             INSERT INTO ticket_instances (
                 panel_id, guild_id, channel_id, user_id, category, is_thread,
                 parent_channel_id, control_message_id, reason, status, claimed_by,
+                claimed_at, claim_history,
                 created_at, closed_at, closed_by, reopened_at, reopened_by
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
             ON CONFLICT (channel_id) DO UPDATE SET
                 status = EXCLUDED.status,
                 claimed_by = EXCLUDED.claimed_by,
+                claimed_at = EXCLUDED.claimed_at,
+                claim_history = EXCLUDED.claim_history,
                 closed_at = EXCLUDED.closed_at,
                 closed_by = EXCLUDED.closed_by,
                 reopened_at = EXCLUDED.reopened_at,
@@ -1474,6 +1700,7 @@ class TicketPanelManager {
             instance.panelId || null, instance.guildId, instance.channelId, instance.userId,
             instance.category, instance.isThread, instance.parentChannelId,
             instance.controlMessageId, instance.reason, instance.status, instance.claimedBy,
+            instance.claimedAt || null, instance.claimHistory ? JSON.stringify(instance.claimHistory) : null,
             instance.createdAt, instance.closedAt || null, instance.closedBy || null,
             instance.reopenedAt || null, instance.reopenedBy || null,
         ]);

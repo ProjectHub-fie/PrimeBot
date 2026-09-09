@@ -998,13 +998,13 @@ function ticketEditorTabsHTML(panel) {
       ${ticketField('Transcript channel ID', 'tk-cf-transcript-channel', `<input type="text" id="tk-cf-transcript-channel" value="${val(cf.transcript?.channelId)}" placeholder="123456789012345678" />`, 'Dashboard-only. The channel PrimeBot posts ticket transcripts to.')}
     `;
 
-    // Tab 7 — Claim: claim properties + channel-name templates (open/claimed/closed) + ticket name.
-
+    // Tab 7 — Claim: claim configuration is now handled by the in-ticket
+    // Claim/Unclaim/Transfer buttons. This tab is kept empty so it no longer
+    // shows the old panel-config fields (the ticket channel-name templates live
+    // on the Ticket tab; the claim button label/emoji/colour live on Buttons).
     const claimTab = `
-      ${ticketField('Ticket channel name (optional)', 'tk-ticket-name', `<input type="text" id="tk-ticket-name" maxlength="100" value="${val(p.ticketName)}" placeholder="Defaults to ticket-username" />`)}
-      ${ticketField('Channel name when OPEN', 'tk-open-name', `<input type="text" id="tk-open-name" maxlength="100" value="${val(p.openNameTemplate)}" placeholder="(open) {name}" />`, 'Template applied when a ticket opens/reopens. Placeholders: {name} (ticket name or username), {username}, {id}, {panel}. Blank = no rename.')}
-      ${ticketField('Channel name when CLAIMED', 'tk-claimed-name', `<input type="text" id="tk-claimed-name" maxlength="100" value="${val(p.claimedNameTemplate)}" placeholder="(solved) {name}" />`, 'Template applied when support claims the ticket. Same placeholders. Blank = no rename.')}
-      ${ticketField('Channel name when CLOSED', 'tk-closed-name', `<input type="text" id="tk-closed-name" maxlength="100" value="${val(p.closedNameTemplate)}" placeholder="(closed) {name}" />`, 'Template applied when the ticket is closed. Same placeholders. Blank = no rename.')}
+      <div class="card-title"><span>Ticket claiming</span></div>
+      <p class="card-hint">Claiming is handled inside each ticket. Support staff click the <strong>Claim Ticket</strong> button in the ticket control panel to take ownership; unclaiming and transfers use the matching buttons in the same area. Claim state (claimer, claimed-at, claim history) is stored per ticket instance — no per-panel claim configuration is needed.</p>
     `;
 
     const tabPanels = [

@@ -570,6 +570,8 @@ const ticketInstances = pgTable('ticket_instances', {
   reason: text('reason'),
   status: varchar('status', { length: 20 }).default('open').notNull(),
   claimedBy: varchar('claimed_by', { length: 50 }),
+  claimedAt: integer('claimed_at'),
+  claimHistory: jsonb('claim_history'),
   createdAt: integer('created_at').notNull(),
   closedAt: integer('closed_at'),
   closedBy: varchar('closed_by', { length: 50 }),
