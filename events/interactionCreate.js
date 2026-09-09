@@ -644,6 +644,10 @@ module.exports = {
                             await safeExecute(mgr.handleReopen.bind(mgr), [interaction], null, 'Ticket panel reopen');
                         } else if (sub === 'claim') {
                             await safeExecute(mgr.handleClaim.bind(mgr), [interaction], null, 'Ticket panel claim');
+                        } else if (sub === 'unclaim') {
+                            await safeExecute(mgr.handleUnclaim.bind(mgr), [interaction], null, 'Ticket panel unclaim');
+                        } else if (sub === 'transfer') {
+                            await safeExecute(mgr.handleTransferPrompt.bind(mgr), [interaction], null, 'Ticket panel transfer');
                         } else if (sub === 'rename') {
                             await safeExecute(mgr.handleRename.bind(mgr), [interaction], null, 'Ticket panel rename');
                         } else {
@@ -995,6 +999,14 @@ module.exports = {
                         [interaction],
                         null,
                         'Ticket panel rename modal'
+                    );
+                } else if (interaction.customId === 'ticketpanel:transfer') {
+                    const mgr = client.ticketPanelManager || client.ticketManager;
+                    await safeExecute(
+                        mgr.handleTransferSubmit.bind(mgr),
+                        [interaction],
+                        null,
+                        'Ticket panel transfer modal'
                     );
                 } else if (interaction.customId.startsWith('ticketpanel:reason:')) {
                     const mgr = client.ticketPanelManager || client.ticketManager;
