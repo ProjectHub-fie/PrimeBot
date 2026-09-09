@@ -244,6 +244,16 @@ class CountingManager {
         return this.counting.has(channelId);
     }
 
+    /**
+     * Whether a message is a bare count in the counting-game sense: a pure
+     * number (1-10 digits), optionally surrounded by whitespace). Used by the
+     * no-prefix guard in messageCreate so plain counts reach the counting manager
+     * instead of being parsed as "$1" / "$4" noise-prefix commands.
+ */
+    static isBareCount(content) {
+        return /^\s*\d{1,10}\s*$/.test(String(content));
+    }
+
     /** Build a status embed for a game object. */
     createCountingEmbed(game) {
         const progress = game.goalNumber > 0

@@ -2299,20 +2299,22 @@ select:focus {
 .doc-cmd-head {
   display: flex;
   align-items: flex-start;
+  flex-wrap: wrap;
   gap: 10px;
   margin-bottom: 8px;
 }
 .doc-cmd-icon { color: var(--accent-strong); display: grid; place-items: center; margin-top: 3px; flex: 0 0 auto; }
 .doc-cmd-icon .ico { width: 16px; height: 16px; }
-.doc-cmd-name { margin: 0; font-size: 15.5px; font-weight: 600; }
+.doc-cmd-name { margin:  0; font-size:  15.5px; font-weight:  600; flex:  1 1 auto; min-width:  0; }
 .doc-cmd-name code {
   background: var(--surface-2);
   border: 1px solid var(--border-soft);
   border-radius: 6px;
   padding: 2px 9px;
   color: var(--on);
+  overflow-wrap: anywhere;
 }
-.doc-cmd-chips { margin-left: auto; display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+.doc-cmd-chips { margin-left: auto; display: flex; flex-wrap: wrap; gap:  6px; justify-content: flex-end; max-width:  100%; min-width:  0; }
 .doc-chip {
   font-size: 10.5px;
   font-weight: 700;

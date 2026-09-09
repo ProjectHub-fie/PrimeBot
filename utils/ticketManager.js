@@ -924,7 +924,67 @@ class TicketPanelManager {
             return interaction.reply({ content: `You already have ${panel.maxOpenPerUser} open ticket(s). Please close one before opening another.`, ephemeral: true });
         }
 
-        const reason = panel.askReason ? (interaction.options?.getString?.('reason') || null) : null;
+        // Ask-for-reason flow: show a modal asking the member why they are opening a ticket.
+        // (the ticket itself is created on submit when the panel requests it).
+        // Button interactions carry no interaction.options, so the old
+        // `interaction.options?.getString?.('reason')` path silently never ran.
+        if (panel.askReason) {
+            return this._showOpenReasonModal(interaction, panel);
+        }
+
+        return this._openTicket(interaction, panel, guild, member, userId, null);
+    }
+
+    /** Show a modal asking for the ticket reason (used when panel.askReason)). */
+    async _showOpenReasonModal(interaction, panel) {
+        const modal = new ModalBuilder()
+            .setCustomId('ticketpanel:reason:' + String(panel.id))
+            .setTitle('Open ' + (panel.name ? String(panel.name).slice(0, 42) : 'Ticket'));
+        const input = new TextInputBuilder()
+            .setCustomId('ticket-reason')
+            .setLabel('Reason for opening this ticket')
+            .setStyle(TextInputStyle.Paragraph)
+            .setRequired(true)
+            .setMaxLength(500)
+            .setPlaceholder(panel.reasonPlaceholder || 'Briefly describe your issue');
+        modal.addComponents(new ActionRowBuilder().addComponents(input));
+        try {
+            return await interaction.showModal(modal);
+        } catch (err) {
+            console.error('[TICKETS] Error showing ticket reason modal:', err);
+            return interaction.reply({ content: 'There was an error opening the ticket form. Please try again.', ephemeral: true });
+        }
+    }
+
+    /** Handle the reason modal submit, then open the ticket. */
+    async handleOpenReasonSubmit(interaction) {
+        const m = /^ticketpanel:reason:(\d+)$/.exec(interaction.customId);
+        const panel = m ? this.getPanelById(m[1]) : null;
+        if (!panel) {
+            return interaction.reply({ content: 'This ticket panel could not be found. It may have been deleted.', ephemeral: true });
+        }
+        let reason = interaction.fields?.getTextInputValue('ticket-reason');
+        if (reason == null) reason = interaction.fields?.get('ticket-reason')?.value;
+        reason = reason && String(reason.trim());
+        if (!reason) {
+            return interaction.reply({ content: 'A reason is required to open this ticket.', ephemeral: true });
+        }
+
+        // Re-check disabled + the per-user open limit: state may have changed while the modal was open.
+        if (!panel.enabled) {
+            return interaction.reply({ content: 'This ticket panel is currently disabled.', ephemeral: true });
+        }
+        const guild = interaction.guild;
+        const userId = interaction.user.id;
+        if (panel.maxOpenPerUser > 0 && this.countOpenTickets(guild.id, userId) >= panel.maxOpenPerUser) {
+            return interaction.reply({ content: `You already have ${panel.maxOpenPerUser} open ticket(s. Please close one before opening another.`, ephemeral: true });
+        }
+
+        return this._openTicket(interaction, panel, guild, interaction.member, userId, reason);
+    }
+
+    /** Open the ticket (shared by handleOpen and handleOpenReasonSubmit)). */
+    async _openTicket(interaction, panel, guild, member, userId, reason) {
         const baseName = panel.ticketName
             ? panel.ticketName
             : `ticket-${interaction.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 40);

@@ -996,6 +996,14 @@ module.exports = {
                         null,
                         'Ticket panel rename modal'
                     );
+                } else if (interaction.customId.startsWith('ticketpanel:reason:')) {
+                    const mgr = client.ticketPanelManager || client.ticketManager;
+                    await safeExecute(
+                        mgr.handleOpenReasonSubmit.bind(mgr),
+                        [interaction],
+                        null,
+                        'Ticket open reason modal'
+                    );
                 } else if (interaction.customId.startsWith('appeal_modal:')) {
                     const guildId = interaction.customId.slice('appeal_modal:'.length);
                     const mgr = interaction.client.appealManager;
