@@ -52,7 +52,7 @@
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.42);
   --shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.55);
   --ring: 0 0 0 3px var(--accent-soft);
-  --maxw: 1180px;
+  --maxw: 1560px;
   --transition: 180ms cubic-bezier(0.4, 0, 0.2, 1);
 
   /* Legacy token aliases — older rules (side menu, save bar, beta / upcoming /
@@ -256,11 +256,12 @@ code {
   min-height: calc(100vh - 62px - 48px);
 }
 
-/* Dense editing workspaces (ticket editor) get a wider content rail so the
- * builder + live preview can share a balanced two-column layout; the cap keeps
- * ultra-wide monitors readable instead of stretching controls end to end. */
+/* Dense editing workspaces keep the same wide rail as the rest of the site —
+ * the builder + live preview share a balanced two-column layout on desktop and
+ * the shared --maxw cap keeps ultra-wide monitors readable instead of
+ * stretching controls end to end. Kept as a semantic alias. */
 .container--editor {
-  max-width: 1560px;
+  max-width: var(--maxw);
 }
 
 .splash {

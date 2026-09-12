@@ -845,7 +845,7 @@ function ticketEditorTabsHTML(panel) {
     // Tab 1 — Panel: identity, enabled, message type, name templates.
 
     const panelTab = `
-      ${ticketField('Panel name', 'tk-name', `<input type="text" id="tk-name" maxlength="100" value="${val(p.name, 'Support Ticket')}" placeholder="Support Ticket" />`, 'Unique per server. Shown as the ticket title and in the dashboard list.')}
+      ${ticketField('Panel name', 'tk-name', `<input type="text" id="tk-name" maxlength="100" value="${val(p.name, 'Support Ticket')}" placeholder="Support Ticket" />`, 'Unique per server. Identifies this panel in the dashboard list. Set the embed title separately on the Message tab — panel name and embed title are independent.')}
       <div class="switch-row">
         <div class="switch-label"><div class="sl-title">Enabled</div><div class="sl-desc">When off, the open ticket button on the panel message is disabled.</div></div>
         <label class="switch"><input type="checkbox" id="tk-enabled" ${chk(p.enabled !== false)}/><span class="slider"></span></label>
