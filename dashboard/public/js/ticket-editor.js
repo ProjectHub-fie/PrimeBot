@@ -46,6 +46,166 @@ function ticketRoleRowHTML(prefix) {
     </div>`;
 }
 
+// ── Message-tab extras: counters, URL validation, save-state pill, reset, unsaved guard.
+const EDB_URL_FIELDS = [
+  { id: 'tk-author-url', note: '.edb-url-note-near-author-url' , label: 'Author URL' },
+  { id: 'tk-author-icon', note: '.edb-note-after-author-icon' , label: 'Author icon URL' },
+  { id: 'tk-title-url', note: '.edb-note-after-title-url' , label: 'Title URL' },
+  { id: 'tk-thumbnail', note: '.edb-note-after-thumbnail' , label: 'Thumbnail URL' },
+  { id: 'tk-image', note: '.edb-note-after-image' , label: 'Image URL' },
+  { id: 'tk-footer-icon', note: '.edb-note-after-footer-icon' , label: 'Footer icon URL' },
+];
+const EDB_COUNTERS = [
+  { id: 'tk-author-name', max: 256 },
+  { id: 'tk-title', max: 256 },
+  { id: 'tk-description', max: 4000 },
+  { id: 'tk-footer', max: 2048 },
+  { id: 'tk-button-label', max: 80 },
+];
+const RE_URL = /^https?:\/\/[^\s]+$/i;
+
+function edbInputLabel(el) {
+  if (!el) return '';
+  const label = el.closest('.edb-field')?.querySelector('.edb-label');
+  return label ? label.textContent.trim() : '';
+}
+
+function validateEdbUrl(el) {
+  if (!el) return;
+  const v = el.value.trim();
+  const noteEl = el.closest('.edb-field')?.querySelector('.edb-note');
+  const lbl = edbInputLabel(el);
+  if (noteEl) {
+    if (v && !RE_URL.test(v) && !/^data:image\//i.test(v)) {
+      noteEl.textContent = `⚠ Please enter a valid URL for ${lbl}.`;
+      noteEl.classList.add('edb-url-error');
+      el.setAttribute('aria-invalid', 'true');
+    } else {
+      noteEl.textContent = '';
+      noteEl.classList.remove('edb-url-error');
+      el.removeAttribute('aria-invalid');
+    }
+  }
+}
+
+function updateEdbCounters() {
+  for (const c of EDB_COUNTERS) {
+    const el = document.getElementById(c.id);
+    const counter = el?.closest('.edb-field')?.querySelector('.edb-counter');
+    if (!el || !counter) continue;
+    const n = el.value.length;
+    counter.textContent = `${n} / ${c.max}`;
+    counter.classList.toggle('edb-over', n > c.max);
+    if (n > c.max) {
+      el.setAttribute('aria-invalid', 'true');
+      counter.setAttribute('role', 'alert');
+    } else {
+      el.removeAttribute('aria-invalid');
+      counter.removeAttribute('role');
+    }
+  }
+}
+
+function bindEdbMessageExtras() {
+  for (const f of EDB_URL_FIELDS) {
+    const el = document.getElementById(f.id);
+    if (el) el.addEventListener('input', () => validateEdbUrl(el));
+  }
+  const countersRoot = document.querySelector('.edb-builder-cols');
+  if (countersRoot) {
+    countersRoot.addEventListener('input', updateEdbCounters);
+    countersRoot.addEventListener('change', updateEdbCounters);
+  }
+  // Reset embed (only the embed/message fields — never the whole panel.)
+  const resetBtn = document.getElementById('edb-reset-embed');
+  if (resetBtn) {
+    resetBtn.addEventListener('click', () => {
+      if (!window.confirm('Reset the embed and message content to defaults? This does not touch the rest of the panel.')) return;
+      const vals = {
+        '#tk-content': '', '#tk-color': '#5865F2', '#tk-color-text': '#5865F2',
+        '#tk-author-name': '', '#tk-author-url': '', '#tk-author-icon': '',
+        '#tk-title': '', '#tk-title-url': '',
+        '#tk-description': '', '#tk-thumbnail': '', '#tk-image': '',
+        '#tk-footer': '', '#tk-footer-icon': '',
+        '#tk-timestamp': '',
+      };
+      for (const [sel, v] of Object.entries(vals)) {
+        const el = document.querySelector(sel);
+        if (!el) continue;
+        if (sel === '#tk-timestamp') el.checked = false; else el.value = v;
+      }
+      window.saveBar?.markDirty?.();
+      renderTicketPreview();
+      updateEdbCounters();
+    });
+  }
+}
+
+function bindEdbSaveState() {
+  const pill = document.getElementById('edb-save-state');
+  if (!pill) return;
+  const text = pill.querySelector('.edb-save-text');
+  const setState = (state) => {
+    pill.classList.toggle('dirty', state === 'dirty');
+    pill.classList.toggle('saving', state === 'saving');
+    pill.classList.toggle('saved', state === 'saved');
+    if (text) {
+      text.textContent = state === 'dirty' ? '● Unsaved changes' : state === 'saving' ? 'Saving…' : '✓ All changes saved';
+    }
+  };
+  const mark = (dirty) => setState(dirty ? 'dirty' : 'saved');
+  // Hook into the floating save bar when available.
+
+  if (typeof setInterval !== 'function') return;
+  const watchSaveBar = setInterval(() => {
+    const sb = window.saveBar;
+    if (!sb) return;
+    clearInterval(watchSaveBar);
+    const origMarkDirty = sb.markDirty?.bind(sb);
+    const origMarkClean = sb.markClean?.bind(sb);
+    if (origMarkDirty) sb.markDirty = (...a) => { origMarkDirty(...a); mark(true); };
+    if (origMarkClean) sb.markClean = (...a) => { origMarkClean(...a); mark(false); };
+    const origRegister = sb.register?.bind(sb);
+    if (origRegister) {
+      sb.register = (saver, ...rest) => {
+        const wrapped = async (...args) => {
+          setState('saving');
+          try {
+            const r = await saver(...args);
+            mark(false);
+            return r;
+          } catch (e) {
+            setState('dirty');
+            throw e;
+          }
+        };
+        return origRegister(wrapped, ...rest);
+      };
+    }
+  }, 50);
+}
+
+function bindEdbNavigationGuard() {
+  if (typeof window.addEventListener !== 'function') return;
+  window.addEventListener('beforeunload', (e) => {
+    if (window.saveBar?._dirty) {
+      e.preventDefault();
+      e.returnValue = '';
+    }
+  });
+}
+
+// Track unsaved changes in the save bar (the floating bar already marks dirty/clean).
+function patchSaveBarDirtyTracking() {
+  const sb = window.saveBar;
+  if (!sb || sb.__edbPatched) return;
+  sb.__edbPatched = true;
+  const origMarkDirty = sb.markDirty?.bind(sb);
+  const origMarkClean = sb.markClean?.bind(sb);
+  if (origMarkDirty) sb.markDirty = (...a) => { origMarkDirty(...a); sb._dirty = true; };
+  if (origMarkClean) sb.markClean = (...a) => { origMarkClean(...a); sb._dirty = false; };
+}
+
 function collectTicketRoles(listSelector, roleClass) {
   const out = [];
   document.querySelectorAll(`${listSelector} .${roleClass}`).forEach(sel => {
@@ -79,13 +239,17 @@ function readTicketForm() {
     name: q('#tk-name').trim() || 'Support Ticket',
     messageType: q('#tk-message-type') || 'embed',
     authorName: q('#tk-author-name').trim() || null,
+    authorUrl: q('#tk-author-url').trim() || null,
     authorIconUrl: q('#tk-author-icon').trim() || null,
     title: q('#tk-title').trim() || null,
+    titleUrl: q('#tk-title-url').trim() || null,
     description: q('#tk-description').trim() || null,
     content: q('#tk-content').trim() || null,
     footerText: q('#tk-footer').trim() || null,
+    footerIconUrl: q('#tk-footer-icon').trim() || null,
     thumbnailUrl: q('#tk-thumbnail').trim() || null,
     imageUrl: q('#tk-image').trim() || null,
+    timestamp: !!document.querySelector('#tk-timestamp')?.checked,
     color: q('#tk-color') || '#5865F2',
     buttonLabel: document.querySelector('#tk-button-label')?.value.trim() || 'Open Ticket',
     buttonEmoji: document.querySelector('#tk-button-emoji')?.value.trim() || null,
@@ -552,7 +716,12 @@ function renderTicketPreview() {
     const btnEmoji = q('#tk-button-emoji');
     const btnLabel = q('#tk-button-label') || 'Open Ticket';
     const styleClass = (q('#tk-button-style') || 'Primary').toLowerCase();
-    const setText = (id, text) => {
+    const showTs = !!document.querySelector('#tk-timestamp')?.checked;
+    const authorUrl = q('#tk-author-url').trim() || null;
+    const titleUrl = q('#tk-title-url').trim() || null;
+    const footerIcon = q('#tk-footer-icon').trim() || null;
+
+    const setText = (id, text, emptyKeep = false) => {
         const el = document.getElementById(id);
         if (!el) return;
         if (text) {
@@ -561,7 +730,7 @@ function renderTicketPreview() {
             if (el.classList.contains('edb-empty')) el.classList.remove('edb-empty');
         } else {
             el.textContent = '';
-            el.classList.add('edb-empty');
+            if (!emptyKeep) el.classList.add('edb-empty');
         }
     };
     const setImg = (id, src) => {
@@ -575,19 +744,25 @@ function renderTicketPreview() {
             el.classList.add('hidden');
         }
     };
+    const setLink = (el, href) => {
+        if (!el) return;
+        if (href) el.setAttribute('href', href);
+        else el.removeAttribute('href');
+    };
 
     // Content / plain body (above the embed).
     setText('edb-content', content);
 
     // Author row — icon + name (or a placeholder when empty).
-    const authorEl = document.getElementById('edb-author');
-    if (authorEl) {
-        const nameEl = document.getElementById('edb-author-name');
+    for (const px of ['', 'pv-']) {
+        const authorEl = document.getElementById(`edb-${px}author`);
+        if (!authorEl) continue;
+        const nameEl = document.getElementById(`edb-${px}author-name`);
         if (nameEl) {
             nameEl.textContent = authorName;
             nameEl.classList.toggle('edb-empty', !authorName);
         }
-        const iconEl = document.getElementById('edb-author-icon');
+        const iconEl = document.getElementById(`edb-${px}author-icon`);
         if (iconEl) {
             if (authorIcon) {
                 iconEl.src = authorIcon;
@@ -597,17 +772,76 @@ function renderTicketPreview() {
                 iconEl.classList.add('hidden');
             }
         }
-        authorEl.classList.toggle('edb-empty', !authorName && !authorIcon);
+        const hasAuthor = !!(authorName || authorIcon);
+        authorEl.classList.toggle('edb-empty', !hasAuthor);
+        // In the detached preview an empty author row is removed entirely so it
+        // never leaves a stray gap (the embed just starts at title/description).
+        if (px === 'pv-') authorEl.classList.toggle('hidden', !hasAuthor);
+        if (px === 'pv-') {
+            const linkEl = document.getElementById('edb-pv-author-link');
+            setLink(linkEl, authorUrl);
+        }
     }
 
-    // Title / description / footer live rows.
+    // Title / description live rows (in-region + preview).
     setText('edb-title', title);
     setText('edb-desc', desc);
-    setText('edb-footer', footer);
+    const pvTitleEl = document.getElementById('edb-pv-title');
+    if (pvTitleEl) {
+        const linkEl = document.getElementById('edb-pv-title-link');
+        if (linkEl) linkEl.textContent = title;
+        pvTitleEl.classList.toggle('hidden', !title);
+        setLink(linkEl, titleUrl);
+    }
+    setText('edb-pv-desc', desc);
+    const pvDescEl = document.getElementById('edb-pv-desc');
+    if (pvDescEl) pvDescEl.classList.toggle('hidden', !desc);
 
-    // Thumbnail + large image.
+    // Footer (text + time + optional icon).
+    const footerText = document.getElementById('edb-footer')?.querySelector('.tk-preview-embed-footer-text') || document.getElementById('edb-pv-footer-text');
+    if (footerText) footerText.textContent = footer;
+    const pvFooterText = document.getElementById('edb-pv-footer-text');
+    if (pvFooterText) {
+        pvFooterText.textContent = footer;
+        pvFooterText.classList.toggle('hidden', !footer);
+    }
+    // Show/hide the little timestamp in both footer rows.
+    for (const timeEl of document.querySelectorAll('.edb-live-footer .tk-preview-embed-time, #edb-pv-time')) {
+        if (!timeEl) continue;
+        timeEl.textContent = showTs ? 'now' : '';
+        timeEl.classList.toggle('hidden', !showTs);
+    }
+    const fIcon = document.getElementById('edb-pv-footer-icon');
+    if (fIcon) {
+        if (footerIcon) { fIcon.src = footerIcon; fIcon.classList.remove('hidden'); }
+        else { fIcon.removeAttribute('src'); fIcon.classList.add('hidden'); }
+    }
+    // Hide the whole footer in the right-column preview when there is nothing
+    // to show (no text, no icon, timestamp disabled) — a clean empty state.
+    const pvFooter = document.getElementById('edb-pv-footer');
+    if (pvFooter) {
+        const hasFooter = footer || footerIcon || showTs;
+        pvFooter.classList.toggle('hidden', !hasFooter);
+        pvFooter.classList.toggle('edb-empty', !hasFooter);
+    }
+
+    // Thumbnail + large image (in-region + preview).
     setImg('edb-thumb', thumb);
     setImg('edb-image', image);
+    setImg('edb-pv-thumb', thumb);
+    setImg('edb-pv-image', image);
+    // Preview rows: hide the whole wrapper when no image is configured so the
+    // embed preview matches Discord exactly (nothing rendered, no gap).
+    for (const imgId of ['edb-pv-thumb', 'edb-pv-image']) {
+        const img = document.getElementById(imgId);
+        if (!img) continue;
+        const hasSrc = !!img.src && !img.classList.contains('hidden');
+        const row = img.closest?.('.edb-live-thumb, .edb-live-image');
+        if (row) {
+            row.classList.toggle('hidden', !hasSrc);
+            row.classList.remove('edb-empty');
+        }
+    }
 
     // Embed color bar.
     const bar = document.getElementById('edb-bar');
@@ -659,6 +893,11 @@ bindEditorTabs();
 bindButtonsBuilder();
 bindQuickActions();
 renderButtonsChips();
+bindEdbMessageExtras();
+bindEdbSaveState();
+patchSaveBarDirtyTracking();
+bindEdbNavigationGuard();
+updateEdbCounters();
 
 document.getElementById('tk-support-add')?.addEventListener('click', () => {
   const ml = document.querySelector('#tk-support-list');
@@ -675,8 +914,10 @@ document.getElementById('tk-ping-add')?.addEventListener('click', () => {
   window.populateRoleSelects();
 });
 
-bindColorSync('tk-color', 'tk-color-text');
-bindColorSync('tk-cf-embed-color', 'tk-cf-embed-color-text');
+if (typeof bindColorSync === 'function') {
+    bindColorSync('tk-color', 'tk-color-text');
+    bindColorSync('tk-cf-embed-color', 'tk-cf-embed-color-text');
+}
 window.populateRoleSelects();
 window.populateChannelSelects();
 
