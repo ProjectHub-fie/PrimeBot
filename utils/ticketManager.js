@@ -5,6 +5,7 @@ const {
 } = require('discord.js');
 const { ticketPool } = require('../server/ticketDb');
 const { trolePool, ensureTicketRoleTable } = require('../server/troleDb');
+const { tclaimPool, ensureTicketClaimsTable } = require('../server/tclaimDb');
 const ticketClaimService = require('./ticketClaimService');
 const ticketPerms = require('./ticketPermissions');
 
@@ -399,6 +400,7 @@ class TicketPanelManager {
         }
         await this._loadComponents();
         await this._loadInstances();
+        await this._loadClaimRows();
     }
 
     async _loadAll() {
@@ -411,6 +413,7 @@ class TicketPanelManager {
             await this._loadRoleSettings();
             await this._loadComponents();
             await this._loadInstances();
+            await this._loadClaimRows();
             console.log(`[TICKETS] Loaded ${panels.length} ticket panels.`);
         } catch (err) {
             console.error('[TICKETS] Failed to load panels:', err.message);
@@ -552,6 +555,65 @@ class TicketPanelManager {
         } catch (err) {
             console.error('[TICKETS] Failed to load instances:', err.message);
         }
+    }
+
+    /**
+     * Merge claim state from the dedicated TCLAIM_DATABASE_URL pool into the
+     * in-memory open instances, seeding a `ticket_claims` row for any
+     * legacy instance that predates the claim table (carrying its current
+     * claim columns over so pre-migration claims are not lost..
+     */
+    async _loadClaimRows() {
+        try {
+            await ensureTicketClaimsTable();
+            const res = await tclaimPool.query('SELECT * FROM ticket_claims');
+            const claimByChannel = new Map();
+            for (const row of res.rows) {
+                claimByChannel.set(String(row.channel_id), row);
+            }
+            for (const [channelId, instance] of this._byChannel) {
+                const row = claimByChannel.get(String(channelId));
+                if (row) {
+                    instance.claimedBy = row.claimed_by || null;
+                    instance.claimedAt = row.claimed_at ? Number(row.claimed_at) : null;
+                    instance.claimHistory = _safeParseJsonArray(row.claim_history);
+                } else {
+                    await this._ensureClaimRow(instance).catch(() => {});
+                }
+            }
+        } catch (err) {
+            console.error('[TICKETS] Failed to load claim rows:', err.message);
+        }
+    }
+
+    /**
+     * Upsert a ticket's claim row in the TCLAIM pool. Used when opening a
+     * ticket and when seeding legacy instances. Only the lifecycle fields
+     * (channel/guild/user/status) are written — claim state is never overwritten
+     * here (COALESCE keeps the live claim). This is deliberately NOT the
+     * claim-state writer; TicketClaimService owns claim mutations.
+
+     */
+    async _ensureClaimRow(instance) {
+        if (!instance || !instance.channelId) return;
+        await ensureTicketClaimsTable();
+        await tclaimPool.query(`
+            INSERT INTO ticket_claims (channel_id, guild_id, user_id, status, claimed_by, claimed_at, claim_history)
+            VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)
+            ON CONFLICT (channel_id) DO UPDATE SET
+                guild_id = EXCLUDED.guild_id,
+                user_id = EXCLUDED.user_id,
+                status = EXCLUDED.status,
+                claimed_by = COALESCE(ticket_claims.claimed_by, EXCLUDED.claimed_by),
+                claimed_at = COALESCE(ticket_claims.claimed_at, EXCLUDED.claimed_at),
+                claim_history = COALESCE(ticket_claims.claim_history, EXCLUDED.claim_history),
+                updated_at = NOW()
+        `, [
+            String(instance.channelId), String(instance.guildId), String(instance.userId),
+            (instance.status || 'open'),
+            instance.claimedBy || null,  instance.claimedAt || null,
+            JSON.stringify(instance.claimHistory || []),
+        ]);
     }
 
     async _fetchAllPanels() {
@@ -1444,6 +1506,7 @@ class TicketPanelManager {
                 createdAt: Date.now(),
             };
             await this._saveInstance(instance);
+            await this._ensureClaimRow(instance).catch(() => {});
             this._byChannel.set(ticketChannel.id, instance);
 
             // Apply the panel's "on open" role add/remove to the ticket author.
@@ -1581,6 +1644,7 @@ class TicketPanelManager {
             );
             this._byChannel.delete(channelId);
             await this._saveInstance(instance);
+            await this._ensureClaimRow(instance).catch(() => {});
             // Apply the closed-status channel name template.
             if (panel) {
                 await this._setTicketName(interaction.channel, panel.closedNameTemplate, panel, opener);
@@ -1685,6 +1749,7 @@ class TicketPanelManager {
         try {
             await interaction.reply({ content: '🗑️ Deleting this ticket channel…', ephemeral: true }).catch(() => {});
             await this._saveInstance({ ...instance, status: 'deleted' });
+            await this._ensureClaimRow({ ...instance, status: 'deleted' }).catch(() => {});
             this._byChannel.delete(channelId);
             await interaction.channel.delete('Ticket deleted via panel button').catch(() => {});
         } catch (err) {
@@ -1727,6 +1792,7 @@ class TicketPanelManager {
             );
             this._byChannel.set(channelId, instance);
             await this._saveInstance(instance);
+            await this._ensureClaimRow(instance).catch(() => {});
             // Re-apply the open-status channel name template.
             if (panel) {
                 await this._setTicketName(interaction.channel, panel.openNameTemplate, panel, opener);

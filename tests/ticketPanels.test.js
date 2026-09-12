@@ -11,7 +11,9 @@ const assert = require('node:assert/strict');
 // Stub the ticket pool BEFORE requiring the manager so its constructor's
 // async _init never hits a real database.
 const { ticketPool } = require('../server/ticketDb');
+const { tclaimPool } = require('../server/tclaimDb');
 ticketPool.query = async () => ({ rows: [] });
+tclaimPool.query = async () => ({ rows: [] });
 
 const { TicketPanelManager } = require('../utils/ticketManager');
 

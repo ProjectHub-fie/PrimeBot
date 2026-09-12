@@ -1816,13 +1816,14 @@ function normalizeTicketComponent(c, position) {
         label: label.slice(0, 80),
         style: type === 'button' ? VALID_TICKET_BUTTON_STYLES.has(c.style) ? c.style : 'Primary' : undefined,
         emoji: c.emoji != null ? String(c.emoji).trim() || null : null,
-        action: type === 'button' ? String(c.action || 'ticket').trim() || 'ticket' : undefined,
+        action: String(c.action || 'ticket').trim() || 'ticket',
         url: type === 'button' ? String(c.url || '').trim() || null : undefined,
         placeholder: type === 'select' ? String(c.placeholder || '').trim().slice(0, 150) || null : undefined,
         minValues: type === 'select' ? Math.max(0, parseInt(c.minValues, 10) || 0) : undefined,
         maxValues: type === 'select' ? Math.max(1, parseInt(c.maxValues, 10) || 1) : undefined,
         claimEnabled: c.claimEnabled !== false,
         ticketConfiguration: (c.ticketConfiguration && typeof c.ticketConfiguration === 'object' && !Array.isArray(c.ticketConfiguration)) ? c.ticketConfiguration : null,
+        options: type === 'select' ? (Array.isArray(c.options) ? c.options.map((o, i) => normalizeTicketOption(o, i)) : []) : undefined,
     };
     // A select's max selections must stay within Discord's 25-option cap..
     if (type === 'select') out.maxValues = Math.min(25, out.maxValues);
