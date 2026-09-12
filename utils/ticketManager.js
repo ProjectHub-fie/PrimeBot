@@ -224,7 +224,11 @@ const DEFAULT_PANEL = {
     color: '#5865F2',
     content: '',
     authorName: '',
+    authorUrl: '',
     authorIconUrl: '',
+    titleUrl: '',
+    footerIconUrl: '',
+    timestampEnabled: true,
     buttonLabel: 'Open Ticket',
     buttonStyle: 'Primary',
     buttonEmoji: '🎫',
@@ -300,6 +304,10 @@ class TicketPanelManager {
             `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS author_icon_url       TEXT`,
             `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS claim_enabled          BOOLEAN NOT NULL DEFAULT true`,
             `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS panel_version           INTEGER NOT NULL DEFAULT 1`,
+            `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS author_url             TEXT`,
+            `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS title_url              TEXT`,
+            `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS footer_icon_url       TEXT`,
+            `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS timestamp_enabled      BOOLEAN NOT NULL DEFAULT true`,
             `CREATE TABLE IF NOT EXISTS ticket_panel_components (
                 id                      SERIAL PRIMARY KEY,
                 panel_id                INTEGER NOT NULL REFERENCES ticket_panels(id) ON DELETE CASCADE,
@@ -657,8 +665,12 @@ class TicketPanelManager {
             thumbnailUrl: row.thumbnail_url || null,
             imageUrl: row.image_url || null,
             authorName: row.author_name || null,
+            authorUrl: row.author_url || null,
             authorIconUrl: row.author_icon_url || null,
+            titleUrl: row.title_url || null,
             footerText: row.footer_text || null,
+            footerIconUrl: row.footer_icon_url || null,
+            timestampEnabled: row.timestamp_enabled !== false,
             content: row.content || null,
             buttonLabel: row.button_label || 'Open Ticket',
             buttonStyle: row.button_style || 'Primary',
@@ -759,8 +771,9 @@ class TicketPanelManager {
                 close_button_emoji, close_button_style, claim_button_label, claim_button_emoji, claim_button_style,
                 claim_enabled, panel_version,
                 open_name_template, claimed_name_template, closed_name_template,
-                close_flow, enabled, created_by, created_at, updated_at
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,NOW(),NOW())
+                close_flow, enabled, created_by, created_at, updated_at,
+                author_url, title_url, footer_icon_url, timestamp_enabled
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,NOW(),NOW(),$40,$41,$42,$43)
             RETURNING id
         `, [
             guildId, panel.name, panel.channelId || null, panel.messageId || null,
@@ -777,6 +790,7 @@ class TicketPanelManager {
             panel.openNameTemplate, panel.claimedNameTemplate, panel.closedNameTemplate,
             JSON.stringify(panel.closeFlow || {}),
             panel.enabled, panel.createdBy || null,
+            panel.authorUrl, panel.titleUrl, panel.footerIconUrl, panel.timestampEnabled,
         ]);
         const id = res.rows[0].id;
         const fetched = await this._fetchPanel(id);
@@ -805,7 +819,8 @@ class TicketPanelManager {
                 close_button_emoji = $27, close_button_style = $28, claim_button_label = $29, claim_button_emoji = $30, claim_button_style = $31,
                 claim_enabled = $32, panel_version = $33,
                 open_name_template = $34, claimed_name_template = $35, closed_name_template = $36,
-                close_flow = $37, enabled = $38, updated_at = NOW()
+                close_flow = $37, enabled = $38, updated_at = NOW(),
+                author_url = $39, title_url = $40, footer_icon_url = $41, timestamp_enabled = $42
             WHERE id = $1
         `, [
             id, norm.name, norm.channelId || null, norm.messageId || null, norm.messageType,
@@ -821,6 +836,7 @@ class TicketPanelManager {
             norm.openNameTemplate, norm.claimedNameTemplate, norm.closedNameTemplate,
             JSON.stringify(norm.closeFlow || {}),
             norm.enabled,
+            norm.authorUrl, norm.titleUrl, norm.footerIconUrl, norm.timestampEnabled,
         ]);
         const fetched = await this._fetchPanel(id);
         if (fetched) this._indexPanel(fetched);
@@ -901,8 +917,20 @@ class TicketPanelManager {
         out.maxOpenPerUser = Math.max(0, parseInt(out.maxOpenPerUser, 10) || 1);
         out.askReason = !!out.askReason;
         out.enabled = out.enabled !== false;
-        for (const f of ['buttonEmoji', 'closeButtonEmoji', 'claimButtonEmoji', 'thumbnailUrl', 'imageUrl', 'authorName', 'authorIconUrl']) {
+        out.timestampEnabled = out.timestampEnabled !== false;
+        for (const f of ['buttonEmoji', 'closeButtonEmoji', 'claimButtonEmoji', 'thumbnailUrl', 'imageUrl', 'authorName', 'authorIconUrl', 'authorUrl', 'titleUrl', 'footerIconUrl']) {
             if (out[f] != null) out[f] = String(out[f]).trim() || null;
+        }
+        // Enforce Discord embed limits + URL validity so a crafted/stale panel
+        // row can never make the EmbedBuilder below throw on send.
+        if (out.title != null) out.title = String(out.title).trim().slice(0, 256) || null;
+        if (out.description != null) out.description = String(out.description).trim().slice(0, 4096) || null;
+        if (out.footerText != null) out.footerText = String(out.footerText).trim().slice(0, 2048) || null;
+        if (out.authorName != null) out.authorName = String(out.authorName).trim().slice(0, 255) || null;
+        for (const u of ['thumbnailUrl', 'imageUrl', 'authorIconUrl', 'authorUrl', 'titleUrl', 'footerIconUrl']) {
+            if (out[u] == null) continue;
+            const v = String(out[u]).trim();
+            out[u] = (v && (/^https?:\/\//i.test(v) || /^data:image\//i.test(v))) ? v : null;
         }
         // Button labels: trim to null when empty/whitespace. An empty label
         // means "no label" — claimButtonLabel null => no claim button rendered.
@@ -931,19 +959,28 @@ class TicketPanelManager {
                 components,
             };
         }
-        const embed = new EmbedBuilder()
-            .setColor(panel.color || '#5865F2')
-            .setTitle(panel.title || '🎫 Support Tickets')
-            .setDescription(panel.description || 'Click the button below to open a support ticket.');
+        const embed = new EmbedBuilder();
+        embed.setColor(panel.color || '#5865F2');
+        if (panel.title) embed.setTitle(panel.title);
+        if (panel.titleUrl) embed.setURL(panel.titleUrl);
+        if (panel.description) embed.setDescription(panel.description);
         if (panel.authorName) {
             const author = { name: panel.authorName };
+            if (panel.authorUrl) author.url = panel.authorUrl;
             if (panel.authorIconUrl) author.iconURL = panel.authorIconUrl;
+
             embed.setAuthor(author);
         }
         if (panel.thumbnailUrl) embed.setThumbnail(panel.thumbnailUrl);
         if (panel.imageUrl) embed.setImage(panel.imageUrl);
-        if (panel.footerText) embed.setFooter({ text: panel.footerText });
-        embed.setTimestamp();
+        if (panel.footerText || panel.footerIconUrl) {
+
+            const footer = { text: panel.footerText || '' };
+            if (panel.footerIconUrl) footer.iconURL = panel.footerIconUrl;
+
+            embed.setFooter(footer);
+        }
+        if (panel.timestampEnabled !== false) embed.setTimestamp();
         return { content: panel.content || null, embeds: [embed], components };
     }
 

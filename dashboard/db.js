@@ -1552,6 +1552,10 @@ async function ensureTicketTables() {
         ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS author_icon_url     TEXT;
         ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS claim_enabled        BOOLEAN NOT NULL DEFAULT true;
         ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS panel_version         INTEGER NOT NULL DEFAULT 1;
+        ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS author_url           TEXT;
+        ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS title_url            TEXT;
+        ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS footer_icon_url     TEXT;
+        ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS timestamp_enabled    BOOLEAN NOT NULL DEFAULT true;
         CREATE TABLE IF NOT EXISTS ticket_panel_components (
             id                      SERIAL PRIMARY KEY,
             panel_id                INTEGER NOT NULL REFERENCES ticket_panels(id) ON DELETE CASCADE,
@@ -1676,8 +1680,12 @@ function ticketRowToPanel(row) {
         thumbnailUrl: row.thumbnail_url || null,
         imageUrl: row.image_url || null,
         authorName: row.author_name || null,
+        authorUrl: row.author_url || null,
         authorIconUrl: row.author_icon_url || null,
+        titleUrl: row.title_url || null,
         footerText: row.footer_text || null,
+        footerIconUrl: row.footer_icon_url || null,
+        timestamp: row.timestamp_enabled !== false,
         content: row.content || null,
         buttonLabel: row.button_label || 'Open Ticket',
         buttonStyle: row.button_style || 'Primary',
@@ -1715,8 +1723,10 @@ function normalizeTicketPanel(data, keepUndefined = false) {
     const defaults = {
         name: 'Support Ticket', messageType: 'embed', title: null, description: null,
         color: '#5865F2', thumbnailUrl: null, imageUrl: null,
-        authorName: null, authorIconUrl: null,
-        footerText: null,
+        authorName: null, authorUrl: null, authorIconUrl: null,
+        titleUrl: null,
+        footerText: null, footerIconUrl: null,
+        timestamp: true,
         content: null, buttonLabel: 'Open Ticket', buttonStyle: 'Primary',
         buttonEmoji: null, category: 'general', ticketName: null,
         supportRoleIds: [], pingRoleIds: [], ticketCategoryId: null,
@@ -1742,6 +1752,20 @@ function normalizeTicketPanel(data, keepUndefined = false) {
     out.color = /^#[0-9a-fA-F]{6}$/.test(out.color) ? out.color : '#5865F2';
     out.authorName = out.authorName == null ? null : String(out.authorName).trim().slice(0, 255) || null;
     out.authorIconUrl = out.authorIconUrl == null ? null : String(out.authorIconUrl).trim() || null;
+    out.authorUrl = out.authorUrl == null ? null : String(out.authorUrl).trim() || null;
+    out.titleUrl = out.titleUrl == null ? null : String(out.titleUrl).trim() || null;
+    out.footerIconUrl = out.footerIconUrl == null ? null : String(out.footerIconUrl).trim() || null;
+    out.timestamp = out.timestamp !== false;
+    // Enforce Discord embed limits server-side so a crafted/over-typed value
+    // can never make buildPanelMessage (EmbedBuilder) throw on send.
+    out.title = out.title == null ? null : String(out.title).trim().slice(0, 256) || null;
+    out.description = out.description == null ? null : String(out.description).trim().slice(0, 4096) || null;
+    out.footerText = out.footerText == null ? null : String(out.footerText).trim().slice(0, 2048) || null;
+    for (const u of ['authorIconUrl', 'authorUrl', 'titleUrl', 'footerIconUrl', 'thumbnailUrl', 'imageUrl']) {
+        if (out[u] == null) continue;
+        const v = String(out[u]).trim();
+        out[u] = (v && (/^https?:\/\//i.test(v) || /^data:image\//i.test(v))) ? v : null;
+    }
     out.supportRoleIds = Array.isArray(out.supportRoleIds) ? out.supportRoleIds.map(String) : [];
     out.pingRoleIds = Array.isArray(out.pingRoleIds) ? out.pingRoleIds.map(String) : [];
     out.cooldownSeconds = Math.max(0, parseInt(out.cooldownSeconds, 10) || 0);
@@ -1758,6 +1782,7 @@ function normalizeTicketPanel(data, keepUndefined = false) {
 const TICKET_PANEL_FIELDS = {
     name: 1, channelId: 1, messageId: 1, messageType: 1, title: 1, description: 1,
     color: 1, thumbnailUrl: 1, imageUrl: 1, authorName: 1, authorIconUrl: 1,
+    authorUrl: 1, titleUrl: 1, footerIconUrl: 1, timestamp: 1,
     footerText: 1, content: 1,
     buttonLabel: 1, buttonStyle: 1, buttonEmoji: 1, category: 1, ticketName: 1,
     supportRoleIds: 1, pingRoleIds: 1, ticketCategoryId: 1, cooldownSeconds: 1,
@@ -2005,8 +2030,9 @@ async function createTicketPanel(guildId, data) {
                 close_button_emoji, close_button_style, claim_button_label, claim_button_emoji, claim_button_style,
                 claim_enabled, panel_version,
                 open_name_template, claimed_name_template, closed_name_template,
-                close_flow, enabled, created_by, created_at, updated_at
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,NOW(),NOW())
+                close_flow, enabled, created_by, created_at, updated_at,
+                author_url, title_url, footer_icon_url, timestamp_enabled
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,NOW(),NOW(),$42,$43,$44,$45)
             RETURNING id
         `, [
             guildId, p.name, p.channelId || null, p.messageId || null, p.messageType,
@@ -2020,6 +2046,7 @@ async function createTicketPanel(guildId, data) {
             p.openNameTemplate, p.claimedNameTemplate, p.closedNameTemplate,
             JSON.stringify(p.closeFlow || {}),
             p.enabled, p.createdBy || null,
+            p.authorUrl, p.titleUrl, p.footerIconUrl, p.timestamp,
         ]);
     } catch (err) {
         if (isTicketNameConflict(err)) throw ticketNameTakenError(p.name);
@@ -2058,7 +2085,8 @@ async function updateTicketPanel(id, patch) {
                 close_button_emoji = $29, close_button_style = $30, claim_button_label = $31, claim_button_emoji = $32, claim_button_style = $33,
                 claim_enabled = $34, panel_version = $35, open_name_template = $36,
                 claimed_name_template = $37, closed_name_template = $38,
-                close_flow = $39, enabled = $40, updated_at = NOW()
+                close_flow = $39, enabled = $40, updated_at = NOW(),
+                author_url = $41, title_url = $42, footer_icon_url = $43, timestamp_enabled = $44
             WHERE id = $1
         `, [
             id, p.name, p.channelId || null, p.messageId || null, p.messageType,
@@ -2072,6 +2100,7 @@ async function updateTicketPanel(id, patch) {
             p.openNameTemplate, p.claimedNameTemplate, p.closedNameTemplate,
             JSON.stringify(p.closeFlow || {}),
             p.enabled,
+            p.authorUrl, p.titleUrl, p.footerIconUrl, p.timestamp,
         ]);
     } catch (err) {
         if (isTicketNameConflict(err)) throw ticketNameTakenError(p.name);
@@ -2782,4 +2811,5 @@ module.exports = {
     removeGuildBirthday,
     isTicketNameConflict,
     uniqueCloneName,
+    normalizeTicketPanel,
 };

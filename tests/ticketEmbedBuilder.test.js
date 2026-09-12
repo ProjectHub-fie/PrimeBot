@@ -58,14 +58,42 @@ test('ticketEditPage: Message tab renders an embed builder — fields ON the emb
     assert.ok(html.includes('id="edb-desc"'), 'live description row');
     assert.ok(html.includes('id="edb-bar"'), 'live color bar');
     assert.ok(html.includes('id="edb-button"'), 'live open-button preview');
-    assert.ok(!html.includes('tk-live-preview'), 'no detached live preview pane');
-    assert.ok(!html.includes('tk-editor-grid'), 'no page-level two-column preview grid');
+    // Premium two-column layout: detached live preview column + separate
+    // thumbnail / image / footer regions so nothing can ever overlap.
+    assert.ok(html.includes('edb-builder-cols'), 'two-column builder grid present');
+    assert.ok(html.includes('edb-builder-left'), 'builder controls column');
+    assert.ok(html.includes('edb-builder-right'), 'sticky preview column');
+    assert.ok(html.includes('edb-preview-embed-wrap'), 'detached live preview pane');
+    assert.ok(html.includes('edb-pv-author'), 'preview author row');
+    assert.ok(html.includes('edb-pv-title'), 'preview title row');
+    assert.ok(html.includes('edb-pv-desc'), 'preview description row');
+    assert.ok(html.includes('edb-pv-thumb'), 'preview thumbnail');
+    assert.ok(html.includes('edb-pv-image'), 'preview large image');
+    assert.ok(html.includes('edb-pv-footer'), 'preview footer');
+    // Each region is its own block section (data-region) — thumbnail and image
+    // are NOT merged into a shared grid cell.
+    assert.ok(html.includes('data-region="edb-thumb"'), 'thumbnail is its own region');
+    assert.ok(html.includes('data-region="edb-image"'), 'image is its own region');
+    // The fixture sets thumbnail+image → the detached preview rows are visible.
+    assert.ok(/class="edb-live edb-live-thumb"/.test(html), 'preview thumb row present when set');
+    assert.ok(!/edb-live-thumb hidden/.test(html), 'thumb preview not hidden when configured');
+    const empty = guildPages.ticketEditPage({ guild: fakeGuild({ ...{ id: 42, name: 'E' }, title: 'T' }), user: null });
+    assert.ok(/edb-live-thumb hidden/.test(empty), 'empty panel pre-hides thumb preview row');
+});
+
+test('ticketEditPage: separate Thumbnail and Image cards never share a grid cell', () => {
+    const html = guildPages.ticketEditPage({ guild: fakeGuild(), user: null });
+    const thumbIdx = html.indexOf('data-region="edb-thumb"');
+    const imageIdx = html.indexOf('data-region="edb-image"');
+    const footerIdx = html.indexOf('data-region="edb-footer"');
+    assert.ok(thumbIdx > -1 && imageIdx > thumbIdx && footerIdx > imageIdx,
+        'regions render in order thumbnail → image → footer (no shared container)');
 });
 
 test('ticketEditPage: every embed-builder input id is unique', () => {
     const html = guildPages.ticketEditPage({ guild: fakeGuild(), user: null });
-    const ids = ['tk-title', 'tk-description', 'tk-content', 'tk-footer', 'tk-thumbnail', 'tk-image',
-        'tk-color', 'tk-color-text', 'tk-author-name', 'tk-author-icon',
+    const ids = ['tk-title', 'tk-title-url', 'tk-description', 'tk-content', 'tk-footer', 'tk-footer-icon', 'tk-thumbnail', 'tk-image',
+        'tk-color', 'tk-color-text', 'tk-author-name', 'tk-author-url', 'tk-author-icon', 'tk-timestamp',
         'tk-button-label', 'tk-button-emoji', 'tk-button-style'];
     for (const id of ids) {
         const n = (html.match(new RegExp(`id="${id}"`, 'g')) || []).length;
@@ -214,7 +242,7 @@ test('client renderTicketPreview updates live output nodes without rebuilding in
     assert.equal(make('edb-title').textContent,'Need help?');
     assert.equal(make('edb-desc').textContent,'Click below');
     assert.equal(make('edb-content').textContent,'@support hello');
-    assert.equal(make('edb-footer').textContent,'PrimeBot');
+    assert.equal(make('edb-pv-footer-text').textContent,'PrimeBot');
     assert.equal(make('edb-author-name').textContent,'Support Team');
     assert.equal(make('edb-author-icon').src,'https://x/a.png');
     assert.equal(make('edb-thumb').src,'https://x/t.png');
@@ -223,4 +251,58 @@ test('client renderTicketPreview updates live output nodes without rebuilding in
     assert.equal(make('edb-button-label').textContent,'Open');
     assert.ok(make('edb-button').classList.contains('tk-preview-button-success'), 'button style class updated');
     assert.equal(make('tk-title').value,'Need help?');
+    // Timestamp + footer live toggles in the detached preview.
+    assert.equal(make('edb-pv-footer-text').textContent, 'PrimeBot');
+    assert.ok(make('edb-pv-footer-text').classList.contains('hidden') === false, 'footer text visible when set');
+});
+
+test('manager buildPanelMessage maps author/title URL + footer icon + NO timestamp', () => {
+    const mgr = new TicketPanelManager({});
+    const panel = mgr._normalizePanel({
+        id: 7, name: 'Support', title: 'Title', titleUrl: 'https://t.example',
+        description: 'Desc', authorName: 'Auth', authorUrl: 'https://a.example',
+        authorIconUrl: 'https://a.example/i.png', footerText: 'Foot', footerIconUrl: 'https://f.example/i.png',
+        timestampEnabled: false, thumbnailUrl: 'https://t.example/thumb.png', imageUrl: 'https://t.example/big.png',
+    });
+    const payload = mgr.buildPanelMessage(panel);
+    const e = payload.embeds[0].toJSON ? payload.embeds[0].toJSON() : payload.embeds[0];
+    assert.equal(e.url, 'https://t.example', 'title URL -> embed.setURL');
+    assert.equal(e.title, 'Title');
+    assert.equal(e.thumbnail.url, 'https://t.example/thumb.png');
+    assert.equal(e.image.url, 'https://t.example/big.png');
+    assert.equal(e.author.name, 'Auth');
+    assert.equal(e.author.url, 'https://a.example');
+    assert.equal(e.author.icon_url, 'https://a.example/i.png');
+    assert.equal(e.footer.text, 'Foot');
+    assert.equal(e.footer.icon_url, 'https://f.example/i.png');
+    assert.equal(e.timestamp, undefined, 'timestampEnabled=false drops setTimestamp');
+});
+
+test('manager normalize drops invalid embed URLs + caps lengths (server-side safety)', () => {
+    const mgr = new TicketPanelManager({});
+    const panel = mgr._normalizePanel({
+        id: 9, name: 'Support', title: 'x'.repeat(900),
+        description: 'y'.repeat(9000),
+        footerText: 'z'.repeat(3000),
+        thumbnailUrl: 'not-a-url', imageUrl: 'ftp://bad', authorUrl: 'javascript:alert(1)',
+        authorName: 'n'.repeat(500), titleUrl: 'https://ok.example',
+    });
+    assert.equal(panel.title.length, 256, 'title capped at 256');
+    assert.equal(panel.description.length, 4096, 'description capped at 4096');
+    assert.equal(panel.footerText.length, 2048, 'footer capped at 2048');
+    assert.equal(panel.authorName.length, 255, 'author name capped at 255');
+    assert.equal(panel.thumbnailUrl, null, 'invalid thumbnail URL dropped');
+    assert.equal(panel.imageUrl, null, 'invalid image URL dropped');
+    assert.equal(panel.authorUrl, null, 'javascript: author URL dropped');
+    assert.equal(panel.titleUrl, 'https://ok.example', 'valid title URL kept');
+});
+
+test('dashboard normalizeTicketPanel caps + validates the same way', () => {
+    const { normalizeTicketPanel } = dashboardDb;
+    const out = normalizeTicketPanel({
+        title: 'a'.repeat(500), thumbnailUrl: 'not-http', footerIconUrl: 'https://ok/icon.png',
+    });
+    assert.equal(out.title.length, 256);
+    assert.equal(out.thumbnailUrl, null);
+    assert.equal(out.footerIconUrl, 'https://ok/icon.png');
 });

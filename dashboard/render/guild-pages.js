@@ -989,9 +989,12 @@ function ticketEditorTabsHTML(panel) {
     // Ticket Tool "Panel Embed Settings" style) + in-ticket welcome message +
     // close embed along the bottom.
     const messageTab = `
-      <div class="card-title"><span>Panel embed</span></div>
-      <p class="card-hint">Edit the panel message directly on the embed — each embed region holds its own field(s), Ticket Tool style. Type and the builder updates the live Discord render inline.</p>
+      <div class="card-title"><span>Message</span></div>
+      <p class="card-hint">Configure the panel message and embed. The editor mirrors Discord's real embed structure — every property maps to the actual <code>EmbedBuilder</code> Discord payload, with a single normalized state powering the live preview, saving, and the bot's renderer.</p>
       ${ticketEmbedBuilderHTML(p, styleOpts)}
+      <div class="edb-save-state" id="edb-save-state" role="status" aria-live="polite">
+        <span class="edb-save-dot"></span><span class="edb-save-text">✓ All changes saved</span>
+      </div>
       <div class="card-title" style="margin-top:14px"><span>In-ticket messages</span></div>
       <p class="card-hint">Shown inside a ticket once opened (not on the panel message).</p>
       ${ticketField('In-ticket welcome message', 'tk-welcome', `<textarea id="tk-welcome" placeholder="Welcome to your support ticket! Please describe your issue.">${val(p.welcomeMessage)}</textarea>`)}
@@ -1155,69 +1158,160 @@ function ticketEmbedBuilderHTML(p = {}, styleOpts) {
         ? `<img id="edb-author-icon" class="edb-author-icon" src="${esc(p.authorIconUrl)}" alt="" />`
         : `<img id="edb-author-icon" class="edb-author-icon hidden" alt="" />`;
     const thumbHTML = p.thumbnailUrl
-        ? `<img id="edb-thumb" class="edb-thumb" src="${esc(p.thumbnailUrl)}" alt="" />`
-        : `<img id="edb-thumb" class="edb-thumb hidden" alt="" />`;
+        ? `<img id="edb-thumb" class="edb-thumb-img" src="${esc(p.thumbnailUrl)}" alt="" />`
+        : `<img id="edb-thumb" class="edb-thumb-img hidden" alt="" />`;
     const imageHTML = p.imageUrl
-        ? `<img id="edb-image" class="edb-image" src="${esc(p.imageUrl)}" alt="" />`
-        : `<img id="edb-image" class="edb-image hidden" alt="" />`;
+        ? `<img id="edb-image" class="edb-image-img" src="${esc(p.imageUrl)}" alt="" />`
+        : `<img id="edb-image" class="edb-image-img hidden" alt="" />`;
+    const titleUrl = p.titleUrl ? esc(p.titleUrl) : '';
+    const authorUrl = p.authorUrl ? esc(p.authorUrl) : '';
+    const footerIcon = p.footerIconUrl ? esc(p.footerIconUrl) : '';
+    const previewFooterSuffix = (!p.footerText && !p.footerIconUrl && p.timestamp === false) ? ' hidden' : '';
+    const counter = (id, max) => `<span class="edb-counter" data-counter-for="${id}" aria-hidden="true">0 / ${max}</span>`;
+    const note = cls => `<p class="edb-note ${cls}"></p>`;
+    const region = (cls, headLabel, payload, hint = '') => `
+      <section class="edb-region ${cls}" data-region="${cls.replace(/^edb-region-?/, '')}">
+        <header class="edb-section-head">
+          <h4 class="edb-section-title">${headLabel}</h4>
+        </header>
+        ${hint ? `<p class="edb-section-hint">${hint}</p>` : ''}
+        ${payload}
+        ${note('')}
+      </section>`;
+    const body = `
+      ${region('edb-author', 'Author', `
+        <div class="edb-duo">
+          <div class="edb-field">
+            <label class="edb-label" for="tk-author-name">Author name</label>
+            <input type="text" id="tk-author-name" maxlength="256" value="${esca(p.authorName)}" placeholder="Support Team" />
+            ${counter('tk-author-name', 256)}
+          </div>
+          <div class="edb-field">
+            <label class="edb-label" for="tk-author-url">Author URL</label>
+            <input type="text" id="tk-author-url" value="${authorUrl}" placeholder="https://example.com" />
+            ${note('edb-url-note')}
+          </div>
+        </div>
+        <div class="edb-field">
+          <label class="edb-label" for="tk-author-icon">Author icon URL</label>
+          <input type="text" id="tk-author-icon" value="${esca(p.authorIconUrl)}" placeholder="https://example.com/icon.png" />
+          ${note('edb-url-note')}
+        </div>
+        <div class="edb-live edb-live-author" id="edb-author">${authorIcon}<span id="edb-author-name">${esca(p.authorName)}</span></div>
+      `,'Shown at the very top of the embed.')}
+      ${region('edb-title', 'Title', `
+        <div class="edb-field">
+          <label class="edb-label" for="tk-title">Title</label>
+          <input type="text" id="tk-title" maxlength="256" value="${esca(p.title)}" placeholder="🎫 Support Tickets" />
+          ${counter('tk-title', 256)}
+        </div>
+        <div class="edb-field">
+          <label class="edb-label" for="tk-title-url">Title URL</label>
+          <input type="text" id="tk-title-url" value="${titleUrl}" placeholder="https://example.com/support" />
+          ${note('edb-url-note')}
+        </div>
+        <div class="edb-live edb-live-title" id="edb-title">${esca(p.title)}</div>
+      `)}
+      ${region('edb-desc', 'Description', `
+        <div class="edb-field">
+          <label class="edb-label" for="tk-description">Description</label>
+          <textarea id="tk-description" rows="4" placeholder="Click the button below to open a support ticket.">${esca(p.description)}</textarea>
+          ${counter('tk-description', 4000)}
+        </div>
+        <div class="edb-live edb-live-desc" id="edb-desc">${esca(p.description)}</div>
+      `,'The main body text. Supports line breaks.')}
+      ${region('edb-thumb', 'Thumbnail', `
+        <p class="edb-section-hint">Small image displayed on the right side of the embed.</p>
+        <div class="edb-field">
+          <label class="edb-label" for="tk-thumbnail">Thumbnail URL</label>
+          <input type="text" id="tk-thumbnail" value="${esca(p.thumbnailUrl)}" placeholder="https://example.com/thumb.png" />
+          ${note('edb-url-note')}
+        </div>
+        <div class="edb-live edb-live-thumb">${thumbHTML}</div>
+      `)}
+      ${region('edb-image', 'Large Image', `
+        <p class="edb-section-hint">Large image displayed at the bottom of the embed.</p>
+        <div class="edb-field">
+          <label class="edb-label" for="tk-image">Image URL</label>
+          <input type="text" id="tk-image" value="${esca(p.imageUrl)}" placeholder="https://example.com/banner.png" />
+          ${note('edb-url-note')}
+        </div>
+        <div class="edb-live edb-live-image">${imageHTML}</div>
+      `)}
+      ${region('edb-footer', 'Footer', `
+        <div class="edb-duo">
+          <div class="edb-field">
+            <label class="edb-label" for="tk-footer">Footer text</label>
+            <input type="text" id="tk-footer" maxlength="2048" value="${esca(p.footerText)}" placeholder="PrimeBot • Tickets" />
+            ${counter('tk-footer', 2048)}
+          </div>
+          <div class="edb-field">
+            <label class="edb-label" for="tk-footer-icon">Footer icon URL</label>
+            <input type="text" id="tk-footer-icon" value="${footerIcon}" placeholder="https://example.com/footer.png" />
+            ${note('edb-url-note')}
+          </div>
+        </div>
+        <div class="edb-live edb-live-footer" id="edb-footer"><span class="tk-preview-embed-footer-text">${esca(p.footerText)}</span><span class="tk-preview-embed-time">now</span></div>
+      `,'Optional. Shown at the bottom-left of the embed.')}
+      ${region('edb-timestamp', 'Timestamp', `
+        <div class="switch-row">
+          <div class="switch-label"><div class="sl-title">Show timestamp in embed footer</div><div class="sl-desc">Renders a small \u201cnow\u201d time in the embed footer when enabled.</div></div>
+          <label class="switch"><input type="checkbox" id="tk-timestamp" ${p.timestamp ? 'checked' : ''}/><span class="slider"></span></label>
+        </div>
+      `)}
+    `;
     return `
     <div class="tk-embed-builder">
+      <div class="edb-live edb-live-content" id="edb-content">${esca(p.content)}</div>
       <div class="edb-region edb-content">
-        <div class="edb-field-head"><label class="edb-label" for="tk-content">Content (above the embed / plain body)</label></div>
-        <textarea id="tk-content" placeholder="Optional: @support or any text shown above the embed / as the plain body.">${esca(p.content)}</textarea>
-        <div class="edb-live edb-live-content" id="edb-content">${esca(p.content)}</div>
+        <div class="edb-field-head"><label class="edb-label" for="tk-content">Message content</label></div>
+        <textarea id="tk-content" rows="2" placeholder="Optional: @support or any text shown above the embed / as the plain body.">${esca(p.content)}</textarea>
       </div>
       <div class="edb-region edb-region-color">
         <div class="edb-field-head"><label class="edb-label" for="tk-color">Embed color</label></div>
         <div class="color-field edb-color-fields">
           <input type="color" id="tk-color" value="${esc(color)}" />
           <input type="text" id="tk-color-text" value="${esc(color)}" style="flex:1" />
+          <button type="button" class="edb-reset" id="edb-reset-embed" title="Reset embed to defaults" aria-label="Reset embed to defaults">${'↺'}</button>
         </div>
       </div>
-      <div class="tk-preview-embed edb-preview-embed">
-        <div class="tk-preview-embed-bar edb-region-color" id="edb-bar" style="background:${esc(color)}" aria-hidden="true"></div>
-        <div class="tk-preview-embed-body">
-          <div class="edb-region edb-author">
-            <div class="edb-field-head"><label class="edb-label">Author</label></div>
-            <div class="edb-duo">
-              <input type="text" id="tk-author-name" maxlength="255" value="${esca(p.authorName)}" placeholder="Author name — e.g. the support team" />
-              <input type="text" id="tk-author-icon" value="${esca(p.authorIconUrl)}" placeholder="Author icon URL" />
+      <div class="edb-builder-cols">
+        <div class="edb-builder-left">
+          ${body}
+        </div>
+        <div class="edb-builder-right">
+          <div class="edb-preview-embed-wrap">
+            <div class="edb-preview-head"><span>${svgIcon('eye')} Live preview</span><span class="edb-preview-live-dot" aria-hidden="true"></span></div>
+            <div class="tk-preview-embed edb-preview-embed">
+            <div class="tk-preview-embed-bar edb-region-color" id="edb-bar" style="background:${esc(color)}" aria-hidden="true"></div>
+            <div class="tk-preview-embed-body">
+              <div class="edb-live edb-live-author${(p.authorName || p.authorIconUrl) ? '' : ' hidden'}" id="edb-pv-author">${authorIcon.replace('id="edb-author-icon"','id="edb-pv-author-icon"')}<a id="edb-pv-author-link" ${p.authorUrl ? `href="${esc(p.authorUrl)}"` : ''}><span id="edb-pv-author-name">${esca(p.authorName || '')}</span></a></div>
+              <div class="edb-live edb-live-title${p.title ? '' : ' hidden'}" id="edb-pv-title"><a id="edb-pv-title-link" ${p.titleUrl ? `href="${esc(p.titleUrl)}"` : ''}>${esca(p.title || '')}</a></div>
+              <div class="edb-live edb-live-desc${p.description ? '' : ' hidden'}" id="edb-pv-desc">${esca(p.description)}</div>
+              <div class="edb-live edb-live-thumb${p.thumbnailUrl ? '' : ' hidden'}">${thumbHTML.replace('id="edb-thumb"','id="edb-pv-thumb"')}</div>
+              <div class="edb-live edb-live-image${p.imageUrl ? '' : ' hidden'}">${imageHTML.replace('id="edb-image"','id="edb-pv-image"')}</div>
+              <div class="edb-live edb-live-footer${previewFooterSuffix}" id="edb-pv-footer">${p.footerIconUrl ? `<img id="edb-pv-footer-icon" class="edb-footer-icon" src="${esc(p.footerIconUrl)}" alt="" />` : '<img id="edb-pv-footer-icon" class="edb-footer-icon hidden" alt="" />'}<span class="tk-preview-embed-footer-text" id="edb-pv-footer-text"${p.footerText ? '' : ' class="hidden"'}>${esca(p.footerText)}</span><span class="tk-preview-embed-time" id="edb-pv-time">now</span></div>
             </div>
-            <div class="edb-live edb-live-author" id="edb-author">${authorIcon}<span id="edb-author-name">${esca(p.authorName)}</span></div>
-          </div>
-          <div class="edb-region edb-title">
-            <div class="edb-field-head"><label class="edb-label" for="tk-title">Title</label></div>
-            <input type="text" id="tk-title" maxlength="255" value="${esca(p.title)}" placeholder="🎫 Support Tickets" />
-            <div class="edb-live edb-live-title" id="edb-title">${esca(p.title)}</div>
-          </div>
-          <div class="edb-region edb-desc">
-            <div class="edb-field-head"><label class="edb-label" for="tk-description">Embed Text</label></div>
-            <textarea id="tk-description" placeholder="Click the button below to open a support ticket.">${esca(p.description)}</textarea>
-            <div class="edb-live edb-live-desc" id="edb-desc">${esca(p.description)}</div>
-          </div>
-          <div class="edb-region edb-thumb">
-            <div class="edb-field-head"><label class="edb-label" for="tk-thumbnail">Thumbnail image URL</label></div>
-            <input type="text" id="tk-thumbnail" value="${esca(p.thumbnailUrl)}" placeholder="https://…/icon.png" />
-            <div class="edb-live edb-live-thumb">${thumbHTML}</div>
-          </div>
-          <div class="edb-region edb-image">
-            <div class="edb-field-head"><label class="edb-label" for="tk-image">Large image URL</label></div>
-            <input type="text" id="tk-image" value="${esca(p.imageUrl)}" placeholder="https://…/banner.png" />
-            <div class="edb-live edb-live-image">${imageHTML}</div>
-          </div>
-          <div class="edb-region edb-footer">
-            <div class="edb-field-head"><label class="edb-label" for="tk-footer">Embed footer text</label></div>
-            <input type="text" id="tk-footer" maxlength="255" value="${esca(p.footerText)}" placeholder="PrimeBot · Tickets" />
-            <div class="edb-live edb-live-footer" id="edb-footer"><span class="tk-preview-embed-footer-text">${esca(p.footerText)}</span><span class="tk-preview-embed-time">now</span></div>
+            </div>
           </div>
         </div>
       </div>
       <div class="edb-region edb-button">
         <div class="edb-field-head"><label class="edb-label">Open ticket button</label></div>
         <div class="edb-triple">
-          <input type="text" id="tk-button-label" maxlength="80" value="${esca(p.buttonLabel, 'Open Ticket')}" placeholder="Open Ticket" />
-          <input type="text" id="tk-button-emoji" maxlength="100" value="${esca(p.buttonEmoji)}" placeholder="🎫" />
-          <select id="tk-button-style">${styleOpts}</select>
+          <div class="edb-field">
+            <label class="edb-label" for="tk-button-label">Label</label>
+            <input type="text" id="tk-button-label" maxlength="80" value="${esca(p.buttonLabel, 'Open Ticket')}" placeholder="Open Ticket" />
+            ${counter('tk-button-label', 80)}
+          </div>
+          <div class="edb-field">
+            <label class="edb-label" for="tk-button-emoji">Emoji (optional)</label>
+            <input type="text" id="tk-button-emoji" maxlength="100" value="${esca(p.buttonEmoji)}" placeholder="🎫" />
+          </div>
+          <div class="edb-field">
+            <label class="edb-label" for="tk-button-style">Style</label>
+            <select id="tk-button-style">${styleOpts}</select>
+          </div>
         </div>
         <div class="edb-live edb-live-button">
           <div class="tk-preview-button tk-preview-button-${esc(styleClass)}" id="edb-button">${btnEmoji}<span id="edb-button-label">${esca(p.buttonLabel, 'Open Ticket')}</span></div>
@@ -1472,5 +1566,6 @@ module.exports = {
     welcomePage, levelingPage, badgesPage, prefixPage, roleRewardsPage, autoResponderPage, reactionsPage, broadcastPage,
     birthdaysPage, loggingPage, reactionRolesPage, ticketsPage, ticketEditPage, automodPage, eventsPage,
     livePollsPage, liveGiveawaysPage,
+    ticketEmbedBuilderHTML,
     TABS,
 };
