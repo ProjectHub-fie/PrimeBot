@@ -618,20 +618,33 @@ module.exports = {
                     if (action === 'ticketpanel') {
                         // Premium ticket panels (configured from the dashboard).
                         // customId forms:
-                        //   ticketpanel:open:<panelId> | ticketpanel:close
-                        //   ticketpanel:closeconfirm:yes|no  (close confirmation)
+                        //   ticketpanel:open:<panelId> | ticketpanel:<componentId>:button
+                        //   ticketpanel:<componentId>:select  (value opt:<optionId>)
+                        //   ticketpanel:close | ticketpanel:closeconfirm:yes|no
                         //   ticketpanel:transcript | ticketpanel:delete
                         //   ticketpanel:reopen | ticketpanel:claim | ticketpanel:rename
                         const sub = params[0];
                         const mgr = client.ticketPanelManager || client.ticketManager;
                         if (sub === 'open') {
                             const panelId = params[1];
-                            const panel = mgr.getPanelById ? mgr.getPanelById(panelId) : null;
-                            if (!panel) {
+                            const panel = mgr.getPanelById && mgr.getPanelById(panelId);
+                            const guildOk = !panel || !panel.guildId || String(panel.guildId) === String(interaction.guild?.id);
+                            if (!panel || !guildOk) {
                                 await safeReply(interaction, { content: 'This ticket panel could not be found. It may have been deleted.', ephemeral: true });
                             } else {
                                 await safeExecute(mgr.handleOpen.bind(mgr), [interaction, panel], null, 'Ticket panel open');
                             }
+                        } else if (sub === 'button' || sub === 'select') {
+                            // Panel-builder input (button or select menu). The component's
+                            // stable id rides in the customId;the manager loads configuration
+                            // from the DB-driven cache and rejects cross-guild use.
+                            const componentId = params[1] ? params[1] : null;
+                            await safeExecute(
+                                mgr.handleComponentOpen.bind(mgr),
+                                [interaction, componentId],
+                                null,
+                                'Ticket panel component open'
+                            );
                         } else if (sub === 'close') {
                             await safeExecute(mgr.handleClose.bind(mgr), [interaction], null, 'Ticket panel close prompt');
                         } else if (sub === 'closeconfirm') {
@@ -1039,6 +1052,29 @@ module.exports = {
                 interactionDebugger.logInteraction(interaction, `Select Menu (${interaction.customId})`);
 
                 try {
+                    // Premium ticket-panel select menus (panel builder): thepper
+                    // component id rides in the customId, the selected option id in the value.
+                    // The manager loads panel/component/option from the DB-driven cache and
+                    // rejects cross-guild use — nothing sensitive rides in the customId..
+                    const panelSel = /^ticketpanel:(\d+):select$/.exec(interaction.customId);
+                    if (panelSel) {
+                        const mgr = interaction.client.ticketPanelManager || interaction.client.ticketManager;
+                        const componentId = panelSel[1];
+                        const rawValue = (interaction.values && interaction.values[0]) || '';
+                        const optMatch = /^opt:(\d+)$/.exec(rawValue);
+                        const optionId = optMatch ? optMatch[1] : null;
+                        if (!optionId) {
+                            await interaction.reply({ content: 'This ticket option could not be found. It may have been deleted.', ephemeral: true }).catch(() => {});
+                            return;
+                        }
+                        await safeExecute(
+                            mgr.handleComponentOpen.bind(mgr),
+                            [interaction, componentId, optionId],
+                            null,
+                            'Ticket panel select option open'
+                        );
+                        return;
+                    }
                     if (interaction.customId === 'category_select_prefix') {
                         const selectedCategory = interaction.values[0];
                         console.log(`[CATEGORIES] User selected category: ${selectedCategory}`);

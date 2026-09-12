@@ -241,6 +241,8 @@ const DEFAULT_PANEL = {
     claimButtonLabel: '',
     claimButtonEmoji: '',
     claimButtonStyle: 'Secondary',
+    claimEnabled: true,
+    panelVersion: 1,
     // Status-based channel name templates. Empty/null → no rename for that state.
     openNameTemplate: '(open) {name}',
     claimedNameTemplate: '(solved) {name}',
@@ -257,6 +259,7 @@ class TicketPanelManager {
         this._byGuild = new Map();    // guildId -> Set<panelId>
         this._byChannel = new Map();  // channelId -> ticket instance (open tickets)
         this._roleSettings = new Map();  // panelId -> ticket role add/remove settings (TROLE pool)
+        this._components = new Map();     // panelId -> component[] (panel builder)
         this._tableReady = false;
         this._init().catch(err =>
             console.error('[TICKETS] Init failed:', err.message)
@@ -294,6 +297,52 @@ class TicketPanelManager {
             `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS close_flow            JSONB`,
             `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS author_name           VARCHAR(255)`,
             `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS author_icon_url       TEXT`,
+            `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS claim_enabled          BOOLEAN NOT NULL DEFAULT true`,
+            `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS panel_version           INTEGER NOT NULL DEFAULT 1`,
+            `CREATE TABLE IF NOT EXISTS ticket_panel_components (
+                id                      SERIAL PRIMARY KEY,
+                panel_id                INTEGER NOT NULL REFERENCES ticket_panels(id) ON DELETE CASCADE,
+                type                    VARCHAR(20) NOT NULL DEFAULT 'button',
+                position                 INTEGER NOT NULL DEFAULT 0,
+                label                   VARCHAR(80),
+                style                   VARCHAR(20) DEFAULT 'Primary',
+                emoji                   VARCHAR(100),
+                action                  VARCHAR(20) NOT NULL DEFAULT 'ticket',
+                url                     TEXT,
+                placeholder              VARCHAR(150),
+                min_values               INTEGER,
+                max_values               INTEGER,
+                claim_enabled            BOOLEAN NOT NULL DEFAULT true,
+                ticket_configuration     JSONB,
+                created_at              TIMESTAMP DEFAULT NOW(),
+                updated_at              TIMESTAMP DEFAULT NOW()
+            )`,
+            `CREATE INDEX IF NOT EXISTS ticket_panel_components_panel_idx ON ticket_panel_components (panel_id)`,
+            `CREATE TABLE IF NOT EXISTS ticket_panel_options (
+                id                      SERIAL PRIMARY KEY,
+                component_id            INTEGER NOT NULL REFERENCES ticket_panel_components(id) ON DELETE CASCADE,
+                label                   VARCHAR(80) NOT NULL,
+                value                   VARCHAR(100) NOT NULL,
+                description             VARCHAR(150),
+                emoji                   VARCHAR(100),
+                position                 INTEGER NOT NULL DEFAULT 0,
+                ticket_configuration     JSONB,
+                created_at              TIMESTAMP DEFAULT NOW(),
+                updated_at              TIMESTAMP DEFAULT NOW()
+            )`,
+            `CREATE INDEX IF NOT EXISTS ticket_panel_options_component_idx ON ticket_panel_options (component_id)`,
+            `CREATE TABLE IF NOT EXISTS ticket_panel_messages (
+                id                      SERIAL PRIMARY KEY,
+                panel_id                INTEGER NOT NULL REFERENCES ticket_panels(id) ON DELETE CASCADE,
+                guild_id                VARCHAR(50) NOT NULL,
+                channel_id              VARCHAR(50) NOT NULL,
+                message_id              VARCHAR(50) NOT NULL,
+                panel_version            INTEGER NOT NULL DEFAULT 1,
+                created_at              TIMESTAMP DEFAULT NOW(),
+                updated_at              TIMESTAMP DEFAULT NOW(),
+                UNIQUE (panel_id, channel_id, message_id)
+            )`,
+            `CREATE INDEX IF NOT EXISTS ticket_panel_messages_panel_idx ON ticket_panel_messages (panel_id)`,
             `ALTER TABLE ticket_instances ADD COLUMN IF NOT EXISTS panel_id     INTEGER REFERENCES ticket_panels(id) ON DELETE SET NULL`,
             `ALTER TABLE ticket_instances ADD COLUMN IF NOT EXISTS reason       TEXT`,
             `ALTER TABLE ticket_instances ADD COLUMN IF NOT EXISTS status       VARCHAR(20) NOT NULL DEFAULT 'open'`,
@@ -348,6 +397,7 @@ class TicketPanelManager {
         for (const [id, panel] of this._byPanel) {
             if (!liveIds.has(id)) this._unindexPanel(panel);
         }
+        await this._loadComponents();
         await this._loadInstances();
     }
 
@@ -359,6 +409,7 @@ class TicketPanelManager {
             this._byGuild.clear();
             for (const panel of panels) this._indexPanel(panel);
             await this._loadRoleSettings();
+            await this._loadComponents();
             await this._loadInstances();
             console.log(`[TICKETS] Loaded ${panels.length} ticket panels.`);
         } catch (err) {
@@ -387,6 +438,82 @@ class TicketPanelManager {
             console.error('[TICKETS] Failed to load role settings:', err.message);
             this._roleSettings.clear();
         }
+    }
+
+    /**
+     * Load the per-panel builder components + dropdown options. Dashboard saves
+     * land here and the manager re-reads on every cache reload, so the panel
+     * message's buttons/dropdowns pick up edits without a bot restart..
+     */
+    async _loadComponents() {
+        try {
+            await this._ensureTable();
+            this._components.clear();
+            const res = await ticketPool.query(`
+                SELECT c.*, JSONB_AGG(
+                    JSONB_BUILD_OBJECT(
+                        'id', o.id,'label', o.label,'value', o.value,'description', o.description,
+                        'emoji', o.emoji,'position', o.position,'ticket_configuration', o.ticket_configuration
+                    ) ORDER BY o.position
+                ) FILTER (WHERE o.id IS NOT NULL) AS _options
+                FROM ticket_panel_components c
+                LEFT JOIN ticket_panel_options o ON o.component_id = c.id
+                GROUP BY c.id
+                ORDER BY c.position, c.id
+            `);
+            for (const row of res.rows) {
+                const opts = [];
+                if (Array.isArray(row._options)) {
+                    for (const o of row._options) opts.push(this._rowToComponentOption(o));
+                }
+                const comp = this._rowToComponent(row);
+                comp.options = opts;
+                if (!this._components.has(String(comp.panelId))) this._components.set(String(comp.panelId), []);
+                this._components.get(String(comp.panelId)).push(comp);
+            }
+        } catch (err) {
+            console.error('[TICKETS] Failed to load panel components:', err.message);
+            this._components.clear();
+        }
+    }
+
+    _rowToComponent(row) {
+        const type = row.type === 'select' ? 'select' : 'button';
+        return {
+            id: Number(row.id),
+            panelId: Number(row.panel_id),
+            type,
+            position: Number(row.position) || 0,
+            label: row.label != null ? String(row.label) : null,
+            style: type === 'button' ? row.style || 'Primary' : undefined,
+            emoji: row.emoji || null,
+            action: type === 'button' ? String(row.action || 'ticket') : 'ticket',
+            url: type === 'button' ? row.url || null : undefined,
+            placeholder: type === 'select' ? row.placeholder || null : undefined,
+            minValues: type === 'select' ? Math.max(0, Number(row.min_values) || 0) : undefined,
+            maxValues: type === 'select' ? Math.min(25, Math.max(1, Number(row.max_values) || 1)) : undefined,
+            claimEnabled: row.claim_enabled !== false,
+            ticketConfiguration: row.ticket_configuration || null,
+            options: [],
+        };
+    }
+
+    _rowToComponentOption(o) {
+        return {
+            id: Number(o.id),
+            label: String(o.label || '' ),
+            value: String(o.value || ''),
+            description: o.description != null ? String(o.description) : null,
+            emoji: o.emoji || null,
+            position: Number(o.position) || 0,
+            ticketConfiguration: o.ticket_configuration || null,
+        };
+    }
+
+    /** All builder components for a panel (sorted by position). */
+    getPanelComponents(panelId) {
+        const list = this._components.get(String(panelId)) || [];
+        return [...list].sort((a, b) => a.position - b.position);
     }
 
     /** Per-panel ticket role settings (never throws). */
@@ -490,6 +617,8 @@ class TicketPanelManager {
             claimButtonLabel: row.claim_button_label || null,
             claimButtonEmoji: row.claim_button_emoji || null,
             claimButtonStyle: row.claim_button_style || 'Secondary',
+            claimEnabled: row.claim_enabled !== false,
+            panelVersion: Number(row.panel_version) || 1,
             openNameTemplate: row.open_name_template != null ? row.open_name_template : null,
             claimedNameTemplate: row.claimed_name_template != null ? row.claimed_name_template : null,
             closedNameTemplate: row.closed_name_template != null ? row.closed_name_template : null,
@@ -566,9 +695,10 @@ class TicketPanelManager {
                 ping_role_ids, ticket_category_id, cooldown_seconds, max_open_per_user,
                 ask_reason, reason_placeholder, welcome_message, close_button_label,
                 close_button_emoji, close_button_style, claim_button_label, claim_button_emoji, claim_button_style,
+                claim_enabled, panel_version,
                 open_name_template, claimed_name_template, closed_name_template,
                 close_flow, enabled, created_by, created_at, updated_at
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,NOW(),NOW())
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,NOW(),NOW())
             RETURNING id
         `, [
             guildId, panel.name, panel.channelId || null, panel.messageId || null,
@@ -581,6 +711,7 @@ class TicketPanelManager {
             panel.askReason, panel.reasonPlaceholder, panel.welcomeMessage,
             panel.closeButtonLabel, panel.closeButtonEmoji, panel.closeButtonStyle,
             panel.claimButtonLabel, panel.claimButtonEmoji, panel.claimButtonStyle,
+            panel.claimEnabled, panel.panelVersion,
             panel.openNameTemplate, panel.claimedNameTemplate, panel.closedNameTemplate,
             JSON.stringify(panel.closeFlow || {}),
             panel.enabled, panel.createdBy || null,
@@ -610,8 +741,9 @@ class TicketPanelManager {
                 cooldown_seconds = $21, max_open_per_user = $22, ask_reason = $23,
                 reason_placeholder = $24, welcome_message = $25, close_button_label = $26,
                 close_button_emoji = $27, close_button_style = $28, claim_button_label = $29, claim_button_emoji = $30, claim_button_style = $31,
-                open_name_template = $32, claimed_name_template = $33, closed_name_template = $34,
-                close_flow = $35, enabled = $36, updated_at = NOW()
+                claim_enabled = $32, panel_version = $33,
+                open_name_template = $34, claimed_name_template = $35, closed_name_template = $36,
+                close_flow = $37, enabled = $38, updated_at = NOW()
             WHERE id = $1
         `, [
             id, norm.name, norm.channelId || null, norm.messageId || null, norm.messageType,
@@ -623,6 +755,7 @@ class TicketPanelManager {
             norm.reasonPlaceholder, norm.welcomeMessage,
             norm.closeButtonLabel, norm.closeButtonEmoji, norm.closeButtonStyle,
             norm.claimButtonLabel, norm.claimButtonEmoji, norm.claimButtonStyle,
+            norm.claimEnabled, norm.panelVersion,
             norm.openNameTemplate, norm.claimedNameTemplate, norm.closedNameTemplate,
             JSON.stringify(norm.closeFlow || {}),
             norm.enabled,
@@ -681,7 +814,10 @@ class TicketPanelManager {
             closeButtonLabel: 1, closeButtonEmoji: 1, closeButtonStyle: 1,
             claimButtonLabel: 1,
             claimButtonEmoji: 1,
-            claimButtonStyle: 1, openNameTemplate: 1, claimedNameTemplate: 1,
+            claimButtonStyle: 1,
+            claimEnabled: 1,
+            panelVersion: 1,
+            openNameTemplate: 1, claimedNameTemplate: 1,
             closedNameTemplate: 1, closeFlow: 1, enabled: 1, createdBy: 1,
         };
     }
@@ -694,6 +830,8 @@ class TicketPanelManager {
         out.buttonStyle = VALID_BUTTON_STYLES.has(out.buttonStyle) ? out.buttonStyle : 'Primary';
         out.closeButtonStyle = VALID_BUTTON_STYLES.has(out.closeButtonStyle) ? out.closeButtonStyle : 'Danger';
         out.claimButtonStyle = VALID_BUTTON_STYLES.has(out.claimButtonStyle) ? out.claimButtonStyle : 'Secondary';
+        out.claimEnabled = out.claimEnabled !== false;
+        out.panelVersion = Math.max(1, parseInt(out.panelVersion, 10) || 1);
         out.color = /^#[0-9a-fA-F]{6}$/.test(out.color) ? out.color : '#5865F2';
         out.supportRoleIds = Array.isArray(out.supportRoleIds) ? out.supportRoleIds.map(String) : [];
         out.pingRoleIds = Array.isArray(out.pingRoleIds) ? out.pingRoleIds.map(String) : [];
@@ -722,19 +860,13 @@ class TicketPanelManager {
 
     // ── Rendering ────────────────────────────────────────────────────────────
 
-    /** Build the panel message payload (embed or plain) + the open button row. */
+    /** Build the panel message payload (embed or plain) + the open button row(s). */
     buildPanelMessage(panel) {
-        const openBtn = new ButtonBuilder()
-            .setCustomId(`ticketpanel:open:${panel.id}`)
-            .setLabel(panel.buttonLabel || 'Open Ticket')
-            .setStyle(ButtonStyle[panel.buttonStyle] || ButtonStyle.Primary);
-        if (panel.buttonEmoji) openBtn.setEmoji(panel.buttonEmoji);
-        const row = new ActionRowBuilder().addComponents(openBtn);
-
+        const components = this._buildPanelRows(panel);
         if (panel.messageType === 'plain') {
             return {
                 content: panel.content || panel.description || 'Click the button below to open a support ticket.',
-                components: [row],
+                components,
             };
         }
         const embed = new EmbedBuilder()
@@ -750,7 +882,96 @@ class TicketPanelManager {
         if (panel.imageUrl) embed.setImage(panel.imageUrl);
         if (panel.footerText) embed.setFooter({ text: panel.footerText });
         embed.setTimestamp();
-        return { content: panel.content || null, embeds: [embed], components: [row] };
+        return { content: panel.content || null, embeds: [embed], components };
+    }
+
+    /**
+     * Build the panel message's action rows from the DB-backed builder components..
+     * Falls back to a single legacy open button when no builder components exist,
+     * so existing panels keep working unchanged..
+     */
+    _buildPanelRows(panel) {
+        const comps = this.getPanelComponents(panel?.id).filter(c => c.type === 'button' || c.type === 'select');
+        if (!panel || !comps.length) {
+            const openBtn = new ButtonBuilder()
+                .setCustomId(`ticketpanel:open:${panel?.id ?? '0'}`)
+                .setLabel(panel?.buttonLabel || 'Open Ticket')
+                .setStyle(ButtonStyle[panel?.buttonStyle] || ButtonStyle.Primary);
+            if (panel?.buttonEmoji) openBtn.setEmoji(panel.buttonEmoji);
+            return [new ActionRowBuilder().addComponents(openBtn)];
+        }
+
+        const rows = [];
+        let buttonsRow = null;
+        const flushButtons = () => {
+            if (buttonsRow && buttonsRow.components.length) rows.push(buttonsRow);
+            buttonsRow = null;
+        };
+        for (const c of [...comps].sort((a, b) => a.position - b.position || a.id - b.id)) {
+            if (c.type === 'select') {
+                flushButtons();
+                const sel = this._buildSelect(c);
+                if (sel) rows.push(new ActionRowBuilder().addComponents(sel));
+                continue;
+            }
+            const btn = this._buildButton(c);
+            if (!btn) continue;
+            if (!buttonsRow || buttonsRow.components.length >= 5) {
+                flushButtons();
+                buttonsRow = new ActionRowBuilder();
+            }
+            buttonsRow.addComponents(btn);
+        }
+        flushButtons();
+        return rows.slice(0, 5);
+    }
+
+    _buildButton(c) {
+        try {
+            let btn;
+            if (c.action === 'link' && c.url) {
+                btn = new ButtonBuilder()
+                    .setLabel(c.label || 'Open')
+                    .setStyle(ButtonStyle.Link)
+                    .setURL(c.url);
+                if (c.emoji) btn.setEmoji(c.emoji);
+            } else {
+                btn = new ButtonBuilder()
+                    .setCustomId(`ticketpanel:${c.id}:button`)
+                    .setLabel(c.label || 'Open Ticket')
+                    .setStyle(ButtonStyle[c.style] || ButtonStyle.Primary);
+                if (c.emoji) btn.setEmoji(c.emoji);
+            }
+            return btn;
+        } catch (err) {
+            console.error('[TICKETS] Error building button component:', err.message);
+            return null;
+        }
+    }
+
+    _buildSelect(c) {
+        try {
+            const opts = (c.options || []).sort((a, b) => a.position - b.position || a.id - b.id);
+            if (!opts.length) return null;
+            const sel = new StringSelectMenuBuilder()
+                .setCustomId(`ticketpanel:${c.id}:select`)
+                .setPlaceholder(c.placeholder || 'Select an option');
+            if (c.minValues != null) sel.setMinValues(Math.min(opts.length, Math.max(0, c.minValues)));
+            if (c.maxValues != null) sel.setMaxValues(Math.min(opts.length, Math.max(1, c.maxValues)));
+            const options = opts.slice(0, 25).map(o => {
+                const ob = new StringSelectMenuOptionBuilder()
+                    .setLabel(String(o.label || 'Option').slice(0, 100))
+                    .setValue(`opt:${o.id}`);
+                if (o.description) ob.setDescription(String(o.description).slice(0, 100));
+                if (o.emoji) ob.setEmoji(o.emoji);
+                return ob;
+            });
+            sel.addOptions(options);
+            return sel;
+        } catch (err) {
+            console.error('[TICKETS] Error building select component:', err.message);
+            return null;
+        }
     }
 
     /** Build the in-ticket control message (close/claim/unclaim/transfer/rename buttons). */
@@ -768,7 +989,11 @@ class TicketPanelManager {
         // buttons only manage ownership.
 
         const extra = [];
-        const claimEnabled = !!(panel && panel.claimButtonLabel);
+        // Claim method toggle: the panel's claim tab switch (claimEnabled, default
+        // on) gates whether the claim control-row is available at all — independent
+        // of the claim button label (which hides just the claim button when blank)..
+        const claimGate = panel && panel.claimEnabled !== false;
+        const claimEnabled = claimGate && !!(panel && panel.claimButtonLabel);
         const claimedBy = claimEnabled && instance && instance.claimedBy ? String(instance.claimedBy) : null;
         if (claimEnabled) {
             if (claimedBy) {
@@ -973,7 +1198,7 @@ class TicketPanelManager {
 
     // ── Ticket open/close/reopen/claim (button interactions) ──────────────────
 
-    async handleOpen(interaction, panel) {
+    async handleOpen(interaction, panel, component = null, option = null) {
         const guild = interaction.guild;
         const member = interaction.member;
         const userId = interaction.user.id;
@@ -981,24 +1206,129 @@ class TicketPanelManager {
             return interaction.reply({ content: 'This ticket panel is currently disabled.', ephemeral: true });
         }
         if (panel.maxOpenPerUser > 0 && this.countOpenTickets(guild.id, userId) >= panel.maxOpenPerUser) {
-            return interaction.reply({ content: `You already have ${panel.maxOpenPerUser} open ticket(s). Please close one before opening another.`, ephemeral: true });
+
+
+            return interaction.reply({ content: `You already have ${panel.maxOpenPerUser} open ticket(s. Please close one before opening another.`, ephemeral: true });
         }
 
-        // Ask-for-reason flow: show a modal asking the member why they are opening a ticket.
-        // (the ticket itself is created on submit when the panel requests it).
-        // Button interactions carry no interaction.options, so the old
-        // `interaction.options?.getString?.('reason')` path silently never ran.
+        // Ask-for-reason flow: show a modal asking the member why they are opening a ticket..
+        // (the ticket itself is created on submit when the panel requests it)..
+        // Button interactions carry no interaction.options., so the old
+        // `interaction.options?.getString?.('reason')` path silently never ran..
+        const cfg = this._ticketConfigFor(panel, (component && component.ticketConfiguration) || (option && option.ticketConfiguration));
+        const ref = component ? { componentId: component.id, optionId: option ? option.id : null } : null;
         if (panel.askReason) {
-            return this._showOpenReasonModal(interaction, panel);
+            return this._showOpenReasonModal(interaction, panel, cfg, ref);
         }
 
-        return this._openTicket(interaction, panel, guild, member, userId, null);
+        return this._openTicket(interaction, panel, guild, member, userId, null, cfg);
+    }
+
+    /**
+     * Open a ticket from a specific panel component (button or select option)..
+     * The component is resolved from the DB-backed cache by its stable id —
+     * never from the interaction's customId payload — and cross-guild usage is
+     * rejected by checking the component's panel belongs to the interaction guild..
+     * Supported customId forms:
+     *   button ticketpanel:<componentId>:button
+     *   select ticketpanel:<componentId>:select   (value "opt:<optionId>")
+     */
+    async handleComponentOpen(interaction, componentId, optionId = null) {
+        const comp = this.findComponentById(componentId);
+        if (!comp) {
+            return interaction.reply({ content: 'This ticket input could not be found. It may have been deleted.', ephemeral: true });
+        }
+        const panel = this.getPanelById(comp.panelId);
+        const guildOk = !panel || panel.guildId == null || String(panel.guildId) === String(interaction.guild?.id);
+        if (!panel || !guildOk) {
+            return interaction.reply({ content: 'This ticket panel could not be found. It may have been deleted.', ephemeral: true });
+        }
+        let option = null;
+        if (optionId) {
+            option = (comp.options || []).find(o => String(o.id) === String(optionId)) || null;
+            if (!option) {
+                return interaction.reply({ content: 'This ticket option could not be found. It may have been deleted.', ephemeral: true });
+            }
+        }
+        return this.handleOpen(interaction, panel, comp, option);
+    }
+
+    /** Find a builder component by id across the cache (never throws). */
+    findComponentById(componentId) {
+        const target = String(componentId);
+        for (const list of this._components.values()) {
+            const hit = list.find(c => String(c.id) === target);
+            if (hit) return hit;
+        }
+        return null;
+    }
+
+    /**
+     * Resolve the component (and option) from the manager's DB-backed cache..
+     * Returns null when the panel/component/option doesn't belong to this guild..
+     */
+    _resolveInput(panel, componentId, optionId = null) {
+        if (!panel || !componentId) return null;
+        const comp = this.getPanelComponents(panel.id).find(c => String(c.id) === String(componentId));
+        if (!comp) return null;
+        if (optionId) {
+            const opt = (comp.options || []).find(o => String(o.id) === String(optionId));
+            if (!opt) return null;
+            return { component: comp, option: opt };
+        }
+        return { component: comp, option: null };
+    }
+
+    /**
+     * Resolve a per-input (button/option) ticket configuration into a panel
+     * patch. Components/options may carry an embedded config object — it is
+     * applied over the panel's own settings for that ticket only (panel+config..
+     * The panel (and its configs) always come from the DB,, never the customId..
+     */
+    _ticketConfigFor(panel, src) {
+        const c = (src && typeof src === 'object' && !Array.isArray(src)) ? src : null;
+        if (!c) return null;
+        const out = {};
+        const remap = {
+            category: 'category',
+            ticketName: 'ticketName',
+            ticketCategoryId: 'ticketCategoryId',
+            supportRoleIds: 'supportRoleIds',
+            pingRoleIds: 'pingRoleIds',
+            cooldown_seconds: 'cooldownSeconds',
+            cooldownSeconds: 'cooldownSeconds',
+            max_open_per_user: 'maxOpenPerUser',
+            maxOpenPerUser: 'maxOpenPerUser',
+            ask_reason: 'askReason',
+            askReason: 'askReason',
+            reason_placeholder: 'reasonPlaceholder',
+            reasonPlaceholder: 'reasonPlaceholder',
+            welcome_message: 'welcomeMessage',
+            welcomeMessage: 'welcomeMessage',
+            channel_name_template: 'openNameTemplate',
+            openNameTemplate: 'openNameTemplate',
+            claimedNameTemplate: 'claimedNameTemplate',
+            closedNameTemplate: 'closedNameTemplate',
+        };
+        for (const k of Object.keys(c)) {
+            const key = remap[k] || k;
+            out[key] = c[k];
+        }
+        const merged = { ...panel, ...out };
+        for (const f of ['supportRoleIds', 'pingRoleIds']) {
+            if (Array.isArray(merged[f])) merged[f] = merged[f].map(String);
+        }
+        if (merged.ticketCategoryId == null) delete merged.ticketCategoryId;
+        if (merged.askReason == null) merged.askReason = false;
+        merged.enabled = panel.enabled !== false;
+        return this._normalizePanel(merged, true);
     }
 
     /** Show a modal asking for the ticket reason (used when panel.askReason)). */
-    async _showOpenReasonModal(interaction, panel) {
+    async _showOpenReasonModal(interaction, panel, cfg = null, ref = null) {
+        const refSuffix = ref && ref.componentId ? `:${ref.componentId}${ref.optionId ? `:${ref.optionId}` : ''}` : '';
         const modal = new ModalBuilder()
-            .setCustomId('ticketpanel:reason:' + String(panel.id))
+            .setCustomId('ticketpanel:reason:' + String(panel.id) + refSuffix)
             .setTitle('Open ' + (panel.name ? String(panel.name).slice(0, 42) : 'Ticket'));
         const input = new TextInputBuilder()
             .setCustomId('ticket-reason')
@@ -1018,7 +1348,7 @@ class TicketPanelManager {
 
     /** Handle the reason modal submit, then open the ticket. */
     async handleOpenReasonSubmit(interaction) {
-        const m = /^ticketpanel:reason:(\d+)$/.exec(interaction.customId);
+        const m = /^ticketpanel:reason:(\d+)(?::(\d+))?(?::(\d+))?$/.exec(interaction.customId);
         const panel = m ? this.getPanelById(m[1]) : null;
         if (!panel) {
             return interaction.reply({ content: 'This ticket panel could not be found. It may have been deleted.', ephemeral: true });
@@ -1040,11 +1370,15 @@ class TicketPanelManager {
             return interaction.reply({ content: `You already have ${panel.maxOpenPerUser} open ticket(s. Please close one before opening another.`, ephemeral: true });
         }
 
-        return this._openTicket(interaction, panel, guild, interaction.member, userId, reason);
+        // Re-resolve the input from the DB (never from the custom id) and load its
+        // per-input ticket configuration.so the resulting ticket honors the builder config..
+        const ref = m && (m[2] || m[3]) ? this._resolveInput(panel, m[2], m[3]) : null;
+        const cfg = this._ticketConfigFor(panel, (ref && (ref.component?.ticketConfiguration || ref.option?.ticketConfiguration)) || null);
+        return this._openTicket(interaction, panel, guild, interaction.member, userId, reason, cfg);
     }
 
     /** Open the ticket (shared by handleOpen and handleOpenReasonSubmit)). */
-    async _openTicket(interaction, panel, guild, member, userId, reason) {
+    async _openTicket(interaction, panel, guild, member, userId, reason, cfg = null) {
         const baseName = panel.ticketName
             ? panel.ticketName
             : `ticket-${interaction.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 40);
@@ -1412,6 +1746,11 @@ class TicketPanelManager {
             return interaction.reply({ content: 'This is not a valid ticket channel.', ephemeral: true });
         }
         const panel = this._panelForInstance(instance);
+        // Claim-method toggle:: tickets created from a panel with claimEnabled = false
+        // (the dashboard Claim tab switch) are not claimable via the button route..
+        if (panel && panel.claimEnabled === false) {
+            return interaction.reply({ content: 'Claiming is disabled for this ticket panel.', ephemeral: true });
+        }
         const allowed = await ticketPerms.canClaimTicket(interaction.guild, interaction.member, panel, instance);
         if (!allowed) {
             return interaction.reply({ content: 'You do not have permission to claim tickets.', ephemeral: true });
@@ -1463,6 +1802,9 @@ The claimed moderator is now the primary staff member responsible for handling t
             return interaction.reply({ content: 'This is not a valid ticket channel.', ephemeral: true });
         }
         const panel = this._panelForInstance(instance);
+        if (panel && panel.claimEnabled === false) {
+            return interaction.reply({ content: 'Claiming is disabled for this ticket panel.', ephemeral: true });
+        }
         const perm = await ticketPerms.canUnclaimTicket(interaction.guild, interaction.member, panel, instance);
         if (!perm.allowed) {
             const text = perm.reason === 'ticket_closed' ? 'This ticket is already closed.' : perm.reason === 'claim_other' ? 'You can only unclaim tickets assigned to you.' : 'You do not have permission to unclaim this ticket.';
@@ -1506,6 +1848,9 @@ This ticket is now available for another staff member to handle.`)
             return interaction.reply({ content: 'This is not a valid ticket channel.', ephemeral: true });
         }
         const panel = this._panelForInstance(instance);
+        if (panel && panel.claimEnabled === false) {
+            return interaction.reply({ content: 'Claiming is disabled for this ticket panel.', ephemeral: true });
+        }
         const perm = await ticketPerms.canTransferTicketClaim(interaction.guild, interaction.member, panel, instance);
         if (!perm.allowed) {
             return interaction.reply({ content: perm.reason === 'claim_other' ? 'Only the current claimer or administrators can transfer this ticket.' : 'You do not have permission to transfer this ticket.', ephemeral: true });
@@ -1535,6 +1880,9 @@ This ticket is now available for another staff member to handle.`)
             return interaction.reply({ content: 'This is not a valid ticket channel.', ephemeral: true });
         }
         const panel = this._panelForInstance(instance);
+        if (panel && panel.claimEnabled === false) {
+            return interaction.reply({ content: 'Claiming is disabled for this ticket panel.', ephemeral: true });
+        }
         const perm = await ticketPerms.canTransferTicketClaim(interaction.guild, interaction.member, panel, instance);
         if (!perm.allowed) {
             return interaction.reply({ content: perm.reason === 'claim_other' ? 'Only the current claimer or administrators can transfer this ticket.' : 'You do not have permission to transfer this ticket.', ephemeral: true });

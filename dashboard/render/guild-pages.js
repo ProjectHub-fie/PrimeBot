@@ -853,6 +853,87 @@ function ticketEditorTabsHTML(panel) {
       ${ticketField('Ticket category label', 'tk-category', `<input type="text" id="tk-category" maxlength="50" value="${val(p.category, 'general')}" placeholder="general" />`)}
     `;
 
+    // Tab 1b — Panel components.builder: the reusable multi-input panel
+    // behaves Ticket Tool style — multiple buttons and/or string-select dropdowns,
+    // each with its own per-input ticket configuration (category, staff roles,
+    // name template, etc.) so ONE panel can open General Support / Purchase /
+    // Partnership tickets. The component positions are explicit (position N);
+    // selects are capped at 25 options; components at 5 action rows.
+
+
+    const editorComponents = Array.isArray(p.components) ? p.components : [];
+    const cfgText = (cfg) => {
+        if (!cfg || typeof cfg !== 'object') return '';
+        const bits = [];
+        if (cfg.category) bits.push(`cat: ${esc(cfg.category)}`);
+        if (cfg.ticketName) bits.push(`name: ${esc(cfg.ticketName)}`);
+        if (Array.isArray(cfg.supportRoleIds) && cfg.supportRoleIds.length) bits.push(`${cfg.supportRoleIds.length} support role(s)`);
+        if (Array.isArray(cfg.pingRoleIds) && cfg.pingRoleIds.length) bits.push(`${cfg.pingRoleIds.length} ping role(s)`);
+        if (cfg.ticketCategoryId) bits.push(`category id: ${esc(String(cfg.ticketCategoryId))}`);
+        if (cfg.maxOpenPerUser) bits.push(`max ${cfg.maxOpenPerUser} open`);
+        if (bits.length) return `<div class="field-hint pcomp-cfg-hint">${bits.join(' · ')}</div>`;
+        return '';
+    };
+    const compRows = editorComponents.sort((a, b) => a.position - b.position || a.id - b.id).map((c, i) => {
+        const opts = Array.isArray(c.options) ? [...c.options].sort((x, y) => x.position - y.position || x.id - y.id) : [];
+        const selectRows = []
+        if (c.type === 'select') {
+            const optRows = (opts.length ? opts : [{}]).map((o, oi) => `
+            <div class="reaction-row pcomp-opt-row" data-opt-idx="${oi}">
+              <input type="text" class="pcomp-opt-label" placeholder="Label" value="${val(o.label)}" maxlength="80" />
+              <input type="text" class="pcomp-opt-emoji" placeholder="emoji" value="${val(o.emoji)}" maxlength="100" />
+              <input type="text" class="pcomp-opt-desc" placeholder="Option description (shown under the label)" value="${val(o.description)}" maxlength="150" />
+              <input type="text" class="pcomp-opt-value" placeholder="value" value="${val(o.value)}" maxlength="100" />
+              <button class="reaction-remove pcomp-opt-del" type="button" title="Remove option">${svgIcon('x')}</button>
+              <span class="pcomp-cfg-summary">${cfgText(o.ticketConfiguration)}</span>
+              <button type="button" class="btn btn-secondary btn-sm pcomp-cfg pcomp-opt-cfg">${svgIcon('sliders')} Config</button>
+            </div>`).join('');
+            selectRows.push(`<div class="pcomp-options">${optRows}</div>
+            <button type="button" class="btn btn-secondary btn-sm pcomp-add-opt">+ Add option</button>`);
+        }
+        const summary = c.type === 'button'
+            ? `<span class="pcomp-type-tag">${esc(c.style || 'Primary')}</span> ${cfgText(c.ticketConfiguration)}`
+            : `<span class="pcomp-type-tag">Dropdown</span> ${c.placeholder ? `placeholder: ${esc(c.placeholder)}` : ''} ${cfgText(c.ticketConfiguration)}`;
+        return `
+      <div class="reaction-row pcomp-row" data-comp-idx="${i}" data-comp-id="${c.id ?? ''}" data-comp-type="${c.type}">
+        <span class="pcomp-grip">${svgIcon('grip')}</span>
+        <span class="pcomp-type">${c.type === 'button' ? '🔘 Button' : '🔽 Dropdown'}</span>
+        ${c.type === 'button'
+            ? `
+          <input type="text" class="pcomp-label" placeholder="Button label" value="${val(c.label)}" maxlength="80" />
+          <input type="text" class="pcomp-emoji" placeholder="emoji" value="${val(c.emoji)}" maxlength="100" />
+          <select class="pcomp-style">
+            ${TICKET_BUTTON_STYLES.map(s => `<option value="${s.value}" ${s.value === (c.style || 'Primary') ? 'selected' : ''}>${esc(s.label)}</option>`).join('')}
+          </select>`
+            : `
+          <input type="text" class="pcomp-label" placeholder="Dropdown placeholder (shown as the select's label)" value="${val(c.placeholder)}" maxlength="150" />
+          <div class="pcomp-range">
+            <label>Min <input type="number" class="pcomp-min" min="0" max="25" value="${Math.max(0, Math.min(25, c.minValues ?? 0))}" /></label>
+            <label>Max <input type="number" class="pcomp-max" min="1" max="25" value="${Math.max(1, Math.min(25, c.maxValues ?? 1))}" /></label>
+          </div>`}
+        <span class="pcomp-summary">${summary}</span>
+        ${c.type === 'button'
+            ? '<button type="button" class="btn btn-secondary btn-sm pcomp-cfg">' + svgIcon('sliders') + ' Config</button>'
+            : ''}
+        <button class="reaction-remove pcomp-del" type="button" title="Remove component">${svgIcon('x')}</button>
+        ${selectRows.join('')}
+      </div>`;
+    }).join('');
+    const componentsTab = `
+      <p class="card-hint">Build the panel's buttons + dropdowns. Each input has its own <strong>ticket configuration</strong> — so one reusable panel can open General Support, Purchase, Partnership, and more. Click <strong>Config</strong> to set that input's per-ticket category, staff roles, name, and limits. Drag rows to reorder (stored as explicit positions).</p>
+      <div class="switch-row">
+        <div class="switch-label"><div class="sl-title">Use this custom panel builder</div><div class="sl-desc">When off, the panel falls back to its single <strong>Open Ticket</strong> button from the legacy settings. When on, the components below drive the panel message (buttons + dropdowns).</div></div>
+        <label class="switch"><input type="checkbox" id="tk-builder-enabled" ${chk(editorComponents.length > 0 || p._builderDefault)}/><span class="slider"></span></label>
+      </div>
+      <div class="pcomp-list">
+        ${compRows || '<div class="alert alert-warn pcomp-empty">No inputs yet. Add a button or dropdown below.</div>'}
+      </div>
+      <div class="pcomp-addbar">
+        <button type="button" class="btn btn-secondary btn-sm" id="tk-add-button">${svgIcon('plus')} Add button</button>
+        <button type="button" class="btn btn-secondary btn-sm" id="tk-add-select">${svgIcon('plus')} Add dropdown</button>
+      </div>
+    `;
+
     // Tab 2 — Buttons: every panel button configured through a Ticket Tool
     // style builder. Each button is a chip; tapping one slides its embed-builder
     // panel open (label / emoji / colour, like the Message tab's embed regions);
@@ -998,17 +1079,20 @@ function ticketEditorTabsHTML(panel) {
       ${ticketField('Transcript channel ID', 'tk-cf-transcript-channel', `<input type="text" id="tk-cf-transcript-channel" value="${val(cf.transcript?.channelId)}" placeholder="123456789012345678" />`, 'Dashboard-only. The channel PrimeBot posts ticket transcripts to.')}
     `;
 
-    // Tab 7 — Claim: claim configuration is now handled by the in-ticket
-    // Claim/Unclaim/Transfer buttons. This tab is kept empty so it no longer
-    // shows the old panel-config fields (the ticket channel-name templates live
-    // on the Ticket tab; the claim button label/emoji/colour live on Buttons).
+    // Tab 8 — Claim: per-panel claim-method switch.
+    // The claim button label/emoji/colour live on the Buttons tab;this tab
+    // only toggles whether claiming is available at all for tickets from this panel..
     const claimTab = `
       <div class="card-title"><span>Ticket claiming</span></div>
-      <p class="card-hint">Claiming is handled inside each ticket. Support staff click the <strong>Claim Ticket</strong> button in the ticket control panel to take ownership; unclaiming and transfers use the matching buttons in the same area. Claim state (claimer, claimed-at, claim history) is stored per ticket instance — no per-panel claim configuration is needed.</p>
+      <div class="switch-row">
+        <div class="switch-label"><div class="sl-title">Enable ticket claiming</div><div class="sl-desc">When on, support staff can use the <strong>Claim Ticket</strong> button (and Unclaim/Transfer) inside each ticket created from this panel. When off, no claim buttons are shown and claiming is disabled for this panel.</div></div>
+        <label class="switch"><input type="checkbox" id="tk-claim-enabled" ${chk(p.claimEnabled !== false)}/><span class="slider"></span></label>
+      </div>
+      <p class="card-hint">Claiming is handled inside each ticket. Support staff click the <strong>Claim Ticket</strong> button in the ticket control panel to take ownership; unclaimingand transfers use the matching buttons in the same area. Claim state (claimer, claimed-at, claim history) is stored per ticket instance. If the claim button's label is left blank on the Buttons tab,the control-row claim button is hidden even when claiming is enabled here.</p>
     `;
 
     const tabPanels = [
-        { key: 'panel',       html: panelTab },
+        { key: 'panel',       html: panelTab + componentsTab },
         { key: 'ticket',      html: roleTab },
         { key: 'buttons',      html: buttonsTab },
         { key: 'message',      html: messageTab },
