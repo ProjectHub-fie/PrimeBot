@@ -1,19 +1,59 @@
 const { Pool } = require('pg');
 
-if (!process.env.WELCOME_DATABASE_URL) {
-    console.warn('⚠️ WELCOME_DATABASE_URL not set — welcome feature will have no database.');
+/**
+ * Dedicated PostgreSQL pool for the Welcome feature.
+ *
+ * Like the other per-feature pools, it gets a separate connection string
+ * (WELCOME_DATABASE_URL) so it can live in its own database/schema if desired.
+ * If WELCOME_DATABASE_URL is unset we fall back to the main DATABASE_URL so the
+ * feature still works in single-DB setups with zero extra configuration.
+ *
+ * Same-DB requirement: for dashboard saves to reach the bot, both deployments
+ * must point at the same WELCOME_DATABASE_URL (or the same DATABASE_URL
+ * fallback). Different DBs → dashboard writes never reach the bot regardless
+ * of caching. (Note: previous versions of this file had NO fallback — a bare
+ * `new Pool({ connectionString: undefined })` silently made every welcome read
+ * fail, so the dashboard showed the feature as permanently off whenever only
+ * DATABASE_URL was set.)
+ */
+
+function resolveConnectionString() {
+    if (process.env.WELCOME_DATABASE_URL) return process.env.WELCOME_DATABASE_URL;
+    if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
+    return null;
 }
 
-const welcomePool = new Pool({
-    connectionString: process.env.WELCOME_DATABASE_URL,
-    ssl: process.env.WELCOME_DATABASE_URL && process.env.WELCOME_DATABASE_URL.includes('sslmode=require')
-        ? { rejectUnauthorized: false }
-        : false,
-    max: 5,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 10000,
-    allowExitOnIdle: true,
-});
+const cs = resolveConnectionString();
+
+if (!cs) {
+    console.warn('⚠️ WELCOME_DATABASE_URL (or DATABASE_URL) not set — welcome feature will have no database.');
+}
+
+function shouldEnableSsl(connectionStr) {
+    return /sslmode\s*=\s*(require|prefer|verify-ca|verify-full|allow)/i.test(connectionStr || '')
+        || process.env.DB_SSL === 'require';
+}
+
+function configFromUrl(connectionStr) {
+    const url = new URL(connectionStr);
+    url.searchParams.delete('sslmode');
+    return {
+        connectionString: url.toString(),
+        ssl: shouldEnableSsl(connectionStr) ? { rejectUnauthorized: false } : false,
+    };
+}
+
+const welcomePool = new Pool(
+    cs
+        ? {
+              ...configFromUrl(cs),
+              max: 5,
+              idleTimeoutMillis: 30000,
+              connectionTimeoutMillis: 10000,
+              allowExitOnIdle: true,
+          }
+        : { max: 0 } // no-op pool; queries will throw and be handled gracefully
+);
 
 welcomePool.on('error', (err) => {
     console.error('[WELCOME DB] Unexpected pool error:', err.message);

@@ -158,6 +158,7 @@ function render(opts) {
         hideBack = false,
         scripts = [],
         locals = {},
+        containerClass = '',
     } = opts;
 
     const version = locals.botVersion || constants.BOT_VERSION;
@@ -188,7 +189,7 @@ function render(opts) {
 </head>
 <body>
   ${navHTML({ active, user, login, hideBack })}
-  <main id="app" class="container">
+  <main id="app" class="container${containerClass ? ` ${containerClass}` : ''}">
     ${body}
   </main>
   <footer class="footer">

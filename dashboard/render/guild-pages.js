@@ -15,7 +15,7 @@ const { guildDataScript, guildHeaderHTML, tabNavHTML, TABS } = require('./guild'
 const { LOG_EVENTS, AUTOMOD_RULES, AUTOMOD_ACTIONS, BADGE_CATALOG } = constants;
 
 // Wrap guild-tab body in the shared shell (header + tabs + data blob + page JS).
-function guildTab({ guild, active, panelHTML, scripts, title, user, panel: _panel }) {
+function guildTab({ guild, active, panelHTML, scripts, title, user, panel: _panel, containerClass }) {
     const body = `
     ${guildHeaderHTML(guild)}
     ${tabNavHTML(guild.id, active)}
@@ -28,6 +28,7 @@ function guildTab({ guild, active, panelHTML, scripts, title, user, panel: _pane
         active: 'servers',
         scripts,
         user,
+        containerClass,
     });
 }
 
@@ -1341,7 +1342,10 @@ function ticketEditPage({ guild, user }) {
       ${tabBar}
       <div class="tk-editor-panels">${tabContent}</div>
     </div>`;
-    return guildTab({ guild, user, active: 'tickets', panelHTML: pageHTML, panel, scripts: ['/js/guild-common.js', '/js/ticket-editor.js'] });
+    // The ticket editor is a dense workspace: give it a wider container than
+    // the standard page so the builder + live preview can use a balanced
+    // two-column layout on desktop (still capped on ultra-wide screens).
+    return guildTab({ guild, user, active: 'tickets', panelHTML: pageHTML, panel, scripts: ['/js/guild-common.js', '/js/ticket-editor.js'], containerClass: 'container--editor' });
 }
 
 // ── Automod ─────────────────────────────────────────────────────────────────
