@@ -1203,11 +1203,25 @@ function ticketPanelMessagePayload(panel) {
         title: panel.title || '🎫 Support Tickets',
         description: panel.description || 'Click the button below to open a support ticket.',
         color,
-        ...(panel.footerText ? { footer: { text: panel.footerText } } : {}),
+        ...(panel.titleUrl ? { url: panel.titleUrl } : {}),
+        ...(panel.authorName ? {
+            author: {
+                name: String(panel.authorName).slice(0, 256),
+                ...(panel.authorUrl ? { url: panel.authorUrl } : {}),
+                ...(panel.authorIconUrl ? { icon_url: panel.authorIconUrl } : {}),
+            },
+        } : {}),
+        ...(panel.footerText || panel.footerIconUrl ? {
+            footer: {
+                text: panel.footerText ? String(panel.footerText).slice(0, 2048) : '',
+                ...(panel.footerIconUrl ? { icon_url: panel.footerIconUrl } : {}),
+            },
+        } : {}),
         ...(panel.thumbnailUrl ? { thumbnail: { url: panel.thumbnailUrl } } : {}),
         ...(panel.imageUrl ? { image: { url: panel.imageUrl } } : {}),
-        timestamp: new Date().toISOString(),
     };
+    // Timestamp is part of the embed footer; the builder exposes a toggle.
+    if (panel.timestamp !== false) embed.timestamp = new Date().toISOString();
     return { content: panel.content || null, embeds: [embed], components };
 }
 

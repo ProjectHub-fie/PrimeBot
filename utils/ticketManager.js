@@ -1255,8 +1255,15 @@ class TicketPanelManager {
      * Resolve the effective channel-name template + attribute opts for a state.
      * Prefers the panel's Ticket-tab role settings (TROLE pool) when that state's
      * toggle is on; otherwise falls back to the legacy per-state template.
-
-    _troleNameState(panel, state, fallbackTemplate) {
+     * The legacy fallback keeps the original rendering defaults ({name} falls
+     * back to the opener's username, count off), so classic templates behave
+     * exactly as before.
+     *
+     * @param {number} count  Value for the {count} placeholder when Show count
+     *   is enabled (computed by the caller — the open path counts the ticket
+     *   being created, close/reopen use the remaining open count).
+     */
+    _troleNameState(panel, state, fallbackTemplate, count = 0) {
         const s = this.getRoleSettings(panel?.id);
         const g = s?.[state];
         if (g && g.enabled) {
@@ -1264,9 +1271,10 @@ class TicketPanelManager {
                 template: g.channelName || null,
                 showUserName: g.showUserName !== false,
                 showCount: g.showCount !== false,
+                count: g.showCount !== false ? (Number(count) || 0) : 0,
             };
         }
-        return { template: fallbackTemplate || null, showUserName: false, showCount: false };
+        return { template: fallbackTemplate || null, showUserName: true, showCount: false, count: 0 };
     }
 
     /** Post the panel to a channel. */
@@ -1478,13 +1486,23 @@ class TicketPanelManager {
 
     /** Open the ticket (shared by handleOpen and handleOpenReasonSubmit)). */
     async _openTicket(interaction, panel, guild, member, userId, reason, cfg = null) {
+        // Per-input (button/option) config overrides apply to this ticket only —
+        // including the open channel-name template and ticketName/category.
+        if (cfg) panel = cfg;
         const baseName = panel.ticketName
             ? panel.ticketName
             : `ticket-${interaction.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 40);
-        // Status-based channel name: prefer the panel's open template, falling back
-        // to the legacy "🎫 <baseName>" form when no template is configured.
-        const openName = this._renderTicketName(panel.openNameTemplate, panel, interaction.user)
-            || `🎫 ${baseName}`.slice(0, 100);
+        // The ticket being opened counts toward the user's open-ticket count.
+        const count = this.countOpenTickets(guild.id, userId) + 1;
+        const ns = this._troleNameState(panel, 'open', panel.openNameTemplate, count);
+        // Status-based channel name: prefer the effective open template (role
+        // settings when enabled, else the panel template), falling back to the
+        // legacy "🎫 <baseName>" form when no template is configured.
+        const openName = this._renderTicketName(ns.template, panel, interaction.user, {
+            showUserName: ns.showUserName,
+            showCount: ns.showCount,
+            count: ns.count,
+        }) || `🎫 ${baseName}`.slice(0, 100);
 
         try {
             let ticketChannel;
@@ -1682,9 +1700,16 @@ class TicketPanelManager {
             this._byChannel.delete(channelId);
             await this._saveInstance(instance);
             await this._ensureClaimRow(instance).catch(() => {});
-            // Apply the closed-status channel name template.
+            // Apply the closed-status channel name template (role settings take
+            // precedence; count = the user's remaining open tickets).
             if (panel) {
-                await this._setTicketName(interaction.channel, panel.closedNameTemplate, panel, opener);
+                const count = this.countOpenTickets(instance.guildId, instance.userId);
+                const ns = this._troleNameState(panel, 'close', panel.closedNameTemplate, count);
+                await this._setTicketName(interaction.channel, ns.template, panel, opener, {
+                    showUserName: ns.showUserName,
+                    showCount: ns.showCount,
+                    count: ns.count,
+                });
                 // Apply the panel's "on close" role add/remove to the ticket author.
 
                 const openerMember = await interaction.guild.members.fetch(instance.userId).catch(() => null);
@@ -1830,9 +1855,16 @@ class TicketPanelManager {
             this._byChannel.set(channelId, instance);
             await this._saveInstance(instance);
             await this._ensureClaimRow(instance).catch(() => {});
-            // Re-apply the open-status channel name template.
+            // Re-apply the open-status channel name template (role settings take
+            // precedence; count includes the reopened ticket).
             if (panel) {
-                await this._setTicketName(interaction.channel, panel.openNameTemplate, panel, opener);
+                const count = this.countOpenTickets(instance.guildId, instance.userId) + 1;
+                const ns = this._troleNameState(panel, 'open', panel.openNameTemplate, count);
+                await this._setTicketName(interaction.channel, ns.template, panel, opener, {
+                    showUserName: ns.showUserName,
+                    showCount: ns.showCount,
+                    count: ns.count,
+                });
             }
         } catch (err) {
             console.error('[TICKETS] Error reopening ticket:', err);
@@ -1878,7 +1910,12 @@ class TicketPanelManager {
             if (panel) {
                 const openerMember = await interaction.guild.members.fetch(instance.userId).catch(() => null);
                 const opener = openerMember?.user || { id: instance.userId, username: openerMember?.displayName };
-                await this._setTicketName(interaction.channel, panel.claimedNameTemplate, panel, opener);
+                const count = this.countOpenTickets(instance.guildId, instance.userId);
+                await this._setTicketName(interaction.channel, panel.claimedNameTemplate, panel, opener, {
+                    showUserName: true,
+                    showCount: true,
+                    count,
+                });
             }
             // Update the control message in place (claim state + buttons swap)..
             const payload = this._openControlPayload(panel, await this._resolveOpener(interaction, instance), instance);

@@ -122,7 +122,7 @@ test('preview embed: bar and body remain a row with min-width guards (fits page 
     assert.match(STYLES, /\.tk-preview-embed-body \{ min-width:\s*0;/);
     assert.match(STYLES, /\.tk-embed-builder \{[\s\S]*?min-width:\s*0;/);
     assert.match(STYLES, /\.edb-duo \{ display:\s*grid; grid-template-columns:\s*minmax\(0,\s*1fr\)\s*minmax\(0,\s*1fr\);/);
-    assert.match(STYLES, /@media \(max-width:\s*980px\)[\s\S]*?\.edb-duo,\s*\.edb-triple \{ grid-template-columns:\s*1fr;/);
+    assert.match(STYLES, /@media \(max-width:\s*920px\)[\s\S]*?\.edb-duo,\s*\.edb-triple \{ grid-template-columns:\s*1fr;/);
 });
 
 test('embed builder: mobile 720px rules stack the bar above the body', () => {

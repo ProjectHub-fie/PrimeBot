@@ -15,7 +15,7 @@ const { guildDataScript, guildHeaderHTML, tabNavHTML, TABS } = require('./guild'
 const { LOG_EVENTS, AUTOMOD_RULES, AUTOMOD_ACTIONS, BADGE_CATALOG } = constants;
 
 // Wrap guild-tab body in the shared shell (header + tabs + data blob + page JS).
-function guildTab({ guild, active, panelHTML, scripts, title, user, panel: _panel }) {
+function guildTab({ guild, active, panelHTML, scripts, title, user, panel: _panel, containerClass }) {
     const body = `
     ${guildHeaderHTML(guild)}
     ${tabNavHTML(guild.id, active)}
@@ -28,6 +28,7 @@ function guildTab({ guild, active, panelHTML, scripts, title, user, panel: _pane
         active: 'servers',
         scripts,
         user,
+        containerClass,
     });
 }
 
@@ -844,7 +845,7 @@ function ticketEditorTabsHTML(panel) {
     // Tab 1 — Panel: identity, enabled, message type, name templates.
 
     const panelTab = `
-      ${ticketField('Panel name', 'tk-name', `<input type="text" id="tk-name" maxlength="100" value="${val(p.name, 'Support Ticket')}" placeholder="Support Ticket" />`, 'Unique per server. Shown as the ticket title and in the dashboard list.')}
+      ${ticketField('Panel name', 'tk-name', `<input type="text" id="tk-name" maxlength="100" value="${val(p.name, 'Support Ticket')}" placeholder="Support Ticket" />`, 'Unique per server. Identifies this panel in the dashboard list. Set the embed title separately on the Message tab — panel name and embed title are independent.')}
       <div class="switch-row">
         <div class="switch-label"><div class="sl-title">Enabled</div><div class="sl-desc">When off, the open ticket button on the panel message is disabled.</div></div>
         <label class="switch"><input type="checkbox" id="tk-enabled" ${chk(p.enabled !== false)}/><span class="slider"></span></label>
@@ -1341,7 +1342,10 @@ function ticketEditPage({ guild, user }) {
       ${tabBar}
       <div class="tk-editor-panels">${tabContent}</div>
     </div>`;
-    return guildTab({ guild, user, active: 'tickets', panelHTML: pageHTML, panel, scripts: ['/js/guild-common.js', '/js/ticket-editor.js'] });
+    // The ticket editor is a dense workspace: give it a wider container than
+    // the standard page so the builder + live preview can use a balanced
+    // two-column layout on desktop (still capped on ultra-wide screens).
+    return guildTab({ guild, user, active: 'tickets', panelHTML: pageHTML, panel, scripts: ['/js/guild-common.js', '/js/ticket-editor.js'], containerClass: 'container--editor' });
 }
 
 // ── Automod ─────────────────────────────────────────────────────────────────

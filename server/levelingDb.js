@@ -2,20 +2,53 @@ const { Pool } = require('pg');
 const { drizzle } = require('drizzle-orm/node-postgres');
 const { userLevels, userBadges, userLevelsRelations, userBadgesRelations } = require('../shared/schema');
 
-if (!process.env.LEVELING_DATABASE_URL) {
-    console.warn('⚠️ LEVELING_DATABASE_URL not set — leveling feature will have no database.');
+/**
+ * Dedicated PostgreSQL pool for the Leveling feature.
+ *
+ * LEVELING_DATABASE_URL can point at its own database/schema. When it is unset
+ * we fall back to the main DATABASE_URL so the feature still works in
+ * single-DB setups (same pattern as every other per-feature pool). Without the
+ * fallback a `new Pool({ connectionString: undefined })` made every leveling
+ * query fail whenever only DATABASE_URL was configured.
+ */
+
+function resolveConnectionString() {
+    if (process.env.LEVELING_DATABASE_URL) return process.env.LEVELING_DATABASE_URL;
+    if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
+    return null;
 }
 
-const levelingPool = new Pool({
-    connectionString: process.env.LEVELING_DATABASE_URL,
-    ssl: process.env.LEVELING_DATABASE_URL && process.env.LEVELING_DATABASE_URL.includes('sslmode=require')
-        ? { rejectUnauthorized: false }
-        : false,
-    max: 10,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 10000,
-    allowExitOnIdle: true,
-});
+const cs = resolveConnectionString();
+
+if (!cs) {
+    console.warn('⚠️ LEVELING_DATABASE_URL (or DATABASE_URL) not set — leveling feature will have no database.');
+}
+
+function shouldEnableSsl(connectionStr) {
+    return /sslmode\s*=\s*(require|prefer|verify-ca|verify-full|allow)/i.test(connectionStr || '')
+        || process.env.DB_SSL === 'require';
+}
+
+function configFromUrl(connectionStr) {
+    const url = new URL(connectionStr);
+    url.searchParams.delete('sslmode');
+    return {
+        connectionString: url.toString(),
+        ssl: shouldEnableSsl(connectionStr) ? { rejectUnauthorized: false } : false,
+    };
+}
+
+const levelingPool = new Pool(
+    cs
+        ? {
+              ...configFromUrl(cs),
+              max: 10,
+              idleTimeoutMillis: 30000,
+              connectionTimeoutMillis: 10000,
+              allowExitOnIdle: true,
+          }
+        : { max: 0 } // no-op pool; queries will throw and be handled gracefully
+);
 
 levelingPool.on('error', (err) => {
     console.error('[LEVELING DB] Unexpected pool error:', err.message);
