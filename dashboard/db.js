@@ -1247,7 +1247,8 @@ function rowToAutomodAppeal(row) {
 // ── Combined view (one fetch per guild for the settings page) ───────────────
 
 async function getGuildConfig(guildId) {
-    const [server, welcome, logging, reactionRoles, automod, ticketPanels, levelingRoleRewards, birthdaySettings, birthdays] = await Promise.all([
+    let ticketPanelComponents = [];
+    const [server, welcome, logging, reactionRoles, automod, ticketPanels, levelingRoleRewards, birthdaySettings, birthdays, comps] = await Promise.all([
         getServerSettings(guildId).catch(err => {
             console.error('[DASHBOARD DB] server_settings read failed:', err.message);
             return defaultServerSettings();
@@ -1284,11 +1285,26 @@ async function getGuildConfig(guildId) {
             console.error('[DASHBOARD DB] birthdays read failed:', err.message);
             return [];
         }),
+        getTicketPanelComponentsByGuild(guildId).then(components => {
+            ticketPanelComponents = components;
+            return components;
+        }).catch(err => {
+            console.error('[DASHBOARD DB] ticket_panel_components read failed:', err.message);
+            return [];
+        }),
     ]);
     // Attach durable role rewards onto the leveling settings (kept in a separate
     // pool so they survive restarts and reach the bot via its cache reload).
     if (server && server.leveling) {
         server.leveling.roleRewards = levelingRoleRewards || [];
+    }
+    const panelMap = new Map((ticketPanels || [])).map(p => [String(p.id), p]);
+    for (const c of comps || []) {
+        const panel = panelMap.get(String(c.panelId));
+        if (panel) {
+            if (!panel.components) panel.components = [];
+            panel.components.push(c);
+        }
     }
     return { server, welcome, logging, reactionRoles, automod, ticketPanels, birthdaySettings, birthdays };
 }
@@ -1534,6 +1550,52 @@ async function ensureTicketTables() {
         ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS close_flow            JSONB;
         ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS author_name         VARCHAR(255);
         ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS author_icon_url     TEXT;
+        ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS claim_enabled        BOOLEAN NOT NULL DEFAULT true;
+        ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS panel_version         INTEGER NOT NULL DEFAULT 1;
+        CREATE TABLE IF NOT EXISTS ticket_panel_components (
+            id                      SERIAL PRIMARY KEY,
+            panel_id                INTEGER NOT NULL REFERENCES ticket_panels(id) ON DELETE CASCADE,
+            type                    VARCHAR(20) NOT NULL DEFAULT 'button',
+            position                 INTEGER NOT NULL DEFAULT 0,
+            label                   VARCHAR(80),
+            style                   VARCHAR(20) DEFAULT 'Primary',
+            emoji                   VARCHAR(100),
+            action                  VARCHAR(20) NOT NULL DEFAULT 'ticket',
+            url                     TEXT,
+            placeholder              VARCHAR(150),
+            min_values               INTEGER,
+            max_values               INTEGER,
+            claim_enabled            BOOLEAN NOT NULL DEFAULT true,
+            ticket_configuration     JSONB,
+            created_at              TIMESTAMP DEFAULT NOW(),
+            updated_at              TIMESTAMP DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS ticket_panel_components_panel_idx ON ticket_panel_components (panel_id);
+        CREATE TABLE IF NOT EXISTS ticket_panel_options (
+            id                      SERIAL PRIMARY KEY,
+            component_id            INTEGER NOT NULL REFERENCES ticket_panel_components(id) ON DELETE CASCADE,
+            label                   VARCHAR(80) NOT NULL,
+            value                   VARCHAR(100) NOT NULL,
+            description             VARCHAR(150),
+            emoji                   VARCHAR(100),
+            position                 INTEGER NOT NULL DEFAULT 0,
+            ticket_configuration     JSONB,
+            created_at              TIMESTAMP DEFAULT NOW(),
+            updated_at              TIMESTAMP DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS ticket_panel_options_component_idx ON ticket_panel_options (component_id);
+        CREATE TABLE IF NOT EXISTS ticket_panel_messages (
+            id                      SERIAL PRIMARY KEY,
+            panel_id                INTEGER NOT NULL REFERENCES ticket_panels(id) ON DELETE CASCADE,
+            guild_id                VARCHAR(50) NOT NULL,
+            channel_id              VARCHAR(50) NOT NULL,
+            message_id              VARCHAR(50) NOT NULL,
+            panel_version            INTEGER NOT NULL DEFAULT 1,
+            created_at              TIMESTAMP DEFAULT NOW(),
+            updated_at              TIMESTAMP DEFAULT NOW(),
+            UNIQUE (panel_id, channel_id, message_id)
+        );
+        CREATE INDEX IF NOT EXISTS ticket_panel_messages_panel_idx ON ticket_panel_messages (panel_id);
     `);
 }
 
@@ -1636,6 +1698,8 @@ function ticketRowToPanel(row) {
         claimButtonLabel: row.claim_button_label || null,
         claimButtonEmoji: row.claim_button_emoji || null,
         claimButtonStyle: row.claim_button_style || 'Secondary',
+        claimEnabled: row.claim_enabled !== false,
+        panelVersion: Number(row.panel_version) || 1,
         openNameTemplate: row.open_name_template != null ? row.open_name_template : null,
         claimedNameTemplate: row.claimed_name_template != null ? row.claimed_name_template : null,
         closedNameTemplate: row.closed_name_template != null ? row.closed_name_template : null,
@@ -1661,6 +1725,8 @@ function normalizeTicketPanel(data, keepUndefined = false) {
         welcomeMessage: null, closeButtonLabel: 'Close Ticket',
         closeButtonEmoji: '🔒', closeButtonStyle: 'Danger',
         claimButtonLabel: null, claimButtonEmoji: null, claimButtonStyle: 'Secondary',
+        claimEnabled: true,
+        panelVersion: 1,
         openNameTemplate: null, claimedNameTemplate: null, closedNameTemplate: null,
         closeFlow: null,
         enabled: true, channelId: null, messageId: null,
@@ -1671,6 +1737,8 @@ function normalizeTicketPanel(data, keepUndefined = false) {
     out.buttonStyle = VALID_TICKET_BUTTON_STYLES.has(out.buttonStyle) ? out.buttonStyle : 'Primary';
     out.closeButtonStyle = VALID_TICKET_BUTTON_STYLES.has(out.closeButtonStyle) ? out.closeButtonStyle : 'Danger';
     out.claimButtonStyle = VALID_TICKET_BUTTON_STYLES.has(out.claimButtonStyle) ? out.claimButtonStyle : 'Secondary';
+    out.claimEnabled = out.claimEnabled !== false;
+    out.panelVersion = Math.max(1, parseInt(out.panelVersion, 10) || 1);
     out.color = /^#[0-9a-fA-F]{6}$/.test(out.color) ? out.color : '#5865F2';
     out.authorName = out.authorName == null ? null : String(out.authorName).trim().slice(0, 255) || null;
     out.authorIconUrl = out.authorIconUrl == null ? null : String(out.authorIconUrl).trim() || null;
@@ -1697,7 +1765,10 @@ const TICKET_PANEL_FIELDS = {
     closeButtonLabel: 1, closeButtonEmoji: 1, closeButtonStyle: 1,
     claimButtonLabel: 1,
     claimButtonEmoji: 1,
-    claimButtonStyle: 1, openNameTemplate: 1, claimedNameTemplate: 1,
+    claimButtonStyle: 1,
+    claimEnabled: 1,
+    panelVersion: 1,
+    openNameTemplate: 1, claimedNameTemplate: 1,
     closedNameTemplate: 1, closeFlow: 1, enabled: 1, createdBy: 1,
 };
 
@@ -1721,6 +1792,197 @@ async function _fetchTicketPanel(id) {
     return ticketRowToPanel(res.rows[0]);
 }
 
+// ── Panel builder components/options/messages (ticket_panel_components etc.) ──
+//
+// Panels are the reusable configuration (embed/details/buttons/dropdowns); the
+// panel message is just a row in ticket_panel_messages pointing at a Discord
+// message posted from the panel; a ticket is what a user gets after clicking a
+// button / choosing a dropdown option. The bot and the dashboard share these
+// tables through the TICKET_DATABASE_URL pool (falls back to DATABASE_URL) so
+// dashboard saves take effect on the bot's next cache reload (~30s) without a
+// restart. Components keep an explicit `position` (never rely on insertion
+// order); options likewise. Component/option custom IDs are just row ids — the
+// full configuration always loads from the DB, so cross-guild tampering of a
+// customId can never reach another guild's config.
+
+function normalizeTicketComponent(c, position) {
+    const type = c.type === 'select' ? 'select' : 'button';
+    let label = '';
+    label = c.label != null ? String(c.label).trim() : '';
+    const out = {
+        id: c.id != null ? Number(c.id) : undefined,
+        type,
+        position: Number.isFinite(position) ? position : (Number.isFinite(c.position) ? Number(c.position) : 0),
+        label: label.slice(0, 80),
+        style: type === 'button' ? VALID_TICKET_BUTTON_STYLES.has(c.style) ? c.style : 'Primary' : undefined,
+        emoji: c.emoji != null ? String(c.emoji).trim() || null : null,
+        action: type === 'button' ? String(c.action || 'ticket').trim() || 'ticket' : undefined,
+        url: type === 'button' ? String(c.url || '').trim() || null : undefined,
+        placeholder: type === 'select' ? String(c.placeholder || '').trim().slice(0, 150) || null : undefined,
+        minValues: type === 'select' ? Math.max(0, parseInt(c.minValues, 10) || 0) : undefined,
+        maxValues: type === 'select' ? Math.max(1, parseInt(c.maxValues, 10) || 1) : undefined,
+        claimEnabled: c.claimEnabled !== false,
+        ticketConfiguration: (c.ticketConfiguration && typeof c.ticketConfiguration === 'object' && !Array.isArray(c.ticketConfiguration)) ? c.ticketConfiguration : null,
+    };
+    // A select's max selections must stay within Discord's 25-option cap..
+    if (type === 'select') out.maxValues = Math.min(25, out.maxValues);
+    return out;
+}
+
+function normalizeTicketOption(o, position) {
+    const out = {
+        id: o.id != null ? Number(o.id) : undefined,
+        label: String(o.label || '').trim().slice(0, 80),
+        value: String(o.value || '').trim().slice(0, 100),
+        description: o.description != null ? String(o.description).trim().slice(0, 150) || null : null,
+        emoji: o.emoji != null ? String(o.emoji).trim() || null : null,
+        position: Number.isFinite(position) ? position : (Number.isFinite(o.position) ? Number(o.position) : 0),
+        ticketConfiguration: (o.ticketConfiguration && typeof o.ticketConfiguration === 'object' && !Array.isArray(o.ticketConfiguration)) ? o.ticketConfiguration : null,
+    };
+    return out;
+}
+
+async function getTicketPanelComponents(panelId) {
+    try {
+        await ensureTicketTables();
+        const res = await getTicketPool().query(`
+            SELECT c.*, JSONB_AGG(
+                JSONB_BUILD_OBJECT(
+                    'id', o.id,'label', o.label,'value', o.value,'description', o.description,
+                    'emoji', o.emoji,'position', o.position,'ticket_configuration', o.ticket_configuration
+                ) ORDER BY o.position
+            ) FILTER (WHERE o.id IS NOT NULL) AS _options
+            FROM ticket_panel_components c
+            LEFT JOIN ticket_panel_options o ON o.component_id = c.id
+            WHERE c.panel_id = $1
+            GROUP BY c.id
+            ORDER BY c.position, c.id
+        `, [panelId]);
+        return res.rows.map(row => {
+            let options = [];
+            if (Array.isArray(row._options)) options = row._options.map((o, i) => normalizeTicketOption(o, i));
+            const base = normalizeTicketComponent(row);
+            return { ...base, options };
+        });
+    } catch (err) {
+        console.error('[DASHBOARD DB] panel components read failed:', err.message);
+        return [];
+    }
+}
+
+async function getTicketPanelComponentsByGuild(guildId) {
+    try {
+        await ensureTicketTables();
+        const res = await getTicketPool().query(`
+            SELECT c.*, JSONB_AGG(
+                JSONB_BUILD_OBJECT(
+                    'id', o.id,'label', o.label,'value', o.value,'description', o.description,
+                    'emoji', o.emoji,'position', o.position,'ticket_configuration', o.ticket_configuration
+                ) ORDER BY o.position
+            ) FILTER (WHERE o.id IS NOT NULL) AS _options
+            FROM ticket_panel_components c
+            LEFT JOIN ticket_panel_options o ON o.component_id = c.id
+            JOIN ticket_panels p ON p.id = c.panel_id
+            WHERE p.guild_id = $1
+            GROUP BY c.id
+            ORDER BY c.panel_id, c.position, c.id
+        `, [guildId]);
+        return res.rows.map(row => {
+            let options = [];
+            if (Array.isArray(row._options)) options = row._options.map((o, i) => normalizeTicketOption(o, i));
+            const base = normalizeTicketComponent(row);
+            return { ...base, panelId: row.panel_id, options };
+        });
+    } catch (err) {
+        console.error('[DASHBOARD DB] panel components by guild read failed:', err.message);
+        return [];
+    }
+}
+
+/** Replace a panel's components (and their options) in one transaction.. */
+async function replaceTicketPanelComponents(panelId, components = []) {
+    await ensureTicketTables();
+    const pool = getTicketPool();
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        await client.query('DELETE FROM ticket_panel_components WHERE panel_id = $1', [panelId]);
+        let pos = 0;
+        for (const raw of components) {
+            const c = normalizeTicketComponent(raw, pos);
+            const res = await client.query(`
+                INSERT INTO ticket_panel_components (
+                    panel_id, type, position, label, style, emoji, action, url,
+                    placeholder, min_values, max_values, claim_enabled, ticket_configuration, created_at, updated_at
+                ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW(),NOW())
+                RETURNING id
+            `, [panelId, c.type, c.position, c.label, c.style, c.emoji, c.action, c.url,
+                  c.placeholder, c.minValues, c.maxValues, c.claimEnabled, JSON.stringify(c.ticketConfiguration || null)]);
+            const componentId = res.rows[0].id;
+            const opts = c.type === 'select' ? c.options : [];
+            for (let i = 0; i < opts.length; i++)
+                await client.query(`
+                    INSERT INTO ticket_panel_options (
+                        component_id, label, value, description, emoji, position, ticket_configuration, created_at, updated_at
+                    ) VALUES ($1,$2,$3,$4,$5,$6,$7,NOW(),NOW())
+                `, [componentId, opts[i].label, opts[i].value, opts[i].description, opts[i].emoji,
+                       i, JSON.stringify(opts[i].ticketConfiguration || null)]);
+            pos++;
+        }
+        await client.query('COMMIT');
+    } catch (err) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw err;
+    } finally {
+        client.release();
+    }
+    return getTicketPanelComponents(panelId);
+}
+
+/** Track a panel message (called whenever a panel is sent/updated).. */
+async function upsertTicketPanelMessage(panelId, guildId, channelId, messageId, panelVersion) {
+    await ensureTicketTables();
+    await getTicketPool().query(`
+        INSERT INTO ticket_panel_messages (panel_id, guild_id, channel_id, message_id, panel_version, created_at, updated_at)
+        VALUES ($1,$2,$3,$4,$5,NOW(),NOW())
+        ON CONFLICT (panel_id, channel_id, message_id) DO UPDATE SET panel_version = EXCLUDED.panel_version, updated_at = NOW()
+    `, [panelId, String(guildId), String(channelId), String(messageId), Math.max(1, parseInt(panelVersion, 10) || 1)]);
+}
+
+async function listTicketPanelMessages(panelId) {
+    try {
+        await ensureTicketTables();
+        const res = await getTicketPool().query(
+            'SELECT * FROM ticket_panel_messages WHERE panel_id = $1 ORDER BY id', [panelId]
+        );
+        return res.rows.map(r => ({
+            id: r.id,
+            panelId: r.panel_id,
+            guildId: r.guild_id,
+            channelId: r.channel_id,
+            messageId: r.message_id,
+            panelVersion: Number(r.panel_version) || 1,
+            createdAt: r.created_at,
+        }));
+    } catch (err) {
+        console.error('[DASHBOARD DB] panel messages read failed:', err.message);
+        return [];
+    }
+}
+
+/** Delete tracked panel messages for a channel (when a message was deleted).. */
+async function deleteTicketPanelMessage(panelId, channelId, messageId) {
+    await ensureTicketTables();
+    try {
+        await getTicketPool().query(
+            'DELETE FROM ticket_panel_messages WHERE panel_id = $1 AND channel_id = $2 AND message_id = $3',
+            [panelId, channelId, messageId]
+        );
+    } catch (err) {
+        console.error('[DASHBOARD DB] panel message delete failed:', err.message);
+    }
+}
+
 async function getTicketPanels(guildId) {
     await ensureTicketTables();
     const res = await getTicketPool().query('SELECT * FROM ticket_panels WHERE guild_id = $1 ORDER BY id', [guildId]);
@@ -1740,9 +2002,10 @@ async function createTicketPanel(guildId, data) {
                 ping_role_ids, ticket_category_id, cooldown_seconds, max_open_per_user,
                 ask_reason, reason_placeholder, welcome_message, close_button_label,
                 close_button_emoji, close_button_style, claim_button_label, claim_button_emoji, claim_button_style,
+                claim_enabled, panel_version,
                 open_name_template, claimed_name_template, closed_name_template,
                 close_flow, enabled, created_by, created_at, updated_at
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,NOW(),NOW())
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,NOW(),NOW())
             RETURNING id
         `, [
             guildId, p.name, p.channelId || null, p.messageId || null, p.messageType,
@@ -1752,6 +2015,7 @@ async function createTicketPanel(guildId, data) {
             p.ticketCategoryId, p.cooldownSeconds, p.maxOpenPerUser, p.askReason,
             p.reasonPlaceholder, p.welcomeMessage, p.closeButtonLabel,
             p.closeButtonEmoji, p.closeButtonStyle, p.claimButtonLabel, p.claimButtonEmoji, p.claimButtonStyle,
+            p.claimEnabled, p.panelVersion,
             p.openNameTemplate, p.claimedNameTemplate, p.closedNameTemplate,
             JSON.stringify(p.closeFlow || {}),
             p.enabled, p.createdBy || null,
@@ -1791,8 +2055,9 @@ async function updateTicketPanel(id, patch) {
                 cooldown_seconds = $23, max_open_per_user = $24, ask_reason = $25,
                 reason_placeholder = $26, welcome_message = $27, close_button_label = $28,
                 close_button_emoji = $29, close_button_style = $30, claim_button_label = $31, claim_button_emoji = $32, claim_button_style = $33,
-                open_name_template = $34, claimed_name_template = $35, closed_name_template = $36,
-                close_flow = $37, enabled = $38, updated_at = NOW()
+                claim_enabled = $34, panel_version = $35, open_name_template = $36,
+                claimed_name_template = $37, closed_name_template = $38,
+                close_flow = $39, enabled = $40, updated_at = NOW()
             WHERE id = $1
         `, [
             id, p.name, p.channelId || null, p.messageId || null, p.messageType,
@@ -1802,6 +2067,7 @@ async function updateTicketPanel(id, patch) {
             p.ticketCategoryId, p.cooldownSeconds, p.maxOpenPerUser, p.askReason,
             p.reasonPlaceholder, p.welcomeMessage, p.closeButtonLabel,
             p.closeButtonEmoji, p.closeButtonStyle, p.claimButtonLabel, p.claimButtonEmoji, p.claimButtonStyle,
+            p.claimEnabled, p.panelVersion,
             p.openNameTemplate, p.claimedNameTemplate, p.closedNameTemplate,
             JSON.stringify(p.closeFlow || {}),
             p.enabled,
@@ -1987,7 +2253,15 @@ async function cloneTicketPanel(id, newName) {
     data.name = explicit || uniqueCloneName(src.name, await getTicketPanels(src.guildId));
     data.channelId = null;
     data.messageId = null;
-    return createTicketPanel(src.guildId, data);
+    const created = await createTicketPanel(src.guildId, data);
+    // Deep-copy the builder components so the clone is completely independent.
+    const components = await getTicketPanelComponents(id);
+    for (const c of components) {
+        for (const o of (c.options || [])) delete o.id;
+        delete c.id;
+    }
+    if (components.length) await replaceTicketPanelComponents(created.id, components);
+    return _fetchTicketPanel(created.id);
 }
 
 async function renameTicketPanel(id, newName) {
@@ -2476,6 +2750,12 @@ module.exports = {
     renameTicketPanel,
     getTicketRoleSettings,
     updateTicketRoleSettings,
+    getTicketPanelComponents,
+    getTicketPanelComponentsByGuild,
+    replaceTicketPanelComponents,
+    upsertTicketPanelMessage,
+    listTicketPanelMessages,
+    deleteTicketPanelMessage,
     getGuildConfig,
     getPlatformStats,
     getLivePolls,

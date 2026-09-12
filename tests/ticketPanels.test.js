@@ -241,7 +241,13 @@ test('cloneTicketPanel auto-suffixes the default copy name when it is taken', as
             return { rows: [panels[0]] };
         }
         if (/FROM ticket_panels WHERE id = \$1/i.test(text)) {
-            return { rows: [] }; // refetch of the new panel
+            return { rows: [{ id: params[0], guild_id: 'g1', name: insertedName || 'Support (copy)', support_role_ids: [], ping_role_ids: [], enabled: true }] }; // refetch of the new panel
+        }
+        if (/ticket_panel_components/i.test(text)) {
+            return { rows: [] };
+        }
+        if (/ticket_panel_component_options/i.test(text)) {
+            return { rows: [] };
         }
         if (/FROM ticket_panels WHERE guild_id = \$1/i.test(text)) {
             return { rows: panels };

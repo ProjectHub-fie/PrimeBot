@@ -2675,3 +2675,95 @@ select:focus {
 .tk-btn-dropdown > .tk-btn-fields { padding:  2px 12px 12px; }
 .tk-btn-dropdown > .field-hint { padding:  0 12px 12px; }
 .tk-btn-fields .field { margin-bottom:  10px; }
+
+
+/* ── Ticket editor: Panel components.builder (Panel tab) ──────────────
+ * Ticket Tool-style reusable multi-input builder: buttons + dropdowns, each
+ * with per-input ticket configuration and (for dropdowns) labeled/described
+ * options. Rows are reorderable; selects capped at 25 options. Explicit
+ * `position` values are stored (never insertion order) so synchronization and
+ * re-ordering survive reloads. The builder toggle falls the panel back to its
+ * legacy single Open Ticket button. */
+
+.pcomp-list {
+  display: flex; flex-direction: column; gap:  10px;
+  margin-top:  12px;
+}
+.pcomp-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap:  8px;
+  background: var(--surface-2);
+  border:  1px solid var(--border-soft);
+  border-radius:  10px;
+  padding:  10px 12px;
+}
+.pcomp-row.pcomp-select-row { background: rgba(88,101,242,  0.06); }
+.pcomp-grip {
+  display: inline-flex; align-items: center; color: #6a7078;
+  cursor: grab; flex:  0 0 auto;
+}
+.pcomp-grip:active { cursor: grabbing; }
+.pcomp-grip .ico { width:  16px; height:  16px; }
+.pcomp-type {
+  font-size:  12px; font-weight:  700; letter-spacing:  0.05em;
+  text-transform: uppercase; color: var(--accent-strong);
+  white-space: nowrap;
+}
+.pcomp-row input[type="text"],
+.pcomp-row input[type="number"],
+.pcomp-row select {
+  padding:  8px 10px; background: var(--bg); border:  1px solid var(--border);
+  border-radius:  8px; color: var(--text); font-size:  12.5px; min-width:  0;
+}
+.pcomp-row input.pcomp-label { flex:  1 1 180px; }
+.pcomp-row input.pcomp-emoji { flex:  0 1 90px; }
+.pcomp-row select.pcomp-style { flex:  0 1 110px; }
+.pcomp-range { display: flex; gap:  8px; align-items: center; flex:  0 1 auto; }
+.pcomp-range label { display: flex; align-items: center; gap:  4px; font-size:  11.5px; color: var(--text-dim); }
+.pcomp-range input { width:  56px; }
+.pcomp-summary {
+  display: flex; flex-wrap: wrap; align-items: center; gap:  6px;
+  font-size:  11.5px; color: var(--text-dim); flex:  1 1 140px; min-width:  0;
+}
+.pcomp-type-tag {
+  font-size:  10px; font-weight:  700; text-transform: uppercase;
+  letter-spacing:  0.06em; color: var(--accent-strong);
+  border:  1px solid rgba(88,101,242,  0.35); border-radius:  999px;
+  padding:  2px 8px; white-space: nowrap;
+}
+.pcomp-options {
+  display: flex; flex-direction: column; gap:  6px;
+  margin-top:  4px;
+}
+.pcomp-opt-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap:  6px;
+  background: rgba(0, 0, 0,  0.16); border-radius:  8px; padding:  6px 8px;
+}
+.pcomp-opt-row .pcomp-opt-label { flex:  1 1 170px; }
+.pcomp-opt-row .pcomp-opt-emoji { flex:  0 1 80px; }
+.pcomp-opt-row .pcomp-opt-desc { flex:  2 1 220px; }
+.pcomp-opt-row .pcomp-opt-value { flex:  0 1 100px; }
+.pcomp-cfg-hint { margin:  2px 0 0; font-size:  11px; }
+.pcomp-cfg-summary { font-size:  11px; color: var(--text-dim); flex:  1 1 100%; }
+.pcomp-addbar { display: flex; gap:  8px; margin-top:  4px; }
+.pcomp-addbar .btn .ico , .pcomp-cfg .ico { width:  14px; height:  14px; }
+
+/* Reorder drag affordance fallback. */
+.pcomp-row.dragging { opacity:  0.55; border-style: dashed; }
+
+/* Per-input ticket configuration modal (slides atop the editor.). */
+.pcfg-modal { display: none; }
+.pcfg-modal.open { display: flex; }
+.pcfg-modal .modal-card {
+  max-width:  520px; width:  100%;
+}
+.pcfg-modal .field { margin-bottom:  10px; }
+.pcfg-modal input[type="text"] {
+  width:  100%; box-sizing: border-box; padding:  9px 10px;
+  background: var(--bg); border:  1px solid var(--border); border-radius:  8px; color: var(--text);
+}
+.pcfg-modal .modal-actions { display: flex; justify-content: flex-end; gap:  8px; margin-top:  14px; }
+
+@media (max-width:  720px) {
+  .pcomp-row { align-items: stretch; }
+  .pcomp-row input.pcomp-label { flex-basis: 100%; }
+}

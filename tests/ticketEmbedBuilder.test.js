@@ -121,7 +121,7 @@ test('updateTicketPanel persists author fields (DB round-trip)', async () => {
     const params = update.params;
     assert.equal(params[10], 'Support Team', 'author_name persisted');
     assert.equal(params[11], 'https://x/a.png', 'author_icon_url persisted');
-    assert.equal(params[37], true, 'enabled still persisted at shifted index');
+    assert.equal(params[39], true, 'enabled still persisted at shifted index');
 });
 
 test('client renderTicketPreview updates live output nodes without rebuilding inputs', () => {

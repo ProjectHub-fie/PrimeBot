@@ -1142,17 +1142,57 @@ function ticketPanelMessagePayload(panel) {
     const color = parseInt((panel.color || '#5865F2').replace('#', ''), 16);
     const buttonEmoji = panel.buttonEmoji || undefined;
     const styleMap = { Primary: 1, Secondary: 2, Success: 3, Danger: 4 };
-    const buttonStyle = styleMap[panel.buttonStyle] || 1;
-    const components = [{
-        type: 1, // ActionRow
-        components: [{
-            type: 2, // Button
-            style: buttonStyle,
-            custom_id: `ticketpanel:open:${panel.id}`,
-            label: panel.buttonLabel || 'Open Ticket',
-            ...(buttonEmoji ? { emoji: { name: buttonEmoji } } : {}),
-        }],
-    }];
+    const comps = Array.isArray(panel.components) ? panel.components.filter(c => c && (c.type === 'button' || c.type === 'select')) : [];
+    let components;
+    if (comps.length) {
+        const rows = [];
+        let btnRow = null;
+        const flush = () => { if (btnRow && btnRow.components.length) rows.push(btnRow); btnRow = null; };
+        const posOf = (c) => (c.position || 0);
+        const idOf = (c) => (c.id || 0);
+        for (const c of [...comps].sort((a, b) => posOf(a) - posOf(b) || idOf(a) - idOf(b))) {
+            if (c.type === 'select') {
+                flush();
+                const opts = (c.options || []).map((o, i) => ({ ...o, _s: (o.position || i)})).sort((a, b) => a._s - b._s).slice(0, 25);
+                if (!opts.length) continue;
+                rows.push({ type: 1, components: [{ type: 3, custom_id: `ticketpanel:${c.id}:select`, placeholder: c.placeholder || 'Select an option', min_values: Math.max(0, Math.min(opts.length, c.minValues ?? 0)), max_values: Math.max(1, Math.min(opts.length, c.maxValues ?? 1)), options: opts.map(o => ({
+                    label: String(o.label || 'Option').slice(0, 100),
+                    value: `opt:${o.id}`,
+                    description: (o.description || undefined)?.slice(0, 100),
+                    emoji: o.emoji ? { name: o.emoji } : undefined,
+                })).filter(o => o.value) }] });
+                continue;
+            }
+            if (!c.label) continue;
+            const btn = {
+                type: 2,
+                style: c.action === 'link' ? 5 : (styleMap[c.style] || 1),
+                custom_id: c.action === 'link' ? undefined : `ticketpanel:${c.id}:button`,
+                label: String(c.label).slice(0, 80),
+                url: c.action === 'link' ? (c.url || undefined) : undefined,
+                emoji: c.emoji ? { name: c.emoji } : undefined,
+            };
+            if (c.action === 'link') delete btn.custom_id;
+            else delete btn.url;
+            if (!btnRow || btnRow.components.length >= 5) flush();
+            if (!btnRow) btnRow = { type: 1, components: [] };
+            btnRow.components.push(btn);
+        }
+        flush();
+        components = rows.slice(0, 5);
+    } else {
+        const buttonStyle = styleMap[panel.buttonStyle] || 1;
+        components = [{
+            type: 1, // ActionRow
+            components: [{
+                type: 2, // Button
+                style: buttonStyle,
+                custom_id: `ticketpanel:open:${panel.id}`,
+                label: panel.buttonLabel || 'Open Ticket',
+                ...(buttonEmoji ? { emoji: { name: buttonEmoji } } : {}),
+            }],
+        }];
+    }
     if (panel.messageType === 'plain') {
         return {
             content: panel.content || panel.description || 'Click the button below to open a support ticket.',
@@ -1232,6 +1272,12 @@ app.post('/api/guilds/:guildId/tickets/quickcreate', requireAuth, requireGuildAd
             await dashboardDb.updateTicketRoleSettings(id, req.guild.id, body.roleSettings);
             panel.roleSettings = await dashboardDb.getTicketRoleSettings(id) || panel.roleSettings;
         }
+        // Panel-builder components (buttons/dropdown options + per-input ticket
+        // configs.) Only replace when the client actually sent them, so legacy
+        // saves keep the existing components.
+        if (Array.isArray(body.components)) {
+            panel.components = await dashboardDb.replaceTicketPanelComponents(id, body.components);
+        }
         res.json({ ticketPanel: panel });
     } catch (err) {
         console.error('[API] edit ticket panel error:', err.message);
@@ -1291,6 +1337,7 @@ app.post('/api/guilds/:guildId/tickets/:id/send', requireAuth, requireGuildAdmin
         const channelId = req.body && req.body.channelId;
         if (!channelId) return res.status(400).json({ error: 'A channel is required.' });
         const panel = await dashboardDb.updateTicketPanel(id, { channelId, enabled: true });
+        panel.components = await dashboardDb.getTicketPanelComponents(id).catch(() => []);
         const sent = await discord.sendChannelMessage(channelId, ticketPanelMessagePayload(panel));
         const updated = await dashboardDb.updateTicketPanel(id, { channelId, messageId: sent.id });
         res.json({ ticketPanel: updated });
@@ -1319,6 +1366,7 @@ app.post('/api/guilds/:guildId/tickets/:id/update', requireAuth, requireGuildAdm
         } catch (err) {
             return res.status(400).json({ error: 'Could not find that message. Make sure the bot can see the channel and message.' });
         }
+        panel.components = await dashboardDb.getTicketPanelComponents(id).catch(() => []);
         await discord.editChannelMessage(channelId, messageId, ticketPanelMessagePayload(panel));
         const updated = await dashboardDb.updateTicketPanel(id, { channelId, messageId });
         res.json({ ticketPanel: updated });
@@ -1666,6 +1714,7 @@ app.get('/guild/:guildId/tickets/:panelId/edit', requireAuth, requireGuildAdminP
         }
         const roleSettings = await dashboardDb.getTicketRoleSettings(panelId);
         if (roleSettings) panel.roleSettings = roleSettings;
+        panel.components = await dashboardDb.getTicketPanelComponents(panelId).catch(() => []);
         req.guild._ticketPanel = panel;
         res.type('html').send(guildPages.ticketEditPage({ guild: req.guild, user: req.user }));
     } catch (err) {
