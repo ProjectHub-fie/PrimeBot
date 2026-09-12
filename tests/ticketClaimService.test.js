@@ -1,6 +1,6 @@
 // Unit tests for the ticket claim service + claim permission helpers.
-// ticketClaimService writes ticket_instances through ticketDb's raw pool.
-// We stub ticketPool.query with an in-memory store so the real conditional
+// ticketClaimService writes ticket_claims through tclaimDb's raw pool (TCLAIM_DATABASE_URL.
+// We stub tclaimPool.query with an in-memory store so the real conditional
 // UPDATE SQL is exercised end-to-end (no Postgres needed in CI).
 // ticketPermissions reads bot_roles through communityPool; that pool is
 // stubbed empty (non-admin/support users degrade to role 'user').
@@ -8,7 +8,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 
-const ticketPool = require('../server/ticketDb').ticketPool;
+const tclaimPool = require('../server/tclaimDb').tclaimPool;
 
 let ticketTable = new Map();
 
@@ -16,7 +16,7 @@ function seedTicket(channelId, opts) {
     opts = opts || {};
     ticketTable.set(channelId, {
         id: ticketTable.size + 1,
-        panel_id: 7,
+        
         guild_id: '111',
         channel_id: channelId,
         user_id: opts.userId || '222333444555',
@@ -29,10 +29,10 @@ function seedTicket(channelId, opts) {
 
 function makeTicketPoolStub() {
     ticketTable = new Map();
-    ticketPool.query = async (sql, params) => {
+    tclaimPool.query = async (sql, params) => {
         params = params || [];
         const firstParam = params[0];
-        if (sql.includes('SELECT id, panel_id')) {
+        if (sql.includes('FROM ticket_claims')) {
             const row = ticketTable.get(String(firstParam));
             return { rows: row ? [row] : [] };
         }

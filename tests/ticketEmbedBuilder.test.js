@@ -15,9 +15,11 @@ const path = require('path');
 const guildPages = require('../dashboard/render/guild-pages');
 const dashboardDb = require('../dashboard/db');
 const { ticketPool } = require('../server/ticketDb');
+const { tclaimPool } = require('../server/tclaimDb');
 const { TicketPanelManager } = require('../utils/ticketManager');
 
 ticketPool.query = async () => ({ rows: [] });
+tclaimPool.query = async () => ({ rows: [] });
 
 function fakeGuild(panel) {
     return {

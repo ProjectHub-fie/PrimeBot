@@ -13,7 +13,9 @@ const assert = require('node:assert/strict');
  * mirroring the other ticket tests.
  */
 const { ticketPool } = require('../server/ticketDb');
+const { tclaimPool } = require('../server/tclaimDb');
 ticketPool.query = async () => ({ rows: [] });
+tclaimPool.query = async () => ({ rows: [] });
 
 const { TicketPanelManager } = require('../utils/ticketManager');
 

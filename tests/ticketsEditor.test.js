@@ -94,3 +94,34 @@ test('updateTicketPanel on a missing panel throws a friendly not-found', async (
     ticketPool.query = async () => ({ rows: [], rowCount: 0 });
     await assert.rejects(() => dashboardDb.updateTicketPanel(99, { name: 'n' }), /not found/i);
 });
+
+// Regression: a panel-builder **select** component must NOT produce a null
+// `action` INSERT. `ticket_panel_components.action` is NOT NULL DEFAULT 'ticket';
+// normalizeTicketComponent used to set action: undefined for selects, so editing a
+// panel carrying a dropdown threw "null value in column "action" ... violates
+// not-null constraint" (see replaceTicketPanelComponents INSERT). The fix defaults
+// action to 'ticket' for every component type, mirroring the manager's _rowToComponent.
+
+test('replaceTicketPanelComponents persists selects with a non-null action', async () => {
+    const inserts = [];
+    // Stub the pool's connect() so the transaction uses an in-memory client query..
+    ticketPool.connect = async () => ({
+        query: async (sql, params) => {
+            if (/INSERT INTO ticket_panel_components/i.test(String(sql))) inserts.push({ sql: String(sql), params });
+            return { rows: [{ id: 1 }] };
+        },
+        release: () => {},
+    });
+
+    await dashboardDb.replaceTicketPanelComponents(42, [
+        { type: 'select', position: 0, placeholder: 'Pick a category', minValues: 1, maxValues: 2, options: [{ label: 'A', value: 'a' }] },
+        { type: 'button', position: 1, label: 'Open', action: 'ticket', style: 'Primary' },
+    ]);
+
+    const compInsert = inserts.find(x => x.sql.includes('INSERT INTO ticket_panel_components'));
+    assert.ok(compInsert, 'component INSERT executed');
+    // The `action` slot for the first component (select) is param index 6
+    // (panelId, type, position, label, style, emoji, action, …)..
+    const selectAt = compInsert.params.findIndex(p => p === 'select');
+    assert.equal(compInsert.params[selectAt + 5], 'ticket', 'select action defaults to ticket, never null');
+});

@@ -1,9 +1,10 @@
-const { ticketPool } = require('../server/ticketDb');
+const { tclaimPool } = require('../server/tclaimDb');
 
 /**
  * Ticket claim service — the single source of truth for claim mutations.
  *
- * Claim state lives on `ticket_instances`:
+ * Claim state lives in the dedicated `ticket_claims` table (TCLAIM_DATABASE_URL
+ * pool; falls back to the main DATABASE_URL when unset):
  *   claimed_by      — Discord user id of the current claimer (null = unclaimed).
  *   claimed_at      — epoch ms when the ticket was claimed (null = unclaimed).
  *   claim_history    — JSONB array of { action, previous_claimer, new_claimer,
@@ -15,6 +16,10 @@ const { ticketPool } = require('../server/ticketDb');
  * exactly the same moment can never both succeed. We never read-then-write
  * a claim state without the race-guarded UPDATE roundtrip appearing at the
  * write site.
+ *
+ * The `status` column mirrors the owning ticket instance's lifecycle so the
+ * race guards stay within this single table/DB (a claim only succeeds while
+ * status = 'open').
  *
  * The service is DB-level only — it never touches Discord so it stays
  * restart-safe and testable. Interactions are handled by TicketPanelManager
@@ -60,15 +65,14 @@ function _historyEntry(action, previousClaimer, newClaimer, performedBy, now) {
 /** Fetch the current claim state + instance for a ticket channel. */
 async function getTicketClaim(channelId) {
     if (!channelId) return null;
-    const res = await ticketPool.query(
-        `SELECT id, panel_id, guild_id, channel_id, user_id, status, claimed_by, claimed_at, claim_history
-         FROM ticket_instances WHERE channel_id = $1`, [String(channelId)]
+    const res = await tclaimPool.query(
+        `SELECT id, guild_id, channel_id, user_id, status, claimed_by, claimed_at, claim_history
+         FROM ticket_claims WHERE channel_id = $1`, [String(channelId)]
     );
     if (res.rows.length === 0) return null;
     const r = res.rows[0];
     return {
         id: r.id,
-        panelId: r.panel_id || null,
         guildId: r.guild_id,
         channelId: r.channel_id,
         userId: r.user_id,
@@ -99,8 +103,8 @@ async function getTicketClaimHistory(channelId) {
 async function claimTicket(channelId, staffId, { performedBy = null, now = Date.now() } = {}) {
     if (!_validId(channelId) || !_validId(staffId)) return null;
     const actor = _validId(performedBy) ? performedBy : staffId;
-    const res = await ticketPool.query(
-        `UPDATE ticket_instances
+    const res = await tclaimPool.query(
+        `UPDATE ticket_claims
          SET claimed_by = $1, claimed_at = $2,
              claim_history = COALESCE(claim_history, $3::jsonb) || $4::jsonb
          WHERE channel_id = $5
@@ -136,8 +140,8 @@ async function unclaimTicket(channelId, claimantId = null, { performedBy = null,
     if (before.status !== 'open') return null;
     if (!force && String(before.claimedBy || '') !== String(claimantId)) return null;
     const prevClaimer = before.claimedBy;
-    const res = await ticketPool.query(
-        `UPDATE ticket_instances
+    const res = await tclaimPool.query(
+        `UPDATE ticket_claims
          SET claimed_by = NULL, claimed_at = NULL,
              claim_history = COALESCE(claim_history, $1::jsonb) || $2::jsonb
          WHERE channel_id = $3
@@ -181,8 +185,8 @@ async function transferTicketClaim(channelId, claimantId, toStaffId, { performed
     const params = force
         ? [String(toStaffId), now, INITIAL_HISTORY, _historyEntry(HISTORY_TRANSFER, prevClaimer, String(toStaffId), actor, now), String(channelId)]
         : [String(toStaffId), now, INITIAL_HISTORY, _historyEntry(HISTORY_TRANSFER, prevClaimer, String(toStaffId), actor, now), String(channelId), String(claimantId)];
-    const res = await ticketPool.query(
-        `UPDATE ticket_instances
+    const res = await tclaimPool.query(
+        `UPDATE ticket_claims
          SET claimed_by = $1, claimed_at = $2,
              claim_history = COALESCE(claim_history, $3::jsonb) || $4::jsonb
          WHERE channel_id = $5

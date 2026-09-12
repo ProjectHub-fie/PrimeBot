@@ -2517,6 +2517,10 @@ select:focus {
 .edb-region-color {
   display: flex; flex-direction: column; gap:  6px;
 }
+/* State/live rows (e.g. the embed footer) stay zero-height until painted —
+ * so a stale unstyled footer never shoves the ticket-configuration fields below
+ * the embed. The client renderer re-sizes the region on input. */
+.edb-live-footer { min-height: 0 !important; }
 .edb-color-fields { display: flex; gap:  6px; align-items: center; }
 .edb-color-fields input[type="color"] { width:  34px; height:  30px; padding:  2px; border-radius:  6px; background: rgba(0, 0, 0,  0.2); border:  1px solid rgba(255, 255, 255,  0.1); }
 .edb-color-fields input[type="text"] { font-size:  12.5px; color: #e9ecf3; background: rgba(0, 0, 0,  0.25); border:  1px solid rgba(255, 255, 255,  0.10); border-radius:  6px; padding:  5px 8px; }
