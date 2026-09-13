@@ -1250,7 +1250,7 @@ app.get('/api/guilds/:guildId/tickets', requireAuth, requireGuildAdmin, async (r
     }
 });
 
-app.post('/api/guilds/:guildId/tickets', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
+app.post('/api/guilds/:guildId/tickets', requireAuth, requireGuildAdmin, async (req, res) => {
     try {
         const body = req.body || {};
         if (!body.name || !String(body.name).trim()) {
@@ -1266,7 +1266,7 @@ app.post('/api/guilds/:guildId/tickets', requireAuth, requireGuildAdmin, require
 
 // One-click "Create a panel" button: creates an Untitled-N panel instantly, so
 // the admin lands on the new panel's edit page instead of filling out a form first.
-app.post('/api/guilds/:guildId/tickets/quickcreate', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
+app.post('/api/guilds/:guildId/tickets/quickcreate', requireAuth, requireGuildAdmin, async (req, res) => {
     try {
         const panel = await dashboardDb.quickCreateTicketPanel(req.guild.id, req.user.id);
         res.json({ ticketPanel: panel });
@@ -1278,7 +1278,7 @@ app.post('/api/guilds/:guildId/tickets/quickcreate', requireAuth, requireGuildAd
 // Edit an existing panel. The editor only opens AFTER a panel was created
 // ("Edit" on the panel card, or via the "Create a panel" button); this
 // PATCH persists edits made in that full-page editor.
-    app.patch('/api/guilds/:guildId/tickets/:id', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
+    app.patch('/api/guilds/:guildId/tickets/:id', requireAuth, requireGuildAdmin, async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);
         if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid panel id.' });
@@ -1312,7 +1312,7 @@ app.post('/api/guilds/:guildId/tickets/quickcreate', requireAuth, requireGuildAd
     }
 });
 
-app.delete('/api/guilds/:guildId/tickets/:id', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
+app.delete('/api/guilds/:guildId/tickets/:id', requireAuth, requireGuildAdmin, async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);
         if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid panel id.' });
@@ -1329,7 +1329,7 @@ app.delete('/api/guilds/:guildId/tickets/:id', requireAuth, requireGuildAdmin, r
     }
 });
 
-app.post('/api/guilds/:guildId/tickets/:id/clone', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
+app.post('/api/guilds/:guildId/tickets/:id/clone', requireAuth, requireGuildAdmin, async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);
         if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid panel id.' });
@@ -1342,7 +1342,7 @@ app.post('/api/guilds/:guildId/tickets/:id/clone', requireAuth, requireGuildAdmi
     }
 });
 
-app.post('/api/guilds/:guildId/tickets/:id/rename', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
+app.post('/api/guilds/:guildId/tickets/:id/rename', requireAuth, requireGuildAdmin, async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);
         if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid panel id.' });
@@ -1357,7 +1357,7 @@ app.post('/api/guilds/:guildId/tickets/:id/rename', requireAuth, requireGuildAdm
 
 // Send the panel to a channel: post the panel message via REST and store the
 // resulting channel/message id on the panel so the bot can later "update" it.
-app.post('/api/guilds/:guildId/tickets/:id/send', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
+app.post('/api/guilds/:guildId/tickets/:id/send', requireAuth, requireGuildAdmin, async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);
         if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid panel id.' });
@@ -1376,7 +1376,7 @@ app.post('/api/guilds/:guildId/tickets/:id/send', requireAuth, requireGuildAdmin
 
 // Re-render an existing panel message by id (the "update panel" button). The
 // messageId may be the panel's stored one or a new one supplied in the body.
-app.post('/api/guilds/:guildId/tickets/:id/update', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
+app.post('/api/guilds/:guildId/tickets/:id/update', requireAuth, requireGuildAdmin, async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);
         if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid panel id.' });

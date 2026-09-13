@@ -60,7 +60,9 @@ test('connection-enhancer.js reconnect paths use the schedule', () => {
 
 test('tickets.js refreshes the panel list on page load', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'public', 'js', 'tickets.js'), 'utf8');
-    assert.match(src, /refreshTicketList\(\)\;\s*\} \/\/ end upcoming\/beta lock guard/, 'refreshes after bindTicketCardActions inside the guard');
+    // Tickets is released (no upcoming/beta lock guard wraps the script now),
+    // so refreshTicketList must run unconditionally at the end of the file.
+    assert.match(src, /\nrefreshTicketList\(\);\s*$/, 'refreshes on load after bindTicketCardActions');
 });
 
 test('refreshTicketList renders server-fetched panels into the tab', async () => {

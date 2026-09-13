@@ -806,13 +806,7 @@ function ticketsPage({ guild, user }) {
     </div>
     `;
 
-        // Tickets is gated behind the "upcoming" (Coming Soon) feature gate —
-    // it stays hidden/locked until the developer says to release it (TABS
-    // upcoming: true). Developer/owner-role viewers bypass via _bypassUpcoming.
-    const wrappedPanelHTML = guild._bypassUpcoming
-        ? panelHTML
-        : upcomingOverlayWrap(panelHTML, { icon: 'ticket', title: 'Tickets' });
-    return guildTab({ guild, user, active: 'tickets', panelHTML: wrappedPanelHTML, scripts: ['/js/guild-common.js', '/js/tickets.js'] });
+        return guildTab({ guild, user, active: 'tickets', panelHTML, scripts: ['/js/guild-common.js', '/js/tickets.js'] });
 }
 
 // ── Ticket panel full-page editor (horizontal SPA-style tabs) ─────────────
