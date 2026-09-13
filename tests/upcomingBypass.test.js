@@ -1,8 +1,9 @@
-// The Events and Tickets pages normally render the "Coming Soon" overlay for
-// everyone (both are `upcoming: true` in render/guild.js TABS. Users holding
-// a developer/owner bot role bypass the gate: the dashboard sets
-// guild._bypassUpcoming (dashboard/auth.js)and eventsPage / ticketsPage must
-// then render the real editor instead of the locked overlay.
+// The Events page renders the "Coming Soon" overlay for everyone
+// (`upcoming: true` in render/guild.js TABS). Users holding a developer/owner
+// bot role bypass the gate: the dashboard sets guild._bypassUpcoming
+// (dashboard/auth.js) and eventsPage then renders the real editor.
+// Tickets has been RELEASED (the `upcoming: true` flag was removed), so
+// ticketsPage always renders the real panel list.
 
 const { test } = require('node:test');
 const assert = require('node:assert');
@@ -34,13 +35,14 @@ test('eventsPage renders the real editor when guild._bypassUpcoming is set', () 
     assert.ok(html.includes('id="ev-form"'), 'real editor form must render');
 });
 
-test('ticketsPage renders the Coming Soon overlay for ordinary users', () => {
+test('ticketsPage renders the real panel list for ordinary users (released)', () => {
     const html = guildPages.ticketsPage({ guild: fakeGuild(false), user: null });
-    assert.ok(html.includes('upcoming-locked-wrap locked'), 'expected the locked overlay — tickets is gated until release');
+    assert.ok(!html.includes('upcoming-locked-wrap locked'), 'overlay must NOT be present — tickets is released');
+    assert.ok(html.includes('id="tk-create-open"'), 'create button renders');
 });
 
-test('ticketsPage renders the real panel list when guild._bypassUpcoming is set', () => {
+test('ticketsPage renders the real panel list for bypass users too', () => {
     const html = guildPages.ticketsPage({ guild: fakeGuild(true), user: null });
-    assert.ok(!html.includes('upcoming-locked-wrap locked'), 'overlay should be skipped for bypass users');
+    assert.ok(!html.includes('upcoming-locked-wrap locked'), 'overlay should not be present for bypass users');
     assert.ok(html.includes('id="tk-create-open"'), 'create button renders');
 });

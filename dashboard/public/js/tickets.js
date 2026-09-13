@@ -13,13 +13,6 @@
 
 const GUILD_ID = window.guildData?.guildId;
 
-// Tickets is currently an "upcoming" feature (see ticketsPage
-// upcoming-locked-wrap) — the page renders a blurred "Coming Soon" overlay for
-// ALL servers. In that case this script exits early — no API calls, no
-// bindings — so the overlay is the only thing that works.
-if (document.querySelector('.upcoming-locked-wrap.locked,.beta-locked-wrap.locked')) {
-
-} else {
 
 function ticketPanelCardHTML(panel) {
   const supportRoles = (panel.supportRoleIds || []).map(id => `<@&${esc(id)}>`).join(', ') || '—';
@@ -171,4 +164,3 @@ bindTicketCardActions();
 // once on load so existing panels actually appear in the tab.
 refreshTicketList();
 
-} // end upcoming/beta lock guard

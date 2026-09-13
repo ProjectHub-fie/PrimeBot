@@ -14,6 +14,31 @@ const { guildDataScript, guildHeaderHTML, tabNavHTML, TABS } = require('./guild'
 
 const { LOG_EVENTS, AUTOMOD_RULES, AUTOMOD_ACTIONS, BADGE_CATALOG } = constants;
 
+/**
+ * Normalize a per-panel ticket-logging config (from the API/data blob) into
+ * { enabled, channelId, events }. Shared with the bot via shared/ticketLogging.js
+ * so the dashboard and the embed builder never drift. Falls back to defaults
+ * for old panels with no config (events all on by default once enabled).
+ */
+function normalizeTicketLoggingServer(raw) {
+    const shared = (() => {
+        try { return require('../../shared/ticketLogging'); } catch { return null; }
+    })();
+    if (shared && typeof shared.normalizeTicketLogging === 'function') {
+        return shared.normalizeTicketLogging(raw || {});
+    }
+    const src = (raw && typeof raw === 'object') ? raw : {};
+    const defaults = (shared && shared.DEFAULT_TICKET_LOG_EVENTS) || ['created', 'closed', 'claimed', 'unclaimed', 'transferred'];
+    const events = Array.isArray(src.events) ? src.events.filter(k => defaults.includes(k)) : defaults.slice();
+    const merged = new Set(events);
+    for (const k of defaults) merged.add(k);
+    return {
+        enabled: src.enabled === true,
+        channelId: src.channelId || null,
+        events: defaults.filter(k => merged.has(k)),
+    };
+}
+
 // Wrap guild-tab body in the shared shell (header + tabs + data blob + page JS).
 function guildTab({ guild, active, panelHTML, scripts, title, user, panel: _panel, containerClass }) {
     const body = `
@@ -781,13 +806,7 @@ function ticketsPage({ guild, user }) {
     </div>
     `;
 
-        // Tickets is gated behind the "upcoming" (Coming Soon) feature gate —
-    // it stays hidden/locked until the developer says to release it (TABS
-    // upcoming: true). Developer/owner-role viewers bypass via _bypassUpcoming.
-    const wrappedPanelHTML = guild._bypassUpcoming
-        ? panelHTML
-        : upcomingOverlayWrap(panelHTML, { icon: 'ticket', title: 'Tickets' });
-    return guildTab({ guild, user, active: 'tickets', panelHTML: wrappedPanelHTML, scripts: ['/js/guild-common.js', '/js/tickets.js'] });
+        return guildTab({ guild, user, active: 'tickets', panelHTML, scripts: ['/js/guild-common.js', '/js/tickets.js'] });
 }
 
 // ── Ticket panel full-page editor (horizontal SPA-style tabs) ─────────────
@@ -820,6 +839,39 @@ const TICKET_EDITOR_TABS = [
     { key: 'claim',         label: 'Claim',         icon: 'hand' },
 ];
 
+function fieldEditorRowHTML(f = {}, i = 0) {
+    const esca = (v) => v == null ? '' : esc(String(v));
+    const name = f.name || '';
+    const value = f.value || '';
+    return `
+    <div class="edb-field-card" data-field-index="${i}">
+      <div class="edb-field-card-head">
+        <span class="edb-grip">${svgIcon('grip')}</span>
+        <span class="edb-field-num">Field ${i + 1}</span>
+        <span class="edb-field-actions">
+          <button type="button" class="btn btn-secondary btn-sm edb-field-dupe" title="Duplicate field">Duplicate</button>
+          <button type="button" class="btn btn-danger btn-sm edb-field-del" title="Delete field">Delete</button>
+        </span>
+      </div>
+      <div class="edb-duo edb-field-name-row">
+        <div class="edb-field">
+          <label class="edb-label" for="edb-field-${i}-name">Field name</label>
+          <input type="text" id="edb-field-${i}-name" class="edb-field-name" maxlength="256" value="${esca(name)}" placeholder="Quick Links" />
+          <span class="edb-counter" data-counter-for="edb-field-${i}-name">${name.length} / 256</span>
+        </div>
+      </div>
+      <div class="edb-field">
+        <label class="edb-label" for="edb-field-${i}-value">Field value</label>
+        <textarea id="edb-field-${i}-value" class="edb-field-value" rows="3" maxlength="1024" placeholder="Create a ticket...">${esca(value)}</textarea>
+        <span class="edb-counter" data-counter-for="edb-field-${i}-value">${value.length} / 1024</span>
+      </div>
+      <div class="edb-field-inline">
+        <label class="switch" for="edb-field-${i}-inline"><input type="checkbox" class="edb-field-inline-inp" id="edb-field-${i}-inline" ${f.inline ? 'checked' : ''}/><span class="slider"></span></label>
+        <span class="edb-label-inline">Inline</span>
+      </div>
+    </div>`;
+}
+
 function ticketField(label, forId, inner, hint = '') {
     return `
     <div class="field">
@@ -829,7 +881,7 @@ function ticketField(label, forId, inner, hint = '') {
     </div>`;
 }
 
-function ticketEditorTabsHTML(panel) {
+function ticketEditorTabsHTML(panel, channels = []) {
     const styleOpts = TICKET_BUTTON_STYLES.map(s => `<option value="${s.value}">${esc(s.label)}</option>`).join('');
     const typeOpts = TICKET_MESSAGE_TYPES.map(t => `<option value="${t.value}">${esc(t.label)}</option>`).join('');
     const p = panel || {};
@@ -1067,12 +1119,45 @@ function ticketEditorTabsHTML(panel) {
       ${ticketNameField('close', 'When ticket closes', 'Close ticket name', '(closed) {name}')}
     `;
 
-    // Tab 6 — Logging: placeholder "available soon".
-    const comingSoonTab = (title) => `
-      <div class="card-title"><span>${title}</span></div>
-      <div class="alert alert-warn">${title} settings are coming soon. More bar tabs will be available here. Settings will be available soon.</div>
+    // Tab 6 — Logging: per-panel ticket logging configuration. Lives INSIDE
+    // this existing Logging bar (no separate page). The event catalog below is
+    // the shared TICKET_LOG_EVENTS source of truth (shared/ticketLogging.js),
+    // the same catalog the bot's utils/ticketLogger.js uses to build embeds,
+    // so the toggle list and the actual log embeds stay in sync.
+    const TLogEv = (() => {
+        try { return require('../../shared/ticketLogging').TICKET_LOG_EVENTS; }
+        catch { return []; }
+    })();
+    const tlog = normalizeTicketLoggingServer(p._ticketLogging || {});
+    const tlogEvChk = (key) => Array.isArray(tlog.events) && tlog.events.includes(key) ? 'checked' : '';
+    const tlogEventsHTML = (TLogEv.length ? TLogEv : [
+        { key: 'created', label: 'Ticket Created' },
+        { key: 'closed', label: 'Ticket Closed' },
+        { key: 'reopened', label: 'Ticket Reopened' },
+        { key: 'claimed', label: 'Ticket Claimed' },
+        { key: 'unclaimed', label: 'Ticket Unclaimed' },
+        { key: 'transferred', label: 'Ticket Transferred' },
+    ]).map(ev => `
+      <label class="check tlog-event-check">
+        <input type="checkbox" class="tlog-event" data-event="${ev.key}" ${tlogEvChk(ev.key)} />
+        <span>${esc(ev.icon || '🎫')} ${esc(ev.label)}</span>
+      </label>`).join('');
+    const loggingTab = `
+      <div class="card-title"><span>Ticket Logging</span></div>
+      <p class="card-hint">Send a professional, event-specific Discord embed to a channel whenever a ticket created from this panel changes state. Logging is secondary — even if the log channel breaks, tickets keep working normally.</p>
+      <div class="switch-row">
+        <div class="switch-label"><div class="sl-title">Enable ticket logging</div><div class="sl-desc">When on, every enabled event below is posted to the log channel as a formatted embed.</div></div>
+        <label class="switch"><input type="checkbox" id="tk-logging-enabled" ${tlog.enabled ? 'checked' : ''}/><span class="slider"></span></label>
+      </div>
+      ${ticketField('Log channel', 'tk-logging-channel', `
+        <select id="tk-logging-channel" data-channel-select>
+          ${channelOptions(channels || [], tlog.channelId)}
+        </select>`, 'The channel where ticket log embeds are sent. Must be in this server and the bot must be able to view + send messages there.')}
+      <div class="card-title" style="margin-top:14px"><span>Log events</span></div>
+      <p class="card-hint">Choose which ticket events post a log embed. Only events the ticket system actually supports are listed.</p>
+      <div class="tlog-events">${tlogEventsHTML}</div>
+      <div class="alert alert-warn tlog-channel-warn" style="display:none">⚠ Logging channel is unavailable — logs will be skipped, but tickets keep working.</div>
     `;
-    const loggingTab = comingSoonTab('Logging');
 
     // Tab 7 — Transcript: transcript channel + toggles.
     const transcriptTab = `
@@ -1239,6 +1324,17 @@ function ticketEmbedBuilderHTML(p = {}, styleOpts) {
         </div>
         <div class="edb-live edb-live-image">${imageHTML}</div>
       `)}
+      ${region('edb-fields', 'Fields', `
+        <div class="edb-fields-head">
+          <p class="edb-section-hint">Additional information displayed inside your Discord embed. Each field maps directly to Discord's <code>{ name, value, inline }</code> — field order is preserved through save, database, and the actual message.</p>
+          <button type="button" class="btn btn-secondary btn-sm" id="edb-add-field">${svgIcon('plus')} Add field</button>
+        </div>
+        <div class="edb-fields-empty ${(p.fields && p.fields.length) ? 'hidden' : ''}" id="edb-fields-empty">No fields configured.</div>
+        <div class="edb-fields-list" id="edb-fields-list">
+          ${(Array.isArray(p.fields) ? p.fields : []).map((f, i) => fieldEditorRowHTML(f, i)).join('')}
+        </div>
+        <div class="edb-live edb-live-fields" id="edb-fields-live"></div>
+      `,'Field name ≤ 256, value ≤ 1024, max 25 fields, total embed size ≤ 6000. Inline fields sit side-by-side when they fit.')}
       ${region('edb-footer', 'Footer', `
         <div class="edb-duo">
           <div class="edb-field">
@@ -1291,6 +1387,7 @@ function ticketEmbedBuilderHTML(p = {}, styleOpts) {
               <div class="edb-live edb-live-desc${p.description ? '' : ' hidden'}" id="edb-pv-desc">${esca(p.description)}</div>
               <div class="edb-live edb-live-thumb${p.thumbnailUrl ? '' : ' hidden'}">${thumbHTML.replace('id="edb-thumb"','id="edb-pv-thumb"')}</div>
               <div class="edb-live edb-live-image${p.imageUrl ? '' : ' hidden'}">${imageHTML.replace('id="edb-image"','id="edb-pv-image"')}</div>
+              <div class="edb-live edb-live-fields${(p.fields && p.fields.length) ? '' : ' hidden'}" id="edb-pv-fields"></div>
               <div class="edb-live edb-live-footer${previewFooterSuffix}" id="edb-pv-footer">${p.footerIconUrl ? `<img id="edb-pv-footer-icon" class="edb-footer-icon" src="${esc(p.footerIconUrl)}" alt="" />` : '<img id="edb-pv-footer-icon" class="edb-footer-icon hidden" alt="" />'}<span class="tk-preview-embed-footer-text" id="edb-pv-footer-text"${p.footerText ? '' : ' class="hidden"'}>${esca(p.footerText)}</span><span class="tk-preview-embed-time" id="edb-pv-time">now</span></div>
             </div>
             </div>
@@ -1323,7 +1420,7 @@ function ticketEmbedBuilderHTML(p = {}, styleOpts) {
 
 function ticketEditPage({ guild, user }) {
     const panel = guild._ticketPanel;
-    const { tabBar, tabContent } = ticketEditorTabsHTML(panel);
+    const { tabBar, tabContent } = ticketEditorTabsHTML(panel, guild._channels || []);
     const id = panel.id;
     const pageHTML = `
     <div class="ticket-editor-top">
