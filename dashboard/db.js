@@ -1313,7 +1313,7 @@ async function getGuildConfig(guildId) {
     if (server && server.leveling) {
         server.leveling.roleRewards = levelingRoleRewards || [];
     }
-    const panelMap = new Map((ticketPanels || [])).map(p => [String(p.id), p]);
+    const panelMap = new Map((ticketPanels || []).map(p => [String(p.id), p]));
     for (const c of comps || []) {
         const panel = panelMap.get(String(c.panelId));
         if (panel) {

@@ -181,7 +181,7 @@ async function transferTicketClaim(channelId, claimantId, toStaffId, { performed
     const prevClaimer = before.claimedBy;
     const cond = force
         ? "AND claimed_by IS NOT NULL AND claimed_by <> ''"
-        : 'AND claimed_by = $5';
+        : 'AND claimed_by = $6';
     const params = force
         ? [String(toStaffId), now, INITIAL_HISTORY, _historyEntry(HISTORY_TRANSFER, prevClaimer, String(toStaffId), actor, now), String(channelId)]
         : [String(toStaffId), now, INITIAL_HISTORY, _historyEntry(HISTORY_TRANSFER, prevClaimer, String(toStaffId), actor, now), String(channelId), String(claimantId)];

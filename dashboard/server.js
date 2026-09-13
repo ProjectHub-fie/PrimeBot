@@ -130,6 +130,16 @@ app.use(cookieParser());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Static frontend assets. Served BEFORE the session middleware on purpose: the
+// session store (connect-pg-simple) talks to Postgres, and a store failure on
+// a cookie-bearing request would turn `/styles.css` (and every other static
+// asset) into a 500 HTML error page — the browser then parses zero CSS rules
+// and the whole layout collapses/overlaps ("General tab cards overlapping").
+// Static files never need the session, so short-circuit them first so a
+// backend/session outage can only ever affect authenticated pages/APIs, not
+// the stylesheets/javascript every page depends on.
+app.use(express.static(path.join(__dirname, 'public')));
+
 // Secure cookies whenever we're not on plain localhost. Vercel, the work host,
 // and production all serve HTTPS, so the session cookie must be marked Secure
 // or browsers will silently drop it.
@@ -167,9 +177,6 @@ app.use((req, res, next) => {
     res.locals.idleTimeoutMs = SESSION_IDLE_TIMEOUT_MS;
     next();
 });
-
-// Static frontend assets.
-app.use(express.static(path.join(__dirname, 'public')));
 
 // Request logging — opt-in via DASHBOARD_LOG_REQUESTS=true (off by default).
 if (process.env.DASHBOARD_LOG_REQUESTS === 'true') {
