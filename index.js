@@ -161,6 +161,20 @@ async function initializeManagers() {
     const ticketPanelManager = new TicketPanelManager(client);
     client.ticketManager    = ticketPanelManager; // legacy alias
     client.ticketPanelManager = ticketPanelManager;
+    // Ticket logging: one subscriber attached once per process (not per event /
+    // per reconnect), so an event can never fire multiple loggers.
+    try {
+        const { sendTicketLog } = require('./utils/ticketLogger');
+        ticketPanelManager.subscribeToTicketLogs((event) =>
+            sendTicketLog(ticketPanelManager, {
+                ...event,
+                reason: event.data.reason,
+            }, event.key, event.data).catch(() => {})
+        );
+        console.log('[MANAGERS] Ticket logging subscriber attached.');
+    } catch (err) {
+        console.error('[MANAGERS] Failed to attach ticket logger:', err.message);
+    }
     client.ticTacToeManager = new TicTacToeManager(client);
     client.pollManager      = new PollManager(client);
     client.livePollManager  = new LivePollManager(client);

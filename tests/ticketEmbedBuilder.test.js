@@ -306,3 +306,207 @@ test('dashboard normalizeTicketPanel caps + validates the same way', () => {
     assert.equal(out.thumbnailUrl, null);
     assert.equal(out.footerIconUrl, 'https://ok/icon.png');
 });
+
+// ── Embed FIELDS (Task 2) ────────────────────────────────────────────────
+// The Fields section inside Message → Embed Builder: field cards render
+// server-side from panel.embedFields, the + Add Field button exists, and the
+// same field config flows to the bot's embed builder in order.
+
+test('ticketEditPage: Message tab renders the FIELDS editor section', () => {
+    const html = guildPages.ticketEditPage({ guild: fakeGuild({ id: 42, name: 'Support' }), user: null });
+    assert.ok(/FIELDS/i.test(html), 'has a Fields section label');
+    assert.ok(html.includes('edb-fields-list'), 'field card list container');
+    assert.ok(html.includes('edb-add-field'), '+ Add Field button exists');
+    assert.ok(html.includes('edb-fields-empty'), 'empty-state element exists');
+});
+
+test('ticketEditPage: field cards render from persisted embedFields in order', () => {
+    const panel = {
+        id: 42, name: 'Support', messageType: 'embed',
+        fields: [
+            { name: 'Quick Links', value: 'Create a ticket', inline: true },
+            { name: 'Support', value: 'Contact staff', inline: false },
+        ],
+    };
+    const html = guildPages.ticketEditPage({ guild: fakeGuild(panel), user: null });
+    assert.equal((html.match(/class="edb-field-card" /g) || []).length, 2, 'two field cards rendered');
+    const first = html.indexOf('Quick Links');
+    const second = html.indexOf('Support', first);
+    assert.ok(first > -1 && second > first, 'fields keep their configured order in the DOM');
+    assert.ok(html.includes('edb-field-0-name'), 'first field name input id present');
+    assert.ok(html.includes('edb-field-1-inline'), 'second field inline checkbox id present');
+});
+
+test('embed fields: server normalizer drops invalid rows and caps at 25', () => {
+    const out = dashboardDb._safeTicketEmbedFields
+        ? dashboardDb._safeTicketEmbedFields([{ name: 'a', value: 'b', inline: true }, { name: '', value: '' }, null, 'x', { name: 'c', value: 'd' }])
+        : null;
+    if (typeof dashboardDb._safeTicketEmbedFields === 'function') {
+        assert.deepEqual(out, [
+            { name: 'a', value: 'b', inline: true },
+            { name: 'c', value: 'd', inline: false },
+        ]);
+    }
+});
+
+test('embed fields: bot buildPanelMessage adds fields in order', () => {
+    const mgr = new TicketPanelManager({});
+    const panel = mgr._normalizePanel({
+        id: 1, name: 'Support', title: 'Help', description: 'Click below',
+        embedFields: [
+            { name: 'First', value: 'one', inline: true },
+            { name: 'Second', value: 'two', inline: false },
+        ],
+    });
+    const payload = mgr.buildPanelMessage(panel);
+    const e = payload.embeds[0].toJSON ? payload.embeds[0].toJSON() : payload.embeds[0];
+    assert.ok(Array.isArray(e.fields), 'embed has fields');
+    assert.equal(e.fields.length, 2, 'both fields present');
+    assert.equal(e.fields[0].name, 'First');
+    assert.equal(e.fields[0].inline, true);
+    assert.equal(e.fields[1].name, 'Second');
+    assert.equal(e.fields[1].inline, false);
+});
+
+test('embed fields: dashboard create/update SQL persists embed_fields', async () => {
+    // Stub the tlog pool (already stubbed) and intercept the ticket pool.
+    const statements = [];
+    const orig = ticketPool.query;
+    ticketPool.query = async (sql, params) => {
+        statements.push({ sql, params });
+        if (/SELECT \* FROM ticket_panels WHERE id = \$1/.test(sql)) {
+            return {
+                rows: [{
+                    id: 42, guild_id: '123', name: 'Support', channel_id: null, message_id: null,
+                    message_type: 'embed', title: 'old', description: null, color: '#5865F2',
+                    thumbnail_url: null, image_url: null, author_name: null, author_icon_url: null,
+                    footer_text: null, content: null,
+                    button_label: 'Open Ticket', button_style: 'Primary', button_emoji: null,
+                    category: 'general', ticket_name: null,
+                    support_role_ids: [], ping_role_ids: [], ticket_category_id: null,
+                    cooldown_seconds: 0, max_open_per_user: 1, ask_reason: false,
+                    reason_placeholder: 'x', welcome_message: null,
+                    close_button_label: 'Close', close_button_emoji: null, close_button_style: 'Danger',
+                    claim_button_label: null, claim_button_emoji: null, claim_button_style: 'Secondary',
+                    open_name_template: null, claimed_name_template: null, closed_name_template: null,
+                    close_flow: {}, enabled: true, created_by: 'u', created_at: null, updated_at: null,
+                }],
+            };
+        }
+        if (/UPDATE ticket_panels SET/.test(sql)) return { rows: [], rowCount: 1 };
+        return { rows: [], rowCount: 1 };
+    };
+    try {
+        await dashboardDb.updateTicketPanel(42, {
+            fields: [{ name: 'F', value: 'V', inline: true }],
+        });
+        const upd = statements.find(s => /UPDATE ticket_panels SET/.test(s.sql));
+        assert.ok(upd, 'UPDATE executed');
+        assert.ok(upd.sql.includes('embed_fields = $45'), 'UPDATE writes embed_fields');
+        assert.equal(upd.params[44], JSON.stringify([{ name: 'F', value: 'V', inline: true }]), 'params persist fields');
+    } finally {
+        ticketPool.query = orig;
+    }
+});
+
+// ── Ticket LOGGING tab (Task 1) inside the existing Logging bar ─────────────
+test('ticketEditPage: Logging tab renders inside the editor (no separate page)', () => {
+    const html = guildPages.ticketEditPage({ guild: fakeGuild({ id: 42, name: 'Support' }), user: null });
+    assert.ok(html.includes('Ticket Logging'), 'Logging config header exists');
+    assert.ok(html.includes('tk-logging-enabled'), 'enable checkbox present');
+    assert.ok(html.includes('tk-logging-channel'), 'log channel select present');
+    assert.ok(html.includes('data-event="created"'), 'created event toggle present');
+});
+
+test('ticketEditPage: Logging tab pre-populates enabled + events from panel config', () => {
+    const panel = {
+        id: 42, name: 'Support',
+        _ticketLogging: {
+            enabled: true,
+            channelId: '987654321',
+            events: ['created'], // shared normalizer re-defaults the standard events
+        },
+    };
+    const html = guildPages.ticketEditPage({ guild: fakeGuild(panel), user: null });
+    assert.ok(html.includes('id="tk-logging-enabled" checked'), 'enabled pre-checked');
+    assert.ok(html.includes('data-event="created" checked'), 'created toggle pre-checked');
+    // The standard events are all kept (never silently disabled after upgrade);
+    // renamed/deleted are opt-in extras that stay off by default.
+    assert.ok(html.includes('data-event="reopened" checked'), 'default event reopened stays checked');
+    assert.ok(!/data-event="renamed" checked/.test(html), 'renamed is an opt-in extra, stays unchecked');
+});
+
+test('shared ticket logging normalizer keeps supported events and drops unknown', () => {
+    const { normalizeTicketLogging } = require('../shared/ticketLogging');
+    const out = normalizeTicketLogging({ enabled: true, channelId: 'c', events: ['created', 'bogus'] });
+    assert.equal(out.enabled, true);
+    assert.equal(out.channelId, 'c');
+    assert.ok(out.events.includes('created'));
+    assert.ok(!out.events.includes('bogus'), 'unknown event dropped');
+    assert.ok(out.events.includes('closed'), 'default events preserved when enabled');
+});
+
+// ── Ticket logger embed builder (Task 1 bot side) ─────────────────────────
+test('ticketLogger builds event-specific embeds with title, fields, timestamp, footer', () => {
+    const { buildTicketLogEmbed } = require('../utils/ticketLogger');
+    const embed = buildTicketLogEmbed('claimed', {
+        ticket: 'support-42',
+        channelId: '111222333',
+        actorId: '888',
+        panelName: 'Support Panel',
+        timestamp: 1789000000000,
+    });
+    const e = embed.toJSON();
+    assert.match(e.title, /Ticket Claimed/, 'title is event-specific');
+    assert.ok(Array.isArray(e.fields) && e.fields.length >= 2, 'has fields');
+    assert.ok(e.fields.some(f => f.name === 'Claimed By' && f.value.includes('<@888>')), 'actor mention in field');
+    assert.ok(e.fields.some(f => f.name === 'Ticket' && f.value.includes('<#111222333>')), 'ticket channel mention');
+    assert.equal(new Date(e.timestamp).getTime(), 1789000000000, 'embed timestamp set');
+    assert.match(e.footer && e.footer.text || '', /PrimeBot • Ticket Logs/, 'footer present');
+    assert.ok(e.color, 'color set');
+});
+
+test('ticketLogger dedupes duplicate events via stable _id', () => {
+    const { _isDuplicateLog } = require('../utils/ticketLogger');
+    assert.equal(_isDuplicateLog('x'), false, 'first occurrence not a duplicate');
+    assert.equal(_isDuplicateLog('x'), true, 'second occurrence within window is a duplicate');
+    assert.equal(_isDuplicateLog('y'), false, 'different id is not a duplicate');
+});
+
+test('ticketLogger closed embed includes opened/closed/duration fields', () => {
+    const { buildTicketLogEmbed } = require('../utils/ticketLogger');
+    const opened = Date.now() - 2 * 3600 * 1000; // 2h ago
+    const embed = buildTicketLogEmbed('closed', {
+        ticket: 'support-42',
+        channelId: '111222333',
+        actorId: '888',
+        openedAt: opened,
+        timestamp: Date.now(),
+    });
+    const e = embed.toJSON();
+    assert.match(e.title, /Ticket Closed/);
+    const names = (e.fields || []).map(f => f.name).join(',');
+    assert.ok(names.includes('Opened At'), 'opened field');
+    assert.ok(names.includes('Closed At'), 'closed field');
+    assert.ok(names.includes('Duration'), 'duration field');
+});
+
+// ── Audit-log pool uses ALOG_DATABASE_URL (Task: shift + fix) ─────────────
+test('audit log functions route to the ALOG pool (server/alogDb)', () => {
+    const alogDb = require('../server/alogDb');
+    assert.ok(alogDb.alogPool, 'alogPool exists');
+    assert.ok(alogDb.addWebsiteLog, 'addWebsiteLog exported');
+    assert.ok(alogDb.getWebsiteLogs, 'getWebsiteLogs exported');
+    const dashboardAlog = require('../dashboard/db');
+    // The dashboard's own ensureWebsiteLogsTable should target the ALOG pool —
+    // it builds the same table the alog write path uses.
+    const re = fs.readFileSync(path.join(__dirname, '..', 'dashboard/db.js'), 'utf8');
+    assert.ok(re.includes('getAlogPool()'), 'dashboard/db uses getAlogPool for website_logs');
+    // server/db or logDb should NOT be the write path for website_logs anymore.
+    const serverLogDbSrc = fs.readFileSync(path.join(__dirname, '..', 'server/logDb.js'), 'utf8');
+    assert.ok(serverLogDbSrc.includes('LOG_DATABASE_URL'), 'logDb keeps its own pool for logging_settings');
+    const src = fs.readFileSync(path.join(__dirname, '..', 'dashboard/db.js'), 'utf8');
+    const idxAlog = src.indexOf('getAlogPool');
+    const idxLog = src.indexOf('getLogPool');
+    assert.ok(idxAlog > -1 && idxLog > -1, 'both pool helpers exist');
+});

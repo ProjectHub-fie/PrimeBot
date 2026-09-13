@@ -375,6 +375,9 @@ async function revokeDashboardBadge(guildId, badgeRowId) {
 
 const config = require('../config');
 const constants = require('./constants');
+const { TICKET_LOG_EVENT_KEYS } = (() => {
+    try { return require('../shared/ticketLogging'); } catch { return { TICKET_LOG_EVENT_KEYS: ['created', 'closed', 'reopened', 'claimed', 'unclaimed', 'transferred', 'renamed', 'deleted'] }; }
+})();
 const { normalizeGuildPrefix } = require('../utils/prefixHelper');
 const { normalizeEvents, DEFAULT_ENABLED_EVENTS } = require('../utils/logEvents');
 const { normalizeRules, normalizeAction, normalizeWarnActions, normalizeDmMessages } = require('../utils/automodRules');
@@ -719,12 +722,24 @@ function rowToLoggingSettings(row) {
 // ── website_logs (dashboard admin-action audit trail, shown on General page) ─
 //
 // Each dashboard settings save records a row here (admin username + a short
-// human-readable content summary + timestamp). Lives in the LOG_DATABASE_URL
-// pool alongside logging_settings so a single connection string covers both the
-// bot's server logging and the dashboard's website log.
+// human-readable content summary + timestamp). Lives in the dedicated
+// ALOG_DATABASE_URL pool (server/alogDb.js) so the audit trail can sit in its
+// own database/schema and is no longer coupled to the bot's server-logging pool.
+
+let alogPool = null;
+function getAlogPool() {
+    if (alogPool) return alogPool;
+    try {
+        alogPool = require('../server/alogDb').alogPool;
+    } catch (err) {
+        console.error('[DASHBOARD DB] alogDb unavailable:', err.message);
+        alogPool = { query: async () => { throw new Error('Audit log database not configured'); } };
+    }
+    return alogPool;
+}
 
 async function ensureWebsiteLogsTable() {
-    await getLogPool().query(`
+    await getAlogPool().query(`
         CREATE TABLE IF NOT EXISTS website_logs (
             id              SERIAL PRIMARY KEY,
             guild_id        VARCHAR(50) NOT NULL,
@@ -734,14 +749,14 @@ async function ensureWebsiteLogsTable() {
             created_at      TIMESTAMP DEFAULT NOW()
         )
     `);
-    await getLogPool().query(
+    await getAlogPool().query(
         `CREATE INDEX IF NOT EXISTS website_logs_guild_idx ON website_logs (guild_id, created_at DESC)`
     );
 }
 
 async function addWebsiteLog(guildId, { adminUserId, adminUsername, content }) {
     await ensureWebsiteLogsTable();
-    await getLogPool().query(
+    await getAlogPool().query(
         `INSERT INTO website_logs (guild_id, admin_user_id, admin_username, content, created_at)
          VALUES ($1, $2, $3, $4, NOW())`,
         [String(guildId), String(adminUserId || ''), String(adminUsername || ''), String(content || '')]
@@ -750,7 +765,7 @@ async function addWebsiteLog(guildId, { adminUserId, adminUsername, content }) {
 
 async function getWebsiteLogs(guildId, limit = 100) {
     await ensureWebsiteLogsTable();
-    const res = await getLogPool().query(
+    const res = await getAlogPool().query(
         `SELECT id, admin_user_id, admin_username, content, created_at
          FROM website_logs
          WHERE guild_id = $1
@@ -1512,6 +1527,7 @@ async function ensureTicketTables() {
             claim_button_emoji     VARCHAR(100),
             claim_button_style     VARCHAR(20) DEFAULT 'Secondary',
             close_flow             JSONB,
+            embed_fields           JSONB,
             enabled             BOOLEAN NOT NULL DEFAULT true,
             created_by          VARCHAR(50),
             created_at          TIMESTAMP DEFAULT NOW(),
@@ -1556,6 +1572,7 @@ async function ensureTicketTables() {
         ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS title_url            TEXT;
         ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS footer_icon_url     TEXT;
         ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS timestamp_enabled    BOOLEAN NOT NULL DEFAULT true;
+        ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS embed_fields          JSONB;
         CREATE TABLE IF NOT EXISTS ticket_panel_components (
             id                      SERIAL PRIMARY KEY,
             panel_id                INTEGER NOT NULL REFERENCES ticket_panels(id) ON DELETE CASCADE,
@@ -1712,6 +1729,7 @@ function ticketRowToPanel(row) {
         claimedNameTemplate: row.claimed_name_template != null ? row.claimed_name_template : null,
         closedNameTemplate: row.closed_name_template != null ? row.closed_name_template : null,
         closeFlow: row.close_flow != null ? normalizeTicketCloseFlow(row.close_flow) : normalizeTicketCloseFlow({}),
+        fields: Array.isArray(row.embed_fields) ? _safeTicketEmbedFields(row.embed_fields) : [],
         enabled: row.enabled !== false,
         createdBy: row.created_by || null,
         createdAt: row.created_at,
@@ -1739,6 +1757,7 @@ function normalizeTicketPanel(data, keepUndefined = false) {
         panelVersion: 1,
         openNameTemplate: null, claimedNameTemplate: null, closedNameTemplate: null,
         closeFlow: null,
+        fields: [],
         enabled: true, channelId: null, messageId: null,
     };
     const out = keepUndefined ? { ...(data || {}) } : { ...defaults, ...(data || {}) };
@@ -1776,6 +1795,7 @@ function normalizeTicketPanel(data, keepUndefined = false) {
         if (out[f] != null) out[f] = String(out[f]).trim().slice(0, 100) || null;
     }
     out.closeFlow = normalizeTicketCloseFlow(out.closeFlow);
+    out.fields = _safeTicketEmbedFields(out.fields);
     return out;
 }
 
@@ -1794,7 +1814,7 @@ const TICKET_PANEL_FIELDS = {
     claimEnabled: 1,
     panelVersion: 1,
     openNameTemplate: 1, claimedNameTemplate: 1,
-    closedNameTemplate: 1, closeFlow: 1, enabled: 1, createdBy: 1,
+    closedNameTemplate: 1, closeFlow: 1, fields: 1, enabled: 1, createdBy: 1,
 };
 
 // PostgreSQL unique_violation (23505) on the per-guild panel-name index is a
@@ -1804,6 +1824,26 @@ function ticketNameTakenError(name) {
     const err = new Error(`A ticket panel named "${name}" already exists in this server. Pick a different name.`);
     err.status = 409;
     return err;
+}
+
+/**
+ * Coerce a stored/API embed fields value into an array of
+ * { name, value, inline } — matches the bot's `_safeEmbedFields` so the
+ * dashboard rows and the real Discord message can never drift. Truncates to
+ * Discord's limits and caps at 25 fields.
+ */
+function _safeTicketEmbedFields(raw) {
+    const arr = raw == null ? [] : (Array.isArray(raw) ? raw : (() => { try { return JSON.parse(String(raw)); } catch { return null; } })());
+    if (!Array.isArray(arr)) return [];
+    const out = [];
+    for (const item of arr.slice(0, 25)) {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+        const name = item.name == null ? '' : String(item.name);
+        const value = item.value == null ? '' : String(item.value);
+        if (!name.trim() && !value.trim()) continue;
+        out.push({ name: name.slice(0, 256), value: value.slice(0, 1024), inline: item.inline === true });
+    }
+    return out;
 }
 
 function isTicketNameConflict(err) {
@@ -2031,8 +2071,8 @@ async function createTicketPanel(guildId, data) {
                 claim_enabled, panel_version,
                 open_name_template, claimed_name_template, closed_name_template,
                 close_flow, enabled, created_by, created_at, updated_at,
-                author_url, title_url, footer_icon_url, timestamp_enabled
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,NOW(),NOW(),$42,$43,$44,$45)
+                author_url, title_url, footer_icon_url, timestamp_enabled, embed_fields
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,NOW(),NOW(),$42,$43,$44,$45,$46)
             RETURNING id
         `, [
             guildId, p.name, p.channelId || null, p.messageId || null, p.messageType,
@@ -2047,6 +2087,7 @@ async function createTicketPanel(guildId, data) {
             JSON.stringify(p.closeFlow || {}),
             p.enabled, p.createdBy || null,
             p.authorUrl, p.titleUrl, p.footerIconUrl, p.timestamp,
+            JSON.stringify(p.fields || []),
         ]);
     } catch (err) {
         if (isTicketNameConflict(err)) throw ticketNameTakenError(p.name);
@@ -2086,7 +2127,8 @@ async function updateTicketPanel(id, patch) {
                 claim_enabled = $34, panel_version = $35, open_name_template = $36,
                 claimed_name_template = $37, closed_name_template = $38,
                 close_flow = $39, enabled = $40, updated_at = NOW(),
-                author_url = $41, title_url = $42, footer_icon_url = $43, timestamp_enabled = $44
+                author_url = $41, title_url = $42, footer_icon_url = $43, timestamp_enabled = $44,
+                embed_fields = $45
             WHERE id = $1
         `, [
             id, p.name, p.channelId || null, p.messageId || null, p.messageType,
@@ -2101,6 +2143,7 @@ async function updateTicketPanel(id, patch) {
             JSON.stringify(p.closeFlow || {}),
             p.enabled,
             p.authorUrl, p.titleUrl, p.footerIconUrl, p.timestamp,
+            JSON.stringify(p.fields || []),
         ]);
     } catch (err) {
         if (isTicketNameConflict(err)) throw ticketNameTakenError(p.name);
@@ -2247,6 +2290,87 @@ async function updateTicketRoleSettings(panelId, guildId, settings = {}) {
         s.close.enabled, s.close.channelName, s.close.showUserName, s.close.showCount,
         s.close.addRoleId, s.close.removeRoleId,
     ]);
+    return s;
+}
+
+// ── Ticket logging settings (TLOG_DATABASE_URL) ──────────────────────────
+// Per-panel ticket logging configuration (enabled / log channel / events).
+// Stored in the dedicated `ticket_logging_settings` table in the TLOG pool
+// (server/tlogDb.js) so the bot's TicketPanelManager and the dashboard share
+// the same rows through the TLOG_DATABASE_URL env var (falls back to
+// DATABASE_URL). Mirrors the TROLE pattern exactly.
+let tlogPool = null;
+function getTlogPool() {
+    if (tlogPool) return tlogPool;
+    try {
+        tlogPool = require('../server/tlogDb').tlogPool;
+    } catch (err) {
+        console.error('[DASHBOARD DB] tlogDb unavailable:', err.message);
+        tlogPool = { query: async () => { throw new Error('Ticket logging database not configured'); } };
+    }
+    return tlogPool;
+}
+
+async function ensureTicketLoggingTable() {
+    await getTlogPool().query(`
+        CREATE TABLE IF NOT EXISTS ticket_logging_settings (
+            panel_id    INTEGER PRIMARY KEY,
+            guild_id    VARCHAR(50) NOT NULL,
+            enabled     BOOLEAN NOT NULL DEFAULT false,
+            channel_id  VARCHAR(50),
+            events      JSONB NOT NULL DEFAULT '[]',
+            updated_at  TIMESTAMP DEFAULT NOW()
+        );
+        ALTER TABLE ticket_logging_settings ADD COLUMN IF NOT EXISTS channel_id VARCHAR(50);
+        ALTER TABLE ticket_logging_settings ADD COLUMN IF NOT EXISTS events     JSONB NOT NULL DEFAULT '[]';
+        CREATE INDEX IF NOT EXISTS ticket_logging_guild_idx
+            ON ticket_logging_settings (guild_id);
+    `);
+}
+
+function normalizeTicketLoggingDb(raw = {}) {
+    let events = Array.isArray(raw.events)
+        ? raw.events.filter(k => TICKET_LOG_EVENT_KEYS.includes(k))
+        : [];
+    // Old panels with no config: enabled stays off until the admin opts in.
+    return {
+        enabled: raw.enabled === true,
+        channelId: (raw.channelId != null && String(raw.channelId).trim()) || null,
+        events,
+    };
+}
+
+async function getTicketLoggingSettings(panelId) {
+    try {
+        await ensureTicketLoggingTable();
+        const res = await getTlogPool().query('SELECT * FROM ticket_logging_settings WHERE panel_id = $1', [panelId]);
+        if (res.rows.length === 0) return null;
+        return normalizeTicketLoggingDb({
+            enabled: res.rows[0].enabled,
+            channelId: res.rows[0].channel_id,
+            events: res.rows[0].events,
+        });
+    } catch (err) {
+        console.error('[DASHBOARD DB] ticket logging settings read failed:', err.message);
+        return null;
+    }
+}
+
+/** Upsert a panel's ticket-logging settings. Returns normalized settings. */
+async function updateTicketLoggingSettings(panelId, guildId, settings = {}) {
+    const s = normalizeTicketLoggingDb(settings);
+    await ensureTicketLoggingTable();
+    await getTlogPool().query(`
+        INSERT INTO ticket_logging_settings (
+            panel_id, guild_id, enabled, channel_id, events, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, NOW())
+        ON CONFLICT (panel_id) DO UPDATE SET
+            guild_id = EXCLUDED.guild_id,
+            enabled = EXCLUDED.enabled,
+            channel_id = EXCLUDED.channel_id,
+            events = EXCLUDED.events,
+            updated_at = NOW()
+    `, [panelId, String(guildId), !!s.enabled, s.channelId, JSON.stringify(s.events || [])]);
     return s;
 }
 
@@ -2780,6 +2904,8 @@ module.exports = {
     renameTicketPanel,
     getTicketRoleSettings,
     updateTicketRoleSettings,
+    getTicketLoggingSettings,
+    updateTicketLoggingSettings,
     getTicketPanelComponents,
     getTicketPanelComponentsByGuild,
     replaceTicketPanelComponents,

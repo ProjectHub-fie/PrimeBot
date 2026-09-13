@@ -6,6 +6,8 @@ const {
 const { ticketPool } = require('../server/ticketDb');
 const { trolePool, ensureTicketRoleTable } = require('../server/troleDb');
 const { tclaimPool, ensureTicketClaimsTable } = require('../server/tclaimDb');
+const { tlogPool, ensureTlogTables } = require('../server/tlogDb');
+const { normalizeTicketLogging } = require('../shared/ticketLogging');
 const ticketClaimService = require('./ticketClaimService');
 const ticketPerms = require('./ticketPermissions');
 
@@ -63,6 +65,7 @@ const CREATE_TABLE_SQL = `
         claim_button_emoji     VARCHAR(100),
         claim_button_style     VARCHAR(20) DEFAULT 'Secondary',
         close_flow             JSONB,
+        embed_fields           JSONB,
         enabled             BOOLEAN NOT NULL DEFAULT true,
         created_by          VARCHAR(50),
         created_at          TIMESTAMP DEFAULT NOW(),
@@ -153,6 +156,28 @@ function _safeParseJsonArray(raw) {
     } catch {
         return [];
     }
+}
+
+/**
+ * Coerce a stored embed_fields value into an array of Discord-compatible
+ * field objects { name, value, inline }. Rejects malformed/oversized entries
+ * so a crafted row can never wedge the EmbedBuilder on send.
+ */
+function _safeEmbedFields(raw) {
+    const arr = _safeParseJsonArray(raw);
+    const out = [];
+    for (const item of arr.slice(0, 25)) {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+        const name = item.name == null ? '' : String(item.name);
+        const value = item.value == null ? '' : String(item.value);
+        if (!name.trim() && !value.trim()) continue;
+        out.push({
+            name: name.slice(0, 256),
+            value: value.slice(0, 1024),
+            inline: item.inline === true,
+        });
+    }
+    return out;
 }
 
 /** Normalize a single button spec { label, emoji, style }. */
@@ -253,6 +278,7 @@ const DEFAULT_PANEL = {
     claimedNameTemplate: '(solved) {name}',
     closedNameTemplate: '(closed) {name}',
     closeFlow: null,
+    embedFields: [],
     enabled: true,
 };
 
@@ -265,6 +291,8 @@ class TicketPanelManager {
         this._byChannel = new Map();  // channelId -> ticket instance (open tickets)
         this._roleSettings = new Map();  // panelId -> ticket role add/remove settings (TROLE pool)
         this._components = new Map();     // panelId -> component[] (panel builder)
+        this._logSettings = new Map();    // panelId -> ticket logging settings (TLOG pool)
+        this._logListeners = new Set();   // ticket log subscribers (bot/dashboard/tests)
         this._tableReady = false;
         this._init().catch(err =>
             console.error('[TICKETS] Init failed:', err.message)
@@ -308,6 +336,7 @@ class TicketPanelManager {
             `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS title_url              TEXT`,
             `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS footer_icon_url       TEXT`,
             `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS timestamp_enabled      BOOLEAN NOT NULL DEFAULT true`,
+            `ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS embed_fields           JSONB`,
             `CREATE TABLE IF NOT EXISTS ticket_panel_components (
                 id                      SERIAL PRIMARY KEY,
                 panel_id                INTEGER NOT NULL REFERENCES ticket_panels(id) ON DELETE CASCADE,
@@ -409,6 +438,7 @@ class TicketPanelManager {
         await this._loadComponents();
         await this._loadInstances();
         await this._loadClaimRows();
+        await this._loadLogSettings();
     }
 
     async _loadAll() {
@@ -422,6 +452,7 @@ class TicketPanelManager {
             await this._loadComponents();
             await this._loadInstances();
             await this._loadClaimRows();
+            await this._loadLogSettings();
             console.log(`[TICKETS] Loaded ${panels.length} ticket panels.`);
         } catch (err) {
             console.error('[TICKETS] Failed to load panels:', err.message);
@@ -448,6 +479,79 @@ class TicketPanelManager {
         } catch (err) {
             console.error('[TICKETS] Failed to load role settings:', err.message);
             this._roleSettings.clear();
+        }
+    }
+
+    /**
+     * Load the per-panel ticket logging settings (TLOG_DATABASE_URL pool).
+     * Dashboard saves land in the `ticket_logging_settings` table and the
+     * manager re-reads on every cache reload, so the bot picks up edits within
+     * ~5s without a restart. Failures degrade to an empty map and only affect
+     * logging — never ticket operations.
+     */
+    async _loadLogSettings() {
+        try {
+            await ensureTlogTables();
+            const res = await tlogPool.query('SELECT * FROM ticket_logging_settings');
+            this._logSettings.clear();
+            for (const row of res.rows) {
+                this._logSettings.set(String(row.panel_id), normalizeTicketLogging({
+                    enabled: row.enabled,
+                    channelId: row.channel_id,
+                    events: row.events,
+                }));
+            }
+        } catch (err) {
+            console.error('[TICKETS] Failed to load ticket logging settings:', err.message);
+            this._logSettings.clear();
+        }
+    }
+
+    /**
+     * Return the ticket-logging config for a panel (disabled default when the
+     * panel has no configured row). `utils/ticketLogger.js` calls this.
+     */
+    getTicketLoggingSettings(guildId, panel = null) {
+        const key = panel && panel.id != null ? String(panel.id) : null;
+        if (key && this._logSettings.has(key)) return this._logSettings.get(key);
+        return { enabled: false, channelId: null, events: [] };
+    }
+
+    /**
+     * Subscribe to ticket log events. Handlers receive a serialized event
+     * descriptor and may return a promise; the bus catches and logs listener
+     * errors so a log failure never propagates. Register once per listener at
+     * construction time (the bot's ticketLogger does this) so a replay of the
+     * same event occurrence can be deduped by handler code via the stable
+     * `_id` — duplicate interactions / reconnects never double-send.
+     */
+    subscribeToTicketLogs(handler) {
+        if (typeof handler === 'function') this._logListeners.add(handler);
+        return () => this._logListeners.delete(handler);
+    }
+
+    /** Fire a ticket log event to all subscribers (fire-and-forget). */
+    _emitTicketLog(eventKey, instance, eventData = {}) {
+        if (this._logListeners.size === 0) return;
+        const event = {
+            key: eventKey,
+            panelId: instance && instance.panelId != null ? String(instance.panelId) : null,
+            guildId: instance && instance.guildId != null ? String(instance.guildId) : null,
+            channelId: instance && instance.channelId != null ? String(instance.channelId) : null,
+            data: { ...eventData },
+        };
+        event._id = [
+            event.key, event.panelId || '0', event.guildId || '0', event.channelId || '0',
+            event.data.actorId || '', event.data.newModeratorId || '',
+            event.data.timestamp || '',
+        ].join(':');
+        for (const handler of this._logListeners) {
+            try {
+                const p = handler(event);
+                if (p && typeof p.catch === 'function') p.catch(err => console.error('[TICKETS] Log listener error:', err.message));
+            } catch (err) {
+                console.error('[TICKETS] Log listener threw:', err.message);
+            }
         }
     }
 
@@ -697,6 +801,7 @@ class TicketPanelManager {
             claimedNameTemplate: row.claimed_name_template != null ? row.claimed_name_template : null,
             closedNameTemplate: row.closed_name_template != null ? row.closed_name_template : null,
             closeFlow: row.close_flow != null ? normalizeCloseFlow(row.close_flow) : normalizeCloseFlow({}),
+            embedFields: _safeEmbedFields(row.embed_fields),
             enabled: row.enabled !== false,
             createdBy: row.created_by || null,
             createdAt: row.created_at,
@@ -772,8 +877,8 @@ class TicketPanelManager {
                 claim_enabled, panel_version,
                 open_name_template, claimed_name_template, closed_name_template,
                 close_flow, enabled, created_by, created_at, updated_at,
-                author_url, title_url, footer_icon_url, timestamp_enabled
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,NOW(),NOW(),$40,$41,$42,$43)
+                author_url, title_url, footer_icon_url, timestamp_enabled, embed_fields
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,NOW(),NOW(),$40,$41,$42,$43,$44)
             RETURNING id
         `, [
             guildId, panel.name, panel.channelId || null, panel.messageId || null,
@@ -791,6 +896,7 @@ class TicketPanelManager {
             JSON.stringify(panel.closeFlow || {}),
             panel.enabled, panel.createdBy || null,
             panel.authorUrl, panel.titleUrl, panel.footerIconUrl, panel.timestampEnabled,
+            JSON.stringify(panel.embedFields || []),
         ]);
         const id = res.rows[0].id;
         const fetched = await this._fetchPanel(id);
@@ -820,7 +926,8 @@ class TicketPanelManager {
                 claim_enabled = $32, panel_version = $33,
                 open_name_template = $34, claimed_name_template = $35, closed_name_template = $36,
                 close_flow = $37, enabled = $38, updated_at = NOW(),
-                author_url = $39, title_url = $40, footer_icon_url = $41, timestamp_enabled = $42
+                author_url = $39, title_url = $40, footer_icon_url = $41, timestamp_enabled = $42,
+                embed_fields = $43
             WHERE id = $1
         `, [
             id, norm.name, norm.channelId || null, norm.messageId || null, norm.messageType,
@@ -837,6 +944,7 @@ class TicketPanelManager {
             JSON.stringify(norm.closeFlow || {}),
             norm.enabled,
             norm.authorUrl, norm.titleUrl, norm.footerIconUrl, norm.timestampEnabled,
+            JSON.stringify(norm.embedFields || []),
         ]);
         const fetched = await this._fetchPanel(id);
         if (fetched) this._indexPanel(fetched);
@@ -896,7 +1004,7 @@ class TicketPanelManager {
             claimEnabled: 1,
             panelVersion: 1,
             openNameTemplate: 1, claimedNameTemplate: 1,
-            closedNameTemplate: 1, closeFlow: 1, enabled: 1, createdBy: 1,
+            closedNameTemplate: 1, closeFlow: 1, embedFields: 1, enabled: 1, createdBy: 1,
         };
     }
 
@@ -945,6 +1053,7 @@ class TicketPanelManager {
             if (out[f] != null) out[f] = String(out[f]).trim().slice(0, 100) || null;
         }
         out.closeFlow = normalizeCloseFlow(out.closeFlow);
+        out.embedFields = _safeEmbedFields(out.embedFields);
         return out;
     }
 
@@ -973,6 +1082,13 @@ class TicketPanelManager {
         }
         if (panel.thumbnailUrl) embed.setThumbnail(panel.thumbnailUrl);
         if (panel.imageUrl) embed.setImage(panel.imageUrl);
+        if (Array.isArray(panel.embedFields) && panel.embedFields.length) {
+            embed.addFields(panel.embedFields.map(f => ({
+                name: String(f.name || '').slice(0, 256),
+                value: String(f.value || '').slice(0, 1024),
+                inline: f.inline === true,
+            })));
+        }
         if (panel.footerText || panel.footerIconUrl) {
 
             const footer = { text: panel.footerText || '' };
@@ -1568,6 +1684,15 @@ class TicketPanelManager {
 
             await this._applyRoleSettings(panel, member, 'open');
 
+            // Ticket logging (fire-and-forget; never blocks or breaks the open).
+            this._emitTicketLog('created', instance, {
+                userId,
+                category: instance.category,
+                reason: instance.reason,
+                panelName: panel ? panel.name : null,
+                timestamp: instance.createdAt,
+            });
+
             return interaction.reply({
                 content: `Your ticket has been opened: ${ticketChannel}`,
                 ephemeral: true,
@@ -1714,6 +1839,17 @@ class TicketPanelManager {
 
                 const openerMember = await interaction.guild.members.fetch(instance.userId).catch(() => null);
                 await this._applyRoleSettings(panel, openerMember, 'close');
+
+                // Ticket logging (fire-and-forget; never blocks or breaks close).
+                this._emitTicketLog('closed', instance, {
+                    actorId: interaction.user.id,
+                    userId: instance.userId,
+                    reason: instance.reason,
+                    panelName: panel.name,
+                    openedAt: instance.createdAt,
+                    closedAt: instance.closedAt,
+                    timestamp: instance.closedAt,
+                });
             }
         } catch (err) {
             console.error('[TICKETS] Error closing ticket:', err);
@@ -1814,6 +1950,16 @@ class TicketPanelManager {
             await this._ensureClaimRow({ ...instance, status: 'deleted' }).catch(() => {});
             this._byChannel.delete(channelId);
             await interaction.channel.delete('Ticket deleted via panel button').catch(() => {});
+
+            // Ticket logging (fire-and-forget; never blocks or breaks delete).
+            const deletedAt = Date.now();
+            const delPanel = this._panelForInstance(instance);
+            this._emitTicketLog('deleted', instance, {
+                actorId: interaction.user.id,
+                userId: instance.userId,
+                panelName: delPanel ? delPanel.name : null,
+                timestamp: deletedAt,
+            });
         } catch (err) {
             console.error('[TICKETS] Error deleting ticket:', err);
             return interaction.reply({ content: 'There was an error deleting this ticket.', ephemeral: true }).catch(() => {});
@@ -1866,6 +2012,15 @@ class TicketPanelManager {
                     count: ns.count,
                 });
             }
+
+            // Ticket logging (fire-and-forget; never blocks or breaks reopen).
+            this._emitTicketLog('reopened', instance, {
+                actorId: interaction.user.id,
+                userId: instance.userId,
+                panelName: panel ? panel.name : null,
+                openedAt: instance.createdAt,
+                timestamp: instance.reopenedAt || Date.now(),
+            });
         } catch (err) {
             console.error('[TICKETS] Error reopening ticket:', err);
             return interaction.reply({ content: 'There was an error reopening this ticket.', ephemeral: true });
@@ -1928,6 +2083,14 @@ This ticket has been claimed by ${interaction.user}.
 The claimed moderator is now the primary staff member responsible for handling this ticket.`)
                 .setTimestamp();
             await interaction.editReply({ embeds: [embed] });
+
+            // Ticket logging (fire-and-forget; never blocks or breaks claim).
+            this._emitTicketLog('claimed', instance, {
+                actorId: interaction.user.id,
+                userId: instance.userId,
+                panelName: panel ? panel.name : null,
+                timestamp: claim.claimedAt || Date.now(),
+            });
         } catch (err) {
             console.error('[TICKETS] Error claiming ticket:', err);
             return interaction.editReply({ content: 'There was an error claiming this ticket. Please try again.', ephemeral: true });
@@ -1974,6 +2137,14 @@ The claimed moderator is now the primary staff member responsible for handling t
 This ticket is now available for another staff member to handle.`)
                 .setTimestamp();
             await interaction.editReply({ embeds: [embed] });
+
+            // Ticket logging (fire-and-forget; never blocks or breaks unclaim).
+            this._emitTicketLog('unclaimed', instance, {
+                actorId: interaction.user.id,
+                userId: instance.userId,
+                panelName: panel ? panel.name : null,
+                timestamp: Date.now(),
+            });
         } catch (err) {
             console.error('[TICKETS] Error unclaiming ticket:', err);
             return interaction.editReply({ content: 'There was an error unclaiming this ticket. Please try again.', ephemeral: true });
@@ -2078,6 +2249,16 @@ Previous Staff: ${prevClaimer ? `<@${prevClaimer}>` : 'Nobody'}
 New Staff: <@${toStaffId}>`)
                 .setTimestamp();
             await interaction.editReply({ embeds: [embed] });
+
+            // Ticket logging (fire-and-forget; never blocks or breaks transfer).
+            this._emitTicketLog('transferred', instance, {
+                actorId: interaction.user.id,
+                userId: instance.userId,
+                previousModeratorId: prevClaimer || null,
+                newModeratorId: toStaffId,
+                panelName: panel ? panel.name : null,
+                timestamp: res.claimedAt || Date.now(),
+            });
         } catch (err) {
             console.error('[TICKETS] Error transferring ticket claim:', err);
             return interaction.editReply({ content: 'There was an error transferring this ticket. Please try again.', ephemeral: true });
@@ -2145,7 +2326,17 @@ New Staff: <@${toStaffId}>`)
             if (interaction.channel.name !== name) {
                 await interaction.channel.setName(name);
             }
-            await interaction.reply({ content: `Ō£Å’ĖÅ Ticket renamed to **${name}**.`, ephemeral: true });
+            await interaction.reply({ content: `Ō£Å’ĖÅ Ticket renamed to **${name}**.`, ephemeral: true });            
+            // Ticket logging (fire-and-forget; never blocks or breaks rename).
+            const renamePanel = this._panelForInstance(instance);
+            this._emitTicketLog('renamed', instance, {
+                actorId: interaction.user.id,
+                userId: instance.userId,
+                oldName,
+                newName: name,
+                panelName: renamePanel ? renamePanel.name : null,
+                timestamp: Date.now(),
+            });
         } catch (err) {
             console.error('[TICKETS] Error renaming ticket:', err);
             return interaction.reply({ content: 'There was an error renaming this ticket.', ephemeral: true });

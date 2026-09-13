@@ -1220,6 +1220,13 @@ function ticketPanelMessagePayload(panel) {
         ...(panel.thumbnailUrl ? { thumbnail: { url: panel.thumbnailUrl } } : {}),
         ...(panel.imageUrl ? { image: { url: panel.imageUrl } } : {}),
     };
+    const rawFields = panel.embedFields || panel.fields || [];
+    const fields = Array.isArray(rawFields) ? rawFields.filter(f => f && (f.name || f.value)) : [];
+    if (fields.length) embed.fields = fields.slice(0, 25).map(f => ({
+        name: String(f.name || '').slice(0, 256),
+        value: String(f.value || '').slice(0, 1024),
+        inline: f.inline === true,
+    }));
     // Timestamp is part of the embed footer; the builder exposes a toggle.
     if (panel.timestamp !== false) embed.timestamp = new Date().toISOString();
     return { content: panel.content || null, embeds: [embed], components };
@@ -1291,6 +1298,12 @@ app.post('/api/guilds/:guildId/tickets/quickcreate', requireAuth, requireGuildAd
         // saves keep the existing components.
         if (Array.isArray(body.components)) {
             panel.components = await dashboardDb.replaceTicketPanelComponents(id, body.components);
+        }
+        // Per-panel TICKET LOGGING config (Logging tab). Saved through the
+        // dedicated TLOG_DATABASE_URL pool so the bot's manager + logger pick it up.
+        if (body.ticketLogging) {
+            await dashboardDb.updateTicketLoggingSettings(id, req.guild.id, body.ticketLogging);
+            panel._ticketLogging = await dashboardDb.getTicketLoggingSettings(id) || {};
         }
         res.json({ ticketPanel: panel });
     } catch (err) {
@@ -1728,6 +1741,10 @@ app.get('/guild/:guildId/tickets/:panelId/edit', requireAuth, requireGuildAdminP
         }
         const roleSettings = await dashboardDb.getTicketRoleSettings(panelId);
         if (roleSettings) panel.roleSettings = roleSettings;
+        // Ticket logging settings (Logging tab) — from the TLOG pool so the
+        // editor pre-populates with the config the bot actually uses.
+        const ticketLogging = await dashboardDb.getTicketLoggingSettings(panelId).catch(() => null);
+        if (ticketLogging) panel._ticketLogging = ticketLogging;
         panel.components = await dashboardDb.getTicketPanelComponents(panelId).catch(() => []);
         req.guild._ticketPanel = panel;
         res.type('html').send(guildPages.ticketEditPage({ guild: req.guild, user: req.user }));

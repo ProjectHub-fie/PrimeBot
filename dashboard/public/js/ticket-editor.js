@@ -104,6 +104,20 @@ function updateEdbCounters() {
       counter.removeAttribute('role');
     }
   }
+  // Dynamic embed field rows: name counter + value counter per card.
+  document.querySelectorAll('.edb-field-card').forEach(card => {
+    const nameEl = card.querySelector('.edb-field-name');
+    const valEl = card.querySelector('.edb-field-value');
+    const counters = card.querySelectorAll('.edb-counter');
+    if (nameEl && counters[0]) {
+      counters[0].textContent = `${nameEl.value.length} / 256`;
+      counters[0].classList.toggle('edb-over', nameEl.value.length > 256);
+    }
+    if (valEl && counters[1]) {
+      counters[1].textContent = `${valEl.value.length} / 1024`;
+      counters[1].classList.toggle('edb-over', valEl.value.length > 1024);
+    }
+  });
 }
 
 function bindEdbMessageExtras() {
@@ -134,6 +148,9 @@ function bindEdbMessageExtras() {
         if (!el) continue;
         if (sel === '#tk-timestamp') el.checked = false; else el.value = v;
       }
+      // Fields: remove every editable card too (the embed resets to none).
+      const list = document.getElementById('edb-fields-list');
+      if (list) list.innerHTML = '';
       window.saveBar?.markDirty?.();
       renderTicketPreview();
       updateEdbCounters();
@@ -213,6 +230,231 @@ function collectTicketRoles(listSelector, roleClass) {
     if (v) out.push(v);
   });
   return out;
+}
+
+// ── Embed fields (Message → Fields) ─────────────────────────────────────
+// Reads the field editor cards into Discord-compatible { name, value, inline }
+// objects in DOM order (the order Discord renders). The same source of truth
+// powers the live preview, the saved PATCH payload, and (via the DB round-trip)
+// the real Discord message — no separate preview-only state.
+function collectEmbedFields() {
+  const out = [];
+  document.querySelectorAll('.edb-field-card').forEach(card => {
+    const name = card.querySelector('.edb-field-name')?.value.trim() ?? '';
+    const value = card.querySelector('.edb-field-value')?.value ?? '';
+    const inline = !!card.querySelector('.edb-field-inline-inp')?.checked;
+    if (!name && !String(value).trim()) return;
+    out.push({ name, value, inline });
+  });
+  return out.slice(0, 25);
+}
+
+function renderFieldsPreview() {
+  const fields = collectEmbedFields();
+  const holders = ['edb-pv-fields', 'edb-fields-live'].map(id => document.getElementById(id)).filter(Boolean);
+  const empty = document.getElementById('edb-fields-empty');
+  for (const holder of holders) {
+    holder.innerHTML = '';
+    fields.forEach(f => {
+      const row = document.createElement('div');
+      row.className = 'tk-preview-embed-field';
+      if (f.inline) row.classList.add('inline');
+      const n = document.createElement('div');
+      n.className = 'tk-preview-embed-field-name';
+      n.textContent = f.name || 'Field name';
+      const v = document.createElement('div');
+      v.className = 'tk-preview-embed-field-value';
+      v.textContent = f.value || '\u200b';
+      row.appendChild(n);
+      row.appendChild(v);
+      holder.appendChild(row);
+    });
+    holder.classList.toggle('hidden', !fields.length);
+    holder.closest?.('.edb-live-fields')?.classList.toggle('hidden', !fields.length);
+  }
+  if (empty) empty.classList.toggle('hidden', fields.length > 0);
+}
+
+function reindexEmbedFields() {
+  document.querySelectorAll('.edb-field-card').forEach((card, i) => {
+    card.dataset.fieldIndex = String(i);
+    const num = card.querySelector('.edb-field-num');
+    if (num) num.textContent = `Field ${i + 1}`;
+    const nameInp = card.querySelector('.edb-field-name');
+    const valInp = card.querySelector('.edb-field-value');
+    const inlInp = card.querySelector('.edb-field-inline-inp');
+    if (nameInp) nameInp.id = `edb-field-${i}-name`;
+    if (valInp) valInp.id = `edb-field-${i}-value`;
+    if (inlInp) inlInp.id = `edb-field-${i}-inline`;
+    for (const inp of [nameInp, valInp, inlInp]) {
+      if (!inp || !inp.labels || !inp.labels[0]) continue;
+      inp.labels[0].htmlFor = inp.id;
+    }
+    // Re-target the counters' data-counter-for by position.
+    const counters = card.querySelectorAll('.edb-counter');
+    if (counters[0]) counters[0].dataset.counterFor = `edb-field-${i}-name`;
+    if (counters[1]) counters[1].dataset.counterFor = `edb-field-${i}-value`;
+  });
+  updateEdbCounters();
+}
+
+function addEmbedField(beforeIndex) {
+  const list = document.getElementById('edb-fields-list');
+  if (!list) return;
+  const all = Array.from(list.querySelectorAll('.edb-field-card'));
+  if (all.length >= 25) {
+    window.toast?.('You can add up to 25 fields.', 'error');
+    return;
+  }
+  const card = document.createElement('div');
+  const i = all.length;
+  card.innerHTML = `
+    <div class="edb-field-card" data-field-index="${i}">
+      <div class="edb-field-card-head">
+        <span class="edb-grip">${typeof window.svgIcon === 'function' ? window.svgIcon('grip') : '⋮'}</span>
+        <span class="edb-field-num">Field ${i + 1}</span>
+        <span class="edb-field-actions">
+          <button type="button" class="btn btn-secondary btn-sm edb-field-dupe" title="Duplicate field">Duplicate</button>
+          <button type="button" class="btn btn-danger btn-sm edb-field-del" title="Delete field">Delete</button>
+        </span>
+      </div>
+      <div class="edb-duo edb-field-name-row">
+        <div class="edb-field">
+          <label class="edb-label" for="edb-field-${i}-name">Field name</label>
+          <input type="text" id="edb-field-${i}-name" class="edb-field-name" maxlength="256" placeholder="Quick Links" />
+          <span class="edb-counter" data-counter-for="edb-field-${i}-name">0 / 256</span>
+        </div>
+      </div>
+      <div class="edb-field">
+        <label class="edb-label" for="edb-field-${i}-value">Field value</label>
+        <textarea id="edb-field-${i}-value" class="edb-field-value" rows="3" maxlength="1024" placeholder="Create a ticket..."></textarea>
+        <span class="edb-counter" data-counter-for="edb-field-${i}-value">0 / 1024</span>
+      </div>
+      <div class="edb-field-inline">
+        <label class="switch" for="edb-field-${i}-inline"><input type="checkbox" class="edb-field-inline-inp" id="edb-field-${i}-inline"/><span class="slider"></span></label>
+        <span class="edb-label-inline">Inline</span>
+      </div>
+    </div>`;
+  if (beforeIndex != null && beforeIndex >= 0 && beforeIndex < all.length) {
+    all[beforeIndex].after(card.firstElementChild);
+  } else {
+    list.appendChild(card.firstElementChild);
+  }
+  reindexEmbedFields();
+  scheduleFieldsPreview();
+  window.saveBar?.markDirty?.();
+}
+
+function scheduleFieldsPreview() {
+  clearTimeout(scheduleFieldsPreview._t);
+  scheduleFieldsPreview._t = setTimeout(() => {
+    renderFieldsPreview();
+    renderTicketPreview();
+  }, 30);
+}
+
+function deleteEmbedField(card) {
+  if (window.confirm('Delete this field?')) {
+    card.remove();
+    reindexEmbedFields();
+    scheduleFieldsPreview();
+    window.saveBar?.markDirty?.();
+  }
+}
+
+function duplicateEmbedField(card) {
+  const src = {
+    name: card.querySelector('.edb-field-name')?.value ?? '',
+    value: card.querySelector('.edb-field-value')?.value ?? '',
+    inline: !!card.querySelector('.edb-field-inline-inp')?.checked,
+  };
+  const list = document.getElementById('edb-fields-list');
+  if (!list) return;
+  if (list.querySelectorAll('.edb-field-card').length >= 25) {
+    window.toast?.('You can add up to 25 fields.', 'error');
+    return;
+  }
+  const clone = document.createElement('div');
+  const i = list.querySelectorAll('.edb-field-card').length;
+  clone.innerHTML = `
+    <div class="edb-field-card" data-field-index="${i}">
+      <div class="edb-field-card-head">
+        <span class="edb-grip">${typeof window.svgIcon === 'function' ? window.svgIcon('grip') : '⋮'}</span>
+        <span class="edb-field-num">Field ${i + 1}</span>
+        <span class="edb-field-actions">
+          <button type="button" class="btn btn-secondary btn-sm edb-field-dupe" title="Duplicate field">Duplicate</button>
+          <button type="button" class="btn btn-danger btn-sm edb-field-del" title="Delete field">Delete</button>
+        </span>
+      </div>
+      <div class="edb-duo edb-field-name-row">
+        <div class="edb-field">
+          <label class="edb-label" for="edb-field-${i}-name">Field name</label>
+          <input type="text" id="edb-field-${i}-name" class="edb-field-name" maxlength="256" value="${escAttr(src.name)}" />
+          <span class="edb-counter" data-counter-for="edb-field-${i}-name">${src.name.length} / 256</span>
+        </div>
+      </div>
+      <div class="edb-field">
+        <label class="edb-label" for="edb-field-${i}-value">Field value</label>
+        <textarea id="edb-field-${i}-value" class="edb-field-value" rows="3" maxlength="1024">${escText(src.value)}</textarea>
+        <span class="edb-counter" data-counter-for="edb-field-${i}-value">${src.value.length} / 1024</span>
+      </div>
+      <div class="edb-field-inline">
+        <label class="switch" for="edb-field-${i}-inline"><input type="checkbox" class="edb-field-inline-inp" id="edb-field-${i}-inline" ${src.inline ? 'checked' : ''}/><span class="slider"></span></label>
+        <span class="edb-label-inline">Inline</span>
+      </div>
+    </div>`;
+  card.after(clone.firstElementChild);
+  reindexEmbedFields();
+  scheduleFieldsPreview();
+  window.saveBar?.markDirty?.();
+}
+
+// Minimal esc helpers (no dependency on server-side esc()).
+function escAttr(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function escText(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '&#10;');
+}
+
+// Logging tab — when the selected log channel isn't in this guild's channel
+// list (deleted/no longer visible to the bot), surface a warning. Logging is
+// secondary so this is informational only — tickets keep working.
+function syncTicketLogChannelWarn() {
+  const sel = document.querySelector('#tk-logging-channel');
+  const warn = document.querySelector('.tlog-channel-warn');
+  if (!sel || !warn) return;
+  const v = sel.value;
+  const known = !v || (window.guildData?.channels || []).some(c => String(c.id) === String(v));
+  warn.style.display = known ? 'none' : '';
+}
+
+function bindTicketLoggingTab() {
+  const sel = document.querySelector('#tk-logging-channel');
+  if (sel) sel.addEventListener('change', syncTicketLogChannelWarn);
+  syncTicketLogChannelWarn();
+}
+
+function bindEmbedFieldActions() {
+  const list = document.getElementById('edb-fields-list');
+  const addBtn = document.getElementById('edb-add-field');
+  if (!list) return;
+  addBtn?.addEventListener('click', () => addEmbedField());
+  list.addEventListener('click', (e) => {
+    const dupe = e.target.closest('.edb-field-dupe');
+    if (dupe) {
+      e.preventDefault();
+      duplicateEmbedField(dupe.closest('.edb-field-card'));
+      return;
+    }
+    const del = e.target.closest('.edb-field-del');
+    if (del) {
+      e.preventDefault();
+      deleteEmbedField(del.closest('.edb-field-card'));
+    }
+  });
+  list.addEventListener('input', scheduleFieldsPreview);
+  list.addEventListener('change', scheduleFieldsPreview);
 }
 
 function readTicketForm() {
@@ -297,6 +539,15 @@ function readTicketForm() {
       },
     },
     enabled: chk('#tk-enabled'),
+    fields: collectEmbedFields(),
+    ticketLogging: {
+      enabled: chk('#tk-logging-enabled'),
+      channelId: document.querySelector('#tk-logging-channel')?.value.trim() || null,
+      events: Array.from(document.querySelectorAll('.tlog-event'))
+        .filter(cb => cb.checked)
+        .map(cb => cb.dataset.event)
+        .filter(Boolean),
+    },
     components: document.querySelector('#tk-builder-enabled')?.checked ? collectPanelComponents() : [],
   };
 }
@@ -870,6 +1121,9 @@ function renderTicketPreview() {
         btn.classList.add(`tk-preview-button-${styleClass}`);
         btn.classList.toggle('edb-empty', !btnEmoji && !btnLabel);
     }
+
+    // Embed fields update in the same pass (both left region + Discord preview).
+    renderFieldsPreview();
 }
 
 let _previewTimer = null;
@@ -894,6 +1148,8 @@ bindButtonsBuilder();
 bindQuickActions();
 renderButtonsChips();
 bindEdbMessageExtras();
+bindEmbedFieldActions();
+bindTicketLoggingTab();
 bindEdbSaveState();
 patchSaveBarDirtyTracking();
 bindEdbNavigationGuard();
@@ -972,4 +1228,5 @@ window.saveBar.register(saveTicketPanel);
 window.saveBar.track(document.body);
 
 // Paint the live preview once (and whenever the form is mutated — bound above).
+renderFieldsPreview();
 renderTicketPreview();

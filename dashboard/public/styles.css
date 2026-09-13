@@ -2641,6 +2641,55 @@ select:focus {
 }
 .edb-reset:hover { border-color: #f23f43; color: #f23f43; }
 
+/* ── Embed Fields (Message → Fields) ───────────────────────────────────────
+ * Field editor cards + live preview rows. Cards grow with their content
+ * (normal flow; no fixed heights) so adding fields never overlaps the footer /
+ * buttons, and everything stays usable from 320px up to ultra-wide. */
+.edb-fields-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.edb-fields-head .edb-section-hint { margin: 0; flex: 1 1 220px; }
+.edb-fields-empty { font-size: 12px; color: #6a7078; font-style: italic; padding: 6px 2px; }
+.edb-fields-list { display: flex; flex-direction: column; gap: 12px; margin-top: 10px; max-width: 100%; }
+.edb-field-card {
+  background: var(--surface-2, #232428);
+  border: 1px solid var(--border-soft, rgba(255,255,255,0.08));
+  border-radius: 10px;
+  padding: 12px;
+  display: flex; flex-direction: column; gap: 12px;
+  max-width: 100%; box-sizing: border-box;
+}
+.edb-field-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.edb-grip { cursor: grab; color: #6a7078; display: inline-flex; }
+.edb-field-num { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #949ba4; flex: 1 1 auto; }
+.edb-field-actions { display: inline-flex; gap: 8px; }
+.edb-field-card .edb-duo.edb-field-name-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+.edb-field-card .edb-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; max-width: 100%; }
+.edb-field-card textarea { min-height: 64px; resize: vertical; }
+.edb-field-inline { display: flex; align-items: center; gap: 8px; }
+.edb-field-inline .edb-label-inline { font-size: 12px; color: #c7cbcf; }
+
+/* Field rows inside the Discord preview (placed between image and footer). */
+.edb-preview-embed-body .edb-live-fields { clear: both; display: flex; flex-direction: column; gap: 8px; margin: 2px 0 6px; }
+.tk-preview-embed-field { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.tk-preview-embed-field.inline { flex: 1 1 30%; min-width: 0; }
+.edb-preview-embed-body .edb-live-fields { flex-flow: row wrap; align-items: flex-start; }
+.tk-preview-embed-field-name { font-size: 12.5px; font-weight: 700; color: #e9ecf3; overflow-wrap: anywhere; }
+.tk-preview-embed-field-value { font-size: 12.5px; color: #dcddde; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.4; }
+.edb-region.edb-fields .edb-live-fields { margin-top: 6px; }
+.edb-region.edb-fields .tk-preview-embed-field { border-left: 2px solid rgba(88,101,242,0.4); padding-left: 8px; margin-bottom: 4px; }
+
+/* Mobile: field cards widen, no side-by-side squeeze. */
+@media (max-width: 720px) {
+  .edb-fields-head { flex-direction: column; align-items: flex-start; }
+  .edb-field-card-head { flex-wrap: wrap; }
+  .edb-field-actions { margin-left: auto; }
+  .edb-preview-embed-body .edb-live-fields { flex-direction: column; }
+  .tk-preview-embed-field.inline { flex: 1 1 100%; }
+}
+@media (max-width: 420px) {
+  .edb-field-card { padding: 10px; }
+  .edb-field-actions .btn { font-size: 11px; padding: 4px 8px; }
+}
+
 /* Open-ticket button region (live output beneath its fields).). */
 .edb-live-button { display: flex; }
 .edb-btn-emoji { display: inline-flex; }
