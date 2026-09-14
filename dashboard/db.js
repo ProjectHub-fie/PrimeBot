@@ -2872,6 +2872,125 @@ async function getNodeStats() {
     return { nodes, lease, thresholdMs: FAILOVER_THRESHOLD_MS };
 }
 
+// ── Saved embeds (EMBED_DATABASE_URL) ───────────────────────────────────────
+//
+// The Embed Builder in the Features sidebar is a fully client-side editor: a
+// draft lives in localStorage and is only pushed to the database when the user
+// explicitly saves. The table below stores those explicit saves (one row per
+// named embed, editable/duplicatable/deletable). Columns are deliberately
+// minimal — guild scoping, a human name, and the JSON payload — with an index
+// covering the guild+name uniqueness check so lookups stay cheap on Neon.
+
+let embedPool = null;
+function getEmbedPool() {
+    if (embedPool) return embedPool;
+    try {
+        embedPool = require('../server/embedDb').embedPool;
+    } catch (err) {
+        console.error('[DASHBOARD DB] embedDb unavailable:', err.message);
+        embedPool = { query: async () => { throw new Error('Embed database not configured'); } };
+    }
+    return embedPool;
+}
+
+async function ensureSavedEmbedsTable() {
+    const p = getEmbedPool();
+    await p.query(`
+        CREATE TABLE IF NOT EXISTS saved_embeds (
+            id SERIAL PRIMARY KEY,
+            guild_id VARCHAR(50) NOT NULL,
+            name VARCHAR(100) NOT NULL,
+            payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+            created_by VARCHAR(50),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    `);
+    await p.query(`
+        CREATE INDEX IF NOT EXISTS saved_embeds_guild_uniq ON saved_embeds (guild_id, lower(name))
+    `).catch(() => {});
+}
+
+// Map a saved_embeds row → the camelCase JSON the page expects.
+function embedRowToItem(row) {
+    let payload = {};
+    if (row.payload && typeof row.payload === 'object') payload = row.payload;
+    else if (row.payload) {
+        try { payload = JSON.parse(row.payload); } catch { payload = {}; }
+    }
+    return {
+        id: Number(row.id),
+        guildId: String(row.guild_id),
+        name: row.name,
+        payload,
+        createdBy: row.created_by || null,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+    };
+}
+
+async function getSavedEmbeds(guildId) {
+    await ensureSavedEmbedsTable();
+    const res = await getEmbedPool().query(
+        'SELECT id, guild_id, name, payload, created_by, created_at, updated_at FROM saved_embeds WHERE guild_id = $1 ORDER BY lower(name) ASC',
+        [String(guildId)]
+    );
+    return (res.rows || []).map(embedRowToItem);
+}
+
+async function getSavedEmbed(guildId, id) {
+    await ensureSavedEmbedsTable();
+    const res = await getEmbedPool().query(
+        'SELECT id, guild_id, name, payload, created_by, created_at, updated_at FROM saved_embeds WHERE guild_id = $1 AND id = $2',
+        [String(guildId), Number(id)]
+    );
+    return res.rows && res.rows[0] ? embedRowToItem(res.rows[0]) : null;
+}
+
+async function createSavedEmbed(guildId, { name, payload }, createdById = null) {
+    await ensureSavedEmbedsTable();
+    const res = await getEmbedPool().query(
+        `INSERT INTO saved_embeds (guild_id, name, payload, created_by)
+         VALUES ($1, $2, $3, $4)
+         RETURNING id, guild_id, name, payload, created_by, created_at, updated_at`,
+        [String(guildId), name, JSON.stringify(payload || {}), createdById]
+    );
+    return embedRowToItem(res.rows[0]);
+}
+
+async function updateSavedEmbed(guildId, id, { name, payload }) {
+    await ensureSavedEmbedsTable();
+    const clauses = [];
+    const values = [String(guildId), Number(id)];
+    if (name != null) { values.push(name); clauses.push(`name = $${values.length}`); }
+    if (payload !== undefined) { values.push(JSON.stringify(payload || {})); clauses.push(`payload = $${values.length}`); }
+    if (!clauses.length) return getSavedEmbed(guildId, id);
+    values.push(new Date().toISOString());
+    clauses.push(`updated_at = $${values.length}`);
+    const res = await getEmbedPool().query(
+        `UPDATE saved_embeds SET ${clauses.join(', ')} WHERE guild_id = $1 AND id = $2 RETURNING id, guild_id, name, payload, created_by, created_at, updated_at`,
+        values
+    );
+    return res.rows && res.rows[0] ? embedRowToItem(res.rows[0]) : null;
+}
+
+async function duplicateSavedEmbed(guildId, id, newName) {
+    await ensureSavedEmbedsTable();
+    const res = await getEmbedPool().query(
+        `INSERT INTO saved_embeds (guild_id, name, payload, created_by)
+         SELECT guild_id, $3, payload, created_by FROM saved_embeds WHERE guild_id = $1 AND id = $2
+         RETURNING id, guild_id, name, payload, created_by, created_at, updated_at`,
+        [String(guildId), Number(id), newName]
+    );
+    return res.rows && res.rows[0] ? embedRowToItem(res.rows[0]) : null;
+}
+
+async function deleteSavedEmbed(guildId, id) {
+    await ensureSavedEmbedsTable();
+    await getEmbedPool().query('DELETE FROM saved_embeds WHERE guild_id = $1 AND id = $2', [String(guildId), Number(id)]);
+    return { ok: true };
+}
+
 module.exports = {
     getServerSettings,
     upsertServerSettings,
@@ -2925,6 +3044,12 @@ module.exports = {
     startEventSchedule,
     cancelEventSchedule,
     getNodeStats,
+    getSavedEmbeds,
+    getSavedEmbed,
+    createSavedEmbed,
+    updateSavedEmbed,
+    duplicateSavedEmbed,
+    deleteSavedEmbed,
     addWebsiteLog,
     getWebsiteLogs,
     getGuildBadges,

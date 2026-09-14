@@ -1631,6 +1631,278 @@ function eventsPage({ guild, user }) {
 // to the global cross-server Live pages. The client (guild-live.js) fetches
 // /api/guilds/:guildId/live/polls|giveaways and reuses the live-card markup.
 
+// ── Embed Builder (Features → Embed) ────────────────────────────────────────
+//
+// A premium, fully client-side Discord Embed Builder. The server only renders
+// the empty builder shell + a hidden modal; all interactivity (live preview,
+// field management, templates, JSON import/export, validation, localStorage
+// draft, saved-embeds CRUD) lives in dashboard/public/js/embed-builder.js.
+// No database writes happen while typing — saving is an explicit user action
+// (POST/PATCH to the /api/guilds/:guildId/embeds endpoints).
+
+const EMBED_TEMPLATES = [
+    { key: 'announcement', label: 'Announcement', icon: 'megaphone' },
+    { key: 'welcome', label: 'Welcome', icon: 'hand' },
+    { key: 'rules', label: 'Rules', icon: 'book' },
+    { key: 'giveaway', label: 'Giveaway', icon: 'gift' },
+    { key: 'ticket', label: 'Ticket', icon: 'ticket' },
+    { key: 'warning', label: 'Warning', icon: 'alertTriangle' },
+    { key: 'success', label: 'Success', icon: 'check' },
+    { key: 'error', label: 'Error', icon: 'ban' },
+    { key: 'information', label: 'Information', icon: 'info' },
+    { key: 'moderation', label: 'Moderation', icon: 'shield' },
+    { key: 'event', label: 'Event', icon: 'calendar' },
+];
+
+function embedPage({ guild, user }) {
+    const templateChips = EMBED_TEMPLATES.map(t =>
+        `<button type="button" class="embed-template-chip" data-template="${esc(t.key)}" title="Load the ${esc(t.label)} template">${svgIcon(t.icon)} ${esc(t.label)}</button>`
+    ).join('');
+
+    // A rendering helper for the static (server-rendered) preview placeholders.
+    const fieldCardShell = (i) => `
+      <div class="edb-field-card" data-field-index="${i}">
+        <div class="edb-field-card-head">
+          <span class="edb-grip">${svgIcon('grip')}</span>
+          <span class="edb-field-num">Field ${i + 1}</span>
+          <span class="edb-field-actions">
+            <button type="button" class="btn btn-secondary btn-sm edb-field-dupe" title="Duplicate field">Duplicate</button>
+            <button type="button" class="btn btn-danger btn-sm edb-field-del" title="Delete field">Delete</button>
+          </span>
+        </div>
+        <div class="edb-duo edb-field-name-row">
+          <div class="edb-field">
+            <label class="edb-label" for="eb-field-${i}-name">Field name</label>
+            <input type="text" id="eb-field-${i}-name" class="edb-field-name" maxlength="256" placeholder="Field name" />
+            <span class="edb-counter" data-counter-for="eb-field-${i}-name">0 / 256</span>
+          </div>
+        </div>
+        <div class="edb-field">
+          <label class="edb-label" for="eb-field-${i}-value">Field value</label>
+          <textarea id="eb-field-${i}-value" class="edb-field-value" rows="3" maxlength="1024" placeholder="Field value"></textarea>
+          <span class="edb-counter" data-counter-for="eb-field-${i}-value">0 / 1024</span>
+        </div>
+        <div class="edb-field-inline">
+          <label class="switch" for="eb-field-${i}-inline"><input type="checkbox" class="edb-field-inline-inp" id="eb-field-${i}-inline"/><span class="slider"></span></label>
+          <span class="edb-label-inline">Inline</span>
+        </div>
+      </div>`;
+
+    const panelHTML = `
+    <div class="card embed-builder-card">
+      <div class="card-title">
+        <span><span class="icon">${svgIcon('message')}</span> Embed Builder</span>
+        <span class="embed-builder-badge">Premium features in free</span>
+      </div>
+      <p class="card-desc">Build a professional Discord embed visually, then copy the JSON payload or save it for later. Everything stays in your browser while you type — nothing is written to the database until you explicitly save.</p>
+
+      <div class="embed-builder-toolbar">
+        <button type="button" class="btn btn-secondary btn-sm" id="eb-import-json" title="Import a Discord embed/message JSON">${svgIcon('download')} Import JSON</button>
+        <button type="button" class="btn btn-secondary btn-sm" id="eb-export-json" title="Copy the embed as Discord-compatible JSON">${svgIcon('copy')} Copy JSON</button>
+        <button type="button" class="btn btn-secondary btn-sm" id="eb-copy-payload" title="Copy the complete message payload (content + embeds)">${svgIcon('fileText')} Copy payload</button>
+        <button type="button" class="btn btn-secondary btn-sm" id="eb-reset" title="Reset the builder to defaults">${svgIcon('refresh')} Reset</button>
+      </div>
+
+      <div class="embed-templates">
+        <span class="embed-templates-label">Templates:</span>
+        <div class="embed-templates-list">${templateChips}</div>
+      </div>
+
+      <div class="embed-builder-grid">
+        <div class="edb-builder-cols">
+          <div class="edb-builder-left">
+            ${embedBuilderSectionsHTML(fieldCardShell)}
+          </div>
+          <div class="edb-builder-right">
+            <div class="edb-preview-embed-wrap">
+              <div class="edb-preview-head"><span>${svgIcon('eye')} Live preview</span><span class="edb-preview-live-dot" aria-hidden="true"></span></div>
+              <div class="tk-preview-embed" id="eb-preview-embed">
+                <div class="tk-preview-embed-bar edb-region-color" id="eb-preview-bar" style="background:#5865F2" aria-hidden="true"></div>
+                <div class="tk-preview-embed-body">
+                  <div class="edb-live edb-live-author hidden" id="eb-pv-author"><img id="eb-pv-author-icon" class="edb-author-icon hidden" alt=""/><a id="eb-pv-author-link"><span id="eb-pv-author-name">PrimeBot</span></a></div>
+                  <div class="edb-live edb-live-title hidden" id="eb-pv-title"><a id="eb-pv-title-link"></a></div>
+                  <div class="edb-live edb-live-desc hidden" id="eb-pv-desc"></div>
+                  <div class="edb-live edb-live-thumb hidden" id="eb-pv-thumb"><img id="eb-pv-thumb-img" class="edb-thumb-img" alt=""/></div>
+                  <div class="edb-live edb-live-image hidden" id="eb-pv-image"><img id="eb-pv-image-img" class="edb-image-img" alt=""/></div>
+                  <div class="edb-live edb-live-fields hidden" id="eb-pv-fields"></div>
+                  <div class="edb-live edb-live-footer hidden" id="eb-pv-footer"><img id="eb-pv-footer-icon" class="edb-footer-icon hidden" alt=""/><span class="tk-preview-embed-footer-text" id="eb-pv-footer-text"></span><span class="tk-preview-embed-time" id="eb-pv-time">&bull; now</span></div>
+                </div>
+              </div>
+              <div class="edb-validation-strip" id="eb-validation-strip" role="status" aria-live="polite"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="embed-builder-saved">
+        <div class="edb-field-head">
+          <h4 class="edb-section-title">Saved embeds</h4>
+          <div class="embed-saved-actions">
+            <input type="search" id="eb-saved-search" class="embed-saved-search" placeholder="Search saved embeds…" autocomplete="off" />
+            <button type="button" class="btn btn-secondary btn-sm" id="eb-save-embed">${svgIcon('save')} Save current embed</button>
+          </div>
+        </div>
+        <p class="edb-section-hint">Saved embeds are stored per-server. Loading one pulls it into the builder; you can rename, duplicate, or delete them at any time.</p>
+        <div id="eb-saved-list"><p class="live-empty">Loading saved embeds…</p></div>
+      </div>
+    </div>
+
+    <div class="modal-overlay hidden" id="eb-modal-overlay">
+      <div class="modal floating-window eb-modal">
+        <div class="modal-head"><h3 id="eb-modal-title">Save embed</h3><button type="button" class="modal-close" id="eb-modal-close" aria-label="Close">${svgIcon('x')}</button></div>
+        <div class="modal-body">
+          <div class="field">
+            <label class="field-label" for="eb-modal-name">Embed name</label>
+            <input type="text" id="eb-modal-name" maxlength="100" placeholder="e.g. Welcome message" />
+            <div class="field-hint" id="eb-modal-hint"></div>
+          </div>
+          <div class="edb-validation-strip" id="eb-modal-validation" role="status" aria-live="polite"></div>
+          <div class="modal-actions">
+            <button type="button" class="btn btn-primary" id="eb-modal-confirm">Save</button>
+            <button type="button" class="btn btn-secondary" id="eb-modal-cancel">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+
+    return guildTab({
+        guild, user, active: 'embed', panelHTML,
+        scripts: ['/js/guild-common.js', '/js/embed-builder.js'],
+        containerClass: 'container--editor',
+    });
+}
+
+// The four builder sections (Basic / Author / Thumbnail+Image / Footer + Fields).
+// Field cards start empty — the client manages them.
+function embedBuilderSectionsHTML(fieldCardShell) {
+    return `
+      <section class="edb-region" data-region="basic">
+        <header class="edb-section-head"><h4 class="edb-section-title">${svgIcon('type')} Basic</h4></header>
+        <p class="edb-section-hint">The core parts of the embed: title, description, URL, color, and timestamp.</p>
+        <div class="edb-field">
+          <label class="edb-label" for="eb-title">Title</label>
+          <input type="text" id="eb-title" maxlength="256" placeholder="Welcome to our server!" />
+          <span class="edb-counter" data-counter-for="eb-title">0 / 256</span>
+        </div>
+        <div class="edb-field">
+          <label class="edb-label" for="eb-description">Description</label>
+          <textarea id="eb-description" rows="4" placeholder="We're glad you're here. Check the rules and grab your roles!"></textarea>
+          <span class="edb-counter" data-counter-for="eb-description">0 / 4096</span>
+        </div>
+        <div class="edb-field">
+          <label class="edb-label" for="eb-url">URL</label>
+          <input type="text" id="eb-url" placeholder="https://… (title becomes a link)" />
+          <p class="edb-note edb-url-note" data-url-for="eb-url"></p>
+        </div>
+        <div class="edb-field">
+          <label class="edb-label" for="eb-color">Embed color</label>
+          <div class="edb-color-fields">
+            <input type="color" id="eb-color" value="#5865F2" />
+            <input type="text" id="eb-color-text" value="#5865F2" pattern="^#[0-9a-fA-F]{6}$" placeholder="#5865F2" />
+          </div>
+        </div>
+        <div class="edb-field">
+          <label class="edb-label" for="eb-content">Message content</label>
+          <textarea id="eb-content" rows="2" placeholder="Optional text sent above the embed (supports channel mentions like <#123…>)."></textarea>
+          <span class="edb-counter" data-counter-for="eb-content">0 / 2000</span>
+        </div>
+        <div class="switch-row">
+          <div class="switch-label"><div class="sl-title">Show timestamp</div><div class="sl-desc">Renders the current time in the embed footer.</div></div>
+          <label class="switch"><input type="checkbox" id="eb-timestamp" checked/><span class="slider"></span></label>
+        </div>
+      </section>
+
+      <section class="edb-region" data-region="author">
+        <header class="edb-section-head">
+          <h4 class="edb-section-title">${svgIcon('userCheck')} Author</h4>
+          <label class="switch mini"><input type="checkbox" id="eb-author-enabled"/><span class="slider"></span></label>
+        </header>
+        <p class="edb-section-hint" id="eb-author-hint">Shown at the very top of the embed.</p>
+        <div class="edb-duo">
+          <div class="edb-field">
+            <label class="edb-label" for="eb-author-name">Author name</label>
+            <input type="text" id="eb-author-name" maxlength="256" placeholder="Support Team" />
+            <span class="edb-counter" data-counter-for="eb-author-name">0 / 256</span>
+          </div>
+          <div class="edb-field">
+            <label class="edb-label" for="eb-author-url">Author URL</label>
+            <input type="text" id="eb-author-url" placeholder="https://example.com/team" />
+            <p class="edb-note edb-url-note" data-url-for="eb-author-url"></p>
+          </div>
+        </div>
+        <div class="edb-field">
+          <label class="edb-label" for="eb-author-icon">Author icon URL</label>
+          <input type="text" id="eb-author-icon" placeholder="https://example.com/icon.png" />
+          <p class="edb-note edb-url-note" data-url-for="eb-author-icon"></p>
+        </div>
+      </section>
+
+      <div class="edb-duo">
+        <section class="edb-region" data-region="thumbnail">
+          <header class="edb-section-head">
+            <h4 class="edb-section-title">${svgIcon('image')} Thumbnail</h4>
+            <label class="switch mini"><input type="checkbox" id="eb-thumbnail-enabled"/><span class="slider"></span></label>
+          </header>
+          <p class="edb-section-hint">Small image on the right side of the embed.</p>
+          <div class="edb-field">
+            <input type="text" id="eb-thumbnail-url" placeholder="https://example.com/thumb.png" />
+            <p class="edb-note edb-url-note" data-url-for="eb-thumbnail-url"></p>
+          </div>
+        </section>
+        <section class="edb-region" data-region="image">
+          <header class="edb-section-head">
+            <h4 class="edb-section-title">${svgIcon('image')} Image</h4>
+            <label class="switch mini"><input type="checkbox" id="eb-image-enabled"/><span class="slider"></span></label>
+          </header>
+          <p class="edb-section-hint">Large image at the bottom of the embed.</p>
+          <div class="edb-field">
+            <input type="text" id="eb-image-url" placeholder="https://example.com/banner.png" />
+            <p class="edb-note edb-url-note" data-url-for="eb-image-url"></p>
+          </div>
+        </section>
+      </div>
+
+      <section class="edb-region" data-region="fields">
+        <div class="edb-fields-head">
+          <div>
+            <h4 class="edb-section-title">${svgIcon('list')} Fields <span class="embed-fields-count" id="eb-fields-counter">0 / 25</span></h4>
+            <p class="edb-section-hint">Add up to 25 fields. Order is preserved. Inline fields sit side-by-side when they fit.</p>
+          </div>
+          <button type="button" class="btn btn-secondary btn-sm" id="eb-add-field">${svgIcon('plus')} Add field</button>
+        </div>
+        <div class="edb-fields-empty" id="eb-fields-empty">No fields yet. Click "Add field" to get started.</div>
+        <div class="edb-fields-list" id="eb-fields-list">${fieldCardShell(0)}</div>
+      </section>
+
+      <section class="edb-region" data-region="footer">
+        <header class="edb-section-head">
+          <h4 class="edb-section-title">${svgIcon('scroll')} Footer</h4>
+          <label class="switch mini"><input type="checkbox" id="eb-footer-enabled"/><span class="slider"></span></label>
+        </header>
+        <p class="edb-section-hint">Small text + icon at the bottom of the embed.</p>
+        <div class="edb-duo">
+          <div class="edb-field">
+            <label class="edb-label" for="eb-footer-text">Footer text</label>
+            <input type="text" id="eb-footer-text" maxlength="2048" placeholder="PrimeBot • 2026" />
+            <span class="edb-counter" data-counter-for="eb-footer-text">0 / 2048</span>
+          </div>
+          <div class="edb-field">
+            <label class="edb-label" for="eb-footer-icon">Footer icon URL</label>
+            <input type="text" id="eb-footer-icon" placeholder="https://example.com/footer.png" />
+            <p class="edb-note edb-url-note" data-url-for="eb-footer-icon"></p>
+          </div>
+        </div>
+      </section>
+    `;
+}
+
+// ── Live Polls / Live Giveaways (per-server) ─────────────────────────────────
+//
+// Live polls & giveaways are inherently cross-server (joined via pass code from
+// any server), so these tabs show the items CREATED in this server, plus a link
+// to the global cross-server Live pages. The client (guild-live.js) fetches
+// /api/guilds/:guildId/live/polls|giveaways and reuses the live-card markup.
+
 function livePollsPage({ guild, user }) {
     const panelHTML = `
     <div class="card">
@@ -1665,7 +1937,7 @@ function liveGiveawaysPage({ guild, user }) {
 
 module.exports = {
     welcomePage, levelingPage, badgesPage, prefixPage, roleRewardsPage, autoResponderPage, reactionsPage, broadcastPage,
-    birthdaysPage, loggingPage, reactionRolesPage, ticketsPage, ticketEditPage, automodPage, eventsPage,
+    birthdaysPage, embedPage, loggingPage, reactionRolesPage, ticketsPage, ticketEditPage, automodPage, eventsPage,
     livePollsPage, liveGiveawaysPage,
     ticketEmbedBuilderHTML,
     TABS,
