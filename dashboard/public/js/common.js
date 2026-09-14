@@ -6,6 +6,37 @@
  * HTML page with a focused script, and this file holds the common glue.
  */
 
+// Global flag so every protected-API 401 triggers exactly ONE logout flow (no
+// retry loops / redirect loops) even when several in-flight requests fail at
+// once. The ACTIVITY sync path (session-timeout.js) never goes through api(), so
+// handling here does not interfere with the idle logout.
+let authFailureHandled = false;
+
+// A protected API returned 401 (or the session-expired idle_timeout response):
+// stop retrying, invalidate auth state, tell every dashboard tab, and go to the
+// login page. The server never receives another request from this page. Manual
+// logout and the inactivity timeout route through session-timeout.js instead,
+// which broadcasts BEFORE navigating — api() handles the passive case where the
+// server rejects a routine request first.
+function handleAuthFailure() {
+  if (authFailureHandled) return;
+  authFailureHandled = true;
+  try {
+    localStorage.setItem('primebot.session.idleLogout', '1');
+    localStorage.setItem('primebot.session.idleLogoutAt', String(Date.now()));
+  } catch (_) { /* private mode — other tabs catch it via their own 401 check */ }
+  try {
+    const bc = new BroadcastChannel('primebot.session.logout');
+    bc.postMessage('logout');
+    bc.close();
+  } catch (_) { /* BroadcastChannel unsupported — storage event fallback covers same-origin tabs */ }
+  // Guard against a redirect loop: never navigate if we're already on the login
+  // page, and if another handler already redirected, we bail out above.
+  if (!/\/login(\?|$)/.test(window.location.pathname + window.location.search)) {
+    window.location.assign('/login');
+  }
+}
+
 async function api(path, options = {}) {
   const res = await fetch(path, {
     headers: {
@@ -19,6 +50,7 @@ async function api(path, options = {}) {
   const text = await res.text();
   if (text) { try { body = JSON.parse(text); } catch { body = text; } }
   if (!res.ok) {
+    if (res.status === 401) handleAuthFailure();
     const msg = (body && body.error) || `Request failed (${res.status})`;
     const err = new Error(msg);
     err.status = res.status;

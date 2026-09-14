@@ -167,11 +167,17 @@ function render(opts) {
         .join('\n  ');
     const logoutScript = login ? '' : `<script>document.getElementById('logout-btn')?.addEventListener('click',()=>{window.location.href='/logout'});</script>`;
     // Idle auto-logout: only on authenticated pages (the login page has no
-    // session). Injects the configured window (SESSION_IDLE_TIMEOUT_MS) and
-    // loads session-timeout.js, which drives the Page-Visibility countdown +
-    // heartbeat. See dashboard/public/js/session-timeout.js.
-    const idleTimeoutMs = parseInt(locals.idleTimeoutMs, 10) || constants.SESSION_IDLE_TIMEOUT_MS;
-    const idleScript = login ? '' : `<script>window.__PRIMEBOT_IDLE_TIMEOUT_MS__=${idleTimeoutMs};</script>\n  <script src="/js/session-timeout.js"></script>`;
+    // session). Injects the inactivity policy (all ms, non-secret) and loads
+    // session-timeout.js, which drives the timestamp-based idle tracking +
+    // 5-minute warning countdown + throttled activity sync. See
+    // dashboard/public/js/session-timeout.js.
+    const idleConfig = {
+      idleTimeoutMs: parseInt(locals.idleTimeoutMs, 10) || constants.SESSION_IDLE_TIMEOUT_MS,
+      warningMs: parseInt(locals.idleWarningMs, 10) || constants.SESSION_WARNING_MS,
+      refreshIntervalMs: parseInt(locals.idleRefreshIntervalMs, 10) || constants.SESSION_ACTIVITY_REFRESH_INTERVAL_MS,
+    };
+    const idleConfigJSON = JSON.stringify(idleConfig).replace(/</g, '\\u003c');
+    const idleScript = login ? '' : `<script>window.__PRIMEBOT_SESSION_CONFIG__=${idleConfigJSON};</script>\n  <script>window.__PRIMEBOT_IDLE_TIMEOUT_MS__=${idleConfig.idleTimeoutMs};</script>\n  <script src="/js/session-timeout.js"></script>`;
 
     return `<!DOCTYPE html>
 <html lang="en">

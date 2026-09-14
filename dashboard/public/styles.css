@@ -1920,6 +1920,88 @@ select:focus {
 
 .modal-desc { font-size: 13px; color: var(--text-dim); margin: 0 0 12px; }
 
+/* ── Session inactivity warning modal ──────────────────────────────────────
+   Built entirely client-side by session-timeout.js. Matches the dashboard's
+   visual language (surface-1 card, border-strong, accent buttons). */
+.idle-warning-hidden { display: none !important; }
+
+#idle-warning-modal {
+  position: fixed; inset: 0;
+  background: rgba(6, 7, 11, 0.62);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 1200;
+  backdrop-filter: blur(5px);
+  padding: 16px;
+}
+
+.idle-warning-card {
+  background: var(--surface-1);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  width: min(400px, 92vw);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  text-align: center;
+  padding: 28px 24px 24px;
+  animation: idle-warning-pop 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes idle-warning-pop {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to   { opacity: 1; transform: none; }
+}
+
+.idle-warning-icon {
+  width: 56px; height: 56px; margin: 0 auto 14px;
+  border-radius: 14px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--accent-soft, rgba(88, 101, 242, 0.14));
+  color: var(--accent);
+}
+.idle-warning-icon .ico { width: 28px; height: 28px; }
+
+#idle-warning-modal h3 {
+  margin: 0 0 8px;
+  font-size: 19px; font-weight: 600;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+}
+
+.idle-warning-desc {
+  margin: 0 0 14px;
+  font-size: 13.5px; line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.idle-warning-label {
+  margin: 0 0 4px;
+  font-size: 12px; font-weight: 600;
+  letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--text-faint, var(--text-dim));
+}
+
+.idle-warning-countdown {
+  font-variant-numeric: tabular-nums;
+  font-size: 40px; font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--on);
+}
+.idle-warning-countdown .idle-warning-countdown-label { display: none; }
+
+.idle-warning-actions {
+  display: flex; gap: 10px; justify-content: center;
+  margin-top: 18px; flex-wrap: wrap;
+}
+.idle-warning-actions .btn { min-width: 150px; justify-content: center; }
+
+.idle-warning-note {
+  margin: 14px 0 0;
+  font-size: 12px; color: var(--text-faint, var(--text-dim));
+}
+
+@media (max-width: 480px) {
+  .idle-warning-actions .btn { min-width: 46%; }
+}
+
 /* Hidden state is opacity+transform (NOT display:none) so the slide/fade-out
    animation actually plays instead of being cut off by the global .hidden. */
 .toast-hidden {

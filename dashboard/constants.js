@@ -17,11 +17,34 @@ module.exports = {
     // Session cookie name.
     SESSION_COOKIE: 'primebot.sid',
 
-    // Idle auto-logout window (ms). While the dashboard tab is visible the
-    // client heartbeats /api/session/heartbeat to keep the session alive; when
-    // the tab is hidden for this long the session is destroyed and the user is
-    // logged out automatically. Overridable via SESSION_IDLE_TIMEOUT_MS env.
-    SESSION_IDLE_TIMEOUT_MS: Math.max(1000, parseInt(process.env.SESSION_IDLE_TIMEOUT_MS, 10) || 120000),
+    // ── Session inactivity policy (single source of truth) ──────────────────
+    //
+    // Idle timeout:        30 minutes of genuine inactivity → automatic logout.
+    // Warning begins:      after 25 minutes idle the client shows a 5-minute
+    //                      warning countdown; it is a UX affordance only.
+    // Warning duration:    IDLE − WARNING = 5 minutes (derived, not duplicated).
+    //
+    // These drive both the client UX (dashboard/public/js/session-timeout.js)
+    // and the server-side idle enforcement (dashboard/auth.js requireAuth +
+    // the /api/session/heartbeat endpoint). The server is authoritative: it is
+    // only consulted on authenticated requests / throttled activity syncs, so a
+    // disabled/malicious client cannot keep an expired session alive.
+    //
+    // Neon compute optimization: the server-side idle deadline is persisted on
+    // the existing Postgres-backed express-session row (primebot_dashboard_session)
+    // and only re-written when SESSION_ACTIVITY_REFRESH_INTERVAL_MS has elapsed
+    // since the previous write — never on every click/scroll/request. A
+    // throttled activity sync happens at most once every 10 minutes.
+    SESSION_IDLE_TIMEOUT_MS: Math.max(1000, parseInt(process.env.SESSION_IDLE_TIMEOUT_MS, 10) || 30 * 60 * 1000),
+
+    // Idle time before the client starts the 5-minute warning countdown.
+    // Must stay < SESSION_IDLE_TIMEOUT_MS.
+    SESSION_WARNING_MS: Math.max(0, parseInt(process.env.SESSION_WARNING_MS, 10) || 25 * 60 * 1000),
+
+    // Minimum time between server-side session-activity refreshes. The client
+    // only issues an activity sync when the user has actually interacted AND
+    // this much time has passed since the last refresh. All values in ms.
+    SESSION_ACTIVITY_REFRESH_INTERVAL_MS: Math.max(5000, parseInt(process.env.SESSION_ACTIVITY_REFRESH_INTERVAL_MS, 10) || 10 * 60 * 1000),
 
     // Cloudflare Turnstile (invisible) public site key for the login page.
     // Empty string = widget not rendered. The matching TURNSTILE_SECRET_KEY
