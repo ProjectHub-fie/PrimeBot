@@ -25,7 +25,7 @@ const PgSession = require('connect-pg-simple')(session);
 
 const discord = require('./discord');
 const turnstile = require('./turnstile');
-const { requireAuth, requireGuildAdmin, requireGuildAdminPage, requireBeta, requireUpcoming } = require('./auth');
+const { requireAuth, requireAuthReadonly, requireGuildAdmin, requireGuildAdminPage, requireBeta, requireUpcoming } = require('./auth');
 const dashboardDb = require('./db');
 const constants = require('./constants');
 const pages = require('./render/pages');
@@ -64,14 +64,20 @@ const REDIRECT_URI = process.env.DISCORD_REDIRECT_URI || `${BASE_URL}/auth/callb
 
 const SESSION_SECRET = process.env.SESSION_SECRET || 'primebot-dashboard-dev-secret-change-me';
 
-// Idle auto-logout: while the dashboard tab is visible the client heartbeats
-// /api/session/heartbeat, which refreshes this deadline. When the tab is
-// hidden (backgrounded/minimized) the client stops heartbeating AND starts a
-// local 120s countdown that ends in logout. The server-side deadline is the
-// safety net for cases where the client JS can't run (tab closed, browser
-// throttled the timer, crash) — once it lapses, the next authenticated request
-// is treated as expired and the user is bounced to /login?error=idle_timeout.
+// Idle auto-logout: 30 minutes of genuine inactivity → automatic logout. The
+// deadline is a rolling `idleExpiresAt` on the (Postgres-backed) session row;
+// dashboard/auth.js only re-persists it when SESSION_ACTIVITY_REFRESH_INTERVAL_MS
+// (default 10 min) has elapsed since the previous persistence (throttled in
+// touchIdleDeadline), so normal usage does NOT write to Neon on every request.
+//
+// The client's session-timeout.js handles the UX locally (timestamps, a 5-minute
+// warning countdown at 25 min idle, a throttled activity sync, and a single
+// /logout request at 30 min). The server deadline is the authoritative safety
+// net for every case where client JS can't run (tab closed, browser throttled
+// the timer, disabled script): once it lapses, the next authenticated request
+// is rejected and the user is bounced to /login?error=idle_timeout.
 const SESSION_IDLE_TIMEOUT_MS = constants.SESSION_IDLE_TIMEOUT_MS;
+const SESSION_ACTIVITY_REFRESH_INTERVAL_MS = constants.SESSION_ACTIVITY_REFRESH_INTERVAL_MS;
 
 // On Vercel (serverless), MemoryStore is useless because each request may run
 // in a fresh instance. Store sessions in the dedicated SEASON_DATABASE_URL pool
@@ -174,7 +180,11 @@ app.use((req, res, next) => {
     res.locals.botSupport = constants.BOT_SUPPORT;
     res.locals.user = req.session && req.session.user;
     // Injected into the page shell for session-timeout.js (see render/layout.js).
+    // Values are the NON-secret inactivity policy knobs; the secret SESSION_SECRET
+    // is never exposed to the client.
     res.locals.idleTimeoutMs = SESSION_IDLE_TIMEOUT_MS;
+    res.locals.idleWarningMs = constants.SESSION_WARNING_MS;
+    res.locals.idleRefreshIntervalMs = SESSION_ACTIVITY_REFRESH_INTERVAL_MS;
     next();
 });
 
@@ -247,9 +257,9 @@ app.get('/auth/callback', async (req, res) => {
         };
         req.session.guilds = guilds;
         req.session.guildsFetchedAt = Date.now();
-        // Start the idle-auto-logout clock: the deadline is refreshed by the
-        // client heartbeat while the tab is visible and by every authenticated
-        // request. See dashboard/auth.js touchIdleDeadline.
+        // Start the idle-auto-logout clock: 30 minutes of inactivity from the
+        // moment of login. The deadline is rolled forward by throttled activity
+        // syncs (see dashboard/auth.js touchIdleDeadline).
         req.session.idleExpiresAt = Date.now() + SESSION_IDLE_TIMEOUT_MS;
 
         console.log(`[AUTH] Login OK for ${user.username} (${user.id}); ${guilds.length} guilds`);
@@ -286,21 +296,29 @@ app.get('/logout', (req, res) => {
     });
 });
 
-// ── Idle auto-logout heartbeat ──────────────────────────────────────────────
+// ── Idle auto-logout / activity sync ───────────────────────────────────────
 //
-// While the dashboard tab is visible, session-timeout.js POSTs here on an
-// interval (well under SESSION_IDLE_TIMEOUT_MS) to refresh the server-side idle
-// deadline. The tab being visible ⇒ the user is "active"; a hidden tab stops
-// heartbeating, so the deadline lapses after SESSION_IDLE_TIMEOUT_MS and the
-// next authenticated request (or this very endpoint) logs them out. This is the
-// server-side guarantee behind the client's Page-Visibility-driven countdown.
+// The client's session-timeout.js issues at most ONE of these per
+// SESSION_ACTIVITY_REFRESH_INTERVAL_MS (default 10 min), and only after real
+// user interaction — never on every mousemove/scroll, and never on a timer.
+// The server-side throttle in touchIdleDeadline (same interval) means that
+// even a noisy client that posts here more often cannot produce a Neon write
+// more than once per interval: when the deadline is still fresh the session
+// object is left untouched and express-session skips store.set() entirely.
+// An expired session is never revived — expireForIdle destroys it before any
+// refresh could happen. This endpoint doubles as the server-authoritative
+// session-validity check for the client.
 app.post('/api/session/heartbeat', requireAuth, (req, res) => {
-    res.json({ ok: true, idleExpiresAt: req.session.idleExpiresAt, idleTimeoutMs: SESSION_IDLE_TIMEOUT_MS });
+    // requireAuth already ran the throttled deadline refresh for this request;
+    // report whether it persisted anything.
+    res.json({ ok: true, refreshed: Boolean(req.idleDeadlineRefreshed), idleExpiresAt: req.session.idleExpiresAt, idleTimeoutMs: SESSION_IDLE_TIMEOUT_MS });
 });
 
 // Read-only accessor so the client can sync its local countdown to the server's
-// authoritative deadline (handles clock drift / resumed sessions).
-app.get('/api/session/heartbeat', requireAuth, (req, res) => {
+// authoritative deadline (handles clock drift / resumed sessions / multi-tab).
+// Uses requireAuthReadonly so THIS request never extends the deadline — only
+// the POST activity sync (or genuine protected work) may roll it forward.
+app.get('/api/session/heartbeat', requireAuthReadonly, (req, res) => {
     res.json({ ok: true, idleExpiresAt: req.session.idleExpiresAt, idleTimeoutMs: SESSION_IDLE_TIMEOUT_MS });
 });
 

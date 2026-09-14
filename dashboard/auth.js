@@ -30,18 +30,42 @@ async function canBypassFeatureGates(req) {
 }
 
 // Idle auto-logout window (server-side safety net). Single source of truth in
-// dashboard/constants.js (SESSION_IDLE_TIMEOUT_MS env, default 120000ms).
+// dashboard/constants.js (SESSION_IDLE_TIMEOUT_MS env, default 30 minutes).
 const IDLE_TIMEOUT_MS = constants.SESSION_IDLE_TIMEOUT_MS;
+// Neon compute optimization: the server-side idle deadline is only persisted
+// when at least this much time has elapsed since the previous persistence. This
+// turns "update last activity on every request" into "update at most once per
+// interval" (default 10 minutes). The exact value is derived from the deadline
+// itself, so no extra session field / DB column is needed.
+const REFRESH_INTERVAL_MS = constants.SESSION_ACTIVITY_REFRESH_INTERVAL_MS;
 
-// Refresh the session's idle deadline to "now + IDLE_TIMEOUT_MS". Called on
-// every successful authenticated request (see requireAuth) and by the
-// /api/session/heartbeat endpoint while the dashboard tab is visible. Writing
-// the deadline onto the session (rather than just touching resave) makes the
-// timeout survive serverless instance churn: the deadline lives in the
-// Postgres-backed session row, not in process memory.
+// When was the session's idle deadline last persisted to the session store?
+// Derived from the current deadline: idleExpiresAt = lastRefresh + IDLE_TIMEOUT_MS.
+// A missing/non-numeric deadline (legacy or debug session) returns 0.
+function lastActivityAt(req) {
+    if (!req.session) return 0;
+    const exp = req.session.idleExpiresAt;
+    if (typeof exp !== 'number' || !Number.isFinite(exp)) return 0;
+    return exp - IDLE_TIMEOUT_MS;
+}
+
+// Refresh the session's idle deadline to "now + IDLE_TIMEOUT_MS" — but ONLY
+// when the minimum refresh interval has elapsed since the last persistence.
+// Called on every successful authenticated request (see requireAuth) and by
+// the /api/session/heartbeat activity-sync endpoint. When the throttle holds,
+// the session object is left untouched, so express-session's store.set() is
+// skipped entirely → ZERO writes to Neon for the vast majority of requests.
+//
+// Writing the deadline onto the session (rather than just touching resave)
+// makes the timeout survive serverless instance churn: the deadline lives in
+// the Postgres-backed session row, not in process memory. Once the interval
+// elapses the deadline is rolled forward to a full idle window again.
 function touchIdleDeadline(req) {
-    if (!req.session) return;
-    req.session.idleExpiresAt = Date.now() + IDLE_TIMEOUT_MS;
+    if (!req.session) return false;
+    const now = Date.now();
+    if (now - lastActivityAt(req) < REFRESH_INTERVAL_MS) return false;
+    req.session.idleExpiresAt = now + IDLE_TIMEOUT_MS;
+    return true;
 }
 
 // Returns true if the session's idle deadline has lapsed. A session without a
@@ -76,9 +100,30 @@ function requireAuth(req, res, next) {
         }
         // Activity refreshes the idle deadline so the session stays alive while
         // the user is genuinely using the dashboard (page navigations, API
-        // calls). The client's periodic heartbeat keeps it alive between
-        // navigations while the tab is visible.
-        touchIdleDeadline(req);
+        // calls). The write is throttled to once per REFRESH_INTERVAL_MS — when
+        // the deadline is still fresh the session object is left untouched, so
+        // express-session skips store.set() (zero Postgres writes). The boolean
+        // is recorded for the activity-sync endpoint to report.
+        req.idleDeadlineRefreshed = touchIdleDeadline(req);
+        req.user = req.session.user;
+        return next();
+    }
+    if (req.accepts('html')) {
+        return res.redirect('/login');
+    }
+    return res.status(401).json({ error: 'Not authenticated' });
+}
+
+// Read-only variant of requireAuth: authenticates and enforces the idle expiry
+// (destroying dead sessions) but NEVER extends the idle deadline. Used by the
+// GET /api/session/heartbeat accessor so a mere status sync (clock drift, tab
+// return, multi-tab resync) can never grant the browser extra time — the POST
+// activity sync is the only endpoint that may roll the deadline forward.
+function requireAuthReadonly(req, res, next) {
+    if (req.session && req.session.user) {
+        if (isIdleExpired(req)) {
+            return expireForIdle(req, res);
+        }
         req.user = req.session.user;
         return next();
     }
@@ -309,4 +354,4 @@ async function requireUpcoming(req, res, next) {
     return res.status(403).json({ error: 'This feature is coming soon and is not available yet.', reason: 'upcoming' });
 }
 
-module.exports = { requireAuth, requireGuildAdmin, requireGuildAdminPage, requireBeta, requireUpcoming, touchIdleDeadline, isIdleExpired, IDLE_TIMEOUT_MS };
+module.exports = { requireAuth, requireAuthReadonly, requireGuildAdmin, requireGuildAdminPage, requireBeta, requireUpcoming, touchIdleDeadline, isIdleExpired, IDLE_TIMEOUT_MS };

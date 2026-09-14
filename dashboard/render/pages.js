@@ -14,7 +14,7 @@ const LOGIN_ERRORS = {
     missing_code: 'Authorization code was missing from the Discord callback.',
     auth_failed: 'Discord sign-in failed. Please try again.',
     session_failed: 'Signed in to Discord, but the server could not save your session. This usually means the database connection is failing on Vercel (check DATABASE_URL / SSL and that the primebot_dashboard_session table is reachable).',
-    idle_timeout: 'You were logged out automatically because the dashboard tab was inactive for a while. Sign in again to continue.',
+    idle_timeout: 'You were signed out automatically after 30 minutes of inactivity. Sign in again to continue.',
     turnstile_failed: 'The security check could not be verified. Please try signing in again.',
 };
 

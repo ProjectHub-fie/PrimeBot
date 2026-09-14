@@ -162,7 +162,7 @@ function buildHarnessApp() {
   a.get('/__test/login', (req, res) => {
     req.session.accessToken = 'fake-access';
     req.session.user = { id: '1', username: 'tester', globalName: 'Tester', avatar: null };
-    req.session.idleExpiresAt = Date.now() + 120000;
+    req.session.idleExpiresAt = Date.now() + constants.SESSION_IDLE_TIMEOUT_MS;
     req.session.save(() => res.json({ ok: true }));
   });
   // Push the idle deadline into the past to simulate a lapsed session.
@@ -170,11 +170,23 @@ function buildHarnessApp() {
     req.session.idleExpiresAt = Date.now() - 1000;
     req.session.save(() => res.json({ ok: true }));
   });
+  // Rewind the deadline so the refresh interval has already elapsed (the
+  // "activity sync is due" case).
+  a.get('/__test/makestale', (req, res) => {
+    req.session.idleExpiresAt = Date.now() - constants.SESSION_ACTIVITY_REFRESH_INTERVAL_MS - 2000 + constants.SESSION_IDLE_TIMEOUT_MS;
+    req.session.save(() => res.json({ ok: true }));
+  });
   // A representative protected route (mirrors server.js /api/me).
   a.get('/api/me', requireAuth, (req, res) => res.json({ user: req.session.user }));
-  // The heartbeat route (mirrors server.js).
-  a.post('/api/session/heartbeat', requireAuth, (req, res) =>
-    res.json({ ok: true, idleExpiresAt: req.session.idleExpiresAt, idleTimeoutMs: constants.SESSION_IDLE_TIMEOUT_MS }));
+  // The heartbeat routes (mirror server.js — POST = throttled activity sync,
+  // GET = read-only, NEVER extends the deadline).
+  const { requireAuthReadonly } = require('../dashboard/auth');
+  a.post('/api/session/heartbeat', requireAuth, (req, res) => {
+    res.json({ ok: true, refreshed: Boolean(req.idleDeadlineRefreshed), idleExpiresAt: req.session.idleExpiresAt, idleTimeoutMs: constants.SESSION_IDLE_TIMEOUT_MS });
+  });
+  a.get('/api/session/heartbeat', requireAuthReadonly, (req, res) => {
+    res.json({ ok: true, idleExpiresAt: req.session.idleExpiresAt, idleTimeoutMs: constants.SESSION_IDLE_TIMEOUT_MS });
+  });
   return a;
 }
 
@@ -227,6 +239,25 @@ test('authenticated heartbeat refreshes the idle deadline and returns 200', asyn
   });
 });
 
+test('GET heartbeat is READ-ONLY: it authenticates but never extends the idle deadline', async () => {
+  await withHarness(async (server) => {
+    const login = await fetchOnce(server, '/__test/login');
+    const cookie = (login.headers['set-cookie'] || []).map((c) => c.split(';')[0]).join('; ');
+
+    const first = JSON.parse((await fetchOnce(server, '/api/session/heartbeat', { headers: { cookie, Accept: 'application/json' } })).body);
+    const deadlineBefore = first.idleExpiresAt;
+    assert.ok(first.idleTimeoutMs >= 1000);
+
+    // A read-only sync must not roll the deadline forward (unlike the POST).
+    for (let i = 0; i < 3; i += 1) {
+      const r = await fetchOnce(server, '/api/session/heartbeat', { headers: { cookie, Accept: 'application/json' } });
+      assert.equal(r.status, 200);
+      const json = JSON.parse(r.body);
+      assert.equal(json.idleExpiresAt, deadlineBefore, `read-only GET #${i} leaves the deadline untouched`);
+    }
+  });
+});
+
 test('an expired session is bounced to /login?error=idle_timeout (HTML) and 401 reason:idle_timeout (JSON)', async () => {
   await withHarness(async (server) => {
     const login = await fetchOnce(server, '/__test/login');
@@ -252,5 +283,34 @@ test('an expired session is bounced to /login?error=idle_timeout (HTML) and 401 
     assert.equal(json.status, 401);
     const body = JSON.parse(json.body);
     assert.equal(body.reason, 'idle_timeout');
+  });
+});
+
+test('heartbeat activity sync is server-throttled: repeated POSTs inside the refresh interval do NOT extend the deadline', async () => {
+  await withHarness(async (server) => {
+    const login = await fetchOnce(server, '/__test/login');
+    const cookie = (login.headers['set-cookie'] || []).map((c) => c.split(';')[0]).join('; ');
+    const REQUEST = { method: 'POST', headers: { cookie, Accept: 'application/json' } };
+
+    const first = await fetchOnce(server, '/api/session/heartbeat', REQUEST);
+    assert.equal(first.status, 200);
+    const firstJson = JSON.parse(first.body);
+    // Deadline set at login → still inside the refresh interval → no re-write.
+    assert.equal(firstJson.refreshed, false, 'a fresh login deadline is not rewritten');
+
+    // A burst of activity-sync calls must not roll the deadline forward.
+    const deadlineA = firstJson.idleExpiresAt;
+    for (let i = 0; i < 5; i += 1) {
+      const r = JSON.parse((await fetchOnce(server, '/api/session/heartbeat', REQUEST)).body);
+      assert.equal(r.refreshed, false, `POST #${i} inside interval must not refresh`);
+      assert.equal(r.idleExpiresAt, deadlineA, 'deadline unchanged by throttled syncs');
+    }
+
+    // Force the deadline stale (refresh interval elapsed) → the next sync may
+    // refresh, and only then does the deadline roll forward.
+    await fetchOnce(server, '/__test/makestale', { headers: { cookie } });
+    const due = JSON.parse((await fetchOnce(server, '/api/session/heartbeat', REQUEST)).body);
+    assert.equal(due.refreshed, true, 'sync is allowed once the interval has elapsed');
+    assert.ok(due.idleExpiresAt > deadlineA, 'deadline rolled forward only when due');
   });
 });
