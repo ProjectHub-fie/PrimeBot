@@ -32,6 +32,8 @@ const devEmbed = require("../utils/devEmbed");
 const { isBetaFeature } = require("../utils/betaFeatureMatcher");
 const resolveUserId = require("../utils/resolveUserId");
 const CountingManager = require("../utils/countingManager");
+const { toMessagePayload } = require("../shared/embedPayload");
+const { findSavedEmbed, listSavedEmbeds } = require("../utils/savedEmbedStore");
 
 /**
  * Try to reply in the channel; if the bot lacks permission, fall back to a DM.
@@ -56,6 +58,35 @@ async function safeBetaReply(message, payload) {
             console.error(`[BETA] DM fallback also failed (${dmErr.code ?? dmErr.message}). User will not see a reply.`);
         }
     }
+}
+
+/**
+ * `$embed` — send an embed saved in the dashboard's Embed Builder.
+ *
+ * Embeds are built/saved on the dashboard (Features → Embed). This prefix
+ * command mirrors `/embed`: `send <name|id> [#channel]` and `list`.
+ */
+function embedUsageEmbed(prefix) {
+    return new EmbedBuilder()
+        .setColor(config.colors.primary)
+        .setTitle('🧩 Embed')
+        .setDescription('Send an embed you built in the dashboard **Embed Builder**.')
+        .addFields(
+            { name: `${prefix}embed send <name|id> [#channel]`, value: 'Send a saved embed (channel defaults to the current one)' },
+            { name: `${prefix}embed list`, value: 'List the embeds saved for this server' },
+        )
+        .setFooter({ text: `Build & save embeds on the dashboard → Features → Embed • Version ${config.version}` });
+}
+
+// Resolve the target channel from a `#channel` argument, if one was given.
+// Discord turns a picked channel into a `<#id>` mention, so we accept both the
+// raw mention token and the resolved mentions collection.
+function embedChannelMention(message, args) {
+    for (const arg of args) {
+        const m = String(arg).match(/^<#(\d+)>$/);
+        if (m) return m[1];
+    }
+    return message.mentions?.channels?.first?.()?.id || null;
 }
 
 module.exports = {
@@ -1454,6 +1485,118 @@ module.exports = {
                         );
                     }
 
+                // Send an embed built + saved in the dashboard's Embed Builder.
+                // `$embed send <name|id> [#channel]` / `$embed list`.
+                case "embed": {
+                    if (!message.member || !message.member.permissions.has(PermissionFlagsBits.ManageGuild)) {
+                        return message.reply("You need the **Manage Server** permission to send saved embeds.");
+                    }
+
+                    const embedSub = (args[0] || "").toLowerCase();
+                    const embedArgs = args.slice(1);
+
+                    if (!embedSub || embedSub === "help") {
+                        return message.reply({ embeds: [embedUsageEmbed(prefix)] });
+                    }
+
+                    if (embedSub === "list") {
+                        let saved;
+                        try {
+                            saved = await listSavedEmbeds(message.guild.id);
+                        } catch (err) {
+                            console.error("[PREFIX EMBED] Failed to list saved embeds:", err.message);
+                            return message.reply("I could not load the saved embeds right now. Please try again later.");
+                        }
+                        if (!saved.length) {
+                            return message.reply({
+                                embeds: [new EmbedBuilder()
+                                    .setColor(config.colors.warning)
+                                    .setTitle("📋 No saved embeds")
+                                    .setDescription(`Build one on the dashboard under **Features → Embed**, then send it with \`${prefix}embed send <name>\`.`)
+                                    .setFooter({ text: `Version: ${config.version}` })],
+                            });
+                        }
+                        return message.reply({
+                            embeds: [new EmbedBuilder()
+                                .setColor(config.colors.primary)
+                                .setTitle("📋 Saved embeds")
+                                .setDescription(saved.map((e, i) => `**${i + 1}.** ${e.name} — \`${prefix}embed send ${e.name}\``).join("\n").slice(0, 4096))
+                                .setFooter({ text: `${saved.length} saved embed(s) • Version: ${config.version}` })],
+                        });
+                    }
+
+                    if (embedSub !== "send") {
+                        return message.reply({ embeds: [embedUsageEmbed(prefix)] });
+                    }
+
+                    const embedChannelId = embedChannelMention(message, embedArgs);
+                    const embedQuery = embedArgs.filter((a) => !/^<#\d+>$/.test(a)).join(" ").trim();
+                    if (!embedQuery) {
+                        return message.reply({ embeds: [embedUsageEmbed(prefix)] });
+                    }
+
+                    const targetChannel = embedChannelId
+                        ? (message.guild.channels.cache.get(embedChannelId) || await message.guild.channels.fetch(embedChannelId).catch(() => null))
+                        : message.channel;
+                    if (!targetChannel || !targetChannel.isTextBased?.()) {
+                        return message.reply("I could not find that channel, or it is not a text channel.");
+                    }
+
+                    let record;
+                    try {
+                        record = await findSavedEmbed(message.guild.id, embedQuery);
+                    } catch (err) {
+                        console.error("[PREFIX EMBED] Failed to load saved embed:", err.message);
+                        return message.reply("I could not load the saved embeds right now. Please try again later.");
+                    }
+                    if (!record) {
+                        return message.reply({
+                            embeds: [new EmbedBuilder()
+                                .setColor(config.colors.error)
+                                .setTitle("❌ Embed not found")
+                                .setDescription(`No saved embed named **${embedQuery}** was found. Use \`${prefix}embed list\` to see the available embeds.`)
+                                .setFooter({ text: `Version: ${config.version}` })],
+                        });
+                    }
+
+                    const embedPayload = toMessagePayload(record.payload);
+                    if (!embedPayload) {
+                        return message.reply({
+                            embeds: [new EmbedBuilder()
+                                .setColor(config.colors.error)
+                                .setTitle("❌ Nothing to send")
+                                .setDescription(`**${record.name}** has no content to send — open it in the Embed Builder and save it again.`)
+                                .setFooter({ text: `Version: ${config.version}` })],
+                        });
+                    }
+
+                    const embedPerms = targetChannel.permissionsFor ? targetChannel.permissionsFor(message.guild.members.me) : null;
+                    if (embedPerms && (!embedPerms.has(PermissionFlagsBits.SendMessages) || !embedPerms.has(PermissionFlagsBits.EmbedLinks))) {
+                        return message.reply(`I need **Send Messages** and **Embed Links** in <#${targetChannel.id}> to post there.`);
+                    }
+
+                    let embedSent;
+                    try {
+                        embedSent = await targetChannel.send(embedPayload);
+                    } catch (err) {
+                        console.error("[PREFIX EMBED] Failed to send embed:", err);
+                        return message.reply(`I could not post that embed in <#${targetChannel.id}>.`);
+                    }
+
+                    // The embed is already posted — a failure building the
+                    // confirmation must not be reported as a send failure.
+                    try {
+                        const embedConfirm = new EmbedBuilder()
+                            .setColor(config.colors.success)
+                            .setDescription(`✅ Posted **${record.name}** in <#${targetChannel.id}> — [jump to message](${embedSent.url}).`)
+                            .setFooter({ text: `Version: ${config.version}` });
+                        const embedReply = await message.reply({ embeds: [embedConfirm] });
+                        setTimeout(() => embedReply.delete().catch(() => {}), 5000);
+                    } catch (err) {
+                        console.error("[PREFIX EMBED] Sent, but the confirmation failed:", err.message);
+                    }
+                    break;
+                }
                 case "echo":
                     // Validate arguments
                     if (args.length < 1) {
