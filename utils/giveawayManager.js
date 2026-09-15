@@ -8,6 +8,7 @@ class GiveawayManager {
     constructor(client) {
         this.client = client;
         this.giveaways = new Map(); // Store active giveaways
+        this._savedSignatures = new Map(); // messageId -> last persisted state (skips no-op writes)
         this.checkInterval = null;
         this.db = null;
         this.schema = null;
@@ -186,34 +187,42 @@ class GiveawayManager {
         }
 
         try {
-            let validCount = 0;
+            let savedCount = 0;
             let invalidCount = 0;
-            
+
             for (const [messageId, giveaway] of this.giveaways.entries()) {
                 // Skip invalid entries
                 if (!giveaway || typeof giveaway !== 'object') {
                     console.warn(`[GIVEAWAY] Skipping invalid giveaway entry with ID ${messageId}`);
                     this.giveaways.delete(messageId);
+                    this._savedSignatures.delete(messageId);
                     invalidCount++;
                     continue;
                 }
-                
-                // Update giveaway in database
+
+                // Only write giveaways whose persisted state actually changed.
+                // This sweep runs every 30s; previously it re-UPDATEd every
+                // giveaway (plus an N+1 participant SELECT each) even when
+                // nothing had happened, keeping Neon awake for no reason.
+                const signature = JSON.stringify({
+                    active: !!giveaway.active,
+                    participants: [...giveaway.participants].sort(),
+                });
+                if (this._savedSignatures.get(messageId) === signature) continue;
+
                 await this.updateGiveawayInDatabase(giveaway);
-                validCount++;
+                this._savedSignatures.set(messageId, signature);
+                savedCount++;
             }
-            
+
             if (invalidCount > 0) {
-                console.log(`[GIVEAWAY] Saved ${validCount} giveaways (${invalidCount} invalid entries removed).`);
+                console.log(`[GIVEAWAY] Saved ${savedCount} giveaways (${invalidCount} invalid entries removed).`);
             }
         } catch (error) {
             console.error('[GIVEAWAY] Error saving giveaways to database:', error);
         }
     }
 
-    /**
-     * Update a single giveaway in the database
-     */
     async updateGiveawayInDatabase(giveaway) {
         if (!this.dbReady) return;
 

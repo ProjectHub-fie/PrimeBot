@@ -4,6 +4,7 @@ const {
     ModalBuilder, TextInputBuilder, TextInputStyle,
 } = require('discord.js');
 const { ticketPool } = require('../server/ticketDb');
+const { AdaptivePoller } = require('./adaptivePoller');
 const { trolePool, ensureTicketRoleTable } = require('../server/troleDb');
 const { tclaimPool, ensureTicketClaimsTable } = require('../server/tclaimDb');
 const { tlogPool, ensureTlogTables } = require('../server/tlogDb');
@@ -294,6 +295,7 @@ class TicketPanelManager {
         this._logSettings = new Map();    // panelId -> ticket logging settings (TLOG pool)
         this._logListeners = new Set();   // ticket log subscribers (bot/dashboard/tests)
         this._tableReady = false;
+        this._fingerprint = null;         // cheap change-detection for the reload poller
         this._init().catch(err =>
             console.error('[TICKETS] Init failed:', err.message)
         );
@@ -401,24 +403,74 @@ class TicketPanelManager {
     }
 
     _startReloadInterval() {
-        const ms = parseInt(process.env.SETTINGS_RELOAD_INTERVAL_MS, 10) || 30000;
-        this._reloadTimer = setInterval(() => {
-            this._loadAll().catch(err =>
-                console.error('[TICKETS] Background reload failed:', err.message)
-            );
-        }, ms);
-        this._reloadTimer.unref?.();
-        this._startRefreshLoop();
+        if (this._reloadTimer) return;
+        // One adaptive poller replaces the fixed 30s reload + 5s refresh pair.
+        // The 5s refresh alone ran FIVE queries every tick (panels + role
+        // settings + components + open instances + claim rows), continuously
+        // waking Neon. Each tick now runs ONE cheap fingerprint query; the full
+        // reload only runs when that fingerprint actually changed, and the
+        // interval backs off while the ticket tables are quiet.
+        this._reloadTimer = new AdaptivePoller({
+            name: 'TICKETS',
+            task: () => this._poll(),
+        });
+        this._reloadTimer.start();
     }
 
-    _startRefreshLoop() {
-        if (this._refreshTimer) return;
-        this._refreshTimer = setInterval(() => {
-            this._refreshFromDatabase().catch(err =>
-                console.error('[TICKETS] Refresh failed:', err.message)
-            );
-        }, 5000);
-        this._refreshTimer.unref?.();
+    /**
+     * Cheap change probe: a single indexed aggregate over the ticket tables.
+     * Returns true when the fingerprint differs from the last full reload (or on
+     * the very first tick), in which case the full cache reload runs.
+     */
+    async _poll() {
+        await this._ensureTable();
+        const parts = [];
+
+        // Core TICKET-pool tables. These are small (one row per panel/instance),
+        // so the aggregate is a trivial indexed/seq scan — far cheaper than the
+        // full `SELECT *` reload it gates.
+        try {
+            const res = await ticketPool.query(`
+                SELECT COUNT(*) AS panels,
+                       COALESCE(MAX(id), 0) AS panel_max_id,
+                       COALESCE(MAX(updated_at), to_timestamp(0)) AS panel_updated,
+                       (SELECT COUNT(*) FROM ticket_instances WHERE status = 'open') AS open_instances,
+                       (SELECT COALESCE(MAX(id), 0) FROM ticket_instances) AS instance_max_id,
+                       COALESCE(MAX(updated_at), to_timestamp(0)) AS comp_updated
+                FROM ticket_panels
+            `);
+            parts.push(JSON.stringify(res.rows[0] || {}));
+        } catch (_) {
+            // ticket_panels may not be fully migrated yet — force a reload.
+            return this._refreshFromDatabase();
+        }
+
+        // Per-panel satellite settings. Each lives in its own optional pool, so
+        // probe them independently: a pool pointed at a separate/unavailable
+        // database must not disable change detection for the core tables.
+        const satellite = async (ensure, pool, sql) => {
+            try {
+                await ensure();
+                const r = await pool.query(sql);
+                return r.rows[0] && r.rows[0].ts ? String(r.rows[0].ts) : '0';
+            } catch (_) {
+                return 'err';
+            }
+        };
+        parts.push(await satellite(ensureTicketRoleTable, trolePool,
+            `SELECT COALESCE(MAX(updated_at), to_timestamp(0)) AS ts FROM ticket_role_settings`));
+        parts.push(await satellite(ensureTicketClaimsTable, tclaimPool,
+            `SELECT COALESCE(MAX(updated_at), to_timestamp(0)) AS ts FROM ticket_claims`));
+        parts.push(await satellite(ensureTlogTables, tlogPool,
+            `SELECT COALESCE(MAX(updated_at), to_timestamp(0)) AS ts FROM ticket_logging_settings`));
+
+        const fingerprint = parts.join('|');
+        if (fingerprint === this._fingerprint) return false;
+        await this._refreshFromDatabase();
+        this._fingerprint = fingerprint;
+        // The fingerprint changed → something in the ticket tables moved. Stay on
+        // the fast interval so a burst of edits is picked up promptly.
+        return true;
     }
 
     async _refreshFromDatabase() {

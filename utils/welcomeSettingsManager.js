@@ -1,4 +1,5 @@
 const { welcomePool } = require('../server/welcomeDb');
+const { AdaptivePoller } = require('./adaptivePoller');
 const fs   = require('fs');
 const path = require('path');
 
@@ -25,7 +26,6 @@ class WelcomeSettingsManager {
     constructor() {
         this._cache = new Map();
         this._tableReady = false;
-        this._refreshTimer = null;
         this._init().catch(err =>
             console.error('[WELCOME SETTINGS] Init failed:', err.message)
         );
@@ -46,45 +46,37 @@ class WelcomeSettingsManager {
 
     /**
      * The dashboard writes welcome settings directly to the DB (a separate
-     * process from the bot). Re-read the table periodically so dashboard saves
-     * take effect without a bot restart (default 30s).
+     * process from the bot). One adaptive poller replaces the previous fixed
+     * pair (a 30s reload plus a 5s refresh — the latter ran a full
+     * `SELECT * FROM welcome_settings` every 5 seconds forever). It stays fast
+     * while edits are landing and backs off to a slow idle interval, so a quiet
+     * deployment stops keeping Neon constantly awake.
      */
     _startReloadInterval() {
-        const ms = parseInt(process.env.SETTINGS_RELOAD_INTERVAL_MS, 10) || 30000;
-        this._reloadTimer = setInterval(() => {
-            this._loadAll().catch(err =>
-                console.error('[WELCOME SETTINGS] Background reload failed:', err.message)
-            );
-        }, ms);
-        this._reloadTimer.unref?.();
-        this._startRefreshLoop();
-    }
-
-    _startRefreshLoop() {
-        if (this._refreshTimer) return;
-        // Dashboard saves happen in a separate process. Refresh the in-memory
-        // cache so new welcome settings are used without restarting the bot.
-        this._refreshTimer = setInterval(() => {
-            this._refreshFromDatabase().catch(err =>
-                console.error('[WELCOME SETTINGS] Refresh failed:', err.message)
-            );
-        }, 5000);
-        this._refreshTimer.unref?.();
+        if (this._reloadTimer) return;
+        this._reloadTimer = new AdaptivePoller({
+            name: 'WELCOME SETTINGS',
+            task: () => this._refreshFromDatabase(),
+        });
+        this._reloadTimer.start();
     }
 
     async _refreshFromDatabase() {
         await this._ensureTable();
         const res = await welcomePool.query('SELECT * FROM welcome_settings');
+        let changed = false;
         for (const row of res.rows) {
             const next = this._rowToSettings(row);
             const previous = this._cache.get(row.guild_id);
             if (!previous || JSON.stringify(previous) !== JSON.stringify(next)) {
                 this._cache.set(row.guild_id, next);
+                changed = true;
                 if (previous) {
                     console.log(`[WELCOME SETTINGS] Applied database update for guild ${row.guild_id}.`);
                 }
             }
         }
+        return changed;
     }
 
     /**

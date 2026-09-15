@@ -1,11 +1,20 @@
 const { EmbedBuilder } = require('discord.js');
 const config = require('../config');
 const { birthdayPool: pool } = require('../server/birthdayDb');
+const { AdaptivePoller } = require('./adaptivePoller');
 const ms = require('ms');
 
 // How often the manager re-reads the tables so dashboard edits (settings,
 // custom embed image, added/removed birthdays) take effect without a restart.
+// The adaptive poller starts here and backs off up to the reload cap when idle.
 const RELOAD_INTERVAL_MS = Math.max(1000, Number(process.env.BIRTHDAY_RELOAD_INTERVAL_MS) || 30000);
+
+/** Field-wise equality for a single birthday entry (used for change detection). */
+function sameBirthdayEntry(a, b) {
+    return a.month === b.month && a.day === b.day
+        && (a.year || null) === (b.year || null)
+        && (a.lastCelebrated || null) === (b.lastCelebrated || null);
+}
 
 // Hardcoded fallback image shown on the `/birthday list` / `$birthday list`
 // embed. A dashboard-configured custom embed image URL (embed_image_url)
@@ -53,15 +62,16 @@ class BirthdayManager {
 
     // Periodic re-read of the birthday tables. Dashboard saves write the DB
     // directly, so without this the bot would keep serving stale cached values
-    // until a restart. A failed reload is logged and retried on the next tick.
+    // until a restart. One adaptive poller (replacing the fixed 30s timer)
+    // refreshes quickly after a change and backs off while the tables are quiet,
+    // so an idle deployment stops waking Neon every 30 seconds.
     _startReloadInterval() {
         if (this._reloadTimer) return;
-        this._reloadTimer = setInterval(() => {
-            this.loadBirthdays().catch(err => {
-                console.error('[BIRTHDAYS] Periodic reload failed:', err.message);
-            });
-        }, RELOAD_INTERVAL_MS);
-        if (this._reloadTimer.unref) this._reloadTimer.unref();
+        this._reloadTimer = new AdaptivePoller({
+            name: 'BIRTHDAYS',
+            task: () => this.loadBirthdays(),
+        });
+        this._reloadTimer.start();
     }
 
     // Self-create the birthday tables if they don't exist (mirrors the
@@ -94,26 +104,24 @@ class BirthdayManager {
     async loadBirthdays() {
         try {
             await this._ensureTables();
-            this.birthdays.clear();
 
             // Load guild configs
             const guildsRes = await pool.query('SELECT guild_id, announcement_channel, role_id, embed_image_url FROM birthdays_guilds');
+            const guildConfigs = new Map();
             for (const row of guildsRes.rows) {
-                this.birthdays.set(row.guild_id, {
+                guildConfigs.set(row.guild_id, {
                     channel: row.announcement_channel || null,
                     role: row.role_id || null,
                     imageUrl: row.embed_image_url || null,
-                    users: new Map(),
                 });
             }
 
             // Load individual birthdays
             const bdRes = await pool.query('SELECT guild_id, user_id, month, day, year, last_celebrated FROM birthdays');
+            const usersByGuild = new Map();
             for (const row of bdRes.rows) {
-                if (!this.birthdays.has(row.guild_id)) {
-                    this.birthdays.set(row.guild_id, { channel: null, role: null, imageUrl: null, users: new Map() });
-                }
-                this.birthdays.get(row.guild_id).users.set(row.user_id, {
+                if (!usersByGuild.has(row.guild_id)) usersByGuild.set(row.guild_id, new Map());
+                usersByGuild.get(row.guild_id).set(row.user_id, {
                     month: row.month,
                     day: row.day,
                     year: row.year || null,
@@ -121,11 +129,68 @@ class BirthdayManager {
                 });
             }
 
-            console.log(`[BIRTHDAYS] Loaded birthdays for ${this.birthdays.size} guilds from database.`);
+            const changed = this._applyBirthdaySnapshot(guildConfigs, usersByGuild);
+            if (changed) {
+                console.log(`[BIRTHDAYS] Loaded birthdays for ${this.birthdays.size} guilds from database.`);
+            }
+            this.isReady = true;
+            return changed;
         } catch (error) {
             console.error('[BIRTHDAYS] Error loading birthdays:', error);
             throw error;
         }
+    }
+
+    /**
+     * Merge a freshly-read snapshot into the live `this.birthdays` Map in place
+     * (callers hold references to it) and report whether anything changed, so
+     * the adaptive poller can back off while the tables are quiet.
+     */
+    _applyBirthdaySnapshot(guildConfigs, usersByGuild) {
+        let changed = false;
+
+        // Drop guilds that no longer exist in the DB.
+        for (const guildId of Array.from(this.birthdays.keys())) {
+            if (!guildConfigs.has(guildId)) {
+                this.birthdays.delete(guildId);
+                changed = true;
+            }
+        }
+
+        for (const [guildId, cfg] of guildConfigs.entries()) {
+            let entry = this.birthdays.get(guildId);
+            if (!entry) {
+                entry = { channel: cfg.channel, role: cfg.role, imageUrl: cfg.imageUrl, users: new Map() };
+                this.birthdays.set(guildId, entry);
+                changed = true;
+            } else if (entry.channel !== cfg.channel || entry.role !== cfg.role || entry.imageUrl !== cfg.imageUrl) {
+                entry.channel = cfg.channel;
+                entry.role = cfg.role;
+                entry.imageUrl = cfg.imageUrl;
+                changed = true;
+            }
+        }
+
+        for (const [guildId, users] of usersByGuild.entries()) {
+            let entry = this.birthdays.get(guildId);
+            if (!entry) {
+                entry = { channel: null, role: null, imageUrl: null, users: new Map() };
+                this.birthdays.set(guildId, entry);
+                changed = true;
+            }
+            for (const userId of Array.from(entry.users.keys())) {
+                if (!users.has(userId)) { entry.users.delete(userId); changed = true; }
+            }
+            for (const [userId, data] of users.entries()) {
+                const previous = entry.users.get(userId);
+                if (!previous || !sameBirthdayEntry(previous, data)) {
+                    entry.users.set(userId, data);
+                    changed = true;
+                }
+            }
+        }
+
+        return changed;
     }
 
     startCheckingBirthdays() {

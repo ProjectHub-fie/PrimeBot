@@ -1,6 +1,5 @@
 const config = require("../config");
-const SETTINGS_RELOAD_INTERVAL_MS = parseInt(process.env.SETTINGS_RELOAD_INTERVAL_MS, 10) || 60000;
-const SETTINGS_REFRESH_INTERVAL_MS = parseInt(process.env.SETTINGS_REFRESH_INTERVAL_MS,  10) ||  15000;
+const { AdaptivePoller } = require('./adaptivePoller');
 const { pool } = require('../server/db');
 const { normalizeGuildPrefix } = require('./prefixHelper');
 
@@ -45,7 +44,6 @@ class ServerSettingsManager {
         this.client = client;
         this.serverSettings = new Map();
         this._tableReady = false;
-        this._refreshTimer = null;
 
         this._init().catch(err =>
             console.error('[SERVER SETTINGS] Initialisation failed:', err.message)
@@ -84,44 +82,42 @@ class ServerSettingsManager {
      * The dashboard writes settings directly to the DB (a separate process from
      * the bot). The bot only learns about those writes by re-reading the table;
      * without this, dashboard saves appear to "succeed but do nothing" until the
-     * bot is restarted. Reload on a configurable interval (default 30s).
+     * bot is restarted.
+     *
+     * One adaptive poller replaces the previous pair of fixed loops (a 60s full
+     * reload plus a 15s refresh that ran the same `SELECT * FROM server_settings`).
+     * It refreshes quickly while the table is changing and backs off to a slow
+     * idle interval otherwise, so a quiet deployment no longer keeps Neon awake.
      */
     _startReloadInterval() {
         if (this._reloadTimer) return;
-        this._reloadTimer = setInterval(() => {
-            this.loadSettings().catch(err =>
-                console.error('[SERVER SETTINGS] Background reload failed:', err.message)
-            );
-        }, SETTINGS_RELOAD_INTERVAL_MS);
-        this._reloadTimer.unref?.();
-        this._startRefreshLoop();
+        this._reloadTimer = new AdaptivePoller({
+            name: 'SERVER SETTINGS',
+            task: () => this._refreshFromDatabase(),
+        });
+        this._reloadTimer.start();
     }
 
-    _startRefreshLoop() {
-        if (this._refreshTimer) return;
-        // The dashboard runs as a separate process, so startup-only loading
-        // leaves the bot with stale settings after a dashboard save.
-        this._refreshTimer = setInterval(() => {
-            this._refreshFromDatabase().catch(err =>
-                console.error('[SERVER SETTINGS] Refresh failed:', err.message)
-            );
-        }, SETTINGS_REFRESH_INTERVAL_MS);
-        this._refreshTimer.unref?.();
-    }
-
+    /**
+     * Re-read the table and apply any changed rows to the in-memory cache.
+     * Returns true when at least one row changed (drives the poller's backoff).
+     */
     async _refreshFromDatabase() {
         await this._ensureTable();
         const res = await pool.query('SELECT * FROM server_settings');
+        let changed = false;
         for (const row of res.rows) {
             const next = this._rowToSettings(row);
             const previous = this.serverSettings.get(row.guild_id);
             if (!previous || JSON.stringify(previous) !== JSON.stringify(next)) {
                 this.serverSettings.set(row.guild_id, next);
+                changed = true;
                 if (previous) {
                     console.log(`[SERVER SETTINGS] Applied database update for guild ${row.guild_id}.`);
                 }
             }
         }
+        return changed;
     }
 
     /** One-time import of existing serverSettings.json data (non-welcome fields only).

@@ -85,8 +85,27 @@ function countPool(count) {
     return { query: async () => ({ rows: [{ count }] }) };
 }
 
+// The main pool serves the server_settings adoption aggregate now (one query
+// returning four FILTERed counts instead of four separate COUNT(*) queries).
+function serverSettingsPool(total) {
+    return {
+        query: async (q) => {
+            const text = String(q);
+            if (text.includes('FILTER (WHERE TRUE)')) {
+                return { rows: [{
+                    total,
+                    leveling: total,
+                    auto_reactions: 0,
+                    broadcasts: 0,
+                }] };
+            }
+            return { rows: [{ count: total }] };
+        },
+    };
+}
+
 function stubDashboardPools({ liveRow }) {
-    stubModule('../server/db', { pool: countPool(5) });
+    stubModule('../server/db', { pool: serverSettingsPool(5) });
     stubModule('../server/welcomeDb', { welcomePool: countPool(1) });
     stubModule('../server/automodDb', { automodPool: countPool(1) });
     stubModule('../server/ticketDb', { ticketPool: countPool(1) });
@@ -134,3 +153,57 @@ test('an explicit server-count override (Discord REST) still wins', async () => 
     assert.equal(stats.servers, 9);
     assert.equal(stats.totalUsers, 9876);
 });
+
+// ── Combined heartbeat + lease (one round trip instead of two) ──────────────
+//
+// The heartbeat loop runs for the life of the process, so shipping the
+// node-status upsert and the lease refresh as one statement halves its DB round
+// trips permanently. These tests pin the contract: the counts still make it
+// through, the lease result is still reported, and a failure falls back.
+
+test('writeHeartbeatWithLease writes counts AND refreshes the lease in one statement', async () => {
+    const fake = makeFakeSeasonDb();
+    const nodeFailover = freshNodeFailover(fake);
+    nodeFailover.setStatsProvider(() => ({ guildCount: 11, memberCount: 5555 }));
+
+    const hasLease = await nodeFailover.writeHeartbeatWithLease('sn1');
+
+    // On a fresh module the CREATE TABLE self-migration runs first; count only
+    // the heartbeat statements, which must be exactly ONE combined statement.
+    const combined = fake.statements.filter((s) => s.sql.includes('INSERT INTO bot_node_status'));
+    assert.equal(combined.length, 1, 'the heartbeat+lease path is one round trip, not two');
+    const stmt = combined[0];
+    assert.ok(stmt.sql.includes('bot_failover_lock'), 'and still refreshes the lease');
+    assert.ok(stmt.params.includes(11) && stmt.params.includes(5555), 'live counts are carried');
+    assert.equal(hasLease, true, 'rowCount>0 means the lease is still held');
+});
+
+test('writeHeartbeatWithLease reports a lost lease when no row is updated', async () => {
+    const fake = makeFakeSeasonDb();
+    fake.seasonDb.execute = async (q) => {
+        const { sql, params } = dialect.sqlToQuery(q);
+        fake.statements.push({ sql, params });
+        return { rows: [], rowCount: 0 };
+    };
+    const nodeFailover = freshNodeFailover(fake);
+
+    const hasLease = await nodeFailover.writeHeartbeatWithLease('sn2');
+
+    assert.equal(hasLease, false, 'a stolen lease must be surfaced so the caller steps down');
+});
+
+test('writeHeartbeatWithLease survives a failing stats provider', async () => {
+    const fake = makeFakeSeasonDb();
+    const nodeFailover = freshNodeFailover(fake);
+    nodeFailover.setStatsProvider(() => { throw new Error('client not ready'); });
+
+    const hasLease = await nodeFailover.writeHeartbeatWithLease('sn1');
+
+    assert.equal(hasLease, true, 'a stats failure must never break the heartbeat');
+    assert.equal(
+        fake.statements.filter((s) => s.sql.includes('INSERT INTO bot_node_status')).length,
+        1,
+        'the heartbeat is still written exactly once'
+    );
+});
+

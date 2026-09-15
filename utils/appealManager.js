@@ -1,6 +1,7 @@
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, MessageFlags } = require('discord.js');
 const { safeReply } = require('./stabilityUtils');
 const { appealPool: pool } = require('../server/appealDb');
+const { AdaptivePoller } = require('./adaptivePoller');
 
 /**
  * AppealManager — the ban-DM + appeal subsystem.
@@ -87,30 +88,29 @@ class AppealManager {
     }
 
     _startReloadInterval() {
-        const ms = parseInt(process.env.SETTINGS_RELOAD_INTERVAL_MS, 10) || 60000;
-        const refreshMs = parseInt(process.env.SETTINGS_REFRESH_INTERVAL_MS, 10) || 15000;
-        setInterval(() => {
-            this._loadAll().catch(err =>
-                console.error('[APPEAL] Background reload failed:', err.message)
-            );
-        }, ms).unref?.();
-        setInterval(() => {
-            this._refreshFromDatabase().catch(err =>
-                console.error('[APPEAL] Refresh failed:', err.message)
-            );
-        }, refreshMs).unref?.();
+        if (this._reloadTimer) return;
+        // One adaptive poller replaces the fixed 60s reload + 15s refresh pair
+        // (both ran a full `SELECT * FROM appeal_settings`).
+        this._reloadTimer = new AdaptivePoller({
+            name: 'APPEAL',
+            task: () => this._refreshFromDatabase(),
+        });
+        this._reloadTimer.start();
     }
 
     async _refreshFromDatabase() {
         await this._ensureTable();
         const res = await pool.query('SELECT * FROM appeal_settings');
+        let changed = false;
         for (const row of res.rows) {
             const next = this._rowToSettings(row);
             const previous = this._cache.get(row.guild_id);
             if (!previous || JSON.stringify(previous) !== JSON.stringify(next)) {
                 this._cache.set(row.guild_id, next);
+                changed = true;
             }
         }
+        return changed;
     }
 
     async _loadAll() {

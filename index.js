@@ -69,6 +69,44 @@ const schema = require('./shared/schema');
 client.db = db;
 client.schema = schema;
 
+// Development-only query profiler. No-op unless DB_QUERY_MONITOR=true, so it
+// costs nothing in production; when enabled it logs the top statements by
+// frequency and total time, attributed to the calling module — the evidence
+// needed to find the next Neon hotspot without guessing.
+if (process.env.DB_QUERY_MONITOR === 'true' || process.env.DB_QUERY_MONITOR === '1') {
+    try {
+        const { instrumentPool } = require('./utils/dbMonitor');
+        const pools = [
+            ['./server/db', 'pool'],
+            ['./server/welcomeDb', 'welcomePool'],
+            ['./server/reactionDb', 'reactionPool'],
+            ['./server/automodDb', 'automodPool'],
+            ['./server/ticketDb', 'ticketPool'],
+            ['./server/liveDb', 'livePool'],
+            ['./server/eventDb', 'eventPool'],
+            ['./server/logDb', 'logPool'],
+            ['./server/alogDb', 'alogPool'],
+            ['./server/levelingDb', 'levelingPool'],
+            ['./server/birthdayDb', 'birthdayPool'],
+            ['./server/seasonDb', 'seasonPool'],
+            ['./server/communityDb', 'communityPool'],
+            ['./server/betaDb', 'betaPool'],
+            ['./server/troleDb', 'trolePool'],
+            ['./server/tclaimDb', 'tclaimPool'],
+            ['./server/tlogDb', 'tlogPool'],
+            ['./server/appealDb', 'appealPool'],
+        ];
+        for (const [mod, name] of pools) {
+            try {
+                const loaded = require(mod);
+                if (loaded && loaded[name]) instrumentPool(loaded[name], name);
+            } catch (_) { /* optional pool — ignore */ }
+        }
+    } catch (err) {
+        console.error('[DB MONITOR] Failed to instrument pools:', err.message);
+    }
+}
+
 // Initialize beta features manager (lightweight — DB only, no intervals)
 const betaManager = require('./utils/betaManager');
 client.betaManager = betaManager;
@@ -637,6 +675,15 @@ async function startWithFailoverCheck() {
 }
 
 async function gracefulShutdown() {
+    // Flush any accumulated XP before stepping down so a normal restart loses
+    // nothing; the bounded periodic flush covers hard crashes.
+    try {
+        if (client?.levelingManager?.flushXp) {
+            await client.levelingManager.flushXp();
+        }
+    } catch (err) {
+        console.error('[LEVELING] Final XP flush failed:', err.message);
+    }
     await stepDown('SIGTERM/SIGINT received');
 }
 process.on('SIGTERM', gracefulShutdown);
