@@ -781,6 +781,104 @@ app.delete('/api/guilds/:guildId/birthdays/:userId', requireAuth, requireGuildAd
     }
 });
 
+// ── API: saved embeds (Embed Builder, EMBED_DATABASE_URL) ───────────────────
+//
+// The embed builder itself is client-side (localStorage draft). These routes
+// persist ONLY explicit admin actions — save / rename / duplicate / delete —
+// so Neon is never written during typing or previewing. Payloads are validated
+// as plain JSON; nothing is ever eval'd.
+
+// Shared validation: name (required, ≤100) and a JSON-able payload.
+function validateSavedEmbedBody(body) {
+    const src = (body && typeof body === 'object') ? body : {};
+    const name = typeof src.name === 'string' ? src.name.trim().slice(0, 100) : '';
+    if (!name) return { error: 'An embed name is required.' };
+    let payload = {};
+    if (src.payload !== undefined) {
+        if (typeof src.payload !== 'object' || src.payload === null || Array.isArray(src.payload)) {
+            return { error: 'Embed payload must be a JSON object.' };
+        }
+        payload = src.payload;
+    }
+    return { name, payload };
+}
+
+app.get('/api/guilds/:guildId/embeds', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const embeds = await dashboardDb.getSavedEmbeds(req.guild.id);
+        res.json({ embeds });
+    } catch (err) {
+        console.error('[API] list saved embeds error:', err.message);
+        res.status(500).json({ error: 'Failed to load saved embeds.' });
+    }
+});
+
+app.post('/api/guilds/:guildId/embeds', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const v = validateSavedEmbedBody(req.body);
+        if (v.error) return res.status(400).json({ error: v.error });
+        const embed = await dashboardDb.createSavedEmbed(req.guild.id, { name: v.name, payload: v.payload }, req.user && req.user.id);
+        recordWebsiteLog(req, `Saved embed “${v.name}”`);
+        res.json({ embed });
+    } catch (err) {
+        console.error('[API] save embed error:', err.message);
+        res.status(500).json({ error: 'Failed to save the embed.' });
+    }
+});
+
+app.patch('/api/guilds/:guildId/embeds/:id', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const id = Number(req.params.id);
+        if (!Number.isInteger(id) || id < 1) return res.status(400).json({ error: 'Invalid embed id.' });
+        const v = validateSavedEmbedBody(req.body);
+        if (v.error) return res.status(400).json({ error: v.error });
+        const patch = {};
+        if (v.name != null) patch.name = v.name;
+        if (Object.keys(v.payload || {}).length || req.body && 'payload' in (req.body || {})) patch.payload = v.payload;
+        const embed = await dashboardDb.updateSavedEmbed(req.guild.id, id, patch);
+        if (!embed) return res.status(404).json({ error: 'Saved embed not found.' });
+        if ('name' in patch) recordWebsiteLog(req, `Renamed saved embed to “${v.name}”`);
+        res.json({ embed });
+    } catch (err) {
+        console.error('[API] update saved embed error:', err.message);
+        res.status(500).json({ error: 'Failed to update the saved embed.' });
+    }
+});
+
+app.post('/api/guilds/:guildId/embeds/:id/duplicate', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const id = Number(req.params.id);
+        if (!Number.isInteger(id) || id < 1) return res.status(400).json({ error: 'Invalid embed id.' });
+        const src = await dashboardDb.getSavedEmbed(req.guild.id, id);
+        if (!src) return res.status(404).json({ error: 'Saved embed not found.' });
+        const all = await dashboardDb.getSavedEmbeds(req.guild.id);
+        const base = `${src.name} (copy)`;
+        let name = base;
+        let n = 2;
+        const names = new Set(all.map(e => e.name));
+        while (names.has(name)) { name = `${src.name} (copy ${n})`; n += 1; }
+        const embed = await dashboardDb.createSavedEmbed(req.guild.id, { name, payload: src.payload }, req.user && req.user.id);
+        recordWebsiteLog(req, `Duplicated saved embed “${src.name}” → “${name}”`);
+        res.json({ embed });
+    } catch (err) {
+        console.error('[API] duplicate saved embed error:', err.message);
+        res.status(500).json({ error: 'Failed to duplicate the saved embed.' });
+    }
+});
+
+app.delete('/api/guilds/:guildId/embeds/:id', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const id = Number(req.params.id);
+        if (!Number.isInteger(id) || id < 1) return res.status(400).json({ error: 'Invalid embed id.' });
+        await dashboardDb.deleteSavedEmbed(req.guild.id, id);
+        recordWebsiteLog(req, `Deleted saved embed #${id}`);
+        res.json({ ok: true });
+    } catch (err) {
+        console.error('[API] delete saved embed error:', err.message);
+        res.status(500).json({ error: 'Failed to delete the saved embed.' });
+    }
+});
+
 // ── API: update logging settings (channel, webhook, events) ─────────────────
 
 app.patch('/api/guilds/:guildId/logging', requireAuth, requireGuildAdmin, async (req, res) => {
@@ -1742,6 +1840,8 @@ app.get('/guild/:guildId/broadcast', requireAuth, requireGuildAdminPage, (req, r
     res.type('html').send(guildPages.broadcastPage({ guild: req.guild, user: req.user })));
 app.get('/guild/:guildId/birthdays', requireAuth, requireGuildAdminPage, (req, res) =>
     res.type('html').send(guildPages.birthdaysPage({ guild: req.guild, user: req.user })));
+app.get('/guild/:guildId/embed', requireAuth, requireGuildAdminPage, (req, res) =>
+    res.type('html').send(guildPages.embedPage({ guild: req.guild, user: req.user })));
 app.get('/guild/:guildId/logging', requireAuth, requireGuildAdminPage, (req, res) =>
     res.type('html').send(guildPages.loggingPage({ guild: req.guild, user: req.user })));
 app.get('/guild/:guildId/automod', requireAuth, requireGuildAdminPage, (req, res) =>

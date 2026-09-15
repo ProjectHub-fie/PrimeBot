@@ -27,6 +27,7 @@ const TABS = [
   { key: 'reactionroles',  label: 'Reaction Roles',  icon: 'smile' },
   { key: 'broadcast',      label: 'Broadcasts',      icon: 'megaphone' },
   { key: 'birthdays',      label: 'Birthdays',       icon: 'cake' },
+  { key: 'embed',          label: 'Embed',           icon: 'message' },
   { key: 'logging',        label: 'Logging',         icon: 'scroll' },
   { key: 'automod',        label: 'Automod',         icon: 'shield' },
   { key: 'tickets',        label: 'Tickets',         icon: 'ticket' },

@@ -3166,3 +3166,153 @@ select:focus {
   .edb-save-state.saving .edb-save-dot { animation: none !important; }
   .edb-region { transition: none !important; }
 }
+
+/* ── Embed Builder (Features → Embed) ───────────────────────────────────────
+ * A premium Discord embed builder: builder (left) + sticky live preview
+ * (right) on desktop, single-column stacked on mobile. All controls reuse the
+ * existing edb-* design system from the ticket editor for visual consistency.
+ * The builder is fluid-first (minmax(0,…), clamp()) so it never overflows. */
+.embed-builder-card .card-title { align-items: center; gap: 12px; }
+.embed-builder-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+  color: #f8c97a;
+  background: rgba(240, 178, 50, 0.12);
+  border: 1px solid rgba(240, 178, 50, 0.35);
+  border-radius: 999px;
+  padding: 4px 12px;
+  white-space: nowrap;
+}
+@media (max-width: 640px) {
+  .embed-builder-card .card-title { flex-wrap: wrap; }
+}
+
+.embed-builder-toolbar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  margin: 14px 0 4px;
+}
+.embed-builder-toolbar .btn { white-space: nowrap; }
+
+.embed-templates {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 10px 0 2px;
+}
+.embed-templates-label {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #949ba4;
+  flex: 0 0 auto;
+}
+.embed-templates-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.embed-template-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 600; color: #c7cbcf;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 999px;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+  white-space: nowrap;
+}
+.embed-template-chip .ico { width: 13px; height: 13px; }
+.embed-template-chip:hover {
+  border-color: rgba(88, 101, 242, 0.55);
+  background: rgba(88, 101, 242, 0.1);
+  color: #fff;
+}
+
+.embed-builder-grid { margin-top: 12px; }
+
+/* Disabled region style (section greyed when its enable-switch is off). */
+.edb-region.embed-region-disabled { opacity: 0.55; }
+.edb-region.embed-region-disabled input,
+.edb-region.embed-region-disabled textarea { color: #6a7078; }
+
+.edb-region .edb-section-title { display: inline-flex; align-items: center; gap: 7px; }
+.edb-region .edb-section-title .ico { width: 14px; height: 14px; color: var(--accent-strong); }
+.embed-fields-count {
+  font-size: 10px; font-weight: 600; color: #8f949e;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 999px;
+  padding: 2px 8px;
+  margin-left: 4px;
+  vertical-align: 1px;
+}
+.edb-field .edb-counter { margin-top: 3px; }
+
+/* Validation strip under the preview. */
+.edb-validation-strip {
+  margin-top: 10px;
+  display: flex; flex-direction: column; gap: 4px;
+  min-height: 0;
+}
+.edb-validation-strip p { margin: 0; font-size: 11.5px; line-height: 1.4; overflow-wrap: anywhere; }
+.edb-validation-strip .edb-validation-error { color: #f23f43; }
+.edb-validation-strip .edb-validation-warn { color: #f0b232; }
+.edb-validation-strip .edb-validation-ok { color: #3ba55d; }
+.edb-validation-strip.has-error { padding: 8px 10px; background: rgba(242, 63, 67, 0.08); border: 1px solid rgba(242, 63, 67, 0.3); border-radius: 8px; }
+.edb-validation-strip.has-warn { padding: 8px 10px; background: rgba(240, 178, 50, 0.08); border: 1px solid rgba(240, 178, 50, 0.3); border-radius: 8px; }
+
+.edb-input-over { border-color: #f23f43 !important; }
+
+/* Drag + drop reordering visual. */
+.edb-field-card.dragging { opacity: 0.5; border-color: rgba(88, 101, 242, 0.7); }
+.edb-grip { cursor: grab; }
+.edb-grip:active { cursor: grabbing; }
+
+/* Saved embeds list. */
+.embed-builder-saved {
+  margin-top: 22px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  padding-top: 16px;
+}
+.embed-saved-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.embed-saved-search {
+  font-size: 13px; color: #e9ecf3;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  padding: 7px 10px;
+  width: min(220px, 100%);
+  box-sizing: border-box;
+  outline: none;
+}
+.embed-saved-search:focus { border-color: rgba(88, 101, 242, 0.7); }
+#eb-saved-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.embed-saved-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  background: var(--surface-2, #232428);
+  border: 1px solid var(--border-soft, rgba(255, 255, 255, 0.08));
+  border-radius: 10px;
+  padding: 10px 12px;
+  flex-wrap: wrap;
+}
+.embed-saved-name { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.embed-saved-name > span {
+  font-size: 13.5px; font-weight: 600; color: #e9ecf3;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+}
+.embed-saved-meta { font-size: 11px; color: #7d848c; }
+.embed-saved-actions-group { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+
+/* Save / rename modal (reuses the shared floating-window modal). */
+.eb-modal { width: min(480px, 95vw); }
+.eb-modal .modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.eb-modal .edb-validation-strip { margin-top: 4px; }
+
+/* Field inline switch inside the builder. */
+.edb-field-inline { display: flex; align-items: center; gap: 8px; }
+
+/* Responsive: single-column builder → preview on smaller content widths; the
+ * sticky preview is disabled and the builder comes first in the flow. */
+@media (max-width: 1000px) {
+  .embed-builder-grid .edb-builder-cols { grid-template-columns: 1fr; gap: 18px; }
+  .embed-builder-grid .edb-builder-right { position: static; order: 2; }
+  .embed-builder-grid .edb-builder-left { order: 1; }
+}
+@media (max-width: 480px) {
+  .embed-saved-row { align-items: flex-start; }
+  .embed-saved-actions-group { width: 100%; }
+  .embed-builder-toolbar .btn,
+  .embed-saved-actions .btn { flex: 1 1 auto; }
+  .embed-template-chip { flex: 0 0 auto; }
+}
