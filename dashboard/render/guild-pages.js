@@ -265,7 +265,7 @@ function badgesPage({ guild, user }) {
         .map(b => badgeCardHTML({ ...b, type: 'special' }, { awardable: true })).join('');
 
     const innerPanelHTML = `
-      <div class="card-title"><span><span class="icon">${svgIcon('award')}</span> Badges <span class="beta-badge">BETA</span></span></div>
+      <div class="card-title"><span><span class="icon">${svgIcon('award')}</span> Badges <span class="beta-badge">BETA</span></span><span class="card-title-actions"><span class="embed-builder-badge">Premium features in free</span></span></div>
       <div class="beta-banner">${svgIcon('flask')} This feature is in beta — expect changes. Please report any issues.</div>
       <p class="card-desc">Members earn level badges automatically as they level up. Server admins can award achievement and special badges to recognize community contributions.</p>
 
@@ -359,7 +359,7 @@ function roleRewardsPage({ guild, user }) {
     const rewardRows = roleRewards.map(r => levelingRewardRowHTML(r, guild._roles)).join('');
     const panelHTML = `
     <div class="card${guild._beta ? '' : ' beta-locked-card'}">
-      <div class="card-title"><span><span class="icon">${svgIcon('gift')}</span> Role Rewards <span class="beta-badge">BETA</span></span></div>
+      <div class="card-title"><span><span class="icon">${svgIcon('gift')}</span> Role Rewards <span class="beta-badge">BETA</span></span><span class="card-title-actions"><span class="embed-builder-badge">Premium features in free</span></span></div>
       <div class="beta-banner">${svgIcon('flask')} This feature is in beta — expect changes. Please report any issues.</div>
       <div class="beta-locked-wrap${guild._beta ? '' : ' locked'}">
         <p class="card-desc">Automatically grant a role when a member reaches a level. Roles are saved to the database and persist across bot restarts.</p>
@@ -1696,6 +1696,17 @@ function embedPage({ guild, user }) {
       </div>
       <p class="card-desc">Build a professional Discord embed visually, then copy the JSON payload or save it for later. Everything stays in your browser while you type — nothing is written to the database until you explicitly save.</p>
 
+      <div class="card-hint embed-send-hint">
+        <div class="esh-title">${svgIcon('send')} Sending a saved embed to a channel</div>
+        <p>After you save an embed here, post it in Discord with the bot — no need to rebuild it:</p>
+        <ul>
+          <li><code>/embed send embed:&lt;name&gt; #channel</code> — slash command (channel optional, defaults to the current one)</li>
+          <li><code>$embed send &lt;name&gt; #channel</code> — prefix command (same options)</li>
+          <li><code>/embed list</code> or <code>$embed list</code> — see every embed saved for this server</li>
+        </ul>
+        <p class="esh-note">The sender needs the <strong>Manage Server</strong> permission, and PrimeBot needs <strong>Send Messages</strong> + <strong>Embed Links</strong> in the target channel.</p>
+      </div>
+
       <div class="embed-builder-toolbar">
         <button type="button" class="btn btn-secondary btn-sm" id="eb-import-json" title="Import a Discord embed/message JSON">${svgIcon('download')} Import JSON</button>
         <button type="button" class="btn btn-secondary btn-sm" id="eb-export-json" title="Copy the embed as Discord-compatible JSON">${svgIcon('copy')} Copy JSON</button>
@@ -1906,7 +1917,7 @@ function embedBuilderSectionsHTML(fieldCardShell) {
 function livePollsPage({ guild, user }) {
     const panelHTML = `
     <div class="card">
-      <div class="card-title"><span><span class="icon">${svgIcon('barChart')}</span> Live Polls</span><button class="btn btn-secondary live-refresh-btn" id="live-refresh">${svgIcon("refresh")} Refresh</button></div>
+      <div class="card-title"><span><span class="icon">${svgIcon('barChart')}</span> Live Polls</span><span class="card-title-actions"><span class="embed-builder-badge">Premium features in free</span><button class="btn btn-secondary live-refresh-btn" id="live-refresh">${svgIcon("refresh")} Refresh</button></span></div>
       <p class="card-desc">Live polls created in <strong>${esc(guild.name)}</strong> — running and recently ended. Live polls are cross-server: anyone can join with the pass code from any server where PrimeBot is present.</p>
       <p class="card-hint">Create one in Discord with <code>$lpoll</code>. See <a href="/live/polls">all live polls across PrimeBot →</a></p>
       <div id="live-content"><p class="live-empty">Loading live polls…</p></div>
@@ -1922,7 +1933,7 @@ function livePollsPage({ guild, user }) {
 function liveGiveawaysPage({ guild, user }) {
     const panelHTML = `
     <div class="card">
-      <div class="card-title"><span><span class="icon">${svgIcon('gift')}</span> Live Giveaways</span><button class="btn btn-secondary live-refresh-btn" id="live-refresh">${svgIcon("refresh")} Refresh</button></div>
+      <div class="card-title"><span><span class="icon">${svgIcon('gift')}</span> Live Giveaways</span><span class="card-title-actions"><span class="embed-builder-badge">Premium features in free</span><button class="btn btn-secondary live-refresh-btn" id="live-refresh">${svgIcon("refresh")} Refresh</button></span></div>
       <p class="card-desc">Live giveaways created in <strong>${esc(guild.name)}</strong> — running and recently ended. Live giveaways are cross-server: anyone can join with the pass code from any server where PrimeBot is present.</p>
       <p class="card-hint">Create one in Discord with <code>$lgiveway</code>. See <a href="/live/giveaways">all live giveaways across PrimeBot →</a></p>
       <div id="live-content"><p class="live-empty">Loading live giveaways…</p></div>

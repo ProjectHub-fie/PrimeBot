@@ -171,6 +171,8 @@ async function showSashHelp(interaction, page) {
             title: '⚙️ Sash Administration',
             desc: 'Advanced server configuration via sash (Admin):',
             fields: [
+                { name: `${prefix}embed send <name|id> [#channel]`, value: 'Send an embed saved in the dashboard Embed Builder' },
+                { name: `${prefix}embed list`, value: 'List this server\'s saved embeds' },
                 { name: `${prefix}welcome-enable`, value: 'Enable welcome system' },
                 { name: `${prefix}welcome-disable`, value: 'Disable welcome system' },
                 { name: `${prefix}welcome-channel #channel`, value: 'Set welcome channel' },
@@ -426,6 +428,18 @@ module.exports = {
             }
             // Log interaction for debugging
             interactionDebugger.logInteraction(interaction, 'Incoming Interaction');
+
+            // Handle slash-command autocomplete (e.g. /embed send).
+            if (interaction.isAutocomplete()) {
+                const command = client.commands.get(interaction.commandName);
+                if (command && typeof command.autocomplete === 'function') {
+                    await command.autocomplete(interaction).catch((err) =>
+                        console.error(`[AUTOCOMPLETE] /${interaction.commandName} failed:`, err.message));
+                } else {
+                    await interaction.respond([]).catch(() => {});
+                }
+                return;
+            }
 
             // Handle slash commands
             if (interaction.isChatInputCommand()) {

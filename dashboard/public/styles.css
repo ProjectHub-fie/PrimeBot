@@ -3187,6 +3187,37 @@ select:focus {
   .embed-builder-card .card-title { flex-wrap: wrap; }
 }
 
+/* Grouped title-right cluster (badge + optional action button, e.g. Refresh). */
+.card-title-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* "How to send this embed" callout on the Embed Builder page. */
+.embed-send-hint {
+  display: block;
+  padding: 12px 14px;
+  margin: 0 0 16px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  border: 1px solid var(--border-soft);
+}
+.embed-send-hint .esh-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-weight: 700;
+  color: var(--text);
+}
+.embed-send-hint .esh-title .ico { width: 16px; height: 16px; color: var(--accent-strong); }
+.embed-send-hint ul { margin: 8px 0; padding-left: 20px; }
+.embed-send-hint li { margin: 4px 0; }
+.embed-send-hint .esh-note { margin: 8px 0 0; opacity: 0.85; }
+
 .embed-builder-toolbar {
   display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
   margin: 14px 0 4px;

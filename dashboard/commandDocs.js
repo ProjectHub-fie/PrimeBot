@@ -167,6 +167,12 @@ const METADATA = {
         description: 'Make the bot repeat a message in the channel.',
         usage: ['echo <message>'],
     },
+    embed: {
+        category: 'Configuration', permission: MANAGE_GUILD,
+        description: 'Send an embed built and saved in the dashboard Embed Builder (Features \u2192 Embed) into a channel. Saving an embed stores it per-server, and this command posts it without rebuilding it.',
+        usage: ['embed send <name|id> [#channel]', 'embed list'],
+        note: 'Slash equivalent: /embed send | /embed list',
+    },
     poll: {
         category: 'Polls',
         description: 'Create a timed reaction poll with two or more options (24 hours by default).',

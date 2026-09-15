@@ -147,6 +147,7 @@ const CATALOG = {
         color: config.colors.error,
         description: 'Feature configuration (Admin only):',
         commands: [
+            { names: ['embed'], args: '<send|list>', desc: 'Send an embed saved in the dashboard Embed Builder' },
             { names: ['autoreact', 'auto-react'], args: '<enable|disable|add|remove|list>', desc: 'Configure auto-reactions' },
             { names: ['autoresponder', 'auto-responder', 'aresponder', 'ar'], args: '<enable|disable|add|exact|remove|list>', desc: 'Configure the auto-responder' },
             { names: ['level-enable', 'levelenable', 'leveling-enable', 'levelingon'], desc: 'Enable the leveling system' },

@@ -243,6 +243,8 @@ async function showCategoryHelp(interaction, category) {
                 .setTitle('⚙️ Administration')
                 .setDescription('Advanced server configuration (Admin only):')
                 .addFields(
+                    { name: '/embed send', value: 'Send an embed saved in the dashboard Embed Builder (Manage Server)', inline: true },
+                    { name: '/embed list', value: 'List this server\'s saved embeds (Manage Server)', inline: true },
                     { name: '/broadcastsettings', value: 'Configure broadcast system settings', inline: true },
                     { name: '/sync configure', value: 'Set up automatic role/badge syncing', inline: true },
                     { name: '/leveling settings', value: 'Advanced leveling system configuration', inline: true },
