@@ -55,3 +55,36 @@ function withEnv(overrides, fn) {
 
   console.log('tokenResolver tests passed');
 })();
+
+// ───────────────────────────────────────────────────────────────────────────
+// $tokentest reads DISCORD_TOKEN, by design.
+//
+// The command shells out to `node token-test.js` from the RUNNING bot, and
+// index.js exports the resolved token as DISCORD_TOKEN (`process.env.DISCORD_TOKEN
+// = token`), so the child process inherits it no matter which variable the
+// deployment sets (DISCORD_TOKEN2 / BOT_TOKEN / ...). token-test.js therefore
+// reads the generic DISCORD_TOKEN on purpose — do not "fix" it to call
+// resolveDiscordToken(), the inherited env var is the contract.
+// ───────────────────────────────────────────────────────────────────────────
+(function runTokenTestWiring() {
+  const script = fs.readFileSync(path.join(__dirname, '..', 'token-test.js'), 'utf8');
+
+  assert.ok(
+    /process\.env\.DISCORD_TOKEN\b/.test(script),
+    'token-test.js reads process.env.DISCORD_TOKEN'
+  );
+  assert.ok(
+    !/resolveDiscordToken\(/.test(script),
+    'token-test.js must not re-resolve — the parent bot already exports ' +
+    'the resolved token as DISCORD_TOKEN for the child process'
+  );
+
+  // index.js is the other half of that contract.
+  const indexSrc = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
+  assert.ok(
+    /process\.env\.DISCORD_TOKEN = token/.test(indexSrc),
+    'index.js exports the resolved token as DISCORD_TOKEN so child processes inherit it'
+  );
+
+  console.log('tokenTest wiring tests passed');
+})();
