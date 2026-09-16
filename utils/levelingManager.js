@@ -7,6 +7,7 @@
 
 const { EmbedBuilder } = require('discord.js');
 const { eq, and, desc, count } = require('drizzle-orm');
+const { AdaptivePoller } = require('./adaptivePoller');
 const fs = require('fs');
 const path = require('path');
 const config = require('../config');
@@ -25,7 +26,25 @@ class LevelingManager {
         // settings) so a bot restart or dashboard save is reflected.
         this._roleRewards = new Map();
         this._roleRewardsTimer = null;
-        this._roleRewardsReloadTimer = null;
+
+        // ─ Batched XP writes ────────────────────────────────────────────────
+        //
+        // XP used to be a `SELECT` + `UPDATE` per eligible message — the single
+        // highest-frequency write in the bot, and by far the biggest Neon
+        // workload driver. Gains now accumulate in memory and are flushed with
+        // ONE batched upsert, so a busy guild costs a fraction of the writes.
+        //
+        // Correctness / data-loss bounds:
+        //   • a user's XP is only credited to the DB on flush, and each message
+        //     keeps at most one pending entry (repeated messages just bump the
+        //     counters), so nothing is double-counted;
+        //   • a level-up flushes that user immediately (correct level-up
+        //     announcement + role/badge awards, no lag);
+        //   • a periodic flush bounds how much XP can be lost if the process
+        //     dies unexpectedly, and a graceful shutdown flushes synchronously.
+        this._xpPending = new Map(); // `${guildId}:${userId}` -> accumulated delta
+        this._xpFlushing = false;
+        this._xpFlushTimer = null;
 
         // Purge expired cooldown entries every 5 minutes to prevent unbounded Map growth
         this.cooldownCleanupInterval = setInterval(() => {
@@ -37,6 +56,174 @@ class LevelingManager {
 
         // Initialize database connection
         this.initializeDatabase();
+    }
+
+    // ── Batched XP flush ────────────────────────────────────────────────────
+
+    _flushMs() {
+        const raw = parseInt(process.env.LEVELING_FLUSH_INTERVAL_MS, 10);
+        return Number.isFinite(raw) && raw >= 0 ? raw : 30000;
+    }
+
+    _startXpFlushTimer() {
+        if (this._xpFlushTimer) return;
+        const ms = this._flushMs();
+        if (ms <= 0) return; // 0 disables batching (write-through, used by tests)
+        this._xpFlushTimer = setInterval(() => {
+            this.flushXp().catch(err =>
+                console.error('[LEVELING] XP flush failed:', err.message)
+            );
+        }, ms);
+        this._xpFlushTimer.unref?.();
+    }
+
+    /**
+     * Credit XP for a message.
+     *
+     * The message counter and cooldown are applied in memory (they decide level
+     * ups and rate limiting, both of which must be immediate), while the XP delta
+     * is accumulated for the next batched flush. A user's authoritative totals
+     * are read once per flush window rather than once per message.
+     */
+    _accumulateXp(guildId, userId, xpGain) {
+        const key = `${guildId}:${userId}`;
+        let entry = this._xpPending.get(key);
+
+        if (!entry) {
+            entry = { guildId, userId, base: null, xp: 0, messages: 0, lastMessage: new Date() };
+            this._xpPending.set(key, entry);
+            entry._basePromise = this._loadXpBase(guildId, userId)
+                .then(base => { entry.base = base; })
+                .catch(() => { entry.base = null; });
+        }
+
+        entry.xp += xpGain;
+        entry.messages += 1;
+        entry.lastMessage = new Date();
+
+        const base = entry.base || { xp: 0, level: 0, messages: 0 };
+        return {
+            waitForBase: () => entry._basePromise,
+            oldLevel: base.level,
+            newLevel: this.calculateLevel(base.messages + entry.messages),
+            xp: base.xp + entry.xp,
+            messages: base.messages + entry.messages,
+            lastMessage: new Date(),
+        };
+    }
+
+    /** Read a user's current totals (once per flush window, not per message). */
+    async _loadXpBase(guildId, userId) {
+        const rows = await this.db.select({
+            xp: this.schema.userLevels.xp,
+            level: this.schema.userLevels.level,
+            messages: this.schema.userLevels.messages,
+        })
+            .from(this.schema.userLevels)
+            .where(and(
+                eq(this.schema.userLevels.guildId, guildId),
+                eq(this.schema.userLevels.userId, userId)
+            ))
+            .limit(1);
+        const row = rows[0];
+        return {
+            xp: row ? (row.xp || 0) : 0,
+            level: row ? (row.level || 0) : 0,
+            messages: row ? (row.messages || 0) : 0,
+        };
+    }
+
+    /**
+     * Persist every accumulated XP delta with a constant number of statements.
+     *
+     * `user_levels` has no unique constraint on (guild_id, user_id), so ON
+     * CONFLICT is not available. Two set-based statements cover every pending
+     * user: one inserts rows that don't exist yet, one increments the rows that
+     * do. Both are O(1) statements regardless of how many users are pending, and
+     * both increment counters (never overwrite), so a retried flush cannot
+     * double-count and concurrent writers cannot clobber each other.
+     *
+     * Entries whose base read failed are skipped and left pending, so no XP is
+     * dropped or mis-attributed.
+     */
+    async flushXp() {
+        if (this._xpFlushing) return 0;
+        if (!this.dbReady || !this.db || !this._xpPending.size) return 0;
+
+        const { levelingPool } = require('../server/levelingDb');
+
+        const written = []; // { key, entry, xp, messages }
+        for (const [key, entry] of this._xpPending.entries()) {
+            if (entry._basePromise) await entry._basePromise;
+            if (!entry.base) {
+                // Retry the base read on the next tick instead of dropping XP.
+                entry._basePromise = this._loadXpBase(entry.guildId, entry.userId)
+                    .then(base => { entry.base = base; })
+                    .catch(() => { entry.base = null; });
+                continue;
+            }
+            written.push({ key, entry, xp: entry.xp, messages: entry.messages });
+        }
+        if (!written.length) return 0;
+
+        const valuesSql = [];
+        const params = [];
+        let p = 1;
+        for (const w of written) {
+            valuesSql.push(`($${p++}, $${p++}, $${p++}, $${p++}, $${p++})`);
+            params.push(w.entry.guildId, w.entry.userId, w.entry.base.xp + w.xp,
+                this.calculateLevel(w.entry.base.messages + w.messages),
+                w.entry.base.messages + w.messages);
+        }
+        const values = `(VALUES ${valuesSql.join(', ')}) AS v(guild_id, user_id, xp, level, messages)`;
+
+        this._xpFlushing = true;
+        try {
+            // Insert rows that don't exist yet with ZERO counters — the UPDATE
+            // below then applies the accumulated delta exactly once. (Starting
+            // from base 0 is correct because _loadXpBase() returns zeroes when
+            // no row exists.) Writing the full value here AND incrementing below
+            // would double-count.
+            await levelingPool.query(
+                `INSERT INTO user_levels (guild_id, user_id, xp, level, messages, last_message, created_at, updated_at)
+                 SELECT v.guild_id, v.user_id, 0, v.level, 0, NOW(), NOW(), NOW()
+                 FROM ${values}
+                 WHERE NOT EXISTS (
+                     SELECT 1 FROM user_levels u
+                     WHERE u.guild_id = v.guild_id AND u.user_id = v.user_id
+                 )`,
+                params
+            );
+
+            await levelingPool.query(
+                `UPDATE user_levels u
+                 SET xp = u.xp + v.xp,
+                     messages = u.messages + v.messages,
+                     level = v.level,
+                     last_message = NOW(),
+                     updated_at = NOW()
+                 FROM ${values}
+                 WHERE u.guild_id = v.guild_id AND u.user_id = v.user_id`,
+                params
+            );
+
+            // Advance each entry's base by exactly what was written and drop only
+            // the amounts persisted here, so anything merged during the await
+            // stays pending without being double-counted.
+            for (const w of written) {
+                w.entry.base.xp += w.xp;
+                w.entry.base.messages += w.messages;
+                w.entry.xp -= w.xp;
+                w.entry.messages -= w.messages;
+                if (w.entry.xp <= 0 && w.entry.messages <= 0) this._xpPending.delete(w.key);
+            }
+            return written.length;
+        } catch (err) {
+            console.error('[LEVELING] Batched XP flush failed:', err.message);
+            return 0; // deltas stay pending and are retried next tick
+        } finally {
+            this._xpFlushing = false;
+        }
     }
 
     async initializeDatabase() {
@@ -61,6 +248,9 @@ class LevelingManager {
             await this._loadRoleRewards();
             this._startRoleRewardsReload();
 
+            // Start the batched XP flush loop (bounded XP loss on crash).
+            this._startXpFlushTimer();
+
             console.log('✅ LevelingManager fully initialized and ready');
         } catch (error) {
             console.error('❌ LevelingManager database initialization failed:', error);
@@ -73,38 +263,36 @@ class LevelingManager {
     // ── Role rewards caching (DB-backed, re-read like welcome settings) ──────
 
     async _loadRoleRewards() {
-        if (!this.dbReady) return;
+        if (!this.dbReady) return false;
         try {
             const { getAllLevelingRoleRewards } = require('../server/levelingDb');
             const all = await getAllLevelingRoleRewards();
             // Preserve in-memory-only rows for guilds that have no DB rows yet
             // (avoids wiping rewards added before the table existed) — merge.
+            let changed = false;
             for (const [gid, rows] of all.entries()) {
+                const previous = this._roleRewards.get(gid);
+                if (!previous || JSON.stringify(previous) !== JSON.stringify(rows)) changed = true;
                 this._roleRewards.set(gid, rows);
             }
+            return changed;
         } catch (err) {
             console.error('[LEVELING] Failed to load role rewards:', err.message);
+            return false;
         }
     }
 
     _startRoleRewardsReload() {
         if (this._roleRewardsTimer) return;
-        // 5s refresh + ~30s full re-read, mirroring the welcome settings pattern,
-        // so dashboard-created rewards reach the bot without a restart.
-        const ms = parseInt(process.env.SETTINGS_RELOAD_INTERVAL_MS, 10) || 60000;
-        const refreshMs = parseInt(process.env.SETTINGS_REFRESH_INTERVAL_MS, 10) || 15000;
-        this._roleRewardsTimer = setInterval(() => {
-            this._loadRoleRewards().catch(err =>
-                console.error('[LEVELING] Role rewards refresh failed:', err.message)
-            );
-        }, refreshMs);
-        this._roleRewardsTimer.unref?.();
-        this._roleRewardsReloadTimer = setInterval(() => {
-            this._loadRoleRewards().catch(err =>
-                console.error('[LEVELING] Role rewards background reload failed:', err.message)
-            );
-        }, ms);
-        this._roleRewardsReloadTimer.unref?.();
+        // One adaptive poller replaces the previous fixed 5s + 30s pair (both
+        // ran the same full-table read of leveling_role_rewards). It refreshes
+        // quickly after a dashboard edit and backs off while the table is quiet,
+        // so an idle deployment stops waking Neon.
+        this._roleRewardsTimer = new AdaptivePoller({
+            name: 'LEVELING',
+            task: () => this._loadRoleRewards(),
+        });
+        this._roleRewardsTimer.start();
     }
 
     /**
@@ -298,79 +486,36 @@ class LevelingManager {
 
         const guildId = message.guild.id;
         const userId = message.author.id;
-        
+
         try {
-            // Get or create user data
-            let userData = await this.db.select()
-                .from(this.schema.userLevels)
-                .where(and(
-                    eq(this.schema.userLevels.guildId, guildId),
-                    eq(this.schema.userLevels.userId, userId)
-                ))
-                .limit(1);
-
-            if (userData.length === 0) {
-                // Create new user
-                await this.db.insert(this.schema.userLevels).values({
-                    guildId: guildId,
-                    userId: userId,
-                    xp: 0,
-                    level: 0,
-                    messages: 0,
-                    lastMessage: new Date(),
-                    createdAt: new Date(),
-                    updatedAt: new Date()
-                });
-
-                userData = [{
-                    xp: 0,
-                    level: 0,
-                    messages: 0,
-                    lastMessage: new Date()
-                }];
-            }
-
-            const user = userData[0];
-            
             // Calculate XP to award with server multiplier
             const baseXP = config.leveling.xpPerMessage;
             const randomBonus = Math.floor(Math.random() * (config.leveling.maxRandomBonus + 1));
             const xpGain = Math.floor((baseXP + randomBonus) * multiplier);
-            
-            // Update user data
-            const oldLevel = user.level;
-            const newXP = user.xp + xpGain;
-            const newMessages = user.messages + 1;
-            
-            // Calculate new level based on messages (not XP)
-            const newLevel = this.calculateLevel(newMessages);
-            
-            // Update database
-            await this.db.update(this.schema.userLevels)
-                .set({
-                    xp: newXP,
-                    level: newLevel,
-                    messages: newMessages,
-                    lastMessage: new Date(),
-                    updatedAt: new Date()
-                })
-                .where(and(
-                    eq(this.schema.userLevels.guildId, guildId),
-                    eq(this.schema.userLevels.userId, userId)
-                ));
-            
-            // Check for level up
+
+            // Accumulate in memory (no per-message SELECT/UPDATE). The user's
+            // authoritative totals are read once per flush window, so level ups
+            // and cooldowns stay immediate while the write itself is batched.
+            const acc = this._accumulateXp(guildId, userId, xpGain);
+            await acc.waitForBase();
+
+            const entry = this._xpPending.get(`${guildId}:${userId}`);
+            if (!entry || !entry.base) return; // base read failed — retried by the poller
+            const oldLevel = entry.base.level;
+            const newLevel = this.calculateLevel(entry.base.messages + entry.messages);
+
             if (newLevel > oldLevel) {
-                // Level up!
-                const updatedUserData = {
-                    xp: newXP,
+                // Persist this user's XP before announcing, so the level-up
+                // message and any role/badge awards reflect committed data.
+                await this.flushXp();
+                await this.handleLevelUp(message, {
+                    xp: entry.base.xp + entry.xp,
                     level: newLevel,
-                    messages: newMessages,
+                    messages: entry.base.messages + entry.messages,
                     lastMessage: new Date()
-                };
-                await this.handleLevelUp(message, updatedUserData, oldLevel, newLevel);
+                }, oldLevel, newLevel);
             }
-            
+
         } catch (error) {
             console.error('[LEVELING] Error awarding XP:', error);
         }

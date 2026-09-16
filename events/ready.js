@@ -79,20 +79,32 @@ module.exports = {
             logServerActivity(`- ${guild.name} (ID: ${guild.id}, Members: ${guild.memberCount})`);
         });
 
-        // Start live poll checking system
+        // Start live poll checking system. The sweeps are adaptive: an expired poll
+        // or giveaway is rare, so a fixed 60s scan kept Neon awake around the
+        // clock for an almost-always-empty result. Both back off while nothing
+        // is due and snap back to the fast interval when one is found (or when a
+        // new poll/giveaway is created — see notifyActivity()).
+        const { AdaptivePoller } = require('../utils/adaptivePoller');
+
         if (client.livePollManager) {
             console.log('Poll checking system started.');
-            setInterval(() => {
-                client.livePollManager.checkExpiredPolls();
-            }, 60000); // Check every minute
+            client._livePollPoller = new AdaptivePoller({
+                name: 'LIVE POLLS',
+                task: () => client.livePollManager.checkExpiredPolls(),
+                initialMs: 60000,
+            });
+            client._livePollPoller.start();
         }
 
         // Start live giveaway checking system
         if (client.liveGiveawayManager) {
             console.log('Live giveaway checking system started.');
-            setInterval(() => {
-                client.liveGiveawayManager.checkExpiredGiveaways().catch(() => {});
-            }, 60000); // Check every minute
+            client._liveGiveawayPoller = new AdaptivePoller({
+                name: 'LIVE GIVEAWAYS',
+                task: () => client.liveGiveawayManager.checkExpiredGiveaways(),
+                initialMs: 60000,
+            });
+            client._liveGiveawayPoller.start();
         }
 
         // Event scheduler is self-driving (its own exec loop); just restore

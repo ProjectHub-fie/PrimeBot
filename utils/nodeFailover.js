@@ -103,6 +103,55 @@ async function writeHeartbeat(role, active) {
     `);
 }
 
+/**
+ * Heartbeat + lease refresh in ONE round trip.
+ *
+ * These ran as two separate statements every 30s for the life of the process, so
+ * the connection/scheduling overhead was paid twice. Neither can be deferred or
+ * backed off (the failover lease is a liveness guarantee), but they can share a
+ * single statement: the heartbeat upsert runs in a data-modifying CTE and the
+ * lease UPDATE is the outer command, whose row count is the "still hold the
+ * lease" signal the caller expects.
+ *
+ * @returns {Promise<boolean>} true when this node still holds the lease.
+ */
+async function writeHeartbeatWithLease(role) {
+    await ensureTable();
+    if (!leaseTableReady) {
+        try { await ensureLeaseTable(); } catch (_) { /* handled below */ }
+    }
+
+    let guildCount = null;
+    let memberCount = null;
+    if (statsProvider) {
+        try {
+            const stats = await statsProvider();
+            if (stats && Number.isFinite(Number(stats.guildCount))) guildCount = Number(stats.guildCount);
+            if (stats && Number.isFinite(Number(stats.memberCount))) memberCount = Number(stats.memberCount);
+        } catch (err) {
+            console.warn('[FAILOVER] stats provider failed (heartbeat continues):', err.message);
+        }
+    }
+
+    const result = await seasonDb.execute(sql`
+        WITH hb AS (
+            INSERT INTO bot_node_status (role, node_name, last_heartbeat, active, guild_count, member_count)
+            VALUES (${role}, ${NODE_NAME}, NOW(), true, ${guildCount}, ${memberCount})
+            ON CONFLICT (role) DO UPDATE SET
+                node_name = EXCLUDED.node_name,
+                last_heartbeat = NOW(),
+                active = EXCLUDED.active,
+                guild_count = EXCLUDED.guild_count,
+                member_count = EXCLUDED.member_count
+            RETURNING 1
+        )
+        UPDATE bot_failover_lock
+        SET last_seen = NOW(), owner_role = ${role}
+        WHERE id = 1 AND owner_node_name = ${NODE_NAME}
+    `);
+    return Number(result?.rowCount || 0) > 0;
+}
+
 async function getStatus(role) {
     await ensureTable();
     // Compute heartbeat age using the DATABASE's clock (NOW()), not this
@@ -160,15 +209,29 @@ function startHeartbeatLoop(role, onLeaseStolen) {
         .then(() => console.log(`[FAILOVER] Initial heartbeat written for role=${role} node=${NODE_NAME}`))
         .catch(err => console.error(`[FAILOVER] Heartbeat write failed for ${role}:`, err.message));
     heartbeatTimer = setInterval(() => {
-        writeHeartbeat(role, true)
-            .then(() => refreshLease(NODE_NAME, role))
+        // One combined statement instead of the previous heartbeat-write +
+        // lease-refresh pair. This loop runs for the life of the process, so
+        // halving its round trips is a permanent saving. If the combined
+        // statement ever fails, fall back to the two original calls so failover
+        // correctness never depends on the optimisation.
+        writeHeartbeatWithLease(role)
             .then(stillHaveLease => {
                 if (!stillHaveLease && typeof onLeaseStolen === 'function') {
                     console.warn(`[FAILOVER] Lease no longer held for ${role} (stolen by higher-priority node). Triggering step-down.`);
                     onLeaseStolen();
                 }
             })
-            .catch(err => console.error(`[FAILOVER] Heartbeat write failed for ${role}:`, err.message));
+            .catch(() => {
+                writeHeartbeat(role, true)
+                    .then(() => refreshLease(NODE_NAME, role))
+                    .then(stillHaveLease => {
+                        if (!stillHaveLease && typeof onLeaseStolen === 'function') {
+                            console.warn(`[FAILOVER] Lease no longer held for ${role} (stolen by higher-priority node). Triggering step-down.`);
+                            onLeaseStolen();
+                        }
+                    })
+                    .catch(err => console.error(`[FAILOVER] Heartbeat write failed for ${role}:`, err.message));
+            });
     }, HEARTBEAT_INTERVAL_MS);
 }
 
@@ -413,6 +476,7 @@ module.exports = {
     MONITOR_INTERVAL_MS,
     ensureTable,
     writeHeartbeat,
+    writeHeartbeatWithLease,
     setStatsProvider,
     getStatus,
     getPrimaryAgeMs,

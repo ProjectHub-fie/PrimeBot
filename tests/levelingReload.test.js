@@ -1,9 +1,12 @@
 // Regression test for "Cannot access 'refreshMs' before initialization".
 // _startRoleRewardsReload() used to reference `refreshMs` (a `const`
 // declared later in the same scope) in the first `setInterval` — a JS
-// temporal-dead-zone ReferenceErrorthat made LevelingManager's
-// initializeDatabase() retry forever. The `const` declarations must come
-// before any use.
+// temporal-dead-zone ReferenceError that made LevelingManager's
+// initializeDatabase() retry forever.
+//
+// That bug is structurally impossible now: a single adaptive poller replaced
+// the two fixed timers, so there is no `refreshMs` const to reference and the
+// manager must never throw while wiring up the reload loop.
 
 const { test } = require('node:test');
 const assert = require('node:assert');
@@ -21,17 +24,14 @@ function freshManager() {
     return mgr;
 }
 
-test('_startRoleRewardsReload starts both timers without TDZ ReferenceError', () => {
+test('_startRoleRewardsReload starts a single poller without TDZ ReferenceError', () => {
     const mgr = freshManager();
     mgr._loadRoleRewards = async () => {};
 
     assert.doesNotThrow(() => mgr._startRoleRewardsReload());
-    assert.ok(mgr._roleRewardsTimer, '5s refresh timer must be running');
-    assert.ok(mgr._roleRewardsReloadTimer, 'background reload timer must be running');
-    assert.notStrictEqual(mgr._roleRewardsTimer, mgr._roleRewardsReloadTimer);
+    assert.ok(mgr._roleRewardsTimer, 'role rewards poller must be running');
 
-    clearInterval(mgr._roleRewardsTimer);
-    clearInterval(mgr._roleRewardsReloadTimer);
+    mgr._roleRewardsTimer.stop();
 });
 
 test('_startRoleRewardsReload is idempotent (no double timers)', () => {
@@ -43,6 +43,5 @@ test('_startRoleRewardsReload is idempotent (no double timers)', () => {
     mgr._startRoleRewardsReload();
     assert.strictEqual(mgr._roleRewardsTimer, first);
 
-    clearInterval(mgr._roleRewardsTimer);
-    clearInterval(mgr._roleRewardsReloadTimer);
+    mgr._roleRewardsTimer.stop();
 });

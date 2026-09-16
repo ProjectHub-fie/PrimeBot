@@ -144,6 +144,9 @@ class LiveGiveawayManager {
             );
         }
         this.giveaways.set(giveawayId, giveaway);
+        // A newly created giveaway may expire soon; make sure the adaptive
+        // expiry sweep is at its fast interval so it is ended on time.
+        this.client?._liveGiveawayPoller?.notifyActivity?.();
         return { giveawayId, passCode, giveaway };
     }
 
@@ -401,6 +404,7 @@ class LiveGiveawayManager {
                 console.error(`[LIVE GIVEAWAY] Failed to auto-end ${giveaway.giveawayId}:`, err.message);
             }
         }
+        return rows.length > 0;
     }
 }
 

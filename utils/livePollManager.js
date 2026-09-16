@@ -231,6 +231,9 @@ class LivePollManager {
                 });
             }
 
+            // A newly created poll may expire soon; make sure the adaptive expiry
+            // sweep is at its fast interval so it is ended on time.
+            this.client?._livePollPoller?.notifyActivity?.();
             return { pollId, passCode, poll };
         } catch (error) {
             console.error('Error creating live poll:', error);
@@ -792,7 +795,9 @@ class LivePollManager {
                 }
 
                 console.log(`[LIVE POLLS] Updated ${expiredPolls.length} expired polls to inactive status.`);
+                return true;
             }
+            return false;
         } catch (error) {
             console.error('[LIVE POLLS] Error checking expired polls:', error.message);
             

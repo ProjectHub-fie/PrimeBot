@@ -1,4 +1,5 @@
 const { reactionPool } = require('../server/reactionDb');
+const { AdaptivePoller } = require('./adaptivePoller');
 const { EmbedBuilder } = require('discord.js');
 
 /**
@@ -90,35 +91,26 @@ class ReactionRoleManager {
     }
 
     _startReloadInterval() {
-        const ms = parseInt(process.env.SETTINGS_RELOAD_INTERVAL_MS, 10) || 60000;
-        const refreshMs = parseInt(process.env.SETTINGS_REFRESH_INTERVAL_MS, 10) || 15000;
-        this._reloadTimer = setInterval(() => {
-            this._loadAll().catch(err =>
-                console.error('[REACTION ROLES] Background reload failed:', err.message)
-            );
-        }, ms);
-        this._reloadTimer.unref?.();
-        this._startRefreshLoop();
-    }
-
-    _startRefreshLoop() {
-        if (this._refreshTimer) return;
-        this._refreshTimer = setInterval(() => {
-            this._refreshFromDatabase().catch(err =>
-                console.error('[REACTION ROLES] Refresh failed:', err.message)
-            );
-        }, refreshMs);
-        this._refreshTimer.unref?.();
+        if (this._reloadTimer) return;
+        // One adaptive poller replaces the fixed 60s reload + 15s refresh pair
+        // (both re-read every menu + mapping). Backs off while the table is quiet.
+        this._reloadTimer = new AdaptivePoller({
+            name: 'REACTION ROLES',
+            task: () => this._refreshFromDatabase(),
+        });
+        this._reloadTimer.start();
     }
 
     async _refreshFromDatabase() {
         await this._ensureTable();
         const menus = await this._fetchAllMenus();
+        let changed = false;
         for (const menu of menus) {
             const key = this._key(menu.guildId, menu.channelId, menu.messageId);
             const previous = this._byMessage.get(key);
             if (!previous || JSON.stringify(previous) !== JSON.stringify(menu)) {
                 this._indexMenu(menu);
+                changed = true;
                 if (previous) {
                     console.log(`[REACTION ROLES] Applied database update for menu ${menu.id} (guild ${menu.guildId}).`);
                 }
@@ -127,8 +119,9 @@ class ReactionRoleManager {
         // Drop menus that no longer exist in the DB.
         const liveIds = new Set(menus.map(m => String(m.id)));
         for (const [id, menu] of this._byId) {
-            if (!liveIds.has(id)) this._unindexMenu(menu);
+            if (!liveIds.has(id)) { this._unindexMenu(menu); changed = true; }
         }
+        return changed;
     }
 
     async _loadAll() {

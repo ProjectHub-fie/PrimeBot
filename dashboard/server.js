@@ -444,15 +444,20 @@ app.get('/api/guilds', requireAuth, async (req, res) => {
 
         const manageable = guilds.filter(g => discord.canManageGuild(g.permissions));
 
+        // One set-based summary read for every manageable guild instead of a
+        // full 10-query getGuildConfig() per server card (was ~10 queries × N
+        // guilds to render a single page).
+        const summaries = await dashboardDb
+            .getGuildConfigSummaries(manageable.slice(0, 50).map(g => g.id))
+            .catch(() => new Map());
+
         // For each manageable guild, check bot presence in parallel (with a cap).
         const result = await Promise.all(manageable.slice(0, 50).map(async (g) => {
             let botInGuild = false;
-            let config = null;
+            const summary = summaries.get(String(g.id)) || null;
             try {
                 await discord.getBotGuild(g.id);
                 botInGuild = true;
-                // Fetch config summary for the overview cards.
-                config = await dashboardDb.getGuildConfig(g.id).catch(() => null);
             } catch (err) {
                 botInGuild = false;
             }
@@ -464,9 +469,9 @@ app.get('/api/guilds', requireAuth, async (req, res) => {
                 approximate_member_count: g.approximate_member_count,
                 permissions: g.permissions,
                 botPresent: botInGuild,
-                welcomeEnabled: config?.welcome?.enabled ?? false,
-                levelingEnabled: config?.server?.leveling?.enabled ?? true,
-                prefix: config?.server?.prefix ?? constants.DEFAULT_PREFIX,
+                welcomeEnabled: summary?.welcomeEnabled ?? false,
+                levelingEnabled: summary?.levelingEnabled ?? true,
+                prefix: summary?.prefix ?? constants.DEFAULT_PREFIX,
             };
         }));
 
@@ -1742,13 +1747,20 @@ async function loadManageableGuilds(req) {
         }
     }
     const manageable = guilds.filter(g => discord.canManageGuild(g.permissions));
-    const result = await Promise.all(manageable.slice(0, 50).map(async (g) => {
+    const capped = manageable.slice(0, 50);
+
+    // One set-based summary read for all cards instead of a full 10-query
+    // getGuildConfig() per guild (this page used to issue ~10 × N queries).
+    const summaries = await dashboardDb
+        .getGuildConfigSummaries(capped.map(g => g.id))
+        .catch(() => new Map());
+
+    const result = await Promise.all(capped.map(async (g) => {
         let botInGuild = false;
-        let config = null;
+        const summary = summaries.get(String(g.id)) || null;
         try {
             await discord.getBotGuild(g.id);
             botInGuild = true;
-            config = await dashboardDb.getGuildConfig(g.id).catch(() => null);
         } catch (err) {
             botInGuild = false;
         }
@@ -1760,9 +1772,9 @@ async function loadManageableGuilds(req) {
             approximate_member_count: g.approximate_member_count,
             permissions: g.permissions,
             botPresent: botInGuild,
-            welcomeEnabled: config?.welcome?.enabled ?? false,
-            levelingEnabled: config?.server?.leveling?.enabled ?? true,
-            prefix: config?.server?.prefix ?? constants.DEFAULT_PREFIX,
+            welcomeEnabled: summary?.welcomeEnabled ?? false,
+            levelingEnabled: summary?.levelingEnabled ?? true,
+            prefix: summary?.prefix ?? constants.DEFAULT_PREFIX,
         };
     }));
     return result;

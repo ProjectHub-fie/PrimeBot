@@ -1,4 +1,5 @@
 const { automodPool: pool } = require('../server/automodDb');
+const { AdaptivePoller } = require('./adaptivePoller');
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 const {
     normalizeRules, metaFor, normalizeAction, normalizeActions,
@@ -125,6 +126,8 @@ class AutomodManager {
         this.client = client;
         this._cache = new Map();
         this._tableReady = false;
+        this._reloadTimer = null;
+        this._appealPoller = null;
         this._init().catch(err =>
             console.error('[AUTOMOD] Init failed:', err.message)
         );
@@ -150,18 +153,15 @@ class AutomodManager {
     }
 
     _startReloadInterval() {
-        const ms = parseInt(process.env.SETTINGS_RELOAD_INTERVAL_MS, 10) || 60000;
-        const refreshMs = parseInt(process.env.SETTINGS_REFRESH_INTERVAL_MS, 10) || 15000;
-        setInterval(() => {
-            this._loadAll().catch(err =>
-                console.error('[AUTOMOD] Background reload failed:', err.message)
-            );
-        }, ms).unref?.();
-        setInterval(() => {
-            this._refreshFromDatabase().catch(err =>
-                console.error('[AUTOMOD] Refresh failed:', err.message)
-            );
-        }, refreshMs).unref?.();
+        if (this._reloadTimer) return;
+        // One adaptive poller replaces the fixed 60s reload + 15s refresh pair
+        // (both ran a full `SELECT * FROM automod_settings`). It backs off while
+        // the table is quiet so a dormant deployment stops waking Neon.
+        this._reloadTimer = new AdaptivePoller({
+            name: 'AUTOMOD',
+            task: () => this._refreshFromDatabase(),
+        });
+        this._reloadTimer.start();
     }
 
     /**
@@ -169,42 +169,54 @@ class AutomodManager {
      * reversed=false) and reverse the underlying action. The dashboard and bot
      * share only the DB, so this is how a dashboard approval reaches the bot.
      * Marks each reversed appeal so it is processed only once.
+     *
+     * Adaptive: approves are rare, so a fixed 30s scan cost ~2,880 queries a
+     * day against an almost-always-empty result. The poller now backs off while
+     * nothing is approved (resuming the fast interval the moment an approval
+     * appears), which keeps Neon suspended on quiet deployments.
      */
     _startAppealReversalPoller() {
-        const ms = parseInt(process.env.APPEAL_POLL_INTERVAL_MS, 10) || 30000;
-        setInterval(() => {
-            this._processApprovedAppeals().catch(err =>
-                console.error('[AUTOMOD] Appeal reversal poll failed:', err.message)
-            );
-        }, ms).unref?.();
+        if (this._appealPoller) return;
+        this._appealPoller = new AdaptivePoller({
+            name: 'AUTOMOD APPEALS',
+            task: () => this._processApprovedAppeals(),
+            initialMs: parseInt(process.env.APPEAL_POLL_INTERVAL_MS, 10) || 30000,
+        });
+        this._appealPoller.start();
     }
 
+    /** @returns {Promise<boolean>} true when at least one appeal was reversed. */
     async _processApprovedAppeals() {
         await this._ensureTable();
         const res = await pool.query(
             `SELECT * FROM automod_appeals WHERE status = 'approved' AND reversed = false LIMIT 50`
         );
+        if (res.rows.length === 0) return false;
         for (const row of res.rows) {
             const appeal = this._rowToAppeal(row);
             await this._reverseAction(appeal).catch(() => {});
             await pool.query('UPDATE automod_appeals SET reversed = true WHERE id = $1', [appeal.id]);
             console.log(`[AUTOMOD] Reversed appeal #${appeal.id} (${appeal.action}) in guild ${appeal.guildId}.`);
         }
+        return true;
     }
 
     async _refreshFromDatabase() {
         await this._ensureTable();
         const res = await pool.query('SELECT * FROM automod_settings');
+        let changed = false;
         for (const row of res.rows) {
             const next = this._rowToSettings(row);
             const previous = this._cache.get(row.guild_id);
             if (!previous || JSON.stringify(previous) !== JSON.stringify(next)) {
                 this._cache.set(row.guild_id, next);
+                changed = true;
                 if (previous) {
                     console.log(`[AUTOMOD] Applied database update for guild ${row.guild_id}.`);
                 }
             }
         }
+        return changed;
     }
 
     async _loadAll() {

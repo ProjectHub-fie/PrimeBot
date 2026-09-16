@@ -16,7 +16,7 @@ ServerSettingsManager.prototype.loadSettings = async function () {};
 
 function makeManager() {
     const mgr = new ServerSettingsManager({});
-    if (mgr._refreshTimer) { clearInterval(mgr._refreshTimer); mgr._refreshTimer = null; }
+    mgr._reloadTimer?.stop?.();
     mgr._tableReady = true;
     // No-op the fire-and-forget DB saver; add/remove still update the in-memory Map.
     mgr._saveGuildSettings = () => {};

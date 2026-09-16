@@ -95,6 +95,22 @@ const CREATE_TABLES_SQL = `
 
     CREATE INDEX IF NOT EXISTS leveling_role_rewards_guild_idx
         ON leveling_role_rewards (guild_id);
+
+    -- user_levels is the hottest table in the bot (every XP flush, profile
+    -- lookup and leaderboard sort touches it) and shipped with NO index at all,
+    -- so every (guild_id, user_id) lookup was a full sequential scan. Non-unique
+    -- on purpose: the column pair was historically unprotected and adding a
+    -- UNIQUE constraint could fail on pre-existing duplicate rows.
+    CREATE INDEX IF NOT EXISTS user_levels_guild_user_idx
+        ON user_levels (guild_id, user_id);
+
+    -- Leaderboard: WHERE guild_id = ? ORDER BY level DESC, xp DESC.
+    CREATE INDEX IF NOT EXISTS user_levels_guild_level_idx
+        ON user_levels (guild_id, level DESC, xp DESC);
+
+    -- Badge lookups are always scoped to a guild + user.
+    CREATE INDEX IF NOT EXISTS user_badges_guild_user_idx
+        ON user_badges (guild_id, user_id);
 `;
 
 async function initLevelingTables() {

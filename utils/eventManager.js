@@ -1,6 +1,24 @@
 const { EmbedBuilder, ChannelType, PermissionFlagsBits } = require('discord.js');
 const config = require('../config');
 const { eventPool } = require('../server/eventDb');
+const { AdaptivePoller } = require('./adaptivePoller');
+
+/** Deep comparison of two schedule snapshots (used for poller backoff). */
+function sameEventSnapshot(prevById, nextById, prevByGuild, nextByGuild) {
+    if (prevById.size !== nextById.size) return false;
+    for (const [id, next] of nextById) {
+        const prev = prevById.get(id);
+        if (!prev) return false;
+        if (JSON.stringify(prev) !== JSON.stringify(next)) return false;
+    }
+    if (prevByGuild.size !== nextByGuild.size) return false;
+    for (const [guildId, ids] of nextByGuild) {
+        const prev = prevByGuild.get(guildId);
+        if (!prev || prev.size !== ids.size) return false;
+        for (const id of ids) if (!prev.has(id)) return false;
+    }
+    return true;
+}
 
 /**
  * EventManager — premium-style event management.
@@ -96,12 +114,14 @@ class EventManager {
     }
 
     _startReloadInterval() {
-        const ms = parseInt(process.env.SETTINGS_RELOAD_INTERVAL_MS, 10) || 60000;
-        const refreshMs = parseInt(process.env.SETTINGS_REFRESH_INTERVAL_MS, 10) || 15000;
-        this._reloadTimer = setInterval(() => {
-            this._loadAll().catch(err => console.error('[EVENTS] Background reload failed:', err.message));
-        }, ms);
-        this._reloadTimer.unref?.();
+        if (this._reloadTimer) return;
+        // One adaptive poller replaces the fixed 60s timer and backs off while
+        // the schedule table is quiet, so an idle deployment stops waking Neon.
+        this._reloadTimer = new AdaptivePoller({
+            name: 'EVENTS',
+            task: () => this._loadAll(),
+        });
+        this._reloadTimer.start();
     }
 
     _startExecLoop() {
@@ -112,21 +132,58 @@ class EventManager {
     }
 
     async _loadAll() {
-        if (!this._tableReady) return;
-        const { rows: schedules } = await eventPool.query(
-            `SELECT * FROM event_schedules WHERE enabled = true ORDER BY id`
-        );
-        this._byId.clear();
-        this._byGuild.clear();
-        for (const s of schedules) {
-            const { rows: tasks } = await eventPool.query(
-                `SELECT * FROM event_tasks WHERE schedule_id = $1 ORDER BY offset_seconds, id`, [s.id]
-            );
-            const schedule = this._rowToSchedule(s, tasks);
-            this._byId.set(s.id, schedule);
-            if (!this._byGuild.has(s.guild_id)) this._byGuild.set(s.guild_id, new Set());
-            this._byGuild.get(s.guild_id).add(s.id);
+        if (!this._tableReady) return false;
+        // One JOIN loads every schedule plus its tasks — previously this ran an
+        // extra `SELECT * FROM event_tasks` per schedule (N+1) on every reload.
+        const { rows } = await eventPool.query(`
+            SELECT s.*, t.id AS task_id, t.schedule_id AS task_schedule_id,
+                   t.offset_seconds, t.action, t.target_type, t.target_ids,
+                   t.message_content, t.embed_title, t.embed_description,
+                   t.embed_color, t.embed_image_url, t.channel_id,
+                   t.executed_at
+            FROM event_schedules s
+            LEFT JOIN event_tasks t ON t.schedule_id = s.id
+            WHERE s.enabled = true
+            ORDER BY s.id, t.offset_seconds, t.id
+        `);
+
+        const schedules = new Map();
+        const tasksBySchedule = new Map();
+        for (const row of rows) {
+            if (!schedules.has(row.id)) schedules.set(row.id, row);
+            if (row.task_id == null) continue;
+            if (!tasksBySchedule.has(row.id)) tasksBySchedule.set(row.id, []);
+            tasksBySchedule.get(row.id).push(this._rowToTask({
+                id: row.task_id,
+                schedule_id: row.task_schedule_id,
+                offset_seconds: row.offset_seconds,
+                action: row.action,
+                target_type: row.target_type,
+                target_ids: row.target_ids,
+                message_content: row.message_content,
+                embed_title: row.embed_title,
+                embed_description: row.embed_description,
+                embed_color: row.embed_color,
+                embed_image_url: row.embed_image_url,
+                channel_id: row.channel_id,
+                executed_at: row.executed_at,
+            }));
         }
+
+        const nextById = new Map();
+        const nextByGuild = new Map();
+        for (const s of schedules.values()) {
+            const schedule = this._rowToSchedule(s, tasksBySchedule.get(s.id) || []);
+            nextById.set(s.id, schedule);
+            if (!nextByGuild.has(s.guild_id)) nextByGuild.set(s.guild_id, new Set());
+            nextByGuild.get(s.guild_id).add(s.id);
+        }
+
+        // Change detection so the poller can back off while nothing is moving.
+        const changed = !sameEventSnapshot(this._byId, nextById, this._byGuild, nextByGuild);
+        this._byId = nextById;
+        this._byGuild = nextByGuild;
+        return changed;
     }
 
     _rowToSchedule(row, taskRows = []) {

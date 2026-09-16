@@ -30,10 +30,10 @@ test('_init still starts the reload loop when every boot step throws', async () 
 
     await mgr._init();
 
-    assert.ok(mgr._reloadTimer, 'reload interval must be running');
-    assert.ok(mgr._refreshTimer, 'refresh loop must be running');
-    clearInterval(mgr._reloadTimer);
-    clearInterval(mgr._refreshTimer);
+    // A single adaptive poller now owns the reload (it replaced the old fixed
+    // reload + refresh pair), and it must still start even when boot steps throw.
+    assert.ok(mgr._reloadTimer, 'reload poller must be running');
+    mgr._reloadTimer.stop();
 });
 
 test('_startReloadInterval is idempotent (no double timers)', async () => {
@@ -42,6 +42,5 @@ test('_startReloadInterval is idempotent (no double timers)', async () => {
     const first = mgr._reloadTimer;
     mgr._startReloadInterval();
     assert.strictEqual(mgr._reloadTimer, first);
-    clearInterval(mgr._reloadTimer);
-    clearInterval(mgr._refreshTimer);
+    mgr._reloadTimer.stop();
 });

@@ -295,6 +295,8 @@ async function ensureUserBadgesTable() {
             created_at      TIMESTAMP DEFAULT NOW()
         );
         CREATE INDEX IF NOT EXISTS user_badges_guild_idx ON user_badges (guild_id);
+        -- Badge lookups/removals are always scoped to a guild + user.
+        CREATE INDEX IF NOT EXISTS user_badges_guild_user_idx ON user_badges (guild_id, user_id);
     `);
 }
 
@@ -430,6 +432,57 @@ async function getServerSettings(guildId) {
     const res = await pool.query(`SELECT ${SERVER_SETTINGS_COLUMNS} FROM server_settings WHERE guild_id = $1`, [guildId]);
     if (res.rows.length === 0) return defaultServerSettings();
     return rowToServerSettings(res.rows[0]);
+}
+
+/**
+ * Lightweight per-guild summary for the server-selection cards.
+ *
+ * The "Servers" page needs only three fields per guild (welcome enabled,
+ * leveling enabled, prefix). Previously it called the full getGuildConfig()
+ * for each guild — ten queries per card — so a 50-server user paid ~500
+ * queries to render one page. This fetches just the needed columns for all
+ * guilds in two set-based queries.
+ *
+ * @param {string[]} guildIds
+ * @returns {Promise<Map<string, {welcomeEnabled: boolean, levelingEnabled: boolean, prefix: string}>>}
+ */
+async function getGuildConfigSummaries(guildIds) {
+    const out = new Map();
+    if (!Array.isArray(guildIds) || guildIds.length === 0) return out;
+
+    await ensureServerSettingsTable();
+    const serverRes = await pool.query(
+        `SELECT guild_id, prefix, leveling_enabled FROM server_settings WHERE guild_id = ANY($1::varchar[])`,
+        [guildIds]
+    ).catch(err => {
+        console.error('[DASHBOARD DB] server_settings summary read failed:', err.message);
+        return { rows: [] };
+    });
+
+    await ensureWelcomeTable();
+    const welcomeRes = await getWelcomePool().query(
+        `SELECT guild_id, enabled FROM welcome_settings WHERE guild_id = ANY($1::varchar[])`,
+        [guildIds]
+    ).catch(err => {
+        console.error('[DASHBOARD DB] welcome_settings summary read failed:', err.message);
+        return { rows: [] };
+    });
+
+    const welcomeEnabled = new Map(welcomeRes.rows.map(r => [String(r.guild_id), r.enabled === true]));
+    for (const id of guildIds) {
+        out.set(String(id), {
+            welcomeEnabled: welcomeEnabled.get(String(id)) ?? false,
+            levelingEnabled: true,
+            prefix: constants.DEFAULT_PREFIX,
+        });
+    }
+    for (const row of serverRes.rows) {
+        const entry = out.get(String(row.guild_id));
+        if (!entry) continue;
+        entry.prefix = row.prefix || constants.DEFAULT_PREFIX;
+        entry.levelingEnabled = row.leveling_enabled === null ? true : row.leveling_enabled === true;
+    }
+    return out;
 }
 
 async function upsertServerSettings(guildId, patch) {
@@ -1341,6 +1394,17 @@ async function _count(query, fallback = 0) {
     }
 }
 
+/** Like _count but returns the whole first row (for multi-count aggregate queries). */
+async function _countRow(query) {
+    try {
+        const res = await pool.query(query);
+        return res.rows[0] || {};
+    } catch (err) {
+        console.error('[DASHBOARD DB] stats aggregate failed:', err.message);
+        return {};
+    }
+}
+
 async function _welcomeCount(query, fallback = 0) {
     try {
         const res = await getWelcomePool().query(query);
@@ -1409,11 +1473,72 @@ async function _liveBotCounts() {
     }
 }
 
+// ── Cached platform adoption counts ───────────────────────────────────────────
+//
+// getPlatformStats() backs BOTH the unauthenticated login screen (/api/stats)
+// and the Stats page (/api/stats/bot). It runs several aggregate COUNTs,
+// including a full COUNT(DISTINCT user_id) scan of user_levels — the largest
+// table in the database. Adoption only changes when an admin edits settings, so
+// running those scans on every page view (and every bot-polling refresh) was
+// pure waste. Results are memoised for a short window; the login screen and the
+// Stats page therefore share one set of counts instead of each paying for them.
+//
+// Deliberately NOT cached: nothing security-sensitive — these are display-only
+// adoption numbers, and a stale-by-a-minute count is harmless. The live bot
+// counts (heartbeat) are still read fresh by getPlatformStats itself.
+const PLATFORM_COUNTS_TTL_MS = 5 * 60 * 1000;
+let _platformCountsCache = { at: 0, value: null };
+
+async function _platformCounts() {
+    const now = Date.now();
+    if (_platformCountsCache.value && now - _platformCountsCache.at < PLATFORM_COUNTS_TTL_MS) {
+        return _platformCountsCache.value;
+    }
+    const [
+        serverCounts,
+        welcomeEnabled,
+        trackedUsers,
+        automodEnabled,
+        ticketPanels,
+    ] = await Promise.all([
+        // All four server_settings adoption counts in ONE pass over the table
+        // (was four separate COUNT(*) scans). The 'global' sentinel row (global
+        // no-prefix grants) is excluded — it is not a real guild.
+        _countRow(`SELECT
+                    COUNT(*) FILTER (WHERE TRUE) AS total,
+                    COUNT(*) FILTER (WHERE leveling_enabled = true) AS leveling,
+                    COUNT(*) FILTER (WHERE auto_reactions_enabled = true) AS auto_reactions,
+                    COUNT(*) FILTER (WHERE receive_broadcasts = true) AS broadcasts
+                FROM server_settings WHERE guild_id <> 'global'`),
+        _welcomeCount(`SELECT COUNT(*) FROM welcome_settings WHERE enabled = true`),
+        // Total unique users the bot has tracked via leveling (across all guilds).
+        // Fallback for totalUsers only — see liveCounts below.
+        _levelingCount(`SELECT COUNT(DISTINCT user_id) FROM user_levels`),
+        _automodCount(`SELECT COUNT(*) FROM automod_settings WHERE enabled = true`),
+        _ticketCount(`SELECT COUNT(*) FROM ticket_panels WHERE enabled = true`),
+    ]);
+
+    const serverRows = serverCounts || {};
+    const value = {
+        totalServers: Number(serverRows.total) || 0,
+        levelingEnabled: Number(serverRows.leveling) || 0,
+        autoReactionsEnabled: Number(serverRows.auto_reactions) || 0,
+        broadcastEnabled: Number(serverRows.broadcasts) || 0,
+        welcomeEnabled: Number(welcomeEnabled) || 0,
+        trackedUsers: Number(trackedUsers) || 0,
+        automodEnabled: Number(automodEnabled) || 0,
+        ticketPanels: Number(ticketPanels) || 0,
+    };
+    _platformCountsCache = { at: now, value };
+    return value;
+}
+
 // memberCountOverride — the REST-summed "guild.memberCount" across bot guilds
 // (dashboard/discord.js getBotMemberCount). Used when the live bot heartbeat
 // isn't reporting, before the leveling fallback.
 async function getPlatformStats(serverCountOverride, memberCountOverride) {
-    const [
+    const counts = await _platformCounts();
+    const {
         totalServers,
         levelingEnabled,
         welcomeEnabled,
@@ -1422,22 +1547,8 @@ async function getPlatformStats(serverCountOverride, memberCountOverride) {
         trackedUsers,
         automodEnabled,
         ticketPanels,
-        liveCounts,
-    ] = await Promise.all([
-        // Exclude the 'global' sentinel row (global no-prefix grants) — it is
-        // not a real guild and must not inflate the adoption stats.
-        _count(`SELECT COUNT(*) FROM server_settings WHERE guild_id <> 'global'`),
-        _count(`SELECT COUNT(*) FROM server_settings WHERE leveling_enabled = true AND guild_id <> 'global'`),
-        _welcomeCount(`SELECT COUNT(*) FROM welcome_settings WHERE enabled = true`),
-        _count(`SELECT COUNT(*) FROM server_settings WHERE auto_reactions_enabled = true AND guild_id <> 'global'`),
-        _count(`SELECT COUNT(*) FROM server_settings WHERE receive_broadcasts = true AND guild_id <> 'global'`),
-        // Total unique users the bot has tracked via leveling (across all guilds).
-        // Fallback for totalUsers only — see liveCounts below.
-        _levelingCount(`SELECT COUNT(DISTINCT user_id) FROM user_levels`),
-        _automodCount(`SELECT COUNT(*) FROM automod_settings WHERE enabled = true`),
-        _ticketCount(`SELECT COUNT(*) FROM ticket_panels WHERE enabled = true`),
-        _liveBotCounts(),
-    ]);
+    } = counts;
+    const liveCounts = await _liveBotCounts();
 
     // Use the authoritative server count (guilds the bot is actually in) when
     // available so adoption percentages are relative to the real total, not the
@@ -3032,6 +3143,7 @@ module.exports = {
     listTicketPanelMessages,
     deleteTicketPanelMessage,
     getGuildConfig,
+    getGuildConfigSummaries,
     getPlatformStats,
     getLivePolls,
     getLiveGiveaways,

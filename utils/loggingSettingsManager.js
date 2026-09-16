@@ -1,4 +1,5 @@
 const { logPool } = require('../server/logDb');
+const { AdaptivePoller } = require('./adaptivePoller');
 const { DEFAULT_ENABLED_EVENTS, normalizeEvents } = require('./logEvents');
 
 const CREATE_TABLE_SQL = `
@@ -35,7 +36,6 @@ class LoggingSettingsManager {
     constructor() {
         this._cache = new Map();
         this._tableReady = false;
-        this._refreshTimer = null;
         this._init().catch(err =>
             console.error('[LOGGING SETTINGS] Init failed:', err.message)
         );
@@ -54,42 +54,35 @@ class LoggingSettingsManager {
         this._startReloadInterval();
     }
 
-    /** Re-read the table periodically so dashboard saves reach the bot. */
+    /** Re-read the table periodically so dashboard saves reach the bot.
+     *  One adaptive poller replaces the fixed 60s reload + 15s refresh pair
+     *  (both ran a full `SELECT * FROM logging_settings`); it backs off while
+     *  the table is quiet so a dormant deployment stops waking Neon. */
     _startReloadInterval() {
-        const ms = parseInt(process.env.SETTINGS_RELOAD_INTERVAL_MS, 10) || 60000;
-        const refreshMs = parseInt(process.env.SETTINGS_REFRESH_INTERVAL_MS, 10) || 15000;
-        this._reloadTimer = setInterval(() => {
-            this._loadAll().catch(err =>
-                console.error('[LOGGING SETTINGS] Background reload failed:', err.message)
-            );
-        }, ms);
-        this._reloadTimer.unref?.();
-        this._startRefreshLoop();
-    }
-
-    _startRefreshLoop() {
-        if (this._refreshTimer) return;
-        this._refreshTimer = setInterval(() => {
-            this._refreshFromDatabase().catch(err =>
-                console.error('[LOGGING SETTINGS] Refresh failed:', err.message)
-            );
-        }, refreshMs);
-        this._refreshTimer.unref?.();
+        if (this._reloadTimer) return;
+        this._reloadTimer = new AdaptivePoller({
+            name: 'LOGGING SETTINGS',
+            task: () => this._refreshFromDatabase(),
+        });
+        this._reloadTimer.start();
     }
 
     async _refreshFromDatabase() {
         await this._ensureTable();
         const res = await logPool.query('SELECT * FROM logging_settings');
+        let changed = false;
         for (const row of res.rows) {
             const next = this._rowToSettings(row);
             const previous = this._cache.get(row.guild_id);
             if (!previous || JSON.stringify(previous) !== JSON.stringify(next)) {
                 this._cache.set(row.guild_id, next);
+                changed = true;
                 if (previous) {
                     console.log(`[LOGGING SETTINGS] Applied database update for guild ${row.guild_id}.`);
                 }
             }
         }
+        return changed;
     }
 
     async _loadAll() {
