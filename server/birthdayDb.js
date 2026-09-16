@@ -1,4 +1,5 @@
 const { Pool } = require('pg');
+const { resolveDbUrl } = require('./resolveDbUrl');
 
 /**
  * Dedicated PostgreSQL pool for the birthday feature (birthdays_guilds +
@@ -7,25 +8,23 @@ const { Pool } = require('pg');
  * These previously rode on the main DATABASE_URL pool. They now get their own
  * connection string (BIRTHDAY_DATABASE_URL) so they can live in their own
  * database/schema if desired. If BIRTHDAY_DATABASE_URL is unset we fall back
- * to the main DATABASE_URL so the feature still works in single-DB setups
+ * to the shared FALLBACK_DATABASE_URL/DATABASE_URL so the feature still works in single-DB setups
  * without any extra configuration.
  *
  * Same-DB requirement (as with the other features): for dashboard reads/writes
  * to reach the bot, both deployments must point at the same
- * BIRTHDAY_DATABASE_URL (or the same DATABASE_URL fallback). Different DBs →
+ * BIRTHDAY_DATABASE_URL (or the same FALLBACK_DATABASE_URL/DATABASE_URL fallback). Different DBs →
  * dashboard edits never reach the bot regardless of caching.
  */
 
 function resolveConnectionString() {
-    if (process.env.BIRTHDAY_DATABASE_URL) return process.env.BIRTHDAY_DATABASE_URL;
-    if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
-    return null;
+    return resolveDbUrl('BIRTHDAY_DATABASE_URL');
 }
 
 const cs = resolveConnectionString();
 
 if (!cs) {
-    console.warn('⚠️ BIRTHDAY_DATABASE_URL (or DATABASE_URL) not set — the birthday feature will have no database.');
+    console.warn('⚠️ BIRTHDAY_DATABASE_URL (or FALLBACK_DATABASE_URL/DATABASE_URL) not set — the birthday feature will have no database.');
 }
 
 function shouldEnableSsl(connectionStr) {

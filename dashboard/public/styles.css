@@ -149,6 +149,8 @@ code {
   gap: 16px;
 }
 
+/* The nav is the only flexible child: brand + avatar keep their intrinsic
+   size, so the scrollable rail can never push the profile pic off-screen. */
 .brand {
   display: flex;
   align-items: center;
@@ -186,7 +188,9 @@ code {
   border-left: 1px solid var(--border);
 }
 
-.topnav { display: flex; align-items: center; gap: 4px; overflow-x: auto; scrollbar-width: none; -ms-overflow-style: none; }
+/* min-width:0 lets the nav shrink so its horizontal scroll kicks in instead of
+   pushing the pinned profile avatar off the right edge of the bar. */
+.topnav { display: flex; align-items: center; gap: 4px; min-width: 0; flex: 1 1 auto; overflow-x: auto; scrollbar-width: none; -ms-overflow-style: none; }
 .topnav::-webkit-scrollbar { display: none; }
 .topnav a {
   color: var(--text-dim);
@@ -220,9 +224,11 @@ code {
 .topnav a.active { color: #fff; background: var(--accent-soft); }
 
 .user-menu {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
+  flex: 0 0 auto;
   padding-left: 14px;
   border-left: 1px solid var(--border);
 }
@@ -234,7 +240,69 @@ code {
   border: 1px solid var(--border);
   object-fit: cover;
 }
+
+/* Avatar acts as the dropdown toggle. It is a plain button so it is keyboard
+   reachable, but visually it is just the avatar (no chrome). */
+.user-menu-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  border-radius: 50%;
+  cursor: pointer;
+  line-height: 0;
+  transition: transform var(--transition);
+}
+.user-menu-toggle:hover { transform: translateY(-1px); }
+.user-menu-toggle:focus-visible { outline: 2px solid var(--blurple); outline-offset: 2px; }
+.user-avatar-fallback {
+  display: inline-grid;
+  place-items: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
 .user-name { font-size: 14px; font-weight: 500; color: var(--text); }
+
+/* Transparent, mobile-only account dropdown. It is display:none on desktop so
+   the inline Log out button (.logout-btn) remains the desktop affordance; the
+   760px media query reveals this panel and hides that button + the name. */
+.user-menu-dropdown {
+  display: none;
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  min-width: 150px;
+  padding: 6px;
+  border-radius: 12px;
+  background: rgba(12, 13, 20, 0.55);
+  backdrop-filter: saturate(160%) blur(14px);
+  border: 1px solid var(--border-soft, var(--border));
+  box-shadow: var(--shadow-lg, 0 18px 40px rgba(0, 0, 0, 0.45));
+  z-index: 60;
+}
+.user-menu-dropdown.open { display: block; }
+.user-menu-logout {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 11px;
+  border-radius: 9px;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 500;
+  text-decoration: none;
+  transition: background var(--transition), color var(--transition);
+}
+.user-menu-logout:hover,
+.user-menu-logout:focus-visible {
+  background: var(--danger-soft, rgba(244, 88, 95, 0.14));
+  color: var(--danger, #f4585f);
+  text-decoration: none;
+}
+.user-menu-logout .ico { width: 17px; height: 17px; }
 .logout-btn {
   color: var(--text-dim);
   font-size: 13px;
@@ -1337,9 +1405,14 @@ select:focus {
 }
 @media (max-width: 760px) {
   /* Trim the chrome — keep the brand mark + name, drop the "Dashboard" sub
-     and the username label so the scrollable topnav has room on phones. */
+     so the scrollable topnav has room on phones. The profile pic stays pinned
+     on the right and becomes the account dropdown toggle: the inline username
+     and Log out button are hidden here and live in the dropdown instead. */
   .brand-sub { display: none; }
   .user-name { display: none; }
+  .user-menu .logout-btn { display: none; }
+  .user-menu { padding-left: 10px; }
+  .user-menu-dropdown { left: auto; right: 0; }
   .topbar-inner { gap: 8px; }
   .topnav { gap: 2px; }
   .topnav a { padding: 8px 10px; }

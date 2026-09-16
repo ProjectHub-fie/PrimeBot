@@ -29,7 +29,12 @@ function resolveDiscordToken(options = {}) {
   const cwd = options.cwd || process.cwd();
   const envFileValues = readEnvFile(cwd);
 
+  // DISCORD_TOKEN2 leads: the production bot runs on that token, so a stray
+  // legacy DISCORD_TOKEN in the environment must not shadow it. Everything
+  // after it is the historical fallback chain, unchanged.
   const candidates = [
+    process.env.DISCORD_TOKEN2,
+    envFileValues.DISCORD_TOKEN2,
     process.env.DISCORD_TOKEN,
     process.env.BOT_TOKEN,
     process.env.TOKEN,

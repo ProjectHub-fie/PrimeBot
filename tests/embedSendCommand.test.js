@@ -350,10 +350,19 @@ test('prefix help catalog lists $embed under Administration', () => {
 });
 
 test('sash help menu lists $embed under Administration', () => {
+    // The sash menu derives its commands from the shared prefixHelp CATALOG, so
+    // $embed reaches it via the Administration catalog entry rather than a
+    // hand-written literal in interactionCreate.js.
+    const { CATALOG } = require('../utils/prefixHelp');
+    const embed = CATALOG.admin.commands.find(c => c.names.includes('embed'));
+    assert.ok(embed, '$embed is in the Administration catalog category');
+    assert.equal(embed.args, '<send|list>');
+    assert.match(embed.desc, /Embed Builder/);
+
     const interactionSrc = fs.readFileSync(path.join(ROOT, 'events', 'interactionCreate.js'), 'utf8');
-    const admin = interactionSrc.split('admin: {')[1];
-    assert.match(admin, /\$\{prefix\}embed send/);
-    assert.match(admin, /\$\{prefix\}embed list/);
+    // …and the sash renderer actually reads that catalog.
+    assert.match(interactionSrc, /fields: cat\.commands\.map\(c => \{/);
+    assert.match(interactionSrc, /require\('\.\.\/utils\/prefixHelp'\)/);
 });
 
 // ── docs page ───────────────────────────────────────────────────────────

@@ -105,15 +105,27 @@ function navHTML({ active, user, login, hideBack }) {
     let userMenu = '';
     if (user) {
         const url = userAvatarUrl(user);
-        const avatar = url
+        const avatarInner = url
             ? `<img class="user-avatar" src="${esc(url)}" alt="" />`
-            : `<span class="user-avatar">${esc((user.username || '?')[0].toUpperCase())}</span>`;
+            : `<span class="user-avatar user-avatar-fallback">${esc((user.username || '?')[0].toUpperCase())}</span>`;
+        // The avatar doubles as the mobile menu toggle; the username + inline
+        // logout are desktop-only and hidden by the 760px media query. The
+        // dropdown itself is transparent and mobile-only (see styles.css) — on
+        // desktop the inline Log out button stays visible next to the name.
         userMenu = `
-      <span class="user-menu">
-        ${avatar}
+      <div class="user-menu">
+        <button type="button" class="user-menu-toggle" id="user-menu-toggle"
+                aria-haspopup="menu" aria-expanded="false" aria-controls="user-menu-dropdown"
+                title="${esc(user.globalName || user.username || 'Account')}">
+          ${avatarInner}
+        </button>
         <span class="user-name">${esc(user.globalName || user.username || 'User')}</span>
         <button class="logout-btn" id="logout-btn">Log out</button>
-      </span>`;
+        <div class="user-menu-dropdown" id="user-menu-dropdown" role="menu">
+          <a class="user-menu-logout" id="profile-logout-btn" role="menuitem" href="/logout"
+             aria-label="Log out" title="Log out">${svgIcon('logOut')}</a>
+        </div>
+      </div>`;
     }
     const backBtn = hideBack ? '' : `<a href="javascript:history.back()" class="back-btn" aria-label="Go back to previous page" title="Go back to previous page">${svgIcon('arrowLeft', 'back-symbol')}</a>`;
     return `
@@ -131,8 +143,8 @@ function navHTML({ active, user, login, hideBack }) {
           ${link('/live', 'Live', 'live', { icon: NAV_ICONS.live })}
           ${link('/docs', 'Docs', 'docs', { icon: NAV_ICONS.docs })}
           ${link('/stats', 'Stats', 'stats')}
-          ${userMenu}
         </nav>
+        ${userMenu}
       </div>
     </header>`;
 }
@@ -166,6 +178,30 @@ function render(opts) {
         .map((s) => `<script src="${esc(s)}"></script>`)
         .join('\n  ');
     const logoutScript = login ? '' : `<script>document.getElementById('logout-btn')?.addEventListener('click',()=>{window.location.href='/logout'});</script>`;
+    // Mobile profile dropdown. The avatar toggle is inert on desktop (the CSS
+    // hides the dropdown there), so no viewport check is needed — toggling
+    // simply flips a class the desktop styles never read.
+    const profileScript = login ? '' : `<script>
+    (function () {
+      var toggle = document.getElementById('user-menu-toggle');
+      var menu = document.getElementById('user-menu-dropdown');
+      if (!toggle || !menu) return;
+      var close = function () {
+        menu.classList.remove('open');
+        toggle.setAttribute('aria-expanded', 'false');
+      };
+      toggle.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var open = menu.classList.toggle('open');
+        toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      });
+      document.addEventListener('click', function (e) {
+        if (!menu.contains(e.target) && !toggle.contains(e.target)) close();
+      });
+      document.addEventListener('keydown', function (e) { if (e.key === 'Escape') close(); });
+      window.addEventListener('resize', close);
+    })();
+  </script>`;
     // Idle auto-logout: only on authenticated pages (the login page has no
     // session). Injects the inactivity policy (all ms, non-secret) and loads
     // session-timeout.js, which drives the timestamp-based idle tracking +
@@ -220,6 +256,7 @@ function render(opts) {
   </script>
   ${scriptTags}
   ${idleScript}
+  ${profileScript}
   ${logoutScript}
 </body>
 </html>`;

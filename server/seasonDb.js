@@ -1,4 +1,5 @@
 const { Pool } = require('pg');
+const { resolveDbUrl } = require('./resolveDbUrl');
 const { drizzle } = require('drizzle-orm/node-postgres');
 const schema = require('../shared/schema.js');
 
@@ -10,26 +11,24 @@ const schema = require('../shared/schema.js');
  * Both previously rode on the main DATABASE_URL pool. They now get their own
  * connection string (SEASON_DATABASE_URL) so they can live in their own
  * database/schema if desired. If SEASON_DATABASE_URL is unset we fall back to
- * the main DATABASE_URL so the features still work in single-DB setups without
+ * the shared FALLBACK_DATABASE_URL/DATABASE_URL so the features still work in single-DB setups without
  * any extra configuration.
  *
  * Same-DB requirement (as with the other features): for the dashboard and bot
  * to see the same session rows / failover state, both deployments must point at
- * the same SEASON_DATABASE_URL (or the same DATABASE_URL fallback). Different
+ * the same SEASON_DATABASE_URL (or the same FALLBACK_DATABASE_URL/DATABASE_URL fallback). Different
  * DBs → sessions aren't shared and failover heartbeats aren't visible across
  * nodes.
  */
 
 function resolveConnectionString() {
-    if (process.env.SEASON_DATABASE_URL) return process.env.SEASON_DATABASE_URL;
-    if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
-    return null;
+    return resolveDbUrl('SEASON_DATABASE_URL');
 }
 
 const cs = resolveConnectionString();
 
 if (!cs) {
-    console.warn('⚠️ SEASON_DATABASE_URL (or DATABASE_URL) not set — dashboard sessions / shardnode failover will have no database.');
+    console.warn('⚠️ SEASON_DATABASE_URL (or FALLBACK_DATABASE_URL/DATABASE_URL) not set — dashboard sessions / shardnode failover will have no database.');
 }
 
 function shouldEnableSsl(connectionStr) {

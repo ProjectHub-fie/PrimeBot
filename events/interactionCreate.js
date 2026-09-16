@@ -86,106 +86,42 @@ async function showMainHelpUpdate(interaction) {
  * "prefix" is replaced with "sash" everywhere it would appear so the menu
  * reads as a "Sash Commands" menu rather than a "Prefix Commands" one.
  *
+ * The catalogue is derived from utils/prefixHelp.js CATALOG (the same source of
+ * truth `$help` uses), so a newly added prefix command appears here with no
+ * edit to this file. The old version hardcoded its own list and had drifted
+ * ~33 commands behind the switch in events/messageCreate.js.
+ *
  * The button leads here from the main /help menu's "Sash" button.
  */
+function buildSashCategories(prefix) {
+    const { CATALOG, CATEGORY_ORDER } = require('../utils/prefixHelp');
+    const out = {};
+    for (const key of CATEGORY_ORDER) {
+        const cat = CATALOG[key];
+        if (!cat) continue;
+        out[key] = {
+            icon: cat.icon,
+            label: cat.label,
+            title: (cat.title || '').replace(/Prefix/g, 'Sash'),
+            desc: (cat.description || '').replace(/Prefix/g, 'Sash'),
+            color: cat.color,
+            fields: cat.commands.map(c => {
+                const aliases = c.names.slice(1);
+                const name = aliases.length
+                    ? `${prefix}${c.names[0]}${c.args ? ' ' + c.args : ''} (${aliases.map(a => prefix + a).join(', ')})`
+                    : `${prefix}${c.names[0]}${c.args ? ' ' + c.args : ''}`;
+                return { name, value: c.desc };
+            }),
+        };
+    }
+    return out;
+}
+
 async function showSashHelp(interaction, page) {
     const category = page || 'main';
     const prefix = config.prefix;
-
-    // Sash (prefix) command catalogue, grouped identically to the messageCreate
-    // prefix help so the two stay in sync. Only the label "sash" differs.
-    const SASH_CATEGORIES = {
-        general: {
-            title: '⚡ Sash General Commands',
-            desc: 'Basic bot commands you run with your sash:',
-            fields: [
-                { name: `${prefix}help [category]`, value: 'Show this categorized sash menu' },
-                { name: `${prefix}about`, value: 'Information about the bot' },
-                { name: `${prefix}updates`, value: 'Latest bot updates and features' },
-                { name: `${prefix}ses`, value: 'Bot session and status information' },
-                { name: `${prefix}ping`, value: 'Check bot latency and response time' },
-                { name: `${prefix}np [duration]`, value: 'Enable no-sash mode for easier commands' },
-            ],
-            color: config.colors.primary,
-        },
-        leveling: {
-            title: '📊 Sash Leveling System',
-            desc: 'XP, ranks, and progression via sash commands:',
-            fields: [
-                { name: `${prefix}rank [@user]`, value: 'View level and XP progress' },
-                { name: `${prefix}leaderboard [page]`, value: 'Server XP leaderboard' },
-                { name: `${prefix}badges [@user]`, value: 'View achievement badges' },
-                { name: `${prefix}level-enable`, value: 'Enable leveling (Admin)' },
-                { name: `${prefix}level-disable`, value: 'Disable leveling (Admin)' },
-                { name: `${prefix}level-channel #channel`, value: 'Level-up channel (Admin)' },
-                { name: `${prefix}award-xp @user [amount]`, value: 'Award XP (Admin)' },
-                { name: `${prefix}award-badge @user [badge]`, value: 'Award badges (Admin)' },
-            ],
-            color: config.colors.success,
-        },
-        games: {
-            title: '🎮 Sash Games & Activities',
-            desc: 'Interactive games run with your sash:',
-            fields: [
-                { name: `${prefix}tictactoe @user`, value: 'Classic Tic-Tac-Toe game' },
-                { name: `${prefix}truthdare`, value: 'Truth or Dare with custom questions' },
-                { name: `${prefix}counting [start]`, value: 'Number counting game' },
-                { name: `${prefix}poll [question] [options]`, value: 'Create interactive polls' },
-            ],
-            color: config.colors.warning,
-        },
-        moderation: {
-            title: '🛡️ Sash Moderation Tools',
-            desc: 'Moderation and server management sash commands:',
-            fields: [
-                { name: `${prefix}kick @member [reason]`, value: 'Kick a member' },
-                { name: `${prefix}ban @member [reason] [days]`, value: 'Ban a member' },
-                { name: `${prefix}move @user #channel`, value: 'Move members between voice channels' },
-                { name: `${prefix}end [activity]`, value: 'End ongoing activities' },
-                { name: `${prefix}snipe [#channel]`, value: 'Recover last deleted message snapshot' },
-                { name: `${prefix}rmr <CID> [reason]`, value: 'Edit or clear an automod embed reason (Moderate Members)' },
-                { name: `${prefix}appealchannel [#channel|off]`, value: 'View or set the automod appeal channel (Moderate Members)' },
-                { name: `${prefix}lock [#channel]`, value: 'Lock a channel (Admin)' },
-                { name: `${prefix}unlock [#channel]`, value: 'Unlock a channel (Admin)' },
-                { name: `${prefix}hide [#channel]`, value: 'Hide a channel (Admin)' },
-                { name: `${prefix}unhide [#channel]`, value: 'Unhide a channel (Admin)' },
-                { name: `${prefix}nuke [name] [#channel]`, value: 'Nuke and recreate a channel (Admin)' },
-            ],
-            color: config.colors.secondary || config.colors.primary,
-        },
-        community: {
-            title: '👥 Sash Community Features',
-            desc: 'Engagement and social sash commands:',
-            fields: [
-                { name: `${prefix}poll "[question]" opt1 opt2 [time]`, value: 'Create server polls' },
-                { name: `${prefix}lpoll create ...`, value: 'Create cross-server live polls' },
-                { name: `${prefix}giveaway [prize] [duration]`, value: 'Create giveaways' },
-                { name: `${prefix}reroll [giveaway-id]`, value: 'Reroll giveaway winners' },
-                { name: `${prefix}birthday set [date]`, value: 'Birthday celebration system' },
-                { name: `${prefix}welcome-config`, value: 'Configure welcome messages' },
-                { name: `${prefix}broadcast [message]`, value: 'Announce to all servers' },
-            ],
-            color: config.colors.success,
-        },
-        admin: {
-            title: '⚙️ Sash Administration',
-            desc: 'Advanced server configuration via sash (Admin):',
-            fields: [
-                { name: `${prefix}embed send <name|id> [#channel]`, value: 'Send an embed saved in the dashboard Embed Builder' },
-                { name: `${prefix}embed list`, value: 'List this server\'s saved embeds' },
-                { name: `${prefix}welcome-enable`, value: 'Enable welcome system' },
-                { name: `${prefix}welcome-disable`, value: 'Disable welcome system' },
-                { name: `${prefix}welcome-channel #channel`, value: 'Set welcome channel' },
-                { name: `${prefix}broadcastsettings`, value: 'Configure broadcast settings' },
-                { name: `${prefix}autoreact enable`, value: 'Enable auto-reactions' },
-                { name: `${prefix}autoreact disable`, value: 'Disable auto-reactions' },
-                { name: `${prefix}autoreact add [word] [emoji]`, value: 'Add auto-reaction trigger' },
-                { name: `${prefix}autoreact remove [word]`, value: 'Remove auto-reaction trigger' },
-                { name: `${prefix}dev [@user]`, value: 'PrimeBot staff-role service (owner assigns roles)' },
-            ],
-            color: config.colors.error,
-        },
-    };
+    const SASH_CATEGORIES = buildSashCategories(prefix);
+    const ORDER = Object.keys(SASH_CATEGORIES);
 
     const backButton = new ActionRowBuilder()
         .addComponents(
@@ -197,7 +133,7 @@ async function showSashHelp(interaction, page) {
         );
 
     if (category === 'main' || category === 'back') {
-        // Main sash menu: category chooser with a back-to-categories button.
+        const total = ORDER.reduce((n, k) => n + SASH_CATEGORIES[k].fields.length, 0);
         const mainEmbed = new EmbedBuilder()
             .setColor(config.colors.primary)
             .setTitle('💬 Sash Command Categories')
@@ -206,29 +142,40 @@ async function showSashHelp(interaction, page) {
                 `**Usage:** \`${prefix}help [category]\` — choose a category below to browse its sash commands.`
             )
             .addFields(
-                { name: '⚡ General', value: `\`${prefix}help general\`\nBasic bot commands`, inline: true },
-                { name: '📊 Leveling', value: `\`${prefix}help leveling\`\nXP, ranks, progression`, inline: true },
-                { name: '🎮 Games', value: `\`${prefix}help games\`\nFun interactive games`, inline: true },
-                { name: '🛡️ Moderation', value: `\`${prefix}help moderation\`\nModeration tools`, inline: true },
-                { name: '👥 Community', value: `\`${prefix}help community\`\nSocial features`, inline: true },
-                { name: '⚙️ Administration', value: `\`${prefix}help admin\`\nAdvanced config`, inline: true }
+                ORDER.map(k => ({
+                    name: `${SASH_CATEGORIES[k].icon} ${SASH_CATEGORIES[k].label}`,
+                    value: `\`${prefix}help ${k}\`\n${SASH_CATEGORIES[k].fields.length} commands`,
+                    inline: true,
+                }))
             )
-            .setFooter({ text: `Sash: ${prefix} • Version: ${config.version}` })
+            .setFooter({ text: `Sash: ${prefix} • Total Commands: ${total} • Version: ${config.version}` })
             .setTimestamp();
 
-        const catButtons = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('help_sash_general').setLabel('General').setStyle(ButtonStyle.Primary).setEmoji('⚡'),
-            new ButtonBuilder().setCustomId('help_sash_leveling').setLabel('Leveling').setStyle(ButtonStyle.Primary).setEmoji('📊'),
-            new ButtonBuilder().setCustomId('help_sash_games').setLabel('Games').setStyle(ButtonStyle.Primary).setEmoji('🎮'),
-            new ButtonBuilder().setCustomId('help_sash_moderation').setLabel('Moderation').setStyle(ButtonStyle.Secondary).setEmoji('🛡️'),
-            new ButtonBuilder().setCustomId('help_sash_community').setLabel('Community').setStyle(ButtonStyle.Success).setEmoji('👥'),
-        );
-        const adminRow = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('help_sash_admin').setLabel('Administration').setStyle(ButtonStyle.Danger).setEmoji('⚙️'),
-            new ButtonBuilder().setCustomId('help_back').setLabel('Back to Categories').setStyle(ButtonStyle.Secondary).setEmoji('↩️'),
-        );
+        // Discord caps 5 buttons per row — chunk the categories across rows.
+        const styles = [
+            ButtonStyle.Primary, ButtonStyle.Primary, ButtonStyle.Primary,
+            ButtonStyle.Secondary, ButtonStyle.Success, ButtonStyle.Secondary,
+            ButtonStyle.Secondary, ButtonStyle.Danger,
+        ];
+        const rows = [];
+        for (let i = 0; i < ORDER.length; i += 5) {
+            rows.push(new ActionRowBuilder().addComponents(
+                ORDER.slice(i, i + 5).map((k, j) => new ButtonBuilder()
+                    .setCustomId(`help_sash_${k}`)
+                    .setLabel(SASH_CATEGORIES[k].label.slice(0, 80))
+                    .setStyle(styles[i + j] || ButtonStyle.Secondary)
+                    .setEmoji(SASH_CATEGORIES[k].icon))
+            ));
+        }
+        rows.push(new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId('help_back')
+                .setLabel('Back to Categories')
+                .setStyle(ButtonStyle.Secondary)
+                .setEmoji('↩️')
+        ));
 
-        await interaction.update({ embeds: [mainEmbed], components: [catButtons, adminRow] });
+        await interaction.update({ embeds: [mainEmbed], components: rows });
         scheduleComponentExpiry(interaction.message);
         return;
     }

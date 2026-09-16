@@ -1,4 +1,5 @@
 const { Pool } = require('pg');
+const { resolveDbUrl } = require('./resolveDbUrl');
 
 /**
  * Dedicated PostgreSQL pool for the Premium Ticket feature.
@@ -8,7 +9,7 @@ const { Pool } = require('pg');
  * the welcome, reaction-role, and automod features — they get a separate
  * connection string (TICKET_DATABASE_URL) so they can live in their own
  * database/schema if desired. If TICKET_DATABASE_URL is unset we fall back to
- * the main DATABASE_URL so the feature still works in single-DB setups without
+ * the shared FALLBACK_DATABASE_URL/DATABASE_URL so the feature still works in single-DB setups without
  * any extra configuration.
  *
  * Same DB requirement: for dashboard-created panels to reach the bot, both
@@ -18,15 +19,13 @@ const { Pool } = require('pg');
  */
 
 function resolveConnectionString() {
-    if (process.env.TICKET_DATABASE_URL) return process.env.TICKET_DATABASE_URL;
-    if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
-    return null;
+    return resolveDbUrl('TICKET_DATABASE_URL');
 }
 
 const cs = resolveConnectionString();
 
 if (!cs) {
-    console.warn('⚠️ TICKET_DATABASE_URL (or DATABASE_URL) not set — tickets will have no database.');
+    console.warn('⚠️ TICKET_DATABASE_URL (or FALLBACK_DATABASE_URL/DATABASE_URL) not set — tickets will have no database.');
 }
 
 function shouldEnableSsl(connectionStr) {

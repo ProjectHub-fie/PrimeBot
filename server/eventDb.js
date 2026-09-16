@@ -1,4 +1,5 @@
 const { Pool } = require('pg');
+const { resolveDbUrl } = require('./resolveDbUrl');
 
 /**
  * Dedicated PostgreSQL pool for the Premium Event Management feature.
@@ -7,25 +8,23 @@ const { Pool } = require('pg');
  * `event_tasks` tables, their own cache in EventManager), so — like the other
  * premium features — they get a separate connection string (EVENT_DATABASE_URL)
  * so they can live in their own database/schema if desired. If
- * EVENT_DATABASE_URL is unset we fall back to the main DATABASE_URL so the
+ * EVENT_DATABASE_URL is unset we fall back to FALLBACK_DATABASE_URL (then DATABASE_URL) so the
  * feature still works in single-DB setups without any extra configuration.
  *
  * Same-DB requirement (as with the other features): for dashboard changes to
  * reach the bot, both deployments must point at the same EVENT_DATABASE_URL
- * (or the same DATABASE_URL fallback). Different DBs → dashboard writes never
+ * (or the same FALLBACK_DATABASE_URL/DATABASE_URL fallback). Different DBs → dashboard writes never
  * reach the bot regardless of caching.
  */
 
 function resolveConnectionString() {
-    if (process.env.EVENT_DATABASE_URL) return process.env.EVENT_DATABASE_URL;
-    if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
-    return null;
+    return resolveDbUrl('EVENT_DATABASE_URL');
 }
 
 const cs = resolveConnectionString();
 
 if (!cs) {
-    console.warn('⚠️ EVENT_DATABASE_URL (or DATABASE_URL) not set — events will have no database.');
+    console.warn('⚠️ EVENT_DATABASE_URL (or FALLBACK_DATABASE_URL/DATABASE_URL) not set — events will have no database.');
 }
 
 function shouldEnableSsl(connectionStr) {

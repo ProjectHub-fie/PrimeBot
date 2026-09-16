@@ -1,4 +1,5 @@
 const { Pool } = require('pg');
+const { resolveDbUrl } = require('./resolveDbUrl');
 
 /**
  * Dedicated PostgreSQL pool for the ticket role add/remove settings.
@@ -6,9 +7,9 @@ const { Pool } = require('pg');
  * These per-panel role grants live in their own `ticket_role_settings` table
  * (separate from `ticket_panels`) — they get their own connection string
  * (TROLE_DATABASE_URL) so they can live in their own database/schema if
- * desired. If TROLE_DATABASE_URL is unset we fall back to the main
- * DATABASE_URL so the feature still works in single-DB setups without any
- * extra configuration.
+ * desired. If TROLE_DATABASE_URL is unset we fall back to
+ * FALLBACK_DATABASE_URL (then DATABASE_URL) so the feature still works in
+ * single-DB setups with no extra configuration.
  *
  * Same DB requirement: for dashboard-created role settings to reach the
  * bot, both deployments must point at the same TROLE_DATABASE_URL (or the
@@ -17,15 +18,13 @@ const { Pool } = require('pg');
  */
 
 function resolveConnectionString() {
-    if (process.env.TROLE_DATABASE_URL) return process.env.TROLE_DATABASE_URL;
-    if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
-    return null;
+    return resolveDbUrl('TROLE_DATABASE_URL');
 }
 
 const cs = resolveConnectionString();
 
 if (!cs) {
-    console.warn('⚠️ TROLE_DATABASE_URL (or DATABASE_URL) not set — ticket role settings will have no database.');
+    console.warn('⚠️ TROLE_DATABASE_URL (or FALLBACK_DATABASE_URL/DATABASE_URL) not set — ticket role settings will have no database.');
 }
 
 function shouldEnableSsl(connectionStr) {

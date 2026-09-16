@@ -1,4 +1,5 @@
 const { Pool } = require('pg');
+const { resolveDbUrl } = require('./resolveDbUrl');
 
 /**
  * Dedicated PostgreSQL pool for the dashboard per-server audit log
@@ -17,15 +18,13 @@ const { Pool } = require('pg');
  */
 
 function resolveConnectionString() {
-    if (process.env.ALOG_DATABASE_URL) return process.env.ALOG_DATABASE_URL;
-    if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
-    return null;
+    return resolveDbUrl('ALOG_DATABASE_URL');
 }
 
 const cs = resolveConnectionString();
 
 if (!cs) {
-    console.warn('⚠️ ALOG_DATABASE_URL (or DATABASE_URL) not set — dashboard audit log will have no database.');
+    console.warn('⚠️ ALOG_DATABASE_URL (or FALLBACK_DATABASE_URL/DATABASE_URL) not set — dashboard audit log will have no database.');
 }
 
 function shouldEnableSsl(connectionStr) {
