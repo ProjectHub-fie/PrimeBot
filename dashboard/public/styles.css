@@ -231,10 +231,13 @@ code {
   flex: 0 0 auto;
   padding-left: 14px;
   border-left: 1px solid var(--border);
+  /* The avatar and the mobile logout dropdown are the same square, so they are
+     driven from one variable — change this and both stay in lockstep. */
+  --profile-size: 30px;
 }
 .user-avatar {
-  width: 30px;
-  height: 30px;
+  width: var(--profile-size);
+  height: var(--profile-size);
   border-radius: 50%;
   background: var(--surface-2);
   border: 1px solid var(--border);
@@ -266,17 +269,20 @@ code {
 }
 .user-name { font-size: 14px; font-weight: 500; color: var(--text); }
 
-/* Transparent, mobile-only account dropdown. It is display:none on desktop so
-   the inline Log out button (.logout-btn) remains the desktop affordance; the
-   760px media query reveals this panel and hides that button + the name. */
+/* Transparent, mobile-only account dropdown. It is exactly the size of the
+   profile pic above it (same --profile-size square, same circular radius) so it
+   reads as the avatar opening rather than a separate panel. It stays
+   display:none on desktop, where the inline Log out button is the affordance;
+   the 760px media query reveals it and hides that button + the name. */
 .user-menu-dropdown {
   display: none;
   position: absolute;
   top: calc(100% + 10px);
   right: 0;
-  min-width: 150px;
-  padding: 6px;
-  border-radius: 12px;
+  width: var(--profile-size);
+  height: var(--profile-size);
+  padding: 0;
+  border-radius: 50%;
   background: rgba(12, 13, 20, 0.55);
   backdrop-filter: saturate(160%) blur(14px);
   border: 1px solid var(--border-soft, var(--border));
@@ -285,14 +291,13 @@ code {
 }
 .user-menu-dropdown.open { display: block; }
 .user-menu-logout {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 9px 11px;
-  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border-radius: 50%;
   color: var(--text);
-  font-size: 14px;
-  font-weight: 500;
   text-decoration: none;
   transition: background var(--transition), color var(--transition);
 }
@@ -302,7 +307,7 @@ code {
   color: var(--danger, #f4585f);
   text-decoration: none;
 }
-.user-menu-logout .ico { width: 17px; height: 17px; }
+.user-menu-logout .ico { width: 15px; height: 15px; }
 .logout-btn {
   color: var(--text-dim);
   font-size: 13px;

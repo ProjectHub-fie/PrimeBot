@@ -45,6 +45,20 @@ The top nav (`render/layout.js` `navHTML`) renders: **Servers** (`/`), **Overvie
 
 The `/guild/:id/reactions` page's "Save auto-reactions" path was exhaustively verified (mock-DB boot + real browser) to work in ALL scenarios: add-rule+save, remove-row+save-empty, toggle, and reload-read-back. The server handler (`upsertServerSettings` writing `server.autoReactions`), the DB round-trip, and `settings-basic.js` `saveAutoReactions` all behave correctly. **If a user reports "auto-reactions not saving", the cause is operational, not code:** see the **Same DB requirement** above — if the bot and dashboard point at different `DATABASE_URL`s, the dashboard's write lands in a different database than the bot reads, so it looks unsaved. Also confirm the bot's `ServerSettingsManager` settings-reload interval has run (≤30s) before concluding a save "didn't take effect".
 
+
+## Dashboard bot-token resolution (DISCORD_TOKEN2) — login member count
+
+The dashboard authenticates its REST calls as `Bot ${process.env.DISCORD_TOKEN}` (`dashboard/discord.js` `botHeaders()`). `dashboard/server.js` now resolves that through `utils/tokenResolver` (`resolveDiscordToken({ cwd: <repo root> })`) at boot, so **`DISCORD_TOKEN2` — the primary production token — works on the dashboard too**, not just in the bot. `DASHBOARD_BOT_TOKEN` remains the explicit override and is never overwritten.
+
+- **The failure mode this fixes:** with only `DISCORD_TOKEN2` set, the header went out as the literal string `Bot undefined`. `getBotGuildCount()`/`getBotMemberCount()` both **swallow** the resulting 401 and return `null` (they warn, they don't throw), so nothing looked broken — but `getPlatformStats` then fell through to the `leveling` distinct-user count. The login screen rendered "Total users" with the number of members the bot had tracked XP for, which is strictly smaller than the real member total. Symptom to watch for: the login/Stats member number is plausible-looking but far too low, and `/api/stats` reports `totalUsersSource: "leveling"`.
+- **Labels are now honest about the source.** The login card is `Total members` when `totalUsersSource` is `bot` (heartbeat `member_count`) or `rest` (summed `approximate_member_count`), and `Members tracked (leveling)` when it is the fallback — so a fallback number is never presented as the member total. `dashboard/public/js/login.js` swaps the label via `#stat-users-label`.
+- **Debugging order for a wrong member count:** (1) check `totalUsersSource` on `/api/stats` — `leveling` means the member count never arrived; (2) confirm the dashboard can authenticate (a valid `DISCORD_TOKEN2`/`DISCORD_TOKEN`/`DASHBOARD_BOT_TOKEN`); (3) confirm bot+dashboard share `SEASON_DATABASE_URL` so the heartbeat `member_count` is visible. A missing token is the most common cause.
+- **Tests:** `tests/loginMemberCountAndProfileMenu.test.js` replays the boot block against a temp `.env` (no DB/network) and asserts `DISCORD_TOKEN2` resolves, the override wins, and the fallback label is honest.
+
+## Profile menu sizing (mobile)
+
+The mobile-only transparent logout dropdown is sized to **exactly match the profile pic**: both the avatar and the dropdown are driven by a single `--profile-size: 30px` variable declared on `.user-menu` in `dashboard/public/styles.css`. `.user-avatar` and `.user-menu-dropdown` both use `width/height: var(--profile-size)` and the dropdown is `border-radius: 50%`, so it reads as the avatar opening rather than a separate 150px panel. Change `--profile-size` once and both stay in lockstep — do not reintroduce a hardcoded dropdown width.
+
 ## Server logging feature
 
 Per-guild logging posts rich embeds of server events (member join/leave, bans/unbans, member role/nickname updates, message edits/deletes, slash-command use) to a log channel and/or a Discord webhook. Configured entirely from the dashboard's **📜 Logging** tab.

@@ -10,7 +10,8 @@
  * same DATABASE_URL / WELCOME_DATABASE_URL.
  *
  * Run with:  npm run dashboard
- * Env vars:  PORT, DISCORD_TOKEN, DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET,
+ * Env vars:  PORT, DISCORD_TOKEN2 (primary bot token) / DISCORD_TOKEN /
+ *            DASHBOARD_BOT_TOKEN, DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET,
  *            DISCORD_REDIRECT_URI, SESSION_SECRET
  */
 
@@ -31,13 +32,25 @@ const constants = require('./constants');
 const pages = require('./render/pages');
 const guildPages = require('./render/guild-pages');
 const L = require('./render/layout');
+const { resolveDiscordToken } = require('../utils/tokenResolver');
 
-// Allow a dedicated token for dashboard REST calls; fall back to DISCORD_TOKEN.
+// The dashboard's REST calls authenticate as `Bot ${process.env.DISCORD_TOKEN}`
+// (see dashboard/discord.js botHeaders). Resolve that through the same helper
+// the bot uses so DISCORD_TOKEN2 — the primary production token — works here
+// too. Without this the header went out as the literal string "Bot undefined":
+// getBotGuildCount/getBotMemberCount both swallowed the 401 and returned null,
+// so the login page silently fell through to the leveling distinct-user count
+// and reported a member total far below the real one.
+// DASHBOARD_BOT_TOKEN remains the dedicated override when explicitly set.
+if (!process.env.DASHBOARD_BOT_TOKEN) {
+    const resolvedBotToken = resolveDiscordToken({ cwd: path.join(__dirname, '..') });
+    if (resolvedBotToken) process.env.DASHBOARD_BOT_TOKEN = resolvedBotToken;
+}
+if (!process.env.DISCORD_TOKEN && process.env.DASHBOARD_BOT_TOKEN) {
+    process.env.DISCORD_TOKEN = process.env.DASHBOARD_BOT_TOKEN;
+}
 if (!process.env.DASHBOARD_BOT_TOKEN && process.env.DISCORD_TOKEN) {
     process.env.DASHBOARD_BOT_TOKEN = process.env.DISCORD_TOKEN;
-}
-if (process.env.DASHBOARD_BOT_TOKEN && !process.env.DISCORD_TOKEN) {
-    process.env.DISCORD_TOKEN = process.env.DASHBOARD_BOT_TOKEN;
 }
 
 const app = express();
@@ -364,6 +377,7 @@ app.get('/api/stats', async (req, res) => {
                 broadcasts: { count: 0, percent: 0 },
             },
             totalUsers: 0,
+            totalUsersSource: null,
             bot: botSelf,
             clientId: process.env.DISCORD_CLIENT_ID,
         });
@@ -1948,9 +1962,11 @@ function preflightCheck() {
             console.warn('   Get it from the Discord Developer Portal → your app → OAuth2 → Client Secret.');
         }
         if (missing.includes('DISCORD_TOKEN')) {
-            console.warn('   DISCORD_TOKEN is used by the dashboard to look up guilds/channels the bot can see.');
-            console.warn('   Without it, opening any server shows "bot token not configured" (HTTP 503).');
-            console.warn('   On Vercel, set DISCORD_TOKEN (or DASHBOARD_BOT_TOKEN) in Settings → Environment Variables.');
+            console.warn('   The bot token is used by the dashboard to look up guilds/channels the bot can see');
+            console.warn('   and to show the live member/server counts on the login screen.');
+            console.warn('   Without it, opening any server shows "bot token not configured" (HTTP 503) and the');
+            console.warn('   login stats fall back to the leveling-tracked user count.');
+            console.warn('   On Vercel, set DISCORD_TOKEN2 (primary) or DISCORD_TOKEN / DASHBOARD_BOT_TOKEN.');
         }
     }
     if (SESSION_SECRET === 'primebot-dashboard-dev-secret-change-me') {
