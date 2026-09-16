@@ -1,4 +1,5 @@
 const { Pool } = require('pg');
+const { resolveDbUrl } = require('./resolveDbUrl');
 const { drizzle } = require('drizzle-orm/node-postgres');
 const schema = require('../shared/schema');
 
@@ -16,21 +17,19 @@ const schema = require('../shared/schema');
  *
  * Same-DB requirement (as with the other features): for the dashboard's beta
  * gate to reflect the bot's `/beta enable` writes, both deployments must point
- * at the same BETA_DATABASE_URL (or the same DATABASE_URL fallback). Different
+ * at the same BETA_DATABASE_URL (or the same FALLBACK_DATABASE_URL/DATABASE_URL fallback). Different
  * DBs → the dashboard never sees the bot's writes and a beta-enabled server
  * gets treated as non-beta.
  */
 
 function resolveConnectionString() {
-    if (process.env.BETA_DATABASE_URL) return process.env.BETA_DATABASE_URL;
-    if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
-    return null;
+    return resolveDbUrl('BETA_DATABASE_URL');
 }
 
 const cs = resolveConnectionString();
 
 if (!cs) {
-    console.warn('⚠️ BETA_DATABASE_URL (or DATABASE_URL) not set — beta settings will have no database.');
+    console.warn('⚠️ BETA_DATABASE_URL (or FALLBACK_DATABASE_URL/DATABASE_URL) not set — beta settings will have no database.');
 }
 
 function shouldEnableSsl(connectionStr) {

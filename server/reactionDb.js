@@ -1,4 +1,5 @@
 const { Pool } = require('pg');
+const { resolveDbUrl } = require('./resolveDbUrl');
 
 /**
  * Dedicated PostgreSQL pool for the reaction-role feature.
@@ -7,20 +8,18 @@ const { Pool } = require('pg');
  * cache in ReactionRoleManager), so — like the welcome feature — they get a
  * separate connection string (REACTION_DATABASE_URL) so they can live in their
  * own database/schema if desired. If REACTION_DATABASE_URL is unset we fall
- * back to the main DATABASE_URL so the feature still works in single-DB setups
+ * back to the shared FALLBACK_DATABASE_URL/DATABASE_URL so the feature still works in single-DB setups
  * without any extra configuration.
  */
 
 function resolveConnectionString() {
-    if (process.env.REACTION_DATABASE_URL) return process.env.REACTION_DATABASE_URL;
-    if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
-    return null;
+    return resolveDbUrl('REACTION_DATABASE_URL');
 }
 
 const cs = resolveConnectionString();
 
 if (!cs) {
-    console.warn('⚠️ REACTION_DATABASE_URL (or DATABASE_URL) not set — reaction roles will have no database.');
+    console.warn('⚠️ REACTION_DATABASE_URL (or FALLBACK_DATABASE_URL/DATABASE_URL) not set — reaction roles will have no database.');
 }
 
 function shouldEnableSsl(connectionStr) {

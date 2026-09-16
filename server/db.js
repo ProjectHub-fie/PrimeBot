@@ -33,15 +33,18 @@ function configFromUrl(connectionStr) {
   };
 }
 
-// Parse PostgreSQL connection string - uses DATABASE_URL env var (set per-host in .env or secrets)
+// Parse PostgreSQL connection string. The main pool prefers DATABASE_URL;
+// FALLBACK_DATABASE_URL is used when it is unset so a deployment can run the
+// whole bot off a single connection string without also defining DATABASE_URL.
 function parseConnectionString() {
-  if (process.env.DATABASE_URL) {
+  const mainUrl = process.env.DATABASE_URL || process.env.FALLBACK_DATABASE_URL;
+  if (mainUrl) {
     try {
-      const databaseUrl = process.env.DATABASE_URL;
-      console.log(`✅ Using PostgreSQL DATABASE_URL (sslmode=${/sslmode=([^&]+)/.exec(databaseUrl)?.[1] || 'off'})`);
-      return configFromUrl(databaseUrl);
+      const sourceVar = process.env.DATABASE_URL ? 'DATABASE_URL' : 'FALLBACK_DATABASE_URL';
+      console.log(`✅ Using PostgreSQL ${sourceVar} (sslmode=${/sslmode=([^&]+)/.exec(mainUrl)?.[1] || 'off'})`);
+      return configFromUrl(mainUrl);
     } catch (error) {
-      console.warn('Failed to parse DATABASE_URL, falling back to individual env vars:', error.message);
+      console.warn('Failed to parse database URL, falling back to individual env vars:', error.message);
     }
   } else {
     console.warn('⚠️ DATABASE_URL not found. Set DATABASE_URL in your environment or .env file.');
@@ -89,7 +92,7 @@ const db = drizzle(pool, { schema });
 // Test connection function
 async function testConnection() {
   try {
-    if (!process.env.DATABASE_URL && !process.env.DB_HOST) {
+    if (!process.env.DATABASE_URL && !process.env.FALLBACK_DATABASE_URL && !process.env.DB_HOST) {
       console.error('❌ No database configuration found');
       console.log('💡 Please create a PostgreSQL database in Replit:');
       console.log('   1. Open a new tab and type "Database"');

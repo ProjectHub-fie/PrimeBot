@@ -1,4 +1,5 @@
 const { Pool } = require('pg');
+const { resolveDbUrl } = require('./resolveDbUrl');
 
 /**
  * Dedicated PostgreSQL pool for per-panel ticket logging configuration.
@@ -12,20 +13,18 @@ const { Pool } = require('pg');
  *
  * Same-DB requirement (as with the other features): for dashboard saves to
  * reach the bot, both deployments must point at the same TLOG_DATABASE_URL
- * (or the same DATABASE_URL fallback). Different DBs → dashboard writes never
+ * (or the same FALLBACK_DATABASE_URL/DATABASE_URL fallback). Different DBs → dashboard writes never
  * reach the bot regardless of caching.
  */
 
 function resolveConnectionString() {
-    if (process.env.TLOG_DATABASE_URL) return process.env.TLOG_DATABASE_URL;
-    if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
-    return null;
+    return resolveDbUrl('TLOG_DATABASE_URL');
 }
 
 const cs = resolveConnectionString();
 
 if (!cs) {
-    console.warn('⚠️ TLOG_DATABASE_URL (or DATABASE_URL) not set — ticket logging will have no database.');
+    console.warn('⚠️ TLOG_DATABASE_URL (or FALLBACK_DATABASE_URL/DATABASE_URL) not set — ticket logging will have no database.');
 }
 
 function shouldEnableSsl(connectionStr) {

@@ -1,11 +1,12 @@
 const { Pool } = require('pg');
+const { resolveDbUrl } = require('./resolveDbUrl');
 
 /**
  * Dedicated PostgreSQL pool for the Welcome feature.
  *
  * Like the other per-feature pools, it gets a separate connection string
  * (WELCOME_DATABASE_URL) so it can live in its own database/schema if desired.
- * If WELCOME_DATABASE_URL is unset we fall back to the main DATABASE_URL so the
+ * If WELCOME_DATABASE_URL is unset we fall back to FALLBACK_DATABASE_URL (then DATABASE_URL) so the
  * feature still works in single-DB setups with zero extra configuration.
  *
  * Same-DB requirement: for dashboard saves to reach the bot, both deployments
@@ -18,15 +19,13 @@ const { Pool } = require('pg');
  */
 
 function resolveConnectionString() {
-    if (process.env.WELCOME_DATABASE_URL) return process.env.WELCOME_DATABASE_URL;
-    if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
-    return null;
+    return resolveDbUrl('WELCOME_DATABASE_URL');
 }
 
 const cs = resolveConnectionString();
 
 if (!cs) {
-    console.warn('⚠️ WELCOME_DATABASE_URL (or DATABASE_URL) not set — welcome feature will have no database.');
+    console.warn('⚠️ WELCOME_DATABASE_URL (or FALLBACK_DATABASE_URL/DATABASE_URL) not set — welcome feature will have no database.');
 }
 
 function shouldEnableSsl(connectionStr) {

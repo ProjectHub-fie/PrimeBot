@@ -1,4 +1,5 @@
 const { Pool } = require('pg');
+const { resolveDbUrl } = require('./resolveDbUrl');
 const { drizzle } = require('drizzle-orm/node-postgres');
 const schema = require('../shared/schema.js');
 
@@ -10,7 +11,7 @@ const schema = require('../shared/schema.js');
  * These previously rode on the main DATABASE_URL pool. They now get their own
  * connection string (COMMUNITY_DATABASE_URL) so they can live in their own
  * database/schema if desired. If COMMUNITY_DATABASE_URL is unset we fall back
- * to the main DATABASE_URL so the features still work in single-DB setups
+ * to the shared FALLBACK_DATABASE_URL/DATABASE_URL so the features still work in single-DB setups
  * without any extra configuration.
  *
  * Exports:
@@ -22,20 +23,18 @@ const schema = require('../shared/schema.js');
  *
  * Same-DB requirement (as with the other features): for dashboard reads to
  * reflect the bot's state, both deployments must point at the same
- * COMMUNITY_DATABASE_URL (or the same DATABASE_URL fallback). Different DBs →
+ * COMMUNITY_DATABASE_URL (or the same FALLBACK_DATABASE_URL/DATABASE_URL fallback). Different DBs →
  * dashboard reads an empty/absent set of polls/giveaways/counting games.
  */
 
 function resolveConnectionString() {
-    if (process.env.COMMUNITY_DATABASE_URL) return process.env.COMMUNITY_DATABASE_URL;
-    if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
-    return null;
+    return resolveDbUrl('COMMUNITY_DATABASE_URL');
 }
 
 const cs = resolveConnectionString();
 
 if (!cs) {
-    console.warn('⚠️ COMMUNITY_DATABASE_URL (or DATABASE_URL) not set — polls / giveaways / counting will have no database.');
+    console.warn('⚠️ COMMUNITY_DATABASE_URL (or FALLBACK_DATABASE_URL/DATABASE_URL) not set — polls / giveaways / counting will have no database.');
 }
 
 function shouldEnableSsl(connectionStr) {

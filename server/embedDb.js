@@ -1,4 +1,5 @@
 const { Pool } = require('pg');
+const { resolveDbUrl } = require('./resolveDbUrl');
 
 /**
  * Dedicated PostgreSQL pool for the saved-embeds feature (saved_embeds table).
@@ -15,15 +16,13 @@ const { Pool } = require('pg');
  */
 
 function resolveConnectionString() {
-    if (process.env.EMBED_DATABASE_URL) return process.env.EMBED_DATABASE_URL;
-    if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
-    return null;
+    return resolveDbUrl('EMBED_DATABASE_URL');
 }
 
 const cs = resolveConnectionString();
 
 if (!cs) {
-    console.warn('⚠️ EMBED_DATABASE_URL (or DATABASE_URL) not set — the saved-embeds feature will have no database.');
+    console.warn('⚠️ EMBED_DATABASE_URL (or FALLBACK_DATABASE_URL/DATABASE_URL) not set — the saved-embeds feature will have no database.');
 }
 
 function shouldEnableSsl(connectionStr) {

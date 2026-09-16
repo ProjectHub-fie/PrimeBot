@@ -99,12 +99,14 @@ function buildSessionStore() {
     } catch (err) {
         console.warn('[SESSION] Could not import season pool, falling back to a local pool:', err.message);
     }
-    if (!pool && process.env.DATABASE_URL) {
-        const dbUrl = process.env.DATABASE_URL;
-        pool = new Pool({
-            connectionString: dbUrl,
-            ssl: /sslmode=require/.test(dbUrl) ? { rejectUnauthorized: false } : (process.env.DB_SSL === 'require' ? { rejectUnauthorized: false } : undefined),
-        });
+    if (!pool) {
+        const fallbackUrl = process.env.FALLBACK_DATABASE_URL || process.env.DATABASE_URL;
+        if (fallbackUrl) {
+            pool = new Pool({
+                connectionString: fallbackUrl,
+                ssl: /sslmode=require/.test(fallbackUrl) ? { rejectUnauthorized: false } : (process.env.DB_SSL === 'require' ? { rejectUnauthorized: false } : undefined),
+            });
+        }
     }
     if (pool) {
         return new PgSession({

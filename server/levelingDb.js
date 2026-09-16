@@ -1,4 +1,5 @@
 const { Pool } = require('pg');
+const { resolveDbUrl } = require('./resolveDbUrl');
 const { drizzle } = require('drizzle-orm/node-postgres');
 const { userLevels, userBadges, userLevelsRelations, userBadgesRelations } = require('../shared/schema');
 
@@ -6,22 +7,20 @@ const { userLevels, userBadges, userLevelsRelations, userBadgesRelations } = req
  * Dedicated PostgreSQL pool for the Leveling feature.
  *
  * LEVELING_DATABASE_URL can point at its own database/schema. When it is unset
- * we fall back to the main DATABASE_URL so the feature still works in
+ * we fall back to the shared FALLBACK_DATABASE_URL/DATABASE_URL so the feature still works in
  * single-DB setups (same pattern as every other per-feature pool). Without the
  * fallback a `new Pool({ connectionString: undefined })` made every leveling
  * query fail whenever only DATABASE_URL was configured.
  */
 
 function resolveConnectionString() {
-    if (process.env.LEVELING_DATABASE_URL) return process.env.LEVELING_DATABASE_URL;
-    if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
-    return null;
+    return resolveDbUrl('LEVELING_DATABASE_URL');
 }
 
 const cs = resolveConnectionString();
 
 if (!cs) {
-    console.warn('⚠️ LEVELING_DATABASE_URL (or DATABASE_URL) not set — leveling feature will have no database.');
+    console.warn('⚠️ LEVELING_DATABASE_URL (or FALLBACK_DATABASE_URL/DATABASE_URL) not set — leveling feature will have no database.');
 }
 
 function shouldEnableSsl(connectionStr) {

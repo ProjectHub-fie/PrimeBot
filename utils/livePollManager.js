@@ -26,7 +26,7 @@ async function initializeDatabase() {
         const { drizzle } = require('drizzle-orm/node-postgres');
         
         // Resolve a connection string so we can decide whether to even try.
-        const hasLiveDb = process.env.LIVE_DATABASE_URL || process.env.DATABASE_URL
+        const hasLiveDb = process.env.LIVE_DATABASE_URL || process.env.FALLBACK_DATABASE_URL || process.env.DATABASE_URL
             || process.env.DB_HOST || process.env.DB_USER || process.env.DB_NAME;
         
         if (!hasLiveDb) {

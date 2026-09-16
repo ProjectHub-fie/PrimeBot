@@ -1,4 +1,5 @@
 const { Pool } = require('pg');
+const { resolveDbUrl } = require('./resolveDbUrl');
 
 /**
  * Dedicated PostgreSQL pool for the Appeal / Ban-DM subsystem.
@@ -8,9 +9,10 @@ const { Pool } = require('pg');
  * configured channel) is its own self-contained subsystem, so — like the
  * welcome / reaction-role / automod features — it gets a separate connection
  * string (APPEAL_DATABASE_URL) so it can live in its own database/schema
- * if desired. If APPEAL_DATABASE_URL is unset we fall back to the main
- * DATABASE_URL so the feature still works in single-DB setups.
-
+ * if desired. If APPEAL_DATABASE_URL is unset we fall back to
+ * FALLBACK_DATABASE_URL (then DATABASE_URL) so the feature still works in
+ * single-DB setups.
+ *
  * The dashboard's automod tab reads/writes the same tables through this pool;
  * the bot's AppealManager caches them and re-reads on an interval, mirroring
  * the other settings managers.
@@ -23,15 +25,13 @@ const { Pool } = require('pg');
  */
 
 function resolveConnectionString() {
-    if (process.env.APPEAL_DATABASE_URL) return process.env.APPEAL_DATABASE_URL;
-    if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
-    return null;
+    return resolveDbUrl('APPEAL_DATABASE_URL');
 }
 
 const cs = resolveConnectionString();
 
 if (!cs) {
-    console.warn('⚠️ APPEAL_DATABASE_URL (or DATABASE_URL) not set — ban-DM appeals will have no database.');
+    console.warn('⚠️ APPEAL_DATABASE_URL (or FALLBACK_DATABASE_URL/DATABASE_URL) not set — ban-DM appeals will have no database.');
 }
 
 function shouldEnableSsl(connectionStr) {

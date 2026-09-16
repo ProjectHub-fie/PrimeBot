@@ -1,4 +1,5 @@
 const { Pool } = require('pg');
+const { resolveDbUrl } = require('./resolveDbUrl');
 
 /**
  * Dedicated PostgreSQL pool for the Premium Automod feature.
@@ -7,20 +8,18 @@ const { Pool } = require('pg');
  * `automod_warnings` tables, its own cache in AutomodManager), so — like the
  * welcome and reaction-role features — it gets a separate connection string
  * (AUTOMOD_DATABASE_URL) so it can live in its own database/schema if desired.
- * If AUTOMOD_DATABASE_URL is unset we fall back to the main DATABASE_URL so the
+ * If AUTOMOD_DATABASE_URL is unset we fall back to FALLBACK_DATABASE_URL (then DATABASE_URL) so the
  * feature still works in single-DB setups without any extra configuration.
  */
 
 function resolveConnectionString() {
-    if (process.env.AUTOMOD_DATABASE_URL) return process.env.AUTOMOD_DATABASE_URL;
-    if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
-    return null;
+    return resolveDbUrl('AUTOMOD_DATABASE_URL');
 }
 
 const cs = resolveConnectionString();
 
 if (!cs) {
-    console.warn('⚠️ AUTOMOD_DATABASE_URL (or DATABASE_URL) not set — automod will have no database.');
+    console.warn('⚠️ AUTOMOD_DATABASE_URL (or FALLBACK_DATABASE_URL/DATABASE_URL) not set — automod will have no database.');
 }
 
 function shouldEnableSsl(connectionStr) {

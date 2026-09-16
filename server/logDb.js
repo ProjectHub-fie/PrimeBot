@@ -1,4 +1,5 @@
 const { Pool } = require('pg');
+const { resolveDbUrl } = require('./resolveDbUrl');
 
 /**
  * Dedicated PostgreSQL pool for the bot logging feature + dashboard website logs.
@@ -12,7 +13,7 @@ const { Pool } = require('pg');
  *      the General settings page) — stored in the `website_logs` table.
  *
  * Both subsystems use the same connection string (LOG_DATABASE_URL), which falls
- * back to the main DATABASE_URL so the feature still works in single-DB setups
+ * back to the shared FALLBACK_DATABASE_URL/DATABASE_URL so the feature still works in single-DB setups
  * with zero extra configuration.
  *
  * Same-DB requirement (as with the other features): for dashboard saves to reach
@@ -21,15 +22,13 @@ const { Pool } = require('pg');
  */
 
 function resolveConnectionString() {
-    if (process.env.LOG_DATABASE_URL) return process.env.LOG_DATABASE_URL;
-    if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
-    return null;
+    return resolveDbUrl('LOG_DATABASE_URL');
 }
 
 const cs = resolveConnectionString();
 
 if (!cs) {
-    console.warn('⚠️ LOG_DATABASE_URL (or DATABASE_URL) not set — logging feature will have no database.');
+    console.warn('⚠️ LOG_DATABASE_URL (or FALLBACK_DATABASE_URL/DATABASE_URL) not set — logging feature will have no database.');
 }
 
 function shouldEnableSsl(connectionStr) {
