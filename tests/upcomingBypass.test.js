@@ -35,6 +35,17 @@ test('eventsPage renders the real editor when guild._bypassUpcoming is set', () 
     assert.ok(html.includes('id="ev-form"'), 'real editor form must render');
 });
 
+test('antiNukePage renders the Coming Soon overlay for ordinary users', () => {
+    const html = guildPages.antiNukePage({ guild: fakeGuild(false), user: null });
+    assert.ok(html.includes('upcoming-locked-wrap locked'), 'expected the locked overlay');
+});
+
+test('antiNukePage renders the real editor when guild._bypassUpcoming is set', () => {
+    const html = guildPages.antiNukePage({ guild: fakeGuild(true), user: null });
+    assert.ok(!html.includes('upcoming-locked-wrap locked'), 'overlay should be skipped');
+    assert.ok(html.includes('id="an-enabled"'), 'real Anti-Nuke editor must render');
+});
+
 test('ticketsPage renders the real panel list for ordinary users (released)', () => {
     const html = guildPages.ticketsPage({ guild: fakeGuild(false), user: null });
     assert.ok(!html.includes('upcoming-locked-wrap locked'), 'overlay must NOT be present — tickets is released');

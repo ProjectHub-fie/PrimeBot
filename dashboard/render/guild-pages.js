@@ -1458,8 +1458,10 @@ function automodPage({ guild, user }) {
 // ── Anti-Nuke (upcoming) ────────────────────────────────────────────────────
 //
 // A separate tab, marked `upcoming: true`, so it renders the standard
-// "Coming Soon……" overlay for every server. The real editor markup is kept
-// behind the blur (flipping the flag later re-enables it with no rewrite).
+// "Coming Soon……" overlay for ordinary users. Developer/owner bot roles bypass
+// the gate (guild._bypassUpcoming) and get the real editor. The editor markup
+// is kept behind the blur (flipping the flag later re-enables it with no
+// rewrite).
 
 function antiNukePage({ guild, user }) {
     const { antiNukePageHTML } = require('./antinuke-page');
