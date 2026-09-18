@@ -382,7 +382,7 @@ const { TICKET_LOG_EVENT_KEYS } = (() => {
 })();
 const { normalizeGuildPrefix } = require('../utils/prefixHelper');
 const { normalizeEvents, DEFAULT_ENABLED_EVENTS } = require('../utils/logEvents');
-const { normalizeRules, normalizeAction, normalizeWarnActions, normalizeDmMessages } = require('../utils/automodRules');
+const { normalizeRules, normalizeAction, normalizeWarnActions, normalizeWarnLadder, normalizeDmMessages } = require('../utils/automodRules');
 
 // ── server_settings (prefix, leveling, auto-reactions, broadcast) ────────────
 
@@ -1060,44 +1060,64 @@ async function deleteReactionRole(id) {
 // dashboard reads/writes here; the bot's AutomodManager picks up changes via
 // its periodic cache reload.
 
+// Memoized so the ~20-statement DDL/ALTER sweep runs once per process instead of
+// on every dashboard read (a real Neon cost saver: the dashboard reads automod
+// settings on each settings-page load). Reset on failure so it retries.
+let _automodTablesReady = null;
 async function ensureAutomodTables() {
-    await getAutomodPool().query(`
-        CREATE TABLE IF NOT EXISTS automod_settings (
-            guild_id            VARCHAR(50) PRIMARY KEY,
-            enabled             BOOLEAN NOT NULL DEFAULT false,
-            log_channel_id      VARCHAR(50),
-            mute_role_id        VARCHAR(50),
-            exempt_role_ids     JSONB NOT NULL DEFAULT '[]',
-            exempt_channel_ids  JSONB NOT NULL DEFAULT '[]',
-            rules               JSONB NOT NULL DEFAULT '[]',
-            warn_threshold      INTEGER NOT NULL DEFAULT 3,
-            warn_action         VARCHAR(20) DEFAULT 'timeout',
-            warn_actions        JSONB NOT NULL DEFAULT '["timeout"]',
-            dm_enabled          BOOLEAN NOT NULL DEFAULT true,
-            dm_messages         JSONB NOT NULL DEFAULT '{}',
-            dm_user              BOOLEAN NOT NULL DEFAULT true,
-            use_appeal           BOOLEAN NOT NULL DEFAULT false,
-            appeal_channel_id   VARCHAR(50),
-            updated_at          TIMESTAMP DEFAULT NOW()
-        )
-    `);
-    await getAutomodPool().query(`ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS log_channel_id     VARCHAR(50)`);
-    await getAutomodPool().query(`ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS mute_role_id       VARCHAR(50)`);
-    await getAutomodPool().query(`ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS exempt_role_ids    JSONB NOT NULL DEFAULT '[]'`);
-    await getAutomodPool().query(`ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS exempt_channel_ids JSONB NOT NULL DEFAULT '[]'`);
-    await getAutomodPool().query(`ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS rules              JSONB NOT NULL DEFAULT '[]'`);
-    await getAutomodPool().query(`ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS warn_threshold     INTEGER NOT NULL DEFAULT 3`);
-    await getAutomodPool().query(`ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS warn_action        VARCHAR(20) DEFAULT 'timeout'`);
-    await getAutomodPool().query(`ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS warn_actions       JSONB NOT NULL DEFAULT '["timeout"]'`);
-    await getAutomodPool().query(`ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS dm_enabled         BOOLEAN NOT NULL DEFAULT true`);
-    await getAutomodPool().query(`ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS dm_messages        JSONB NOT NULL DEFAULT '{}'`);
-    await getAutomodPool().query(`ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS dm_user             BOOLEAN NOT NULL DEFAULT true`);
-    await getAutomodPool().query(`ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS use_appeal          BOOLEAN NOT NULL DEFAULT false`);
-    await getAutomodPool().query(`ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS appeal_channel_id  VARCHAR(50)`);
-    await getAutomodPool().query(`
-        CREATE TABLE IF NOT EXISTS automod_warnings (
-            id           SERIAL PRIMARY KEY,
-            guild_id     VARCHAR(50) NOT NULL,
+    if (_automodTablesReady) return _automodTablesReady;
+    _automodTablesReady = (async () => {
+        await getAutomodPool().query(`
+            CREATE TABLE IF NOT EXISTS automod_settings (
+                guild_id            VARCHAR(50) PRIMARY KEY,
+                enabled             BOOLEAN NOT NULL DEFAULT false,
+                log_channel_id      VARCHAR(50),
+                mute_role_id        VARCHAR(50),
+                exempt_role_ids     JSONB NOT NULL DEFAULT '[]',
+                exempt_channel_ids  JSONB NOT NULL DEFAULT '[]',
+                exempt_user_ids     JSONB NOT NULL DEFAULT '[]',
+                rules               JSONB NOT NULL DEFAULT '[]',
+                warn_threshold      INTEGER NOT NULL DEFAULT 3,
+                warn_action         VARCHAR(20) DEFAULT 'timeout',
+                warn_actions        JSONB NOT NULL DEFAULT '["timeout"]',
+                warn_ladder         JSONB NOT NULL DEFAULT '[]',
+                dm_enabled          BOOLEAN NOT NULL DEFAULT true,
+                dm_messages         JSONB NOT NULL DEFAULT '{}',
+                dm_user              BOOLEAN NOT NULL DEFAULT true,
+                use_appeal           BOOLEAN NOT NULL DEFAULT false,
+                appeal_channel_id   VARCHAR(50),
+                dry_run             BOOLEAN NOT NULL DEFAULT false,
+                raid_lockdown       BOOLEAN NOT NULL DEFAULT false,
+                raid_alert_channel_id VARCHAR(50),
+                incident_retention_days INTEGER NOT NULL DEFAULT 30,
+                updated_at          TIMESTAMP DEFAULT NOW()
+            )
+        `);
+        await getAutomodPool().query(`
+            ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS log_channel_id     VARCHAR(50);
+            ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS mute_role_id       VARCHAR(50);
+            ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS exempt_role_ids    JSONB NOT NULL DEFAULT '[]';
+            ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS exempt_channel_ids JSONB NOT NULL DEFAULT '[]';
+            ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS exempt_user_ids    JSONB NOT NULL DEFAULT '[]';
+            ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS rules              JSONB NOT NULL DEFAULT '[]';
+            ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS warn_threshold     INTEGER NOT NULL DEFAULT 3;
+            ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS warn_action        VARCHAR(20) DEFAULT 'timeout';
+            ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS warn_actions       JSONB NOT NULL DEFAULT '["timeout"]';
+            ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS warn_ladder        JSONB NOT NULL DEFAULT '[]';
+            ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS dm_enabled         BOOLEAN NOT NULL DEFAULT true;
+            ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS dm_messages        JSONB NOT NULL DEFAULT '{}';
+            ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS dm_user            BOOLEAN NOT NULL DEFAULT true;
+            ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS use_appeal         BOOLEAN NOT NULL DEFAULT false;
+            ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS appeal_channel_id  VARCHAR(50);
+            ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS dry_run            BOOLEAN NOT NULL DEFAULT false;
+            ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS raid_lockdown      BOOLEAN NOT NULL DEFAULT false;
+            ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS raid_alert_channel_id VARCHAR(50);
+            ALTER TABLE automod_settings ADD COLUMN IF NOT EXISTS incident_retention_days INTEGER NOT NULL DEFAULT 30;
+        `);
+        await getAutomodPool().query(`
+            CREATE TABLE IF NOT EXISTS automod_warnings (
+                id           SERIAL PRIMARY KEY,
+                guild_id     VARCHAR(50) NOT NULL,
             user_id      VARCHAR(50) NOT NULL,
             moderator_id VARCHAR(50),
             reason       TEXT NOT NULL DEFAULT '',
@@ -1129,6 +1149,13 @@ async function ensureAutomodTables() {
             ON automod_appeals (guild_id, status);
     `);
     await getAutomodPool().query(`ALTER TABLE automod_appeals ADD COLUMN IF NOT EXISTS reversed BOOLEAN NOT NULL DEFAULT false`);
+    })().catch(err => {
+        // Reset so the next call retries — a transient DB blip must not wedge
+        // the whole automod feature for the life of the process.
+        _automodTablesReady = null;
+        throw err;
+    });
+    return _automodTablesReady;
 }
 
 async function getAutomodSettings(guildId) {
@@ -1145,15 +1172,21 @@ function defaultAutomodSettings() {
         muteRoleId: null,
         exemptRoleIds: [],
         exemptChannelIds: [],
+        exemptUserIds: [],
         rules: [],
         warnThreshold: 3,
         warnAction: 'timeout',
         warnActions: ['timeout'],
+        warnLadder: [{ count: 3, actions: ['timeout'] }],
         dmEnabled: true,
         dmMessages: {},
         dmUser: true,
         useAppeal: false,
         appealChannelId: null,
+        dryRun: false,
+        raidLockdown: false,
+        raidAlertChannelId: null,
+        incidentRetentionDays: 30,
     };
 }
 
@@ -1161,21 +1194,28 @@ function rowToAutomodSettings(row) {
     const warnActions = Array.isArray(row.warn_actions) && row.warn_actions.length
         ? normalizeWarnActions(row.warn_actions, 'timeout')
         : [normalizeAction(row.warn_action, 'timeout')];
+    const warnThreshold = Math.max(1, parseInt(row.warn_threshold, 10) || 3);
     return {
         enabled: row.enabled,
         logChannelId: row.log_channel_id || null,
         muteRoleId: row.mute_role_id || null,
         exemptRoleIds: Array.isArray(row.exempt_role_ids) ? row.exempt_role_ids.map(String) : [],
         exemptChannelIds: Array.isArray(row.exempt_channel_ids) ? row.exempt_channel_ids.map(String) : [],
+        exemptUserIds: Array.isArray(row.exempt_user_ids) ? row.exempt_user_ids.map(String) : [],
         rules: normalizeRules(row.rules),
-        warnThreshold: Math.max(1, parseInt(row.warn_threshold, 10) || 3),
+        warnThreshold,
         warnAction: warnActions[0],
         warnActions,
+        warnLadder: normalizeWarnLadder(row.warn_ladder, { threshold: warnThreshold, warnActions }),
         dmEnabled: row.dm_enabled !== false,
         dmMessages: normalizeDmMessages(row.dm_messages),
         dmUser: row.dm_user !== false,
         useAppeal: row.use_appeal === true,
         appealChannelId: row.appeal_channel_id || null,
+        dryRun: row.dry_run === true,
+        raidLockdown: row.raid_lockdown === true,
+        raidAlertChannelId: row.raid_alert_channel_id || null,
+        incidentRetentionDays: Math.max(0, parseInt(row.incident_retention_days, 10) || 0),
     };
 }
 
@@ -1188,6 +1228,7 @@ async function upsertAutomodSettings(guildId, patch) {
     if ('muteRoleId' in patch)        merged.muteRoleId = patch.muteRoleId || null;
     if ('exemptRoleIds' in patch)     merged.exemptRoleIds = (Array.isArray(patch.exemptRoleIds) ? patch.exemptRoleIds : []).map(String);
     if ('exemptChannelIds' in patch)  merged.exemptChannelIds = (Array.isArray(patch.exemptChannelIds) ? patch.exemptChannelIds : []).map(String);
+    if ('exemptUserIds' in patch)     merged.exemptUserIds = (Array.isArray(patch.exemptUserIds) ? patch.exemptUserIds : []).map(String);
     if ('rules' in patch)             merged.rules = normalizeRules(patch.rules);
     if ('warnThreshold' in patch)     merged.warnThreshold = Math.max(1, parseInt(patch.warnThreshold, 10) || 3);
     if ('warnAction' in patch)        merged.warnAction = normalizeAction(patch.warnAction, 'timeout');
@@ -1195,41 +1236,68 @@ async function upsertAutomodSettings(guildId, patch) {
         merged.warnActions = normalizeWarnActions(patch.warnActions, merged.warnAction || 'timeout');
         merged.warnAction = merged.warnActions[0];
     }
+    if ('warnLadder' in patch) {
+        merged.warnLadder = normalizeWarnLadder(patch.warnLadder, {
+            threshold: merged.warnThreshold, warnActions: merged.warnActions,
+        });
+    }
     if ('dmEnabled' in patch)         merged.dmEnabled = patch.dmEnabled !== false;
     if ('dmMessages' in patch)        merged.dmMessages = normalizeDmMessages(patch.dmMessages);
     if ('dmUser' in patch)            merged.dmUser = patch.dmUser !== false;
     if ('useAppeal' in patch)        merged.useAppeal = patch.useAppeal === true;
     if ('appealChannelId' in patch)   merged.appealChannelId = patch.appealChannelId || null;
+    if ('dryRun' in patch)            merged.dryRun = patch.dryRun === true;
+    if ('raidLockdown' in patch)      merged.raidLockdown = patch.raidLockdown === true;
+    if ('raidAlertChannelId' in patch) merged.raidAlertChannelId = patch.raidAlertChannelId || null;
+    if ('incidentRetentionDays' in patch) {
+        merged.incidentRetentionDays = Math.max(0, parseInt(patch.incidentRetentionDays, 10) || 0);
+    }
+    // Keep the flat threshold/actions mirrored from the ladder's first rung.
+    if (merged.warnLadder && merged.warnLadder.length) {
+        merged.warnThreshold = merged.warnLadder[0].count;
+        merged.warnActions = merged.warnLadder[0].actions;
+        merged.warnAction = merged.warnActions[0];
+    }
 
     await getAutomodPool().query(`
         INSERT INTO automod_settings (
             guild_id, enabled, log_channel_id, mute_role_id,
-            exempt_role_ids, exempt_channel_ids, rules,
-            warn_threshold, warn_action, warn_actions,
-            dm_enabled, dm_messages, dm_user, use_appeal, appeal_channel_id, updated_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,NOW())
+            exempt_role_ids, exempt_channel_ids, exempt_user_ids, rules,
+            warn_threshold, warn_action, warn_actions, warn_ladder,
+            dm_enabled, dm_messages, dm_user, use_appeal, appeal_channel_id,
+            dry_run, raid_lockdown, raid_alert_channel_id, incident_retention_days, updated_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,NOW())
         ON CONFLICT (guild_id) DO UPDATE SET
             enabled            = EXCLUDED.enabled,
             log_channel_id     = EXCLUDED.log_channel_id,
             mute_role_id       = EXCLUDED.mute_role_id,
             exempt_role_ids    = EXCLUDED.exempt_role_ids,
             exempt_channel_ids = EXCLUDED.exempt_channel_ids,
+            exempt_user_ids    = EXCLUDED.exempt_user_ids,
             rules              = EXCLUDED.rules,
             warn_threshold     = EXCLUDED.warn_threshold,
             warn_action        = EXCLUDED.warn_action,
             warn_actions       = EXCLUDED.warn_actions,
+            warn_ladder        = EXCLUDED.warn_ladder,
             dm_enabled         = EXCLUDED.dm_enabled,
             dm_messages        = EXCLUDED.dm_messages,
             dm_user            = EXCLUDED.dm_user,
             use_appeal         = EXCLUDED.use_appeal,
             appeal_channel_id  = EXCLUDED.appeal_channel_id,
+            dry_run            = EXCLUDED.dry_run,
+            raid_lockdown      = EXCLUDED.raid_lockdown,
+            raid_alert_channel_id = EXCLUDED.raid_alert_channel_id,
+            incident_retention_days = EXCLUDED.incident_retention_days,
             updated_at         = NOW()
     `, [
         guildId, merged.enabled, merged.logChannelId, merged.muteRoleId,
         JSON.stringify(merged.exemptRoleIds), JSON.stringify(merged.exemptChannelIds),
-        JSON.stringify(merged.rules), merged.warnThreshold, merged.warnAction,
-        JSON.stringify(merged.warnActions), merged.dmEnabled,
+        JSON.stringify(merged.exemptUserIds), JSON.stringify(merged.rules),
+        merged.warnThreshold, merged.warnAction,
+        JSON.stringify(merged.warnActions), JSON.stringify(merged.warnLadder || []), merged.dmEnabled,
         JSON.stringify(merged.dmMessages), merged.dmUser, merged.useAppeal, merged.appealChannelId,
+        merged.dryRun === true, merged.raidLockdown === true, merged.raidAlertChannelId || null,
+        Math.max(0, parseInt(merged.incidentRetentionDays, 10) || 0),
     ]);
     return getAutomodSettings(guildId);
 }
@@ -1312,11 +1380,219 @@ function rowToAutomodAppeal(row) {
     };
 }
 
+// ── automod_incidents (Incident Center + Analytics) ──────────────────────────
+//
+// The bot writes one row per enforcement; the dashboard only ever READS. Every
+// query is filter-driven, indexed and paginated so opening the page never scans
+// the whole history. Analytics run a small fixed set of aggregate queries that
+// the client caches (the page remembers the last result per guild + window).
+
+const AUTOMOD_INCIDENTS_DDL = `
+    CREATE TABLE IF NOT EXISTS automod_incidents (
+        id          SERIAL PRIMARY KEY,
+        guild_id    VARCHAR(50) NOT NULL,
+        user_id     VARCHAR(50),
+        username    VARCHAR(120),
+        channel_id  VARCHAR(50),
+        message_id  VARCHAR(50),
+        rule_type   VARCHAR(40) NOT NULL,
+        actions     JSONB NOT NULL DEFAULT '[]',
+        severity    VARCHAR(20) NOT NULL DEFAULT 'medium',
+        reason      TEXT NOT NULL DEFAULT '',
+        dry_run     BOOLEAN NOT NULL DEFAULT false,
+        cid         INTEGER,
+        created_at  TIMESTAMP DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS automod_incidents_guild_created_idx
+        ON automod_incidents (guild_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS automod_incidents_guild_rule_idx
+        ON automod_incidents (guild_id, rule_type);
+    CREATE INDEX IF NOT EXISTS automod_incidents_guild_severity_idx
+        ON automod_incidents (guild_id, severity);
+    CREATE INDEX IF NOT EXISTS automod_incidents_guild_user_idx
+        ON automod_incidents (guild_id, user_id);
+`;
+
+const ANTINUKE_DDL = `
+    CREATE TABLE IF NOT EXISTS antinuke_settings (
+        guild_id           VARCHAR(50) PRIMARY KEY,
+        enabled            BOOLEAN NOT NULL DEFAULT false,
+        alert_channel_id   VARCHAR(50),
+        responses          JSONB NOT NULL DEFAULT '[]',
+        trusted_user_ids   JSONB NOT NULL DEFAULT '[]',
+        trusted_role_ids   JSONB NOT NULL DEFAULT '[]',
+        watched            JSONB NOT NULL DEFAULT '{}',
+        dry_run            BOOLEAN NOT NULL DEFAULT true,
+        updated_at         TIMESTAMP DEFAULT NOW()
+    );
+`;
+
+async function ensureAutomodIncidentsTable() {
+    await getAutomodPool().query(AUTOMOD_INCIDENTS_DDL);
+}
+
+function rowToAutomodIncident(row) {
+    return {
+        id: row.id,
+        userId: row.user_id,
+        username: row.username,
+        channelId: row.channel_id,
+        messageId: row.message_id,
+        ruleType: row.rule_type,
+        actions: Array.isArray(row.actions) ? row.actions : [],
+        severity: row.severity,
+        reason: row.reason,
+        dryRun: row.dry_run === true,
+        cid: row.cid,
+        createdAt: row.created_at,
+    };
+}
+
+/**
+ * Filtered + paginated incident search. Mirrors the bot manager's getIncidents
+ * (the dashboard owns the read path; the bot owns the write path). All filters
+ * are parameterized — no user input is ever concatenated into SQL.
+ */
+async function getAutomodIncidents(guildId, {
+    ruleType = null, severity = null, action = null, channelId = null,
+    dryRun = null, search = null, sinceDays = null,
+    limit = 25, offset = 0,
+} = {}) {
+    await ensureAutomodIncidentsTable();
+    const where = ['guild_id = $1'];
+    const params = [String(guildId)];
+    const push = (v) => { params.push(v); return `$${params.length}`; };
+    if (ruleType) where.push(`rule_type = ${push(String(ruleType))}`);
+    if (severity && ['low', 'medium', 'high', 'critical'].includes(severity)) where.push(`severity = ${push(severity)}`);
+    if (channelId) where.push(`channel_id = ${push(String(channelId))}`);
+    if (dryRun === true) where.push('dry_run = true');
+    if (dryRun === false) where.push('dry_run = false');
+    if (typeof action === 'string' && action) where.push(`actions ? ${push(action)}`);
+    if (search) {
+        const like = `%${String(search).slice(0, 100).replace(/[%_]/g, '')}%`;
+        where.push(`(username ILIKE ${push(like)} OR user_id ILIKE ${push(like)} OR reason ILIKE ${push(like)})`);
+    }
+    const days = parseInt(sinceDays, 10);
+    if (Number.isFinite(days) && days > 0) where.push(`created_at > NOW() - (${push(days)} || ' days')::interval`);
+    const lim = Math.min(100, Math.max(1, parseInt(limit, 10) || 25));
+    const off = Math.max(0, parseInt(offset, 10) || 0);
+    const whereSql = where.join(' AND ');
+    const [rows, count] = await Promise.all([
+        getAutomodPool().query(
+            `SELECT * FROM automod_incidents WHERE ${whereSql} ORDER BY created_at DESC LIMIT ${lim} OFFSET ${off}`,
+            params
+        ),
+        getAutomodPool().query(`SELECT COUNT(*)::int AS count FROM automod_incidents WHERE ${whereSql}`, params),
+    ]);
+    return {
+        total: count.rows[0]?.count || 0,
+        limit: lim,
+        offset: off,
+        incidents: rows.rows.map(rowToAutomodIncident),
+    };
+}
+
+/** Aggregated analytics for the dashboard charts. Indexed + time-bounded. */
+async function getAutomodAnalytics(guildId, { days = 30 } = {}) {
+    await ensureAutomodIncidentsTable();
+    const d = Math.min(365, Math.max(1, parseInt(days, 10) || 30));
+    const base = `FROM automod_incidents WHERE guild_id = $1 AND created_at > NOW() - ($2 || ' days')::interval`;
+    const params = [String(guildId), String(d)];
+    const q = (sql) => getAutomodPool().query(sql, params);
+    const [totals, byRule, bySeverity, byAction, byChannel, byUser, overTime] = await Promise.all([
+        q(`SELECT COUNT(*)::int AS total,
+                  COUNT(*) FILTER (WHERE dry_run = false)::int AS enforced,
+                  COUNT(*) FILTER (WHERE dry_run = true)::int AS dry_run,
+                  COUNT(DISTINCT user_id)::int AS users ${base}`),
+        q(`SELECT rule_type, COUNT(*)::int AS count ${base} GROUP BY rule_type ORDER BY count DESC LIMIT 20`),
+        q(`SELECT severity, COUNT(*)::int AS count ${base} GROUP BY severity ORDER BY count DESC`),
+        q(`SELECT act AS action, COUNT(*)::int AS count
+             FROM automod_incidents, jsonb_array_elements_text(actions) AS act
+             WHERE guild_id = $1 AND created_at > NOW() - ($2 || ' days')::interval
+             GROUP BY act ORDER BY count DESC`),
+        q(`SELECT channel_id, COUNT(*)::int AS count ${base} GROUP BY channel_id ORDER BY count DESC LIMIT 10`),
+        q(`SELECT user_id, MAX(username) AS username, COUNT(*)::int AS count ${base} GROUP BY user_id ORDER BY count DESC LIMIT 10`),
+        q(`SELECT to_char(date_trunc('day', created_at), 'YYYY-MM-DD') AS day, COUNT(*)::int AS count
+             ${base} GROUP BY day ORDER BY day ASC`),
+    ]);
+    const t = totals.rows[0] || {};
+    return {
+        days: d,
+        totals: {
+            total: t.total || 0, enforced: t.enforced || 0,
+            dryRun: t.dry_run || 0, users: t.users || 0,
+        },
+        byRule: byRule.rows.map(r => ({ key: r.rule_type, count: r.count })),
+        bySeverity: bySeverity.rows.map(r => ({ key: r.severity, count: r.count })),
+        byAction: byAction.rows.map(r => ({ key: r.action, count: r.count })),
+        byChannel: byChannel.rows.map(r => ({ key: r.channel_id, count: r.count })),
+        topUsers: byUser.rows.map(r => ({ userId: r.user_id, username: r.username, count: r.count })),
+        overTime: overTime.rows.map(r => ({ day: r.day, count: r.count })),
+    };
+}
+
+// ── antinuke_settings (upcoming feature) ─────────────────────────────────────
+//
+// Anti-Nuke has its own pool (ANUKE_DATABASE_URL, server/anukeDb.js) so it can
+// sit in a separate database like every other feature.
+
+async function ensureAntiNukeTable() {
+    const { anukePool } = require('../server/anukeDb');
+    await anukePool.query(ANTINUKE_DDL);
+}
+
+async function getAntiNukeSettings(guildId) {
+    await ensureAntiNukeTable();
+    const { anukePool } = require('../server/anukeDb');
+    const { normalizeAntiNukeSettings } = require('../utils/antiNukeRules');
+    const res = await anukePool.query('SELECT * FROM antinuke_settings WHERE guild_id = $1', [guildId]);
+    if (res.rows.length === 0) return normalizeAntiNukeSettings({});
+    const row = res.rows[0];
+    return normalizeAntiNukeSettings({
+        enabled: row.enabled,
+        alertChannelId: row.alert_channel_id || null,
+        responses: row.responses,
+        trustedUserIds: row.trusted_user_ids,
+        trustedRoleIds: row.trusted_role_ids,
+        watched: row.watched,
+        dryRun: row.dry_run !== false,
+        updatedAt: row.updated_at || null,
+    });
+}
+
+async function upsertAntiNukeSettings(guildId, patch = {}) {
+    const { anukePool } = require('../server/anukeDb');
+    const { normalizeAntiNukeSettings } = require('../utils/antiNukeRules');
+    const current = await getAntiNukeSettings(guildId);
+    const merged = normalizeAntiNukeSettings({ ...current, ...patch });
+    await anukePool.query(`
+        INSERT INTO antinuke_settings (
+            guild_id, enabled, alert_channel_id, responses,
+            trusted_user_ids, trusted_role_ids, watched, dry_run, updated_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())
+        ON CONFLICT (guild_id) DO UPDATE SET
+            enabled          = EXCLUDED.enabled,
+            alert_channel_id = EXCLUDED.alert_channel_id,
+            responses        = EXCLUDED.responses,
+            trusted_user_ids = EXCLUDED.trusted_user_ids,
+            trusted_role_ids = EXCLUDED.trusted_role_ids,
+            watched          = EXCLUDED.watched,
+            dry_run          = EXCLUDED.dry_run,
+            updated_at       = NOW()
+    `, [
+        guildId, merged.enabled, merged.alertChannelId,
+        JSON.stringify(merged.responses), JSON.stringify(merged.trustedUserIds),
+        JSON.stringify(merged.trustedRoleIds), JSON.stringify(merged.watched),
+        merged.dryRun !== false,
+    ]);
+    return merged;
+}
+
 // ── Combined view (one fetch per guild for the settings page) ───────────────
 
 async function getGuildConfig(guildId) {
     let ticketPanelComponents = [];
-    const [server, welcome, logging, reactionRoles, automod, ticketPanels, levelingRoleRewards, birthdaySettings, birthdays, comps] = await Promise.all([
+    const [server, welcome, logging, reactionRoles, automod, antiNuke, ticketPanels, levelingRoleRewards, birthdaySettings, birthdays, comps] = await Promise.all([
         getServerSettings(guildId).catch(err => {
             console.error('[DASHBOARD DB] server_settings read failed:', err.message);
             return defaultServerSettings();
@@ -1336,6 +1612,10 @@ async function getGuildConfig(guildId) {
         getAutomodSettings(guildId).catch(err => {
             console.error('[DASHBOARD DB] automod_settings read failed:', err.message);
             return defaultAutomodSettings();
+        }),
+        getAntiNukeSettings(guildId).catch(err => {
+            console.error('[DASHBOARD DB] antinuke_settings read failed:', err.message);
+            return null;
         }),
         getTicketPanels(guildId).catch(err => {
             console.error('[DASHBOARD DB] ticket_panels read failed:', err.message);
@@ -1374,7 +1654,7 @@ async function getGuildConfig(guildId) {
             panel.components.push(c);
         }
     }
-    return { server, welcome, logging, reactionRoles, automod, ticketPanels, birthdaySettings, birthdays };
+    return { server, welcome, logging, reactionRoles, automod, antiNuke, ticketPanels, birthdaySettings, birthdays };
 }
 
 // ── Aggregated platform stats (public — shown on the login screen) ──────────
@@ -3121,6 +3401,11 @@ module.exports = {
     defaultAutomodSettings,
     getAutomodWarnings,
     clearAutomodWarnings,
+    getAutomodIncidents,
+    getAutomodAnalytics,
+    getAntiNukeSettings,
+    upsertAntiNukeSettings,
+    ensureAutomodIncidentsTable,
     submitAutomodAppeal,
     getAutomodAppeals,
     decideAutomodAppeal,

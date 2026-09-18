@@ -148,8 +148,12 @@ client.betaManager = betaManager;
     client.welcomeSettingsManager = { getWelcomeSettings: () => ({ enabled: false }), updateGuildSetting: noop, setWelcomeChannel: noop, setWelcomeMessage: noop, setWelcomeBanner: noop, setWelcomeColor: noop, setWelcomeDmMessage: noop, toggleWelcomeDm: noop, toggleWelcomeFeature: noop };
     client.loggingSettingsManager = { getSettings: () => ({ enabled: false, events: [] }), isEnabled: () => false, updateSettings: noop };
     client.automodManager = {
-        isEnabled: () => false, getSettings: () => ({ enabled: false, rules: [], warnThreshold: 3, warnAction: 'timeout' }),
-        updateSettings: noop, scanMessage: noopAsync,
+        isEnabled: () => false, isDryRun: () => false,
+        getSettings: () => ({ enabled: false, rules: [], warnThreshold: 3, warnAction: 'timeout' }),
+        updateSettings: noop, scanMessage: noopAsync, scanMemberJoin: noopAsync,
+        evaluate: () => [], testContent: () => ({ enabled: false, dryRun: false, matches: [], skipped: [] }),
+        getIncidents: async () => ({ total: 0, incidents: [] }), getAnalytics: async () => null,
+        applyPreset: () => null, getDryRunCount: () => 0,
         addWarning: noopAsync, removeWarnings: async () => 0, getWarnings: async () => [], getWarningCount: async () => 0,
         warnMember: async () => ({ count: 0, escalated: false, warnThreshold: 3, warnAction: 'timeout' }),
         muteMember: noopAsync, unmuteMember: noopAsync,
@@ -230,6 +234,18 @@ async function initializeManagers() {
         console.log('[MANAGERS] AutomodManager loaded.');
     } catch (err) {
         console.error('[MANAGERS] Failed to load AutomodManager:', err.message);
+    }
+
+    try {
+        const AntiNukeManager = require('./utils/antiNukeManager');
+        client.antiNukeManager = new AntiNukeManager(client);
+        console.log('[MANAGERS] AntiNukeManager loaded.');
+    } catch (err) {
+        console.error('[MANAGERS] Failed to load AntiNukeManager:', err.message);
+        client.antiNukeManager = {
+            getSettings: () => ({ enabled: false, watched: {}, responses: [], dryRun: true }),
+            updateSettings: (g, p) => ({ ...(p || {}) }),
+        };
     }
 
     try {

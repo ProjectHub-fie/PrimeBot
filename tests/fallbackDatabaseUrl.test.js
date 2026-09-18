@@ -21,7 +21,7 @@ const ROOT = path.join(__dirname, '..');
 
 // The DB env vars are saved/restored around each test so the suite never
 // leaks configuration into another test file sharing this process.
-const DB_VARS = ['FALLBACK_DATABASE_URL', 'DATABASE_URL', 'LOG_DATABASE_URL', 'AUTOMOD_DATABASE_URL'];
+const DB_VARS = ['FALLBACK_DATABASE_URL', 'DATABASE_URL', 'LOG_DATABASE_URL', 'AUTOMOD_DATABASE_URL', 'ANUKE_DATABASE_URL'];
 
 function withEnv(vars, fn) {
     const saved = {};

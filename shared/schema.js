@@ -418,13 +418,51 @@ const automodSettings = pgTable('automod_settings', {
   muteRoleId: varchar('mute_role_id', { length: 50 }),
   exemptRoleIds: jsonb('exempt_role_ids').default([]).notNull(),
   exemptChannelIds: jsonb('exempt_channel_ids').default([]).notNull(),
+  exemptUserIds: jsonb('exempt_user_ids').default([]).notNull(),
   rules: jsonb('rules').default([]).notNull(),
   warnThreshold: integer('warn_threshold').default(3).notNull(),
   warnAction: varchar('warn_action', { length: 20 }).default('timeout'),
   warnActions: jsonb('warn_actions').default(['timeout']).notNull(),
+  warnLadder: jsonb('warn_ladder').default([]).notNull(),
   dmEnabled: boolean('dm_enabled').default(true).notNull(),
   dmMessages: jsonb('dm_messages').default({}).notNull(),
+  dmUser: boolean('dm_user').default(true).notNull(),
+  useAppeal: boolean('use_appeal').default(false).notNull(),
   appealChannelId: varchar('appeal_channel_id', { length: 50 }),
+  dryRun: boolean('dry_run').default(false).notNull(),
+  raidLockdown: boolean('raid_lockdown').default(false).notNull(),
+  raidAlertChannelId: varchar('raid_alert_channel_id', { length: 50 }),
+  incidentRetentionDays: integer('incident_retention_days').default(30).notNull(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+// Automod incident ledger (one row per enforcement — Incident Center + Analytics)
+const automodIncidents = pgTable('automod_incidents', {
+  id: serial('id').primaryKey(),
+  guildId: varchar('guild_id', { length: 50 }).notNull(),
+  userId: varchar('user_id', { length: 50 }),
+  username: varchar('username', { length: 120 }),
+  channelId: varchar('channel_id', { length: 50 }),
+  messageId: varchar('message_id', { length: 50 }),
+  ruleType: varchar('rule_type', { length: 40 }).notNull(),
+  actions: jsonb('actions').default([]).notNull(),
+  severity: varchar('severity', { length: 20 }).default('medium').notNull(),
+  reason: text('reason').default('').notNull(),
+  dryRun: boolean('dry_run').default(false).notNull(),
+  cid: integer('cid'),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// Anti-nuke settings (per-guild, own ANUKE_DATABASE_URL pool)
+const antinukeSettings = pgTable('antinuke_settings', {
+  guildId: varchar('guild_id', { length: 50 }).primaryKey(),
+  enabled: boolean('enabled').default(false).notNull(),
+  alertChannelId: varchar('alert_channel_id', { length: 50 }),
+  responses: jsonb('responses').default([]).notNull(),
+  trustedUserIds: jsonb('trusted_user_ids').default([]).notNull(),
+  trustedRoleIds: jsonb('trusted_role_ids').default([]).notNull(),
+  watched: jsonb('watched').default({}).notNull(),
+  dryRun: boolean('dry_run').default(true).notNull(),
   updatedAt: timestamp('updated_at').defaultNow(),
 });
 
@@ -739,6 +777,8 @@ module.exports = {
   loggingSettings,
   websiteLogs,
   automodSettings,
+  automodIncidents,
+  antinukeSettings,
   automodWarnings,
   automodAppeals,
   appealSettings,

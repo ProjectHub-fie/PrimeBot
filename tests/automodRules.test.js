@@ -48,7 +48,14 @@ test('normalizeRules coerces a messy rules array into clean objects', () => {
         { type: 'links' }, // missing action defaults to 'delete'
     ]);
     assert.equal(out.length, 4);
-    assert.deepEqual(out[0], { type: 'invites', enabled: true, action: 'delete', actions: ['delete'] });
+    // normalizeRules now fills the rule's full canonical shape (severity, actions,
+    // exemption lists, cooldown, …), so assert on the interesting fields rather
+    // than an exact object snapshot.
+    assert.equal(out[0].type, 'invites');
+    assert.equal(out[0].enabled, true);
+    assert.equal(out[0].action, 'delete');
+    assert.deepEqual(out[0].actions, ['delete']);
+    assert.ok(out[0].severity, 'rules carry a default severity');
     assert.equal(out[1].type, 'blockedWords');
     assert.deepEqual(out[1].words, ['bad', 'worse']); // lowercased + trimmed
     assert.equal(out[1].enabled, false);
@@ -91,18 +98,33 @@ test('links matches any URL', () => {
 
 test('mentions counts user + role mentions against the threshold', () => {
     const rule = { type: 'mentions', enabled: true, action: 'warn', threshold: 3 };
-    assert.equal(matchRule(rule, { ...CTX, content: '<@1> <@2> <@3>' }).reason, 'Mass mentions (3/3)');
+    assert.equal(matchRule(rule, { ...CTX, content: '<@1> <@2> <@3>' }).reason, 'Mention spam (3/3)');
     assert.equal(matchRule(rule, { ...CTX, content: '<@1> <@&2>' }), null);
+    // massMention is the separate @everyone/@here + large-role rule.
+    const mass = { type: 'massMention', enabled: true, action: 'delete', threshold: 3 };
+    assert.ok(matchRule(mass, { ...CTX, content: 'hi @everyone' }));
+    assert.equal(matchRule(mass, { ...CTX, content: 'hi @someone' }), null);
 });
 
-test('spam tracks rapid duplicates across calls within the window', () => {
+test('spam tracks rapid messages across calls within the window', () => {
     const rule = { type: 'spam', enabled: true, action: 'delete', threshold: 3, seconds: 5 };
     const spamState = new Map();
     assert.equal(matchRule(rule, { ...CTX, content: 'spam me' }, spamState), null);
     assert.equal(matchRule(rule, { ...CTX, content: 'spam me' }, spamState), null);
     const third = matchRule(rule, { ...CTX, content: 'spam me' }, spamState);
-    assert.ok(third, 'third duplicate should trip spam');
-    assert.ok(third.reason.startsWith('Spam ('));
+    assert.ok(third, 'third message in the window should trip spam');
+    assert.ok(third.reason.startsWith('Message flooding'), 'spam reports flooding');
+});
+
+test('duplicateMessages tracks repeated content within the window', () => {
+    const rule = { type: 'duplicateMessages', enabled: true, action: 'delete', threshold: 3, seconds: 5, similarity: 90 };
+    const dupState = new Map();
+    assert.equal(matchRule(rule, { ...CTX, content: 'hello there' }, dupState), null);
+    assert.equal(matchRule(rule, { ...CTX, content: 'hello there' }, dupState), null);
+    const third = matchRule(rule, { ...CTX, content: 'hello there' }, dupState);
+    assert.ok(third, 'third identical message should trip duplicateMessages');
+    assert.ok(third.reason.startsWith('Duplicate messages'));
+    assert.equal(matchRule(rule, { ...CTX, content: 'completely different' }, dupState), null);
 });
 
 test('spam ignores messages outside its time window', () => {
