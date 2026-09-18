@@ -6,11 +6,13 @@
  * webhook and bot additions, permission rewrites) and alerts the server owner.
  *
  * The tab is flagged `upcoming: true` in render/guild.js, so this page renders
- * the standard "Coming Soon……" overlay for every server — the editor markup
+ * the standard "Coming Soon……" overlay for ordinary users — the editor markup
  * below is kept behind the blur, blurred and inert, so releasing the feature is
- * just a matter of removing the flag. Nothing here moderates anyone: the
- * detection executor is deliberately not attached to Discord audit-log events
- * while the feature is unreleased.
+ * just a matter of removing the flag. Developer/owner bot roles bypass the gate
+ * (guild._bypassUpcoming, set by requireGuildAdminPage) and get the real editor
+ * so the feature can be exercised, exactly like eventsPage. Nothing here
+ * moderates anyone: the detection executor is deliberately not attached to
+ * Discord audit-log events while the feature is unreleased.
  *
  * All controls are real markup (usable before JS runs); the client script
  * (public/js/antinuke.js) only adds interactivity. Icons are SVG, never emoji.
@@ -51,7 +53,7 @@ function watchCardHTML(action, watch) {
 }
 
 function antiNukePageHTML({ guild, user }) {
-    const s = guild._config.antiNuke || {};
+    const s = (guild._config || {}).antiNuke || {};
     const watched = s.watched || {};
     const responses = Array.isArray(s.responses) ? s.responses : [];
     const trustedRoles = Array.isArray(s.trustedRoleIds) ? s.trustedRoleIds : [];
@@ -65,7 +67,7 @@ function antiNukePageHTML({ guild, user }) {
         </span>
       </label>`).join('');
 
-    const panelHTML = `
+    const innerPanelHTML = `
     <div class="an-page">
       <section class="card am-hero">
         <div class="am-hero-main">
@@ -128,10 +130,17 @@ function antiNukePageHTML({ guild, user }) {
       </div>
     </div>`;
 
+    // Developer/owner-role viewers bypass the upcoming gate (guild._bypassUpcoming,
+    // set by requireGuildAdminPage): render the real editor so the feature can be
+    // exercised, mirroring eventsPage.
+    const panelHTML = guild._bypassUpcoming
+        ? innerPanelHTML
+        : upcomingOverlayWrap(innerPanelHTML);
+
     const body = `
     ${require('./guild').guildHeaderHTML(guild)}
     ${require('./guild').tabNavHTML(guild.id, 'antinuke')}
-    ${upcomingOverlayWrap(panelHTML)}
+    ${panelHTML}
     ${require('./guild').guildDataScript({ guildId: guild.id, channels: guild._channels, roles: guild._roles, extra: { _antiNukeSettings: s } })}
     <script>window.__ANTINUKE_ACTIONS=${jsonForScript(ANTINUKE_ACTIONS)};
 window.__ANTINUKE_RESPONSES=${jsonForScript(ANTINUKE_RESPONSES)};
