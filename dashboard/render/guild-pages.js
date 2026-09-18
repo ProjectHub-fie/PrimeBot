@@ -1446,146 +1446,25 @@ function ticketEditPage({ guild, user }) {
 }
 
 // ── Automod ─────────────────────────────────────────────────────────────────
+//
+// The Automod page lives in render/automod-page.js (it is a large, sectioned
+// control panel). This delegate keeps the TABS key → page mapping in one place.
 
 function automodPage({ guild, user }) {
-    const s = guild._config.automod || {};
-    const rules = Array.isArray(s.rules) ? s.rules : [];
-    // Render existing rule rows server-side.
-    const warnActions = AUTOMOD_ACTIONS.filter(a => ['warn', 'timeout', 'kick', 'ban'].includes(a.key));
-    const dmKeys = ['delete', 'warn', 'timeout', 'kick', 'ban', 'escalation'];
-    const dmMessages = s.dmMessages || {};
-    const ruleRows = rules.map(rule => {
-        const meta = AUTOMOD_RULES.find(r => r.key === rule.type) || AUTOMOD_RULES[0];
-        const selected = Array.isArray(rule.actions) && rule.actions.length ? rule.actions : (rule.action ? [rule.action] : ['delete']);
-        const actionChecks = AUTOMOD_ACTIONS.map(a =>
-            `<label class="switch mini am-action-label"><input type="checkbox" class="am-action" value="${a.key}" ${selected.includes(a.key) ? 'checked' : ''}/><span class="switch-text">${svgIcon(a.iconName)} ${esc(a.label)}</span></label>`
-        ).join('');
-        let extra = '';
-        if (meta.params.includes('words')) extra = `<input type="text" class="am-words" value="${esc((rule.words || []).join(', '))}" placeholder="extra domains/terms (comma-separated)" />`;
-        if (meta.params.includes('threshold')) extra += `<input type="number" class="am-threshold" value="${rule.threshold ?? ''}" placeholder="threshold" min="1" style="width:96px" />`;
-        if (meta.params.includes('seconds')) extra += `<input type="number" class="am-seconds" value="${rule.seconds ?? ''}" placeholder="seconds" min="1" max="3600" style="width:96px" />`;
-        return `
-      <div class="reaction-row am-rule-row" data-type="${esc(meta.key)}">
-        <label class="switch mini"><input type="checkbox" class="am-enabled" ${rule.enabled !== false ? 'checked' : ''}/><span class="slider"></span></label>
-        <span class="am-rule-label">${svgIcon(meta.iconName)} ${esc(meta.label)}</span>
-        <div class="am-actions-group">${actionChecks}</div>
-        ${extra}
-        <button class="reaction-remove am-remove" type="button">${svgIcon('x')}</button>
-      </div>`;
-    }).join('');
-    const addTypeOpts = AUTOMOD_RULES.map(r => `<option value="${r.key}">${svgIcon(r.iconName, 'am-opt-ico')} ${esc(r.label)}</option>`).join('');
-    const warnActionChecks = warnActions.map(a =>
-        `<label class="switch mini am-action-label"><input type="checkbox" class="am-warn-action" value="${a.key}" ${(s.warnActions || [s.warnAction || 'timeout']).includes(a.key) ? 'checked' : ''}/><span class="switch-text">${svgIcon(a.iconName)} ${esc(a.label)}</span></label>`
-    ).join('');
-    const dmRows = dmKeys.map(k => {
-        const a = AUTOMOD_ACTIONS.find(x => x.key === k);
-        const label = a ? `${svgIcon(a.iconName)} ${a.label}` : (k === 'escalation' ? `${svgIcon('octagonX')} Escalation` : k);
-        return `<div class="field-row"><label class="field-label" style="min-width:120px">${label}</label><input type="text" class="am-dm-message" data-key="${k}" value="${esc(dmMessages[k] || '')}" placeholder="(use default)" style="flex:1"/></div>`;
-    }).join('');
+    const { body, scripts, title } = require('./automod-page').automodPageHTML({ guild, user });
+    return render({ title, body, active: 'servers', scripts, user });
+}
 
-    const panelHTML = `
-    <div class="card">
-      <div class="card-title"><span><span class="icon">${svgIcon('shield')}</span> Premium Automod</span></div>
-      <p class="card-desc">Automatic moderation that scans every message against your rules. Premium features for free: blocked words, invite/bad-link/NSFW filtering, spam &amp; mass-mention detection, caps/emoji/repeated-char/new-account filters, multi-action punishment, DM notifications, warning escalation, and appeals.</p>
+// ── Anti-Nuke (upcoming) ────────────────────────────────────────────────────
+//
+// A separate tab, marked `upcoming: true`, so it renders the standard
+// "Coming Soon……" overlay for every server. The real editor markup is kept
+// behind the blur (flipping the flag later re-enables it with no rewrite).
 
-      <div class="switch-row">
-        <div class="switch-label"><div class="sl-title">Enable Automod</div><div class="sl-desc">Master switch. When off, no messages are scanned.</div></div>
-        <label class="switch"><input type="checkbox" id="am-enabled" ${s.enabled ? 'checked' : ''}/><span class="slider"></span></label>
-      </div>
-
-      <div class="field">
-        <label class="field-label" for="am-log-channel">Automod log channel (optional)</label>
-        <select id="am-log-channel" data-channel-select>${channelOptions(guild._channels, s.logChannelId)}</select>
-        <div class="field-hint">Where automod actions are posted as the bot.</div>
-      </div>
-
-      <div class="field">
-        <label class="field-label" for="am-mute-role">Mute role (optional)</label>
-        <select id="am-mute-role" data-role-select data-placeholder="— None (use timeouts) —">${roleOptions(guild._roles, s.muteRoleId)}</select>
-        <div class="field-hint">Used for mutes when the bot can't apply a native timeout. Set this to enable indefinite mutes.</div>
-      </div>
-
-      <div class="field">
-        <label class="field-label">Exempt roles</label>
-        <div class="field-hint">Members with these roles (and admins) are never actioned.</div>
-        <div class="rr-list" id="am-exempt-roles"></div>
-      </div>
-
-      <div class="field">
-        <label class="field-label">Exempt channels</label>
-        <div class="field-hint">Messages in these channels are never scanned.</div>
-        <div class="rr-list" id="am-exempt-channels"></div>
-      </div>
-
-      <div class="field">
-        <label class="field-label">Rules</label>
-        <div class="reactions-list" id="am-rules-list">${ruleRows}</div>
-        <div style="display:flex; gap:8px; align-items:center; margin-top:8px">
-          <select id="am-add-type">${addTypeOpts}</select>
-          <button class="btn btn-secondary" id="am-add-rule">${svgIcon('plus')} Add rule</button>
-        </div>
-        <div class="field-hint">Select one or more actions per rule. "Delete" is always applied first when chosen.</div>
-      </div>
-
-      <div class="field">
-        <label class="field-label">Warning escalation</label>
-        <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap">
-          <label>After <input type="number" id="am-warn-threshold" value="${s.warnThreshold ?? 3}" min="1" max="50" style="width:72px"/> warnings</label>
-          <span>→ apply:</span>
-        </div>
-        <div class="am-actions-group" id="am-warn-actions-group" style="margin-top:6px">${warnActionChecks}</div>
-        <div class="field-hint">When a member's total warnings reach the threshold, these actions apply automatically and their warnings are cleared. Select multiple to escalate through several punishments at once.</div>
-      </div>
-
-      <div class="switch-row">
-        <div class="switch-label"><div class="sl-title">DM punished members</div><div class="sl-desc">Send a direct message to members when an action is taken against them.</div></div>
-        <label class="switch"><input type="checkbox" id="am-dm-enabled" ${s.dmEnabled !== false ? 'checked' : ''}/><span class="slider"></span></label>
-      </div>
-
-      <div class="switch-row">
-        <div class="switch-label"><div class="sl-title">DM user</div><div class="sl-desc">Send the banned member a rich ban direct message with all available fields when they are banned.</div></div>
-        <label class="switch"><input type="checkbox" id="am-dm-user" ${s.dmUser !== false ? 'checked' : ''}/><span class="slider"></span></label>
-      </div>
-
-      <div class="switch-row">
-        <div class="switch-label"><div class="sl-title">Use appeal</div><div class="sl-desc">Attach an "Appeal ban" button to the ban DM so members can file an appeal from a floating Discord form.</div></div>
-        <label class="switch"><input type="checkbox" id="am-use-appeal" ${s.useAppeal === true ? 'checked' : ''}/><span class="slider"></span></label>
-      </div>
-
-      <div class="field">
-        <label class="field-label">Custom DM messages (optional)</label>
-        <div class="field-hint">Override the default message sent for each action. Placeholders: {server}, {reason}, {action}, {threshold}. Leave blank to use the default.</div>
-        <div class="field-rows" id="am-dm-messages">${dmRows}</div>
-      </div>
-
-      <div class="field">
-        <label class="field-label" for="am-appeal-channel">Appeal channel (optional)</label>
-        <select id="am-appeal-channel" data-channel-select>${channelOptions(guild._channels, s.appealChannelId)}</select>
-        <div class="field-hint">New appeals filed via <code>/appeal</code> or the ban-DM form are posted here for moderators to review. If left unset, appeals fall back to the automod log channel (and you can set it anytime with <code>$appealchannel #channel</code> or <code>/automod set appeal_channel</code>).</div>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-title"><span><span class="icon">${svgIcon('alertTriangle')}</span> Warnings</span></div>
-      <p class="card-desc">Live warning ledger for this server (automod + manual <code>/warn</code>). <a href="#" id="am-refresh-warnings">Refresh</a></p>
-      <div id="am-warnings-list"><div class="field-hint">Loading…</div></div>
-    </div>
-
-    <div class="card">
-      <div class="card-title"><span><span class="icon">${svgIcon('envelope')}</span> Appeals</span></div>
-      <p class="card-desc">Punishment appeals filed by members. Approving an appeal reverses the action (unban/unmute) automatically. <a href="#" id="am-refresh-appeals">Refresh</a></p>
-      <div id="am-appeals-list"><div class="field-hint">Loading…</div></div>
-    </div>`;
-
-    // Embed the automod settings + rule/action catalogs so the client script
-    // can render exempt lists and add-rule rows without an extra fetch.
-    const body = `
-    ${guildHeaderHTML(guild)}
-    ${tabNavHTML(guild.id, 'automod')}
-    ${panelHTML}
-    ${guildDataScript({ guildId: guild.id, channels: guild._channels, roles: guild._roles, extra: { _automodSettings: s } })}
-    <script>window.__AUTOMOD_RULES=${JSON.stringify(AUTOMOD_RULES)};window.__AUTOMOD_ACTIONS=${JSON.stringify(AUTOMOD_ACTIONS)};window.__AUTOMOD_SETTINGS=${JSON.stringify(s)};</script>`;
-    return render({ title: `PrimeBot · ${guild.name} · Automod`, body, active: 'servers', scripts: ['/js/guild-common.js', '/js/automod.js'], user });
+function antiNukePage({ guild, user }) {
+    const { antiNukePageHTML } = require('./antinuke-page');
+    const { body, scripts, title } = antiNukePageHTML({ guild, user });
+    return render({ title, body, active: 'servers', scripts, user });
 }
 
 // ── Events ──────────────────────────────────────────────────────────────────
@@ -1948,8 +1827,9 @@ function liveGiveawaysPage({ guild, user }) {
 
 module.exports = {
     welcomePage, levelingPage, badgesPage, prefixPage, roleRewardsPage, autoResponderPage, reactionsPage, broadcastPage,
-    birthdaysPage, embedPage, loggingPage, reactionRolesPage, ticketsPage, ticketEditPage, automodPage, eventsPage,
+    birthdaysPage, embedPage, loggingPage, reactionRolesPage, ticketsPage, ticketEditPage, automodPage, antiNukePage, eventsPage,
     livePollsPage, liveGiveawaysPage,
     ticketEmbedBuilderHTML,
+    upcomingOverlayWrap,
     TABS,
 };

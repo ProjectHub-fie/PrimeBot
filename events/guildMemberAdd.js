@@ -21,6 +21,15 @@ module.exports = {
                 isBot: member.user.bot,
             });
 
+            // Premium Automod raid protection: evaluate this join against the
+            // guild's join-burst / similar-name rules. Runs in-memory against the
+            // cached config and only touches the DB when a rule actually trips.
+            // Fire-and-forget so a raid-protection failure never breaks welcome.
+            if (client.automodManager?.scanMemberJoin) {
+                client.automodManager.scanMemberJoin(member).catch(err =>
+                    console.error('[AUTOMOD] join scan failed:', err.message));
+            }
+
             // Check if welcome settings manager is available
             if (!client.welcomeSettingsManager) {
                 console.warn('[WELCOME] Welcome settings manager not available, using defaults for all servers');

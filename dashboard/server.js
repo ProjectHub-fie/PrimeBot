@@ -33,6 +33,8 @@ const pages = require('./render/pages');
 const guildPages = require('./render/guild-pages');
 const L = require('./render/layout');
 const { resolveDiscordToken } = require('../utils/tokenResolver');
+const { buildPresetPatch } = require('../utils/automodPresets');
+const { AUTOMOD_ACTIONS } = require('../utils/automodRules');
 
 // The dashboard's REST calls authenticate as `Bot ${process.env.DISCORD_TOKEN}`
 // (see dashboard/discord.js botHeaders). Resolve that through the same helper
@@ -966,9 +968,10 @@ app.patch('/api/guilds/:guildId/automod', requireAuth, requireGuildAdmin, async 
     try {
         const allowed = [
             'enabled', 'logChannelId', 'muteRoleId',
-            'exemptRoleIds', 'exemptChannelIds', 'rules',
-            'warnThreshold', 'warnAction', 'warnActions',
+            'exemptRoleIds', 'exemptChannelIds', 'exemptUserIds', 'rules',
+            'warnThreshold', 'warnAction', 'warnActions', 'warnLadder',
             'dmEnabled', 'dmMessages', 'dmUser', 'useAppeal', 'appealChannelId',
+            'dryRun', 'raidLockdown', 'raidAlertChannelId', 'incidentRetentionDays',
         ];
         const patch = {};
         for (const key of allowed) {
@@ -989,16 +992,176 @@ app.patch('/api/guilds/:guildId/automod', requireAuth, requireGuildAdmin, async 
             }
             patch.warnActions = valid;
         }
+        if ('warnLadder' in patch) {
+            if (!Array.isArray(patch.warnLadder) || patch.warnLadder.length === 0) {
+                return res.status(400).json({ error: 'warnLadder must be a non-empty array of { count, actions }.' });
+            }
+            patch.warnLadder = patch.warnLadder.map(step => ({
+                count: Math.max(1, parseInt(step && step.count, 10) || 1),
+                actions: (Array.isArray(step && step.actions) ? step.actions : [])
+                    .filter(a => ['warn', 'timeout', 'kick', 'ban'].includes(a)),
+            })).filter(s => s.actions.length > 0);
+            if (patch.warnLadder.length === 0) {
+                return res.status(400).json({ error: 'warnLadder steps must each contain at least one action.' });
+            }
+        }
         if ('dmEnabled' in patch) patch.dmEnabled = patch.dmEnabled !== false;
         if ('dmUser' in patch) patch.dmUser = patch.dmUser !== false;
         if ('useAppeal' in patch) patch.useAppeal = patch.useAppeal === true;
         if ('appealChannelId' in patch) patch.appealChannelId = patch.appealChannelId || null;
+        if ('dryRun' in patch) patch.dryRun = patch.dryRun === true;
+        if ('raidLockdown' in patch) patch.raidLockdown = patch.raidLockdown === true;
+        if ('raidAlertChannelId' in patch) patch.raidAlertChannelId = patch.raidAlertChannelId || null;
+        if ('incidentRetentionDays' in patch) {
+            const days = parseInt(patch.incidentRetentionDays, 10);
+            if (![0, 7, 30, 90, 180].includes(days)) {
+                return res.status(400).json({ error: 'incidentRetentionDays must be 0 (forever), 7, 30, 90 or 180.' });
+            }
+            patch.incidentRetentionDays = days;
+        }
         const updated = await dashboardDb.upsertAutomodSettings(req.guild.id, patch);
         recordWebsiteLog(req, 'Updated automod settings');
         res.json({ automod: updated });
     } catch (err) {
         console.error('[API] update automod error:', err.message);
         res.status(500).json({ error: 'Failed to update automod settings.' });
+    }
+});
+
+// Apply a preset. A preset replaces the rules list, so the dashboard always
+// confirms first — the endpoint itself is a normal authenticated write.
+app.post('/api/guilds/:guildId/automod/preset', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const key = String((req.body && req.body.preset) || '');
+        const current = await dashboardDb.getAutomodSettings(req.guild.id);
+        const patch = buildPresetPatch(key, current);
+        if (!patch) return res.status(400).json({ error: 'Unknown preset.' });
+        const updated = await dashboardDb.upsertAutomodSettings(req.guild.id, patch);
+        recordWebsiteLog(req, `Applied automod preset "${key}"`);
+        res.json({ automod: updated });
+    } catch (err) {
+        console.error('[API] apply automod preset error:', err.message);
+        res.status(500).json({ error: 'Failed to apply the preset.' });
+    }
+});
+
+// Test a rule set against sample content. Pure evaluation — never punishes,
+// never writes, and never touches Discord.
+app.post('/api/guilds/:guildId/automod/test', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const content = String((req.body && req.body.content) || '').slice(0, 4000);
+        const settings = await dashboardDb.getAutomodSettings(req.guild.id);
+        // The dashboard runs as its own process with no bot runtime attached, so
+        // rule evaluation happens right here against the stored rules. It is a
+        // pure function of the config and never sends a Discord action.
+        const { matchRule, metaFor } = require('../utils/automodRules');
+        const matches = [];
+        for (const rule of settings.rules || []) {
+            if (rule.enabled === false) continue;
+            let m = null;
+            try { m = matchRule(rule, { content, guildId: req.guild.id, userId: 'test', channelId: 'test' }, {}); }
+            catch (e) { matches.push({ type: rule.type, label: metaFor(rule.type).label, error: e.message }); continue; }
+            if (m) {
+                matches.push({
+                    type: rule.type, label: metaFor(rule.type).label, icon: metaFor(rule.type).icon,
+                    reason: m.reason, severity: m.severity || rule.severity,
+                    actions: rule.actions,
+                    actionLabels: (rule.actions || []).map(a => (AUTOMOD_ACTIONS.find(x => x.key === a) || {}).label || a),
+                });
+            }
+        }
+        // `dryRun: true` is always reported: the tester never enforces, so the
+        // client can label the result as a preview regardless of the live setting.
+        res.json({ result: { enabled: settings.enabled, dryRun: true, matches, skipped: [] } });
+    } catch (err) {
+        console.error('[API] automod test error:', err.message);
+        res.status(500).json({ error: 'Failed to test the message.' });
+    }
+});
+
+// Incident center — filtered + paginated so the page never loads everything.
+app.get('/api/guilds/:guildId/automod/incidents', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const result = await dashboardDb.getAutomodIncidents(req.guild.id, {
+            ruleType: req.query.rule || null,
+            severity: req.query.severity || null,
+            action: req.query.action || null,
+            channelId: req.query.channel || null,
+            search: req.query.search || null,
+            sinceDays: req.query.days || null,
+            limit: req.query.limit,
+            offset: req.query.offset,
+        });
+        res.json(result);
+    } catch (err) {
+        console.error('[API] get automod incidents error:', err.message);
+        res.status(500).json({ error: 'Failed to load incidents.' });
+    }
+});
+
+// Analytics — a small fixed set of aggregate queries over an indexed window.
+app.get('/api/guilds/:guildId/automod/analytics', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const analytics = await dashboardDb.getAutomodAnalytics(req.guild.id, { days: req.query.days });
+        res.json({ analytics });
+    } catch (err) {
+        console.error('[API] get automod analytics error:', err.message);
+        res.status(500).json({ error: 'Failed to load analytics.' });
+    }
+});
+
+// ── API: Anti-Nuke (upcoming) ───────────────────────────────────────────────
+//
+// The write endpoint is guarded by requireUpcoming (403 for ordinary users;
+// developer/owner bot roles bypass it so the feature can be exercised). Anti-Nuke
+// is configuration-only while upcoming — no Discord audit-log executor is
+// attached, so nothing moderates anyone yet.
+
+app.get('/api/guilds/:guildId/antinuke', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const settings = await dashboardDb.getAntiNukeSettings(req.guild.id);
+        res.json({ antiNuke: settings });
+    } catch (err) {
+        console.error('[API] get antinuke settings error:', err.message);
+        res.status(500).json({ error: 'Failed to load anti-nuke settings.' });
+    }
+});
+
+app.patch('/api/guilds/:guildId/antinuke', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
+    try {
+        const { normalizeAntiNukeSettings, NUKE_ACTION_KEYS, NUKE_RESPONSE_KEYS } = require('../utils/antiNukeRules');
+        const body = req.body || {};
+        const patch = {};
+        if ('enabled' in body) patch.enabled = body.enabled === true;
+        if ('dryRun' in body) patch.dryRun = body.dryRun !== false;
+        if ('alertChannelId' in body) patch.alertChannelId = body.alertChannelId || null;
+        if ('responses' in body) {
+            const list = (Array.isArray(body.responses) ? body.responses : []).filter(r => NUKE_RESPONSE_KEYS.includes(r));
+            if (list.length === 0) return res.status(400).json({ error: 'Select at least one response action.' });
+            patch.responses = Array.from(new Set(list));
+        }
+        if ('trustedUserIds' in body) patch.trustedUserIds = Array.isArray(body.trustedUserIds) ? body.trustedUserIds : [];
+        if ('trustedRoleIds' in body) patch.trustedRoleIds = Array.isArray(body.trustedRoleIds) ? body.trustedRoleIds : [];
+        if ('watched' in body) {
+            const raw = body.watched && typeof body.watched === 'object' ? body.watched : {};
+            const watched = {};
+            for (const key of Object.keys(raw)) {
+                if (!NUKE_ACTION_KEYS.includes(key)) continue; // never accept an unknown action key
+                watched[key] = {
+                    enabled: raw[key] && raw[key].enabled !== false,
+                    threshold: parseInt(raw[key] && raw[key].threshold, 10) || undefined,
+                    seconds: parseInt(raw[key] && raw[key].seconds, 10) || undefined,
+                };
+            }
+            patch.watched = watched;
+        }
+        const merged = normalizeAntiNukeSettings({ ...(await dashboardDb.getAntiNukeSettings(req.guild.id)), ...patch });
+        const updated = await dashboardDb.upsertAntiNukeSettings(req.guild.id, merged);
+        recordWebsiteLog(req, 'Updated anti-nuke settings');
+        res.json({ antiNuke: updated });
+    } catch (err) {
+        console.error('[API] update antinuke settings error:', err.message);
+        res.status(500).json({ error: 'Failed to update anti-nuke settings.' });
     }
 });
 
@@ -1874,6 +2037,10 @@ app.get('/guild/:guildId/logging', requireAuth, requireGuildAdminPage, (req, res
     res.type('html').send(guildPages.loggingPage({ guild: req.guild, user: req.user })));
 app.get('/guild/:guildId/automod', requireAuth, requireGuildAdminPage, (req, res) =>
     res.type('html').send(guildPages.automodPage({ guild: req.guild, user: req.user })));
+// Anti-Nuke is `upcoming: true` — the page renders the Coming Soon overlay for
+// everyone, so it needs no extra server-side guard here.
+app.get('/guild/:guildId/antinuke', requireAuth, requireGuildAdminPage, (req, res) =>
+    res.type('html').send(guildPages.antiNukePage({ guild: req.guild, user: req.user })));
 app.get('/guild/:guildId/tickets', requireAuth, requireGuildAdminPage, (req, res) =>
     res.type('html').send(guildPages.ticketsPage({ guild: req.guild, user: req.user })));
 // Full-page ticket panel editor — reached from "Create a panel" (after an

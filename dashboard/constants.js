@@ -5,7 +5,18 @@
  */
 const config = require('../config');
 const { LOG_EVENTS } = require('../utils/logEvents');
-const { RULES: AUTOMOD_RULES, ACTIONS: AUTOMOD_ACTIONS } = require('../utils/automodRules');
+const {
+    RULES: AUTOMOD_RULES,
+    ACTIONS: AUTOMOD_ACTIONS,
+    SEVERITIES: AUTOMOD_SEVERITIES,
+    RULE_CATEGORIES: AUTOMOD_SECTIONS,
+    DEFAULT_DM_MESSAGES: AUTOMOD_DEFAULT_DM_MESSAGES,
+} = require('../utils/automodRules');
+const { PRESETS: AUTOMOD_PRESETS } = require('../utils/automodPresets');
+const {
+    NUKE_ACTIONS: ANTINUKE_ACTIONS,
+    NUKE_RESPONSES: ANTINUKE_RESPONSES,
+} = require('../utils/antiNukeRules');
 
 module.exports = {
     // OAuth scopes requested at login. "guilds" lets us list the admin's servers.
@@ -79,6 +90,29 @@ module.exports = {
     // Automod rule types + actions shared with the bot (utils/automodRules.js).
     AUTOMOD_RULES,
     AUTOMOD_ACTIONS,
+    // Severity catalog (low/medium/high/critical) — drives the dashboard badges
+    // and mirrors the log-embed colors the bot uses.
+    AUTOMOD_SEVERITIES,
+    // Rule sections for the Automod page navigation (Anti-Spam, Content
+    // Protection, Raid Protection).
+    AUTOMOD_SECTIONS,
+    // Default DM templates, so the DM editor can show the real default text.
+    AUTOMOD_DEFAULT_DM_MESSAGES,
+    // Ready-made protection profiles (utils/automodPresets.js).
+    AUTOMOD_PRESETS,
+
+    // Anti-Nuke catalogs (utils/antiNukeRules.js) for the upcoming Anti-Nuke tab.
+    ANTINUKE_ACTIONS,
+    ANTINUKE_RESPONSES,
+
+    // Incident retention choices offered on the Automod → Settings section.
+    AUTOMOD_RETENTION_OPTIONS: [
+        { value: 7, label: '7 days' },
+        { value: 30, label: '30 days' },
+        { value: 90, label: '90 days' },
+        { value: 180, label: '180 days' },
+        { value: 0, label: 'Forever' },
+    ],
 
     // Leveling badge catalog (config.leveling.badges). The dashboard's Badges
     // tab renders the achievement + special badges (awardable from the UI) and

@@ -22,6 +22,22 @@ function esc(str) {
     }[c]));
 }
 
+/**
+ * JSON for embedding inside an inline `<script>`.
+ *
+ * `JSON.stringify` alone is NOT safe there: a string containing `</script>`
+ * closes the element early, and `<!--` starts an HTML comment that swallows the
+ * rest of the script. Escaping `<` (and the U+2028/U+2029 line separators, which
+ * are valid in JSON but illegal in a JS string literal) makes any payload safe
+ * to inline. Use this for every `window.__X = ...` injection.
+ */
+function jsonForScript(value) {
+    return JSON.stringify(value === undefined ? null : value)
+        .replace(/</g, '\\u003c')
+        .replace(/\u2028/g, '\\u2028')
+        .replace(/\u2029/g, '\\u2029');
+}
+
 function guildIconUrl(guild) {
     if (guild && guild.icon) {
         return `https://cdn.discordapp.com/icons/${guild.id}/${guild.icon}.png?size=96`;
@@ -264,6 +280,7 @@ function render(opts) {
 
 module.exports = {
     esc,
+    jsonForScript,
     guildIconUrl,
     guildInitial,
     guildIconHTML,

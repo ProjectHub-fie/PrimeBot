@@ -345,6 +345,19 @@ const SaveBar = (() => {
     if (typeof saver === 'function') savers.push(saver);
   }
 
+  // Re-baseline ONE control that was persisted out-of-band (e.g. a switch the
+  // page saves immediately on change instead of waiting for the floating bar).
+  // Re-snapshotting everything would swallow unrelated unsaved edits, so this
+  // only updates the affected element's entry in the snapshot.
+  function syncControl(el) {
+    if (!snapshot || !el) return;
+    const tracked = trackedRoots.some(root => root.contains(el));
+    if (!tracked) return;
+    if (el.type === 'button' || el.type === 'submit') return;
+    snapshot.controls.set(el, { value: el.value, checked: el.checked });
+    recheck();
+  }
+
   // Register a callback fired AFTER a successful save (after the toast +
   // re-snapshot). Use this to refresh page areas that depend on server-side
   // writes triggered by the save (e.g. the website log on the General page).
@@ -352,7 +365,7 @@ const SaveBar = (() => {
     if (typeof cb === 'function') savedCallbacks.push(cb);
   }
 
-  return { register, track, markDirty, markClean, onSaved };
+  return { register, track, markDirty, markClean, onSaved, syncControl };
 })();
 
 window.api = api;

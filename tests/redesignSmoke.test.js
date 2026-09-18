@@ -41,13 +41,13 @@ test('404 page: svg + graphic, returns 404 status', () => {
 test('guild tab pages: card-title icons are SVG, no emoji leftovers in titles', () => {
     const guild = {
         id: '1', name: 'Test', icon: null,
-        _config: { server: {}, welcome: {}, logging: {}, automod: {} },
+        _config: { server: {}, welcome: {}, logging: {}, automod: {}, antiNuke: {} },
         _channels: [], _roles: [],
     };
     for (const fn of ['welcomePage', 'levelingPage', 'badgesPage', 'prefixPage',
                       'roleRewardsPage', 'autoResponderPage', 'reactionsPage',
                       'birthdaysPage', 'loggingPage', 'reactionRolesPage', 'ticketsPage',
-                      'automodPage', 'eventsPage', 'livePollsPage', 'liveGiveawaysPage']) {
+                      'automodPage', 'antiNukePage', 'eventsPage', 'livePollsPage', 'liveGiveawaysPage']) {
         const html = guildPages[fn]({ guild, user: { username: 'u' } });
         assert.ok(hasIco(html), `${fn} has no svg icon`);
         // No leftover emoji in card-title icon spans.

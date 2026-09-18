@@ -30,6 +30,7 @@ const TABS = [
   { key: 'embed',          label: 'Embed',           icon: 'message' },
   { key: 'logging',        label: 'Logging',         icon: 'scroll' },
   { key: 'automod',        label: 'Automod',         icon: 'shield' },
+  { key: 'antinuke',       label: 'Anti-Nuke',       icon: 'shieldAlert', upcoming: true },
   { key: 'tickets',        label: 'Tickets',         icon: 'ticket' },
   { key: 'live/polls',     label: 'Live Polls',      icon: 'barChart' },
   { key: 'live/giveaways', label: 'Live Giveaways',  icon: 'gift' },

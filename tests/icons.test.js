@@ -74,14 +74,17 @@ test('automod + logging pages render rule/event toggles with SVG icons (not emoj
         _channels: [], _roles: [],
     };
     const amHTML = guildPages.automodPage({ guild, user: { username: 'u' } });
-    // Rule labels, action checkboxes, add-rule options, warn-actions, DM rows,
-    // and the remove buttons are all SVG now — no catalog emoji leaked.
-    assert.match(amHTML, /am-rule-label">\s*<svg class="ico"/);
+    // Rule icons, action checkboxes, add-rule button and the remove buttons are
+    // all SVG now — no catalog emoji leaked into the page chrome.
+    assert.match(amHTML, /am-rule-icon">\s*<svg class="ico"/);
     assert.match(amHTML, /am-action-label[\s\S]*?<svg class="ico"/);
-    assert.match(amHTML, /am-warn-action[\s\S]*?<svg class="ico"/);
     assert.match(amHTML, /am-remove[\s\S]*?<svg class="ico"/);
-    assert.match(amHTML, /id="am-add-rule">[\s\S]*?<svg class="ico"/);
-    assert.doesNotMatch(amHTML, /am-rule-label">🚫/);
+    assert.match(amHTML, /id="am-add-rule"[\s\S]*?<svg class="ico"/);
+    // The warning escalation is now a ladder of count→action rows.
+    assert.match(amHTML, /class="am-ladder-row"/);
+    assert.match(amHTML, /am-ladder-action/);
+    // No rule-catalog emoji anywhere in the page chrome.
+    assert.doesNotMatch(amHTML, /am-rule-name">🚫/);
     assert.doesNotMatch(amHTML, /switch-text">🗑️/);
 
     const logHTML = guildPages.loggingPage({ guild, user: { username: 'u' } });
