@@ -2038,7 +2038,8 @@ app.get('/guild/:guildId/logging', requireAuth, requireGuildAdminPage, (req, res
 app.get('/guild/:guildId/automod', requireAuth, requireGuildAdminPage, (req, res) =>
     res.type('html').send(guildPages.automodPage({ guild: req.guild, user: req.user })));
 // Anti-Nuke is `upcoming: true` — the page renders the Coming Soon overlay for
-// everyone, so it needs no extra server-side guard here.
+// ordinary users; developer/owner bot roles bypass it (guild._bypassUpcoming)
+// so the feature can be exercised. No extra server-side guard is needed here.
 app.get('/guild/:guildId/antinuke', requireAuth, requireGuildAdminPage, (req, res) =>
     res.type('html').send(guildPages.antiNukePage({ guild: req.guild, user: req.user })));
 app.get('/guild/:guildId/tickets', requireAuth, requireGuildAdminPage, (req, res) =>
