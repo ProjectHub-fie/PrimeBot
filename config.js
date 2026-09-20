@@ -1,12 +1,12 @@
 module.exports = {
     // Bot version information
-    version: '2.10.0',
+    version: '3.0.0',
     buildDate: '2025-05-29',
     
     // Bot configuration
     prefix: '$', // Command prefix for message commands
-    website: 'https://primebot-online.vercel.app/',
-    doc: 'https://primebot-online.vercel.app/docs.html',
+    website: 'https://cpanel-primebot.vercel.app/',
+    doc: 'https://cpanel-primebot.vercel.app/docs',
     // Bot URLs
     supportServer: "https://discord.gg/gd7UNSfX86", // PrimeBot support server
   
