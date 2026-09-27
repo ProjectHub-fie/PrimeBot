@@ -27,6 +27,7 @@ const PgSession = require('connect-pg-simple')(session);
 const discord = require('./discord');
 const turnstile = require('./turnstile');
 const { requireAuth, requireAuthReadonly, requireGuildAdmin, requireGuildAdminPage, requireBeta, requireUpcoming } = require('./auth');
+const eventAuth = require('./eventAuth');
 const dashboardDb = require('./db');
 const constants = require('./constants');
 const pages = require('./render/pages');
@@ -1815,75 +1816,330 @@ app.get('/api/guilds/:guildId/live/giveaways', requireAuth, requireGuildAdmin, a
     }
 });
 
-// ── API: Event management (📅 Events tab) ────────────────────────────────────
+// ── API: Event Management (📅 Event Management tab) ───────────────────────────
+//
+// All routes require requireAuth + requireGuildAdmin (proves the caller manages
+// the guild and the bot is present), then a granular Event permission via
+// eventAuth.requireEventPermission, and — for single-event routes —
+// eventAuth.requireEventOwnership which enforces guild isolation (no IDOR).
+// The bot mirrors every write: it re-reads the tables on its cache poll and
+// performs the Discord side-effects (announcements, reminders, roles).
 
+const eventPerm = (p) => [requireAuth, requireGuildAdmin, eventAuth.requireEventPermission(p)];
+
+// List events (search / filter / sort + server-side pagination).
 app.get('/api/guilds/:guildId/events', requireAuth, requireGuildAdmin, async (req, res) => {
     try {
-        const schedules = await dashboardDb.getEventSchedules(req.guild.id);
-        res.json({ schedules });
+        const { status = null, search = null, sort = 'start', limit = 50, offset = 0 } = req.query;
+        const result = await dashboardDb.getEventList(req.guild.id, {
+            status: status || null,
+            search: search || null,
+            sort: sort || 'start',
+            limit: parseInt(limit, 10) || 50,
+            offset: parseInt(offset, 10) || 0,
+        });
+        res.json({ events: result.events, total: result.total });
     } catch (err) {
-        console.error('[API] get events error:', err.message);
+        console.error('[API] list events error:', err.message);
         res.status(500).json({ error: 'Failed to load events.' });
     }
 });
 
-app.post('/api/guilds/:guildId/events', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
+// Create an event. `publish: true` opens registration immediately.
+app.post('/api/guilds/:guildId/events', eventPerm('manage_events'), async (req, res) => {
     try {
-        const schedule = await dashboardDb.createEventSchedule(req.guild.id, req.body || {}, req.user.id);
-        res.json({ schedule });
+        const body = req.body || {};
+        const event = await dashboardDb.createEvent(req.guild.id, body, req.user.id);
+        eventAuth.clearEventPolicyCache(req.guild.id);
+        await dashboardDb.addEventActivity(event.id, req.guild.id, {
+            userId: req.user.id, username: req.user.username, action: 'event_created', detail: event.name,
+        }).catch(() => {});
+        if (body.publish) {
+            const published = await dashboardDb.updateEvent(event.id, { status: 'registration_open' });
+            Object.assign(event, published);
+            await dashboardDb.addEventActivity(event.id, req.guild.id, {
+                userId: req.user.id, username: req.user.username, action: 'event_published',
+            }).catch(() => {});
+        }
+        recordWebsiteLog(req, `Created event "${event.name}"`);
+        res.json({ event });
     } catch (err) {
         console.error('[API] create event error:', err.message);
-        res.status(500).json({ error: 'Failed to create event: ' + err.message });
+        res.status(err.status || 500).json({ error: 'Failed to create the event: ' + err.message });
     }
 });
 
-app.patch('/api/guilds/:guildId/events/:id', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
+// Analytics (cheap aggregate — not run on page render).
+// NOTE: registered before the /:id route so "analytics" is never parsed as an id.
+app.get('/api/guilds/:guildId/events/analytics', requireAuth, requireGuildAdmin, async (req, res) => {
     try {
-        const id = parseInt(req.params.id, 10);
-        if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid event id.' });
-        const schedule = await dashboardDb.updateEventSchedule(id, req.body || {});
-        res.json({ schedule });
+        const analytics = await dashboardDb.getEventAnalytics(req.guild.id);
+        res.json({ analytics });
+    } catch (err) {
+        console.error('[API] event analytics error:', err.message);
+        res.status(500).json({ error: 'Failed to load event analytics.' });
+    }
+});
+
+// Duplicate an event (configuration only — never participants).
+app.post('/api/guilds/:guildId/events/:id/duplicate', eventPerm('manage_events'), eventAuth.requireEventOwnership, async (req, res) => {
+    try {
+        const event = await dashboardDb.duplicateEvent(req.event.id, req.user.id);
+        recordWebsiteLog(req, `Duplicated event "${req.event.name}"`);
+        res.json({ event });
+    } catch (err) {
+        console.error('[API] duplicate event error:', err.message);
+        res.status(err.status || 500).json({ error: 'Failed to duplicate the event: ' + err.message });
+    }
+});
+
+// Get a single event + participants + activity + reminders.
+app.get('/api/guilds/:guildId/events/:id', requireAuth, requireGuildAdmin, eventAuth.requireEventOwnership, async (req, res) => {
+    try {
+        const [participants, activity, reminders] = await Promise.all([
+            dashboardDb.getEventParticipants(req.event.id),
+            dashboardDb.getEventActivity(req.event.id, 100),
+            dashboardDb.getEventReminderRows(req.event.id),
+        ]);
+        res.json({ event: req.event, participants, activity, reminders });
+    } catch (err) {
+        console.error('[API] get event error:', err.message);
+        res.status(500).json({ error: 'Failed to load the event.' });
+    }
+});
+
+// Update an event.
+app.patch('/api/guilds/:guildId/events/:id', eventPerm('manage_events'), eventAuth.requireEventOwnership, async (req, res) => {
+    try {
+        const event = await dashboardDb.updateEvent(req.event.id, req.body || {});
+        eventAuth.clearEventPolicyCache(req.guild.id);
+        await dashboardDb.addEventActivity(event.id, req.guild.id, {
+            userId: req.user.id, username: req.user.username, action: 'event_edited',
+        }).catch(() => {});
+        recordWebsiteLog(req, `Updated event "${event.name}"`);
+        res.json({ event });
     } catch (err) {
         console.error('[API] update event error:', err.message);
-        res.status(500).json({ error: 'Failed to update event: ' + err.message });
+        res.status(err.status || 500).json({ error: 'Failed to update the event: ' + err.message });
     }
 });
 
-app.delete('/api/guilds/:guildId/events/:id', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
+// Delete an event.
+app.delete('/api/guilds/:guildId/events/:id', eventPerm('cancel_events'), eventAuth.requireEventOwnership, async (req, res) => {
     try {
-        const id = parseInt(req.params.id, 10);
-        if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid event id.' });
-        await dashboardDb.deleteEventSchedule(id);
+        await dashboardDb.deleteEvent(req.event.id);
+        recordWebsiteLog(req, `Deleted event "${req.event.name}"`);
         res.json({ ok: true });
     } catch (err) {
         console.error('[API] delete event error:', err.message);
-        res.status(500).json({ error: 'Failed to delete event.' });
+        res.status(500).json({ error: 'Failed to delete the event.' });
     }
 });
 
-app.post('/api/guilds/:guildId/events/:id/start', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
+// Publish: open registration (when it has a schedule) + post the announcement.
+app.post('/api/guilds/:guildId/events/:id/publish', eventPerm('send_announcements'), eventAuth.requireEventOwnership, async (req, res) => {
     try {
-        const id = parseInt(req.params.id, 10);
-        if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid event id.' });
-        await dashboardDb.startEventSchedule(id);
+        let event = req.event;
+        if (event.status === 'draft') {
+            event = await dashboardDb.updateEvent(event.id, { status: event.startAt ? 'registration_open' : 'scheduled' });
+        }
+        let announced = false;
+        if (event.announcementChannelId) {
+            try {
+                const msg = await discord.sendChannelMessage(event.announcementChannelId, {
+                    embeds: [buildEventEmbedForApi(event)],
+                    allowed_mentions: { parse: [] },
+                });
+                await dashboardDb.setEventAnnouncementMessage(event.id, event.announcementChannelId, msg.id);
+                announced = true;
+            } catch (e) {
+                console.warn('[API] publish announcement failed:', e.message);
+            }
+        }
+        await dashboardDb.addEventActivity(event.id, req.guild.id, {
+            userId: req.user.id, username: req.user.username, action: 'event_published',
+            detail: announced ? 'Announcement posted' : 'No announcement channel configured',
+        }).catch(() => {});
+        recordWebsiteLog(req, `Published event "${event.name}"`);
+        res.json({ event, announced });
+    } catch (err) {
+        console.error('[API] publish event error:', err.message);
+        res.status(err.status || 500).json({ error: err.message });
+    }
+});
+
+// Announce: POST posts a fresh message; PATCH edits the existing one in place.
+app.post('/api/guilds/:guildId/events/:id/announce', eventPerm('send_announcements'), eventAuth.requireEventOwnership, async (req, res) => {
+    try {
+        const event = req.event;
+        if (!event.announcementChannelId) return res.status(400).json({ error: 'Choose an announcement channel first.' });
+        const msg = await discord.sendChannelMessage(event.announcementChannelId, {
+            embeds: [buildEventEmbedForApi(event)], allowed_mentions: { parse: [] },
+        });
+        await dashboardDb.setEventAnnouncementMessage(event.id, event.announcementChannelId, msg.id);
+        await dashboardDb.addEventActivity(event.id, req.guild.id, {
+            userId: req.user.id, username: req.user.username, action: 'announcement_sent',
+        }).catch(() => {});
+        res.json({ ok: true, messageId: msg.id });
+    } catch (err) {
+        console.error('[API] announce event error:', err.message);
+        res.status(500).json({ error: 'Failed to post the announcement.' });
+    }
+});
+
+app.patch('/api/guilds/:guildId/events/:id/announce', eventPerm('send_announcements'), eventAuth.requireEventOwnership, async (req, res) => {
+    try {
+        const event = req.event;
+        if (!event.announcementChannelId || !event.announcementMessageId) {
+            return res.status(400).json({ error: 'There is no announcement message to update.' });
+        }
+        await discord.editChannelMessage(event.announcementChannelId, event.announcementMessageId, {
+            embeds: [buildEventEmbedForApi(event)], allowed_mentions: { parse: [] },
+        });
+        await dashboardDb.addEventActivity(event.id, req.guild.id, {
+            userId: req.user.id, username: req.user.username, action: 'announcement_updated',
+        }).catch(() => {});
         res.json({ ok: true });
     } catch (err) {
-        console.error('[API] start event error:', err.message);
-        res.status(500).json({ error: 'Failed to start event: ' + err.message });
+        console.error('[API] update announcement error:', err.message);
+        res.status(500).json({ error: 'Failed to update the announcement.' });
     }
 });
 
-app.post('/api/guilds/:guildId/events/:id/cancel', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
+// Cancel: stop reminders, prevent registration, notify participants (bot).
+app.post('/api/guilds/:guildId/events/:id/cancel', eventPerm('cancel_events'), eventAuth.requireEventOwnership, async (req, res) => {
     try {
-        const id = parseInt(req.params.id, 10);
-        if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid event id.' });
-        await dashboardDb.cancelEventSchedule(id);
-        res.json({ ok: true });
+        const event = await dashboardDb.updateEvent(req.event.id, { status: 'cancelled' });
+        await dashboardDb.addEventActivity(event.id, req.guild.id, {
+            userId: req.user.id, username: req.user.username, action: 'event_cancelled',
+            detail: (req.body || {}).reason || null,
+        }).catch(() => {});
+        recordWebsiteLog(req, `Cancelled event "${event.name}"`);
+        res.json({ event });
     } catch (err) {
         console.error('[API] cancel event error:', err.message);
-        res.status(500).json({ error: 'Failed to cancel event.' });
+        res.status(err.status || 500).json({ error: err.message });
     }
 });
+
+// Complete an event.
+app.post('/api/guilds/:guildId/events/:id/complete', eventPerm('manage_events'), eventAuth.requireEventOwnership, async (req, res) => {
+    try {
+        const event = await dashboardDb.updateEvent(req.event.id, { status: 'completed' });
+        await dashboardDb.addEventActivity(event.id, req.guild.id, {
+            userId: req.user.id, username: req.user.username, action: 'event_completed',
+        }).catch(() => {});
+        res.json({ event });
+    } catch (err) {
+        console.error('[API] complete event error:', err.message);
+        res.status(err.status || 500).json({ error: err.message });
+    }
+});
+
+// Participants.
+app.get('/api/guilds/:guildId/events/:id/participants', requireAuth, requireGuildAdmin, eventAuth.requireEventOwnership, async (req, res) => {
+    try {
+        const participants = await dashboardDb.getEventParticipants(req.event.id, { status: req.query.status || null });
+        res.json({ participants });
+    } catch (err) {
+        console.error('[API] list participants error:', err.message);
+        res.status(500).json({ error: 'Failed to load participants.' });
+    }
+});
+
+app.post('/api/guilds/:guildId/events/:id/participants', eventPerm('manage_participants'), eventAuth.requireEventOwnership, async (req, res) => {
+    try {
+        const userId = String((req.body || {}).userId || '');
+        if (!/^\d{15,22}$/.test(userId)) return res.status(400).json({ error: 'Invalid user ID.' });
+        const registered = await dashboardDb.getEventParticipants(req.event.id, { status: 'registered' });
+        const full = req.event.maxParticipants && registered.length >= req.event.maxParticipants;
+        const status = full ? 'waiting' : 'registered';
+        const participant = await dashboardDb.addEventParticipant(req.event.id, req.guild.id, userId, { status });
+        await dashboardDb.addEventActivity(req.event.id, req.guild.id, {
+            userId: req.user.id, username: req.user.username,
+            action: status === 'waiting' ? 'participant_waitlisted' : 'participant_added',
+            detail: `<@${userId}>`,
+        }).catch(() => {});
+        res.json({ participant });
+    } catch (err) {
+        console.error('[API] add participant error:', err.message);
+        res.status(500).json({ error: 'Failed to add the participant.' });
+    }
+});
+
+app.patch('/api/guilds/:guildId/events/:id/participants/:userId', eventPerm('manage_participants'), eventAuth.requireEventOwnership, async (req, res) => {
+    try {
+        const { userId } = req.params;
+        if (!/^\d{15,22}$/.test(userId)) return res.status(400).json({ error: 'Invalid user ID.' });
+        const participant = await dashboardDb.updateEventParticipant(req.event.id, userId, req.body || {});
+        if (!participant) return res.status(404).json({ error: 'Participant not found.' });
+        await dashboardDb.addEventActivity(req.event.id, req.guild.id, {
+            userId: req.user.id, username: req.user.username, action: 'participant_updated',
+            detail: `<@${userId}>`,
+        }).catch(() => {});
+        res.json({ participant });
+    } catch (err) {
+        console.error('[API] update participant error:', err.message);
+        res.status(500).json({ error: 'Failed to update the participant.' });
+    }
+});
+
+app.delete('/api/guilds/:guildId/events/:id/participants/:userId', eventPerm('manage_participants'), eventAuth.requireEventOwnership, async (req, res) => {
+    try {
+        const { userId } = req.params;
+        if (!/^\d{15,22}$/.test(userId)) return res.status(400).json({ error: 'Invalid user ID.' });
+        await dashboardDb.removeEventParticipant(req.event.id, userId);
+        let promoted = null;
+        if (req.event.waitlistEnabled) promoted = await dashboardDb.promoteEventWaiting(req.event.id).catch(() => null);
+        await dashboardDb.addEventActivity(req.event.id, req.guild.id, {
+            userId: req.user.id, username: req.user.username, action: 'participant_removed',
+            detail: `<@${userId}>${promoted ? ` · promoted <@${promoted.userId}>` : ''}`,
+        }).catch(() => {});
+        res.json({ ok: true, promoted });
+    } catch (err) {
+        console.error('[API] remove participant error:', err.message);
+        res.status(500).json({ error: 'Failed to remove the participant.' });
+    }
+});
+
+// Activity log.
+app.get('/api/guilds/:guildId/events/:id/activity', requireAuth, requireGuildAdmin, eventAuth.requireEventOwnership, async (req, res) => {
+    try {
+        const activity = await dashboardDb.getEventActivity(req.event.id, parseInt(req.query.limit, 10) || 100);
+        res.json({ activity });
+    } catch (err) {
+        console.error('[API] get activity error:', err.message);
+        res.status(500).json({ error: 'Failed to load the activity log.' });
+    }
+});
+
+// Build a Discord API embed for an event (dashboard-side publish). Kept local so
+// it does not require the bot manager; mirrors shared/eventMessages.
+function buildEventEmbedForApi(event) {
+    const { eventTypeMeta, eventStatusMeta } = require('../shared/eventConstants');
+    const type = eventTypeMeta(event.type);
+    const color = event.embedColor || type.color || '#5865F2';
+    const toInt = (h) => (/^#[0-9a-fA-F]{6}$/.test(h) ? parseInt(h.slice(1), 16) : 0x5865f2);
+    const ts = (iso, style) => iso ? `<t:${Math.floor(new Date(iso).getTime() / 1000)}:${style}>` : 'Not scheduled';
+    const fields = [
+        { name: '📅 When', value: `${ts(event.startAt, 'F')}\n${ts(event.startAt, 'R')}`, inline: true },
+    ];
+    if (event.endAt) fields.push({ name: '🏁 Ends', value: ts(event.endAt, 'F'), inline: true });
+    fields.push({ name: '📍 Where', value: event.locationValue ? `${event.locationType}: ${event.locationValue}` : 'Not set', inline: true });
+    fields.push({ name: '🎟️ Registration', value: eventStatusMeta(event.status).label, inline: true });
+    const embed = {
+        title: (event.embedTitle || `${type.icon} ${event.name}`).slice(0, 256),
+        color: toInt(color),
+        fields,
+        footer: { text: event.embedFooter || 'PrimeBot Events' },
+        timestamp: new Date().toISOString(),
+    };
+    const desc = (event.embedDescription || event.description || '').slice(0, 4096);
+    if (desc) embed.description = desc;
+    if (event.imageUrl && /^https?:\/\//.test(event.imageUrl)) embed.image = { url: event.imageUrl };
+    if (event.thumbnailUrl && /^https?:\/\//.test(event.thumbnailUrl)) embed.thumbnail = { url: event.thumbnailUrl };
+    return embed;
+}
 
 // ── Page routes (server-rendered multi-page app) ────────────────────────────
 //
@@ -2075,8 +2331,67 @@ app.get('/guild/:guildId/tickets/:panelId/edit', requireAuth, requireGuildAdminP
         res.status(500).type('html').send(L.render({ title: 'PrimeBot · Error', body, user: req.session && req.session.user }));
     }
 });
-app.get('/guild/:guildId/events', requireAuth, requireGuildAdminPage, (req, res) =>
-    res.type('html').send(guildPages.eventsPage({ guild: req.guild, user: req.user })));
+// Event Management: hub, create wizard, and per-event manage pages. The hub
+// pre-loads the first page of events + the guild-wide event policy so the page
+// renders server-side (no API round-trip on load); the wizard and manage pages
+// load their event data server-side too.
+app.get('/guild/:guildId/events', requireAuth, requireGuildAdminPage, async (req, res) => {
+    try {
+        const [list, policy] = await Promise.all([
+            dashboardDb.getEventList(req.guild.id, { limit: 100, sort: 'start' }).catch(() => ({ events: [], total: 0 })),
+            dashboardDb.getEventPolicy(req.guild.id).catch(() => ({ managerRoleId: null, permissions: [] })),
+        ]);
+        req.guild._config = {
+            ...(req.guild._config || {}),
+            events: list.events,
+            eventTotal: list.total,
+            eventPolicy: policy,
+        };
+        res.type('html').send(guildPages.eventsPage({ guild: req.guild, user: req.user }));
+    } catch (err) {
+        console.error('[ROUTE] events page error:', err.message);
+        const body = `<div class="card"><div class="alert alert-error">Failed to load events.</div><p><a href="/guild/${L.esc(req.params.guildId)}">← Back</a></p></div>`;
+        res.status(500).type('html').send(L.render({ title: 'PrimeBot · Error', body, user: req.session && req.session.user }));
+    }
+});
+app.get('/guild/:guildId/events/new', requireAuth, requireGuildAdminPage, (req, res) => {
+    const template = typeof req.query.template === 'string' ? req.query.template : 'custom';
+    res.type('html').send(guildPages.eventWizardPage({ guild: req.guild, user: req.user, template }));
+});
+app.get('/guild/:guildId/events/:id', requireAuth, requireGuildAdminPage, async (req, res) => {
+    try {
+        const id = parseInt(req.params.id, 10);
+        const event = Number.isFinite(id) ? await dashboardDb.getEventById(id) : null;
+        if (!event || String(event.guildId) !== String(req.guild.id)) {
+            return res.status(404).type('html').send(pages.notFoundPage({ user: req.session && req.session.user }));
+        }
+        const [participants, activity] = await Promise.all([
+            dashboardDb.getEventParticipants(event.id).catch(() => []),
+            dashboardDb.getEventActivity(event.id, 100).catch(() => []),
+        ]);
+        // Channel type lists for the location + announcement selectors.
+        let eventChannels = req.guild._channels || [];
+        let eventVoiceChannels = [];
+        let eventStageChannels = [];
+        try {
+            const all = await discord.getGuildChannelsByType(req.guild.id, [0, 2, 4, 5, 13]);
+            eventChannels = all.filter(c => c.type === 0 || c.type === 5).map(c => ({ id: c.id, name: c.name }));
+            eventVoiceChannels = all.filter(c => c.type === 2).map(c => ({ id: c.id, name: c.name }));
+            eventStageChannels = all.filter(c => c.type === 13).map(c => ({ id: c.id, name: c.name }));
+        } catch (err) {
+            console.error('[ROUTE] event channel fetch failed:', err.message);
+        }
+        req.guild._eventChannels = eventChannels;
+        req.guild._eventVoiceChannels = eventVoiceChannels;
+        req.guild._eventStageChannels = eventStageChannels;
+        const activeTab = typeof req.query.tab === 'string' ? req.query.tab : 'overview';
+        res.type('html').send(guildPages.eventManagePage({ guild: req.guild, user: req.user, event, participants, activity, activeTab }));
+    } catch (err) {
+        console.error('[ROUTE] event manage page error:', err.message);
+        const body = `<div class="card"><div class="alert alert-error">Failed to load the event.</div><p><a href="/guild/${L.esc(req.params.guildId)}/events">← Back to events</a></p></div>`;
+        res.status(500).type('html').send(L.render({ title: 'PrimeBot · Error', body, user: req.session && req.session.user }));
+    }
+});
 app.get('/guild/:guildId/live/polls', requireAuth, requireGuildAdminPage, (req, res) =>
     res.type('html').send(guildPages.livePollsPage({ guild: req.guild, user: req.user })));
 app.get('/guild/:guildId/live/giveaways', requireAuth, requireGuildAdminPage, (req, res) =>

@@ -15,7 +15,7 @@ const { scheduleComponentExpiry } = require('./stabilityUtils');
 //   • Moderation         — mod tools + self-roles ($role) + $beta
 //   • Administration     — feature configuration
 //
-// Excluded by design: broadcast, session ($ses), sync, tokentest, np/noprefix,
+// Excluded by design: broadcast, session ($ses), sync, tokentest, test, np/noprefix,
 // and $betaserver (internal developer tool). Role content was merged into
 // Moderation; the category-browser command lives in General.
 //

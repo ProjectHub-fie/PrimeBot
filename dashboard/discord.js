@@ -236,6 +236,31 @@ async function getGuildChannels(guildId) {
 }
 
 /**
+ * Get channels of a guild filtered by Discord channel type, for the Event
+ * Management location/an announcement selectors. Types: 0 text, 2 voice,
+ * 4 category, 5 announcement, 13 stage.
+ */
+async function getGuildChannelsByType(guildId, types = [0]) {
+    const channels = await fetchJson(`${API_BASE}/guilds/${guildId}/channels`, { headers: botHeaders() });
+    const set = new Set(types);
+    return (channels || []).filter(c => set.has(c.type));
+}
+
+/**
+ * Fetch a guild member's role ids (used by the event page so the server can
+ * pre-fill the configured event-manager role and role selectors). Returns []
+ * when the member is not found.
+ */
+async function getGuildMemberRoles(guildId, userId) {
+    try {
+        const member = await fetchJson(`${API_BASE}/guilds/${guildId}/members/${userId}`, { headers: botHeaders() });
+        return Array.isArray(member && member.roles) ? member.roles : [];
+    } catch {
+        return [];
+    }
+}
+
+/**
  * Get roles of a guild, optionally excluding roles the bot cannot assign
  * (those at/above the bot's highest role, and integration-managed roles).
  * `excludeUnassignable=true` is used by reaction-role / leveling selectors.
@@ -342,6 +367,8 @@ module.exports = {
     getBotSelf,
     getBotMember,
     getGuildChannels,
+    getGuildChannelsByType,
+    getGuildMemberRoles,
     getGuildRoles,
     canManageGuild,
     fetchJson,

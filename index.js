@@ -84,6 +84,7 @@ if (process.env.DB_QUERY_MONITOR === 'true' || process.env.DB_QUERY_MONITOR === 
             ['./server/ticketDb', 'ticketPool'],
             ['./server/liveDb', 'livePool'],
             ['./server/eventDb', 'eventPool'],
+            ['./server/eventMgmtDb', 'eventMgmtPool'],
             ['./server/logDb', 'logPool'],
             ['./server/alogDb', 'alogPool'],
             ['./server/levelingDb', 'levelingPool'],
@@ -169,6 +170,16 @@ client.betaManager = betaManager;
         deleteMenu: noopAsync, handleReactionAdd: noopAsync, handleReactionRemove: noopAsync,
         restorePersistentMenus: noopAsync,
     };
+    client.eventMgmtManager = {
+        getEvent: () => null, getGuildEvents: () => [],
+        handleButton: async () => false, restore: noopAsync,
+        transitionStatus: noopAsync, publish: noopAsync, announceEvent: noopAsync,
+        updateAnnouncement: noopAsync, cancelEvent: noopAsync, completeEvent: noopAsync,
+        joinEvent: async () => ({ ok: false, message: 'Events are unavailable right now.' }),
+        leaveEvent: async () => ({ ok: false, message: 'Events are unavailable right now.' }),
+        checkIn: async () => ({ ok: false, message: 'Events are unavailable right now.' }),
+        setResult: noopAsync, cacheSize: 0,
+    };
 }
 
 // ── Real manager boot — runs exactly once when this node connects ─────────
@@ -187,7 +198,7 @@ async function initializeManagers() {
     const PollManager       = require('./utils/pollManager');
     const LivePollManager   = require('./utils/livePollManager');
     const LiveGiveawayManager = require('./utils/liveGiveawayManager');
-    const EventManager      = require('./utils/eventManager');
+    const EventManager      = require('./utils/eventScheduleManager');
     const EmojiManager      = require('./utils/emojiManager');
     const CountingManager   = require('./utils/countingManager');
     const TruthDareManager  = require('./utils/truthDareManager');
@@ -272,6 +283,28 @@ async function initializeManagers() {
             getGuildSchedules: () => [], getSchedule: () => null,
             startNow: async () => {}, cancelSchedule: async () => {}, restore: async () => {},
             normalizeTask: () => ({}),
+        };
+    }
+
+    // Event Management (📅 Event Management tab) — registration, reminders,
+    // announcements, attendance and Discord button handling. The legacy
+    // EventManager (timed lock/unlock schedules) above remains for back-compat.
+    try {
+        const EventMgmtManager = require('./utils/eventMgmtManager');
+        client.eventMgmtManager = new EventMgmtManager(client);
+        console.log('[MANAGERS] EventMgmtManager loaded.');
+    } catch (err) {
+        console.error('[MANAGERS] Failed to load EventMgmtManager:', err.message);
+        client.eventMgmtManager = {
+            getEvent: () => null, getGuildEvents: () => [],
+            handleButton: async () => false, restore: async () => {},
+            transitionStatus: async () => {}, publish: async () => {},
+            announceEvent: async () => {}, updateAnnouncement: async () => {},
+            cancelEvent: async () => {}, completeEvent: async () => {},
+            joinEvent: async () => ({ ok: false, message: 'Events are unavailable right now.' }),
+            leaveEvent: async () => ({ ok: false, message: 'Events are unavailable right now.' }),
+            checkIn: async () => ({ ok: false, message: 'Events are unavailable right now.' }),
+            setResult: async () => {}, cacheSize: 0,
         };
     }
 

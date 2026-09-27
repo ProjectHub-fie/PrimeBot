@@ -117,6 +117,15 @@ module.exports = {
             }, 7000);
         }
 
+        // Event Management (registration/reminders/announcements) restore.
+        if (client.eventMgmtManager && typeof client.eventMgmtManager.restore === 'function') {
+            setTimeout(() => {
+                client.eventMgmtManager.restore().catch(err =>
+                    console.error('[EVENTMGMT] Restore failed:', err.message)
+                );
+            }, 7500);
+        }
+
         // Re-apply roles for persistent reaction-role menus so they survive
         // bot restarts and Discord reaction-cache evictions.
         if (client.reactionRoleManager && typeof client.reactionRoleManager.restorePersistentMenus === 'function') {

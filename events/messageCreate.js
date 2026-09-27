@@ -3518,6 +3518,40 @@ module.exports = {
                     break;
                 }
 
+                case "test": {
+                    // Developer-only: run the project's test suite (tests/*.test.js).
+                    // Mirrors `$tokentest`'s exec-embed pattern.
+                    if (!config.developerIds.includes(message.author.id)) return;
+
+                    const runningEmbed = new EmbedBuilder()
+                        .setColor(config.colors.primary)
+                        .setTitle('🧪 Test Suite')
+                        .setDescription('Running `npm test` (tests/*.test.js)…');
+
+                    const testMsg = await message.channel.send({ embeds: [runningEmbed] });
+
+                    const { exec } = require('child_process');
+                    // 5-minute cap: the full suite is large but should finish well within it.
+                    exec('npm test', { timeout: 300000, maxBuffer: 1024 * 512, cwd: process.cwd() }, async (err, stdout, stderr) => {
+                        const raw = (stdout + stderr).trim() || '(no output)';
+                        // Surface the tail — the summary + any failures live there.
+                        const tail = raw.length > 1900 ? '…(truncated)\n' + raw.slice(-1900) : raw;
+                        // Node's test reporter prints "# pass N" / "# fail N".
+                        const pass = (raw.match(/^# pass (\d+)/m) || [])[1];
+                        const fail = (raw.match(/^# fail (\d+)/m) || [])[1];
+
+                        const resultEmbed = new EmbedBuilder()
+                            .setColor(err ? config.colors.error : config.colors.success)
+                            .setTitle(err ? '❌ Tests Failed' : '✅ Tests Passed')
+                            .setDescription(`\`\`\`\n${tail}\n\`\`\``)
+                            .setFooter({ text: `Exit code: ${err ? err.code ?? 1 : 0}${pass != null ? ` • pass ${pass}` : ''}${fail != null ? ` • fail ${fail}` : ''}` })
+                            .setTimestamp();
+
+                        await testMsg.edit({ embeds: [resultEmbed] }).catch(() => {});
+                    });
+                    break;
+                }
+
                 case "np":
                 case "noprefix": {
                     // Developer-only access for the no-prefix administration command

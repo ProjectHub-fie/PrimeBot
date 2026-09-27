@@ -16,7 +16,7 @@ const path = require('path');
 const EVENT_SOURCE = path.join(__dirname, '..', 'events', 'messageCreate.js');
 
 // Developer/diagnostic commands intentionally left out of the public docs.
-const EXCLUDE = new Set(['tokentest', 'ses', 'sync', 'betaserver']);
+const EXCLUDE = new Set(['tokentest', 'test', 'ses', 'sync', 'betaserver']);
 
 // Display order + icon (from dashboard/public/js/icons.js) for each category.
 const CATEGORIES = [

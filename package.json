@@ -6,6 +6,7 @@
     "start": "node start-bot.js",
     "dev": "node start-bot.js",
     "dashboard": "node dashboard/server.js",
+    "test": "node --test tests/*.test.js",
     "check-beta": "node scripts/check_beta.js",
     "db:push": "npx drizzle-kit push"
   },
