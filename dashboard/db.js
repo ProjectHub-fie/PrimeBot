@@ -71,7 +71,7 @@ function getEventPool() {
     try {
         eventPool = require('../server/eventDb').eventPool;
     } catch (err) {
-        console.error('[DASHBOARD DB] eventDb unavailable:', err.message);
+        console.error('[DASHBOARD DB] eventScheduleDb unavailable:', err.message);
         eventPool = { query: async () => { throw new Error('Event database not configured'); } };
     }
     return eventPool;
@@ -1655,6 +1655,68 @@ async function getGuildConfig(guildId) {
         }
     }
     return { server, welcome, logging, reactionRoles, automod, antiNuke, ticketPanels, birthdaySettings, birthdays };
+}
+
+// ── Event Management (server/eventMgmtRepo.js — EVENTMGMT_DATABASE_URL) ──────
+//
+// The repo is pure SQL + normalization; the dashboard re-exports it so the
+// API routes have a single import. Loaded lazily so a missing pg pool never
+// breaks unrelated dashboard pages.
+let _eventMgmtRepo = null;
+function eventMgmt() {
+    if (_eventMgmtRepo) return _eventMgmtRepo;
+    try {
+        _eventMgmtRepo = require('../server/eventMgmtRepo');
+    } catch (err) {
+        console.error('[DASHBOARD DB] eventMgmtRepo unavailable:', err.message);
+        _eventMgmtRepo = { __unavailable: true };
+    }
+    return _eventMgmtRepo;
+}
+
+/** Guarded call into the Event Management repo (throws a friendly error). */
+async function eventMgmtCall(method, ...args) {
+    const repo = eventMgmt();
+    if (repo.__unavailable || typeof repo[method] !== 'function') {
+        throw new Error('Event Management database is not configured.');
+    }
+    return repo[method](...args);
+}
+
+async function getEventList(guildId, opts) { return eventMgmtCall('getGuildEvents', guildId, opts); }
+async function getEventById(id) { return eventMgmtCall('getEvent', id); }
+async function createEvent(guildId, data, creatorId) { return eventMgmtCall('createEvent', guildId, data, creatorId); }
+async function updateEvent(id, patch) { return eventMgmtCall('updateEvent', id, patch); }
+async function deleteEvent(id) { return eventMgmtCall('deleteEvent', id); }
+async function duplicateEvent(id, creatorId) { return eventMgmtCall('duplicateEvent', id, creatorId); }
+async function getEventParticipants(eventId, opts) { return eventMgmtCall('getParticipants', eventId, opts); }
+async function getEventParticipant(eventId, userId) { return eventMgmtCall('getParticipant', eventId, userId); }
+async function addEventParticipant(eventId, guildId, userId, opts) { return eventMgmtCall('addParticipant', eventId, guildId, userId, opts); }
+async function updateEventParticipant(eventId, userId, patch) { return eventMgmtCall('updateParticipant', eventId, userId, patch); }
+async function removeEventParticipant(eventId, userId) { return eventMgmtCall('removeParticipant', eventId, userId); }
+async function promoteEventWaiting(eventId) { return eventMgmtCall('promoteNextWaiting', eventId); }
+async function getEventActivity(eventId, limit) { return eventMgmtCall('getActivity', eventId, limit); }
+async function addEventActivity(eventId, guildId, entry) { return eventMgmtCall('addActivity', eventId, guildId, entry); }
+async function getEventAnalytics(guildId) { return eventMgmtCall('getGuildEventAnalytics', guildId); }
+async function setEventAnnouncementMessage(id, channelId, messageId) { return eventMgmtCall('setAnnouncementMessage', id, channelId, messageId); }
+async function getEventReminderRows(eventId) { return eventMgmtCall('getEventReminders', eventId); }
+
+/**
+ * Guild-wide event policy (manager role + granular permissions). Read from the
+ * most recently configured event. Degrades to an empty policy.
+ */
+async function getEventPolicy(guildId) {
+    try {
+        const { events } = await eventMgmtCall('getGuildEvents', guildId, { limit: 100, sort: 'updated' });
+        for (const ev of events) {
+            if (ev.eventManagerRoleId) {
+                return { managerRoleId: ev.eventManagerRoleId, permissions: ev.eventPermissions || [] };
+            }
+        }
+    } catch (err) {
+        console.error('[DASHBOARD DB] event policy read failed:', err.message);
+    }
+    return { managerRoleId: null, permissions: [] };
 }
 
 // ── Aggregated platform stats (public — shown on the login screen) ──────────
@@ -3449,6 +3511,25 @@ module.exports = {
     deleteSavedEmbed,
     addWebsiteLog,
     getWebsiteLogs,
+    // Event Management (EVENTMGMT_DATABASE_URL via server/eventMgmtRepo.js)
+    getEventList,
+    getEventById,
+    createEvent,
+    updateEvent,
+    deleteEvent,
+    duplicateEvent,
+    getEventParticipants,
+    getEventParticipant,
+    addEventParticipant,
+    updateEventParticipant,
+    removeEventParticipant,
+    promoteEventWaiting,
+    getEventActivity,
+    addEventActivity,
+    getEventAnalytics,
+    getEventPolicy,
+    setEventAnnouncementMessage,
+    getEventReminderRows,
     getGuildBadges,
     awardDashboardBadge,
     revokeDashboardBadge,

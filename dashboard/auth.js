@@ -198,6 +198,10 @@ async function requireGuildAdmin(req, res, next) {
             approximate_member_count: botGuild.approximate_member_count,
             userIsOwner: userGuild.owner,
         };
+        // Stash the caller's raw guild permissions on the session so the Event
+        // Management guards can tell an administrator from an event-manager
+        // without another Discord round-trip.
+        req.session.userGuildPermissions = userGuild.permissions;
         next();
     } catch (err) {
         console.error('[AUTH] requireGuildAdmin error:', err.message);

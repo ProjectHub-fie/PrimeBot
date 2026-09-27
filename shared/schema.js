@@ -735,6 +735,107 @@ const eventTasksRelations = relations(eventTasks, ({ one }) => ({
   }),
 }));
 
+// ── Event Management (em_* tables, EVENTMGMT_DATABASE_URL) ────────────────────
+// The premium event platform: events, participants (waiting list + attendance),
+// pre-event reminders, per-user "Remind Me" subscriptions and an activity log.
+// Mirrors migrations/0026_add_event_management.sql.
+const emEvents = pgTable('em_events', {
+  id: serial('id').primaryKey(),
+  guildId: varchar('guild_id', { length: 50 }).notNull(),
+  creatorId: varchar('creator_id', { length: 50 }),
+  name: varchar('name', { length: 100 }).notNull(),
+  description: text('description'),
+  type: varchar('type', { length: 30 }).notNull().default('custom'),
+  status: varchar('status', { length: 30 }).notNull().default('draft'),
+  startAt: timestamp('start_at'),
+  endAt: timestamp('end_at'),
+  timezone: varchar('timezone', { length: 64 }).default('UTC'),
+  locationType: varchar('location_type', { length: 20 }).default('none'),
+  locationValue: varchar('location_value', { length: 500 }),
+  registrationMode: varchar('registration_mode', { length: 20 }).default('open'),
+  maxParticipants: integer('max_participants'),
+  waitlistEnabled: boolean('waitlist_enabled').default(true),
+  registrationDeadline: timestamp('registration_deadline'),
+  trackAttendance: boolean('track_attendance').default(false),
+  announcementChannelId: varchar('announcement_channel_id', { length: 50 }),
+  announcementMessageId: varchar('announcement_message_id', { length: 50 }),
+  participantRoleId: varchar('participant_role_id', { length: 50 }),
+  staffRoleId: varchar('staff_role_id', { length: 50 }),
+  winnerRoleId: varchar('winner_role_id', { length: 50 }),
+  attendanceRoleId: varchar('attendance_role_id', { length: 50 }),
+  eventManagerRoleId: varchar('event_manager_role_id', { length: 50 }),
+  eventPermissions: jsonb('event_permissions').default([]),
+  imageUrl: text('image_url'),
+  thumbnailUrl: text('thumbnail_url'),
+  embedTitle: varchar('embed_title', { length: 256 }),
+  embedDescription: text('embed_description'),
+  embedColor: varchar('embed_color', { length: 20 }).default('#5865F2'),
+  embedFields: jsonb('embed_fields').default([]),
+  embedFooter: varchar('embed_footer', { length: 255 }),
+  reminders: jsonb('reminders').default([]),
+  result: jsonb('result'),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+const emParticipants = pgTable('em_participants', {
+  id: serial('id').primaryKey(),
+  eventId: integer('event_id').notNull(),
+  guildId: varchar('guild_id', { length: 50 }).notNull(),
+  userId: varchar('user_id', { length: 50 }).notNull(),
+  username: varchar('username', { length: 100 }),
+  status: varchar('status', { length: 20 }).notNull().default('registered'),
+  role: varchar('role', { length: 20 }).notNull().default('participant'),
+  attendanceStatus: varchar('attendance_status', { length: 20 }).notNull().default('unknown'),
+  checkedInAt: timestamp('checked_in_at'),
+  registeredAt: timestamp('registered_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+const emReminders = pgTable('em_reminders', {
+  id: serial('id').primaryKey(),
+  eventId: integer('event_id').notNull(),
+  guildId: varchar('guild_id', { length: 50 }).notNull(),
+  key: varchar('key', { length: 10 }).notNull(),
+  offsetMinutes: integer('offset_minutes').notNull(),
+  sendAt: timestamp('send_at').notNull(),
+  sentAt: timestamp('sent_at'),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+const emUserReminders = pgTable('em_user_reminders', {
+  id: serial('id').primaryKey(),
+  eventId: integer('event_id').notNull(),
+  guildId: varchar('guild_id', { length: 50 }).notNull(),
+  userId: varchar('user_id', { length: 50 }).notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+const emActivity = pgTable('em_activity', {
+  id: serial('id').primaryKey(),
+  eventId: integer('event_id').notNull(),
+  guildId: varchar('guild_id', { length: 50 }).notNull(),
+  userId: varchar('user_id', { length: 50 }),
+  username: varchar('username', { length: 100 }),
+  action: varchar('action', { length: 50 }).notNull(),
+  detail: text('detail'),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+const emEventsRelations = relations(emEvents, ({ many }) => ({
+  participants: many(emParticipants),
+  reminders: many(emReminders),
+  activity: many(emActivity),
+}));
+
+const emParticipantsRelations = relations(emParticipants, ({ one }) => ({
+  event: one(emEvents, { fields: [emParticipants.eventId], references: [emEvents.id] }),
+}));
+
+const emRemindersRelations = relations(emReminders, ({ one }) => ({
+  event: one(emEvents, { fields: [emReminders.eventId], references: [emEvents.id] }),
+}));
+
 // Exports
 module.exports = {
   livePolls,
@@ -798,4 +899,12 @@ module.exports = {
   eventTasks,
   eventSchedulesRelations,
   eventTasksRelations,
+  emEvents,
+  emParticipants,
+  emReminders,
+  emUserReminders,
+  emActivity,
+  emEventsRelations,
+  emParticipantsRelations,
+  emRemindersRelations,
 };

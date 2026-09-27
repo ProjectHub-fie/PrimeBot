@@ -10,7 +10,7 @@ const assert = require('node:assert/strict');
 const { eventPool } = require('../server/eventDb');
 eventPool.query = async () => ({ rows: [] });
 
-const EventManager = require('../utils/eventManager');
+const EventManager = require('../utils/eventScheduleManager');
 
 function makeManager() {
     return new EventManager(null);

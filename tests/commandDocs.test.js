@@ -16,7 +16,7 @@ test('extractCommandGroups finds the prefix commands from messageCreate.js', () 
 
 test('developer/diagnostic commands are excluded', () => {
     const all = commandDocs.extractCommandGroups().flatMap((g) => g.aliases);
-    for (const excluded of ['tokentest', 'ses', 'sync', 'betaserver']) {
+    for (const excluded of ['tokentest', 'test', 'ses', 'sync', 'betaserver']) {
         assert.ok(!all.includes(excluded), `${excluded} should be excluded`);
     }
 });
@@ -53,7 +53,7 @@ test('docs page renders the command-documentation layout with a search box', () 
     const cardCount = (html.match(/<article class="doc-cmd"/g) || []).length;
     assert.strictEqual(cardCount, commands.length);
     // excluded developer commands must not appear
-    for (const excluded of ['tokentest', 'ses', 'betaserver']) {
+    for (const excluded of ['tokentest', 'test', 'ses', 'betaserver']) {
         assert.ok(!html.includes(`id="cmd-${excluded}"`), `docs page leaked ${excluded}`);
     }
 });

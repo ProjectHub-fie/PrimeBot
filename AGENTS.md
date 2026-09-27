@@ -515,3 +515,88 @@ The page uses the floating `saveBar` (see "Dashboard save pattern"): every field
 **Gotcha when adding an API route:** the route list in `automodHttp.test.js` is enumerated by hand. A new endpoint without a 401 assertion is untested — add it there.
 
 **Gotcha when adding an out-of-band save:** any control the page persists on its own (rather than through the floating bar) must call `window.saveBar.syncControl(el)` on success. Without it the bar shows a permanent, unsaveable "unsaved changes" state for that field. Do NOT call `syncControl` on failure — the control must stay dirty so the user can retry. `saveBar.syncControl` only re-baselines the one element (a full `resnapshot()` would swallow unrelated pending edits).
+
+## Event Management feature (📅 Event Management tab) — released
+
+The premium event platform: create → schedule → publish → register → remind →
+attend → complete, entirely dashboard-configured, with the bot doing the Discord
+work. **Event Management is RELEASED** — the `upcoming: true` flag was removed
+from the `events` tab in `render/guild.js` TABS and the write endpoints no longer
+use `requireUpcoming`. It is a NEW subsystem, separate from the older legacy
+**event schedules** (`event_schedules`/`event_tasks`, `EVENT_DATABASE_URL`,
+`utils/eventScheduleManager.js`, `server/eventDb.js` — that pool file was renamed
+from `eventScheduleDb.js`) which remains for timed lock/unlock channel schedules.
+
+- **Shared catalogs:** `shared/eventConstants.js` (types, statuses + validated
+  transitions via `canTransition`, registration modes, location types, reminder
+  presets, permission keys, templates, `normalizeEventPermissions`,
+  `eventTypeMeta`, `eventStatusMeta`) and `shared/eventMessages.js`
+  (`buildAnnouncementPayload` / `buildReminderPayload` / `discordTimestamp` —
+  the single source for message + component payloads, mirrored by the dashboard's
+  local `buildEventEmbedForApi` in `server.js`).
+- **Storage:** `em_events` / `em_participants` / `em_reminders` /
+  `em_user_reminders` / `em_activity` in the dedicated **`EVENTMGMT_DATABASE_URL`**
+  pool (`server/eventMgmtDb.js` → `eventMgmtPool`, falls back to
+  `FALLBACK_DATABASE_URL`/`DATABASE_URL`). Self-created via `ensureEventMgmtTables()`
+  so a fresh DB works without migrations; migration
+  `migrations/0026_add_event_management.sql` + `shared/schema.js` mirror the shape.
+  **Same-DB requirement:** bot and dashboard must point at the same
+  `EVENTMGMT_DATABASE_URL` for dashboard changes to reach the bot.
+- **Repository:** `server/eventMgmtRepo.js` — raw SQL + `normalizeEventConfig()`
+  (the security boundary: trims, clamps, rejects non-http URLs, validates enums,
+  caps embed fields/counts, dedupes reminders — never trusts client input).
+  `rowToEvent` maps snake_case → the camelCase API shape.
+- **Bot:** `utils/eventMgmtManager.js` (cache + `AdaptivePoller`, never a fixed
+  timer) performs announcements, reminders (`em_reminders`, dedup via `sent_at`),
+  joins/leaves/check-in, role assignment and waiting-list auto-promotion.
+  `utils/eventDiscord.js` holds the **`SerialQueue`** used to pace role ops
+  (`_roleQueue`) and participant DMs (`_dmQueue`) so a 500-member event can't
+  spam the Discord API; it also enforces the bot's role hierarchy
+  (`role.position >= me.roles.highest.position` → skip, never attempt). Wired in
+  `index.js` (`client.eventMgmtManager`, with an early-boot no-op stub) and
+  restored in `events/ready.js`.
+- **Discord interactions:** `evjoin:` / `evleave:` / `evcheckin:` / `evparts:` /
+  `evinfo:` / `evremind:<eventId>` buttons routed in `events/interactionCreate.js`
+  to `client.eventMgmtManager.handleButton`. The manager rejects any event that
+  isn't in the interaction's guild.
+- **Dashboard:** three server-rendered pages in `dashboard/render/events-page.js`
+  (wrapped by thin `guild-pages.js` re-exports): hub `/guild/:id/events` (hero +
+  stats + cards + templates + search/filter/sort), wizard `/guild/:id/events/new`
+  (8 steps, live embed preview) and manage `/guild/:id/events/:id` (Overview /
+  Participants / Announcements / Reminders / Settings / Activity Log).
+  Client scripts `events-hub.js`, `events-wizard.js`, `events-manage.js`.
+  Served by routes in `dashboard/server.js` (they preload event data so the page
+  renders without an API round-trip).
+- **API:** `dashboard/server.js` — list (paginated), create, get, PATCH update,
+  DELETE, `publish`, `announce` (POST new / PATCH edits the existing message —
+  never spams), `cancel`, `complete`, `duplicate`, participants
+  (GET/POST/PATCH/DELETE, waiting-list auto-promote on remove), `activity`,
+  `analytics`. All guarded by `requireAuth + requireGuildAdmin` plus
+  `eventAuth.requireEventPermission(perm)` and, for single-event routes,
+  `eventAuth.requireEventOwnership` (guild isolation → no IDOR/cross-guild access).
+  Dashboard wrappers live in `dashboard/db.js` (`getEventList` … `getEventReminderRows`).
+- **Permissions:** `dashboard/eventAuth.js`. Owner + administrators always pass; an
+  optional **Event Manager role** (per-guild, stored on `em_events`) grants a
+  configurable subset (`EVENT_PERMISSIONS`). Every endpoint re-verifies
+  server-side; hiding a button is never enough. Degrades to deny on error.
+- **Neon optimization:** countdowns are 100% client-side (a 1s local timer; the
+  hub/manage tick functions perform **no** network calls — a test pins this), the
+  page list arrives with the HTML, the scheduler uses `AdaptivePoller` (no
+  per-second `SELECT`), reminders use an indexed due-row query
+  (`em_reminders_due_idx … WHERE sent_at IS NULL`), and lists paginate server-side.
+- **Rate-limit protection:** serial queues + configurable pacing
+  (`EVENT_ROLE_OP_DELAY_MS` default 1100, `EVENT_DM_DELAY_MS` default 150), role
+  hierarchy checks, and one-shot reminder/announcement writes.
+- **Env vars:** `EVENTMGMT_DATABASE_URL` (optional), `EVENTMGMT_TICK_INTERVAL_MS`
+  (default 60000), `EVENT_ROLE_OP_DELAY_MS`, `EVENT_DM_DELAY_MS`. The legacy
+  `EVENT_DATABASE_URL` / `EVENT_EXEC_INTERVAL_MS` now apply only to the older
+  event-schedules subsystem.
+- **`$test` command:** developer-only (same gate as `$tokentest`), runs
+  `npm test` (`node --test tests/*.test.js`) and posts the tail + pass/fail
+  counts as an embed. Excluded from `$help`/docs/the Sash menu like `tokentest`.
+- **Tests:** `tests/eventManagement.test.js` (32) — catalogs, lifecycle,
+  message-component caps + customId limits, `normalizeEventConfig` hardening,
+  `rowToEvent`, permission/ownership middleware (owner/admin/manager/IDOR),
+  page renders (hero/stats/empty state/wizard steps/manage tabs/participants),
+  the `$test` command, and the no-per-second-poll / client-countdown /
+  serial-queue invariants.

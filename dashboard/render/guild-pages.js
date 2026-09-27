@@ -11,6 +11,7 @@
 const constants = require('../constants');
 const { esc, channelOptions, roleOptions, render, svgIcon } = require('./layout');
 const { guildDataScript, guildHeaderHTML, tabNavHTML, TABS } = require('./guild');
+const eventsPageLib = require('./events-page');
 
 const { LOG_EVENTS, AUTOMOD_RULES, AUTOMOD_ACTIONS, BADGE_CATALOG } = constants;
 
@@ -1478,31 +1479,22 @@ function antiNukePage({ guild, user }) {
 // `upcoming` flag off — no markup rewrite needed when it ships.
 
 function eventsPage({ guild, user }) {
-    const innerPanelHTML = `
-      <div class="card-title"><span><span class="icon">${svgIcon('calendar')}</span> Event Management <span class="soon-badge">SOON</span></span></div>
-      <p>Schedule an event with a countdown and a list of timed tasks. The bot will lock/unlock or hide/unhide the channel(s) you choose (pick one, or hold Ctrl/Cmd to select several), add/remove roles, or send a text/embed message at the offsets you set (seconds from the event start).</p>
-      <div class="ev-form" id="ev-form">
-        <div class="form-row">
-          <label>Event name<input type="text" id="ev-name" placeholder="e.g. Game Night" /></label>
-          <label>Countdown (seconds)<input type="number" id="ev-countdown" min="0" value="0" /></label>
-        </div>
-        <label>Description <textarea id="ev-description" rows="2" placeholder="Optional description"></textarea></label>
-        <h4 class="ev-tasks-head">Tasks</h4>
-        <div id="ev-tasks-list"></div>
-        <button class="btn btn-secondary" id="ev-add-task">+ Add task</button>
-        <div class="form-actions">
-          <button class="btn btn-primary" id="ev-save">Create event</button>
-          <button class="btn btn-secondary" id="ev-clear">Clear</button>
-        </div>
-      </div>
-      <h3 class="ev-list-head">Scheduled events</h3>
-      <div id="ev-list"><p class="live-empty">Loading…</p></div>`;
-    // Developer/owner-role viewers bypass the upcoming gate: render the real
-    // editor (no "Coming Soon" overlay) so the feature can be exercised.
-    const panelHTML = guild._bypassUpcoming
-        ? innerPanelHTML
-        : upcomingOverlayWrap(innerPanelHTML, { icon: 'calendar', title: 'Event Management' });
-    return guildTab({ guild, user, active: 'events', panelHTML, scripts: ['/js/guild-common.js', '/js/events.js'] });
+    // The full Event Management page lives in its own module (render/events-page.js)
+    // — released, not gated. This thin wrapper keeps the existing call site and
+    // return shape (guildTab-style) so guildTab callers are unaffected.
+    const { body, scripts, title } = eventsPageLib.eventsPage({ guild, user });
+    return render({ title, body, active: 'servers', scripts, user });
+}
+
+// Event Management: create wizard + per-event manage page (own modules).
+function eventWizardPage({ guild, user, template }) {
+    const { body, scripts, title } = eventsPageLib.eventWizardPage({ guild, user, template });
+    return render({ title, body, active: 'servers', scripts, user });
+}
+
+function eventManagePage({ guild, user, event, participants, activity, activeTab }) {
+    const { body, scripts, title } = eventsPageLib.eventManagePage({ guild, user, event, participants, activity, activeTab });
+    return render({ title, body, active: 'servers', scripts, user });
 }
 
 // ── Live Polls / Live Giveaways (per-server) ─────────────────────────────────
@@ -1830,6 +1822,7 @@ function liveGiveawaysPage({ guild, user }) {
 module.exports = {
     welcomePage, levelingPage, badgesPage, prefixPage, roleRewardsPage, autoResponderPage, reactionsPage, broadcastPage,
     birthdaysPage, embedPage, loggingPage, reactionRolesPage, ticketsPage, ticketEditPage, automodPage, antiNukePage, eventsPage,
+    eventWizardPage, eventManagePage,
     livePollsPage, liveGiveawaysPage,
     ticketEmbedBuilderHTML,
     upcomingOverlayWrap,
