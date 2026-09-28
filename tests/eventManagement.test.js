@@ -297,9 +297,10 @@ function fakeGuild(over = {}) {
     };
 }
 
-test('eventsPage renders the premium hero, stats and create button (not gated)', () => {
+test('eventsPage renders the premium hero, stats and create button for bypass developers', () => {
     const gp = require('../dashboard/render/guild-pages');
-    const html = gp.eventsPage({ guild: fakeGuild(), user: { username: 'u' } });
+    // Developer/owner roles bypass the upcoming gate and see the real page.
+    const html = gp.eventsPage({ guild: fakeGuild({ _bypassUpcoming: true }), user: { username: 'u' } });
     assert.match(html, /Event Management/);
     assert.match(html, /Create, manage, and run Discord events with ease\./);
     assert.match(html, /Premium features in free\./);
@@ -309,20 +310,41 @@ test('eventsPage renders the premium hero, stats and create button (not gated)',
     assert.match(html, /Upcoming Events/);
     assert.match(html, /Completed Events/);
     assert.match(html, /Total Participants/);
-    assert.ok(!html.includes('upcoming-locked-wrap locked'), 'Event Management is released, not gated');
+    assert.ok(!html.includes('upcoming-locked-wrap locked'), 'bypass users get the real editor, not the overlay');
     assert.match(html, /<svg class="ico"/);
+});
+
+test('eventsPage renders the Coming Soon overlay for ordinary users (upcoming)', () => {
+    const gp = require('../dashboard/render/guild-pages');
+    const html = gp.eventsPage({ guild: fakeGuild(), user: { username: 'u' } });
+    assert.match(html, /upcoming-locked-wrap locked/, 'ordinary users see the locked overlay');
+    assert.match(html, /Event Management……/, 'overlay names the feature');
+});
+
+test('eventWizardPage and eventManagePage are gated for ordinary users but usable by bypass developers', () => {
+    const gp = require('../dashboard/render/guild-pages');
+    const ev = { id: 5, guildId: '111111111111111111', name: 'Night', type: 'gaming', status: 'registration_open', registrationMode: 'open', startAt: new Date().toISOString(), maxParticipants: 50, waitlistEnabled: true, trackAttendance: true, reminders: ['1h'], eventPermissions: [], participantRoleId: null };
+    const wizardGated = gp.eventWizardPage({ guild: fakeGuild(), user: null, template: 'gaming-night' });
+    assert.match(wizardGated, /upcoming-locked-wrap locked/, 'wizard gated for ordinary users');
+    const manageGated = gp.eventManagePage({ guild: fakeGuild(), user: null, event: ev, participants: [], activity: [], activeTab: 'overview' });
+    assert.match(manageGated, /upcoming-locked-wrap locked/, 'manage page gated for ordinary users');
+
+    const wizard = gp.eventWizardPage({ guild: fakeGuild({ _bypassUpcoming: true }), user: null, template: 'gaming-night' });
+    assert.ok(!wizard.includes('upcoming-locked-wrap locked'), 'bypass users get the wizard');
+    const manage = gp.eventManagePage({ guild: fakeGuild({ _bypassUpcoming: true }), user: null, event: ev, participants: [], activity: [], activeTab: 'overview' });
+    assert.ok(!manage.includes('upcoming-locked-wrap locked'), 'bypass users get the manage page');
 });
 
 test('eventsPage shows the branded empty state when there are no events', () => {
     const gp = require('../dashboard/render/guild-pages');
-    const html = gp.eventsPage({ guild: fakeGuild(), user: { username: 'u' } });
+    const html = gp.eventsPage({ guild: fakeGuild({ _bypassUpcoming: true }), user: { username: 'u' } });
     assert.match(html, /No events yet/);
     assert.match(html, /Create your first community event/);
 });
 
 test('eventWizardPage renders all eight steps + a progress indicator', () => {
     const gp = require('../dashboard/render/guild-pages');
-    const html = gp.eventWizardPage({ guild: fakeGuild(), user: { username: 'u' }, template: 'gaming-night' });
+    const html = gp.eventWizardPage({ guild: fakeGuild({ _bypassUpcoming: true }), user: { username: 'u' }, template: 'gaming-night' });
     for (const step of ['Basic Information', 'Schedule', 'Location', 'Registration', 'Roles', 'Discord Message', 'Advanced Settings', 'Review']) {
         assert.ok(html.includes(step), `wizard missing step "${step}"`);
     }
@@ -335,7 +357,7 @@ test('eventWizardPage renders all eight steps + a progress indicator', () => {
 test('eventManagePage renders every management tab', () => {
     const gp = require('../dashboard/render/guild-pages');
     const ev = { id: 5, guildId: '111111111111111111', name: 'Night', type: 'gaming', status: 'registration_open', registrationMode: 'open', startAt: new Date().toISOString(), maxParticipants: 50, waitlistEnabled: true, trackAttendance: true, reminders: ['1h'], eventPermissions: [], participantRoleId: null };
-    const html = gp.eventManagePage({ guild: fakeGuild(), user: { username: 'u' }, event: ev, participants: [], activity: [], activeTab: 'overview' });
+    const html = gp.eventManagePage({ guild: fakeGuild({ _bypassUpcoming: true }), user: { username: 'u' }, event: ev, participants: [], activity: [], activeTab: 'overview' });
     for (const tab of ['Overview', 'Participants', 'Announcements', 'Reminders', 'Settings', 'Activity Log']) {
         assert.ok(html.includes(tab), `manage page missing tab "${tab}"`);
     }
@@ -349,7 +371,7 @@ test('participants panel renders participant rows with actions', () => {
         { userId: '222222222222222222', username: 'alice', status: 'registered', attendanceStatus: 'present', registeredAt: new Date().toISOString() },
         { userId: '333333333333333333', username: 'bob', status: 'waiting', attendanceStatus: 'unknown', registeredAt: new Date().toISOString() },
     ];
-    const html = eventManagePage({ guild: fakeGuild(), user: { username: 'u' }, event: ev, participants, activity: [], activeTab: 'participants' });
+    const html = eventManagePage({ guild: fakeGuild({ _bypassUpcoming: true }), user: { username: 'u' }, event: ev, participants, activity: [], activeTab: 'participants' });
     assert.match(html, /alice/);
     assert.match(html, /bob/);
     assert.match(html, /ev-pt-remove/);

@@ -1826,10 +1826,19 @@ async function _levelingCount(query, fallback = 0) {
 // predate this feature) so callers can fall back gracefully.
 async function _liveBotCounts() {
     try {
+        // The two counts arrive on the same heartbeat row but are independent:
+        // a node can report a guild count while its member count is NULL (the
+        // member column may be absent on a pre-upgrade row, or the provider may
+        // have failed for members only). Requiring member_count here used to
+        // discard a perfectly good guild_count, which silently dropped the
+        // server count back to the lazy server_settings row count — the cause of
+        // the dashboard showing fewer servers than Discord does.
         const res = await getSeasonPool().query(`
             SELECT guild_count, member_count
             FROM bot_node_status
             WHERE active = true
+              AND (guild_count IS NOT NULL OR member_count IS NOT NULL)
+              AND NOW() - last_heartbeat < INTERVAL '90 seconds'
               AND member_count IS NOT NULL
               AND NOW() - last_heartbeat < (
                   -- Honour the interval the writer published, so a node that has
@@ -1845,7 +1854,7 @@ async function _liveBotCounts() {
         if (!row) return null;
         return {
             guildCount: row.guild_count != null ? Number(row.guild_count) : null,
-            memberCount: Number(row.member_count),
+            memberCount: row.member_count != null ? Number(row.member_count) : null,
         };
     } catch (err) {
         return null;
@@ -1937,15 +1946,24 @@ async function getPlatformStats(serverCountOverride, memberCountOverride) {
     const servers = serverCountOverride != null
         ? serverCountOverride
         : (liveCounts && liveCounts.guildCount != null ? liveCounts.guildCount : totalServers);
+    // 'rest'  = authoritative Discord REST guild count (getBotGuildCount)
+    // 'bot'   = live heartbeat guild_count from the active node
+    // 'db'    = lazy server_settings row count (undercounts unconfigured guilds)
+    const serversSource = serverCountOverride != null
+        ? 'rest'
+        : (liveCounts && liveCounts.guildCount != null ? 'bot' : 'db');
 
     // The ACTUAL member count across all guilds. Prefer the live bot's
     // heartbeat report (guild.memberCount); when the bot isn't reporting
     // (offline / failover disabled / pre-upgrade rows) fall back to the
     // REST-summed guild.memberCount, then to the leveling-tracked count.
-    const totalUsers = liveCounts
+    const liveMemberCount = liveCounts && liveCounts.memberCount != null
         ? liveCounts.memberCount
+        : null;
+    const totalUsers = liveMemberCount != null
+        ? liveMemberCount
         : (memberCountOverride != null ? memberCountOverride : trackedUsers);
-    const totalUsersSource = liveCounts
+    const totalUsersSource = liveMemberCount != null
         ? 'bot'
         : (memberCountOverride != null ? 'rest' : 'leveling');
 
@@ -1969,6 +1987,9 @@ async function getPlatformStats(serverCountOverride, memberCountOverride) {
         // 'rest' = REST-summed guild.memberCount (getBotMemberCount);
         // 'leveling' = fallback distinct-count of leveling-tracked users.
         totalUsersSource,
+        // Where the `servers` number came from (see above). The UI uses it to
+        // say "configured" when it can only show the lazy DB row count.
+        serversSource,
     };
 }
 

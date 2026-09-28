@@ -38,6 +38,73 @@ test('without an override it degrades to the leveling count', async () => {
     assert.equal(stats.totalUsersSource, 'leveling');
 });
 
+test('an explicit server-count override (Discord REST) still wins', async () => {
+    const db = stubDashboardWithLiveRow({ guild_count: 3, member_count: 9876 });
+    const stats = await db.getPlatformStats(9);
+    assert.equal(stats.servers, 9);
+    assert.equal(stats.totalUsers, 9876);
+});
+
+// ── guild_count is independent of member_count ─────────────────────────────
+//
+// The heartbeat row carries guild_count + member_count, but they are written
+// independently: a node can report a guild count while member_count is NULL
+// (pre-upgrade row, or the member half of the provider failed). The old query
+// required member_count IS NOT NULL, which discarded a perfectly good guild
+// count and silently dropped the server number to the lazy server_settings row
+// count — the dashboard then showed fewer servers than Discord does.
+
+function stubDashboardWithLiveRow(liveRow) {
+    const countPool = (count) => ({ query: async () => ({ rows: [{ count }] }) });
+    // The main pool serves the server_settings adoption aggregate (one row with
+    // four FILTERed counts). `_platformCounts` also reads totalServers from it.
+    stubModule('../server/db', { pool: { query: async () => ({ rows: [{ total: 5, leveling: 5, auto_reactions: 0, broadcasts: 0 }] }) } });
+    stubModule('../server/welcomeDb', { welcomePool: countPool(1) });
+    stubModule('../server/automodDb', { automodPool: countPool(1) });
+    stubModule('../server/ticketDb', { ticketPool: countPool(1) });
+    stubModule('../server/levelingDb', { levelingPool: countPool(42) });
+    stubModule('../server/seasonDb', {
+        seasonPool: {
+            query: async (q) => {
+                const text = String(q);
+                if (text.includes('bot_node_status')) return { rows: liveRow ? [liveRow] : [] };
+                return { rows: [{ count: 5 }] };
+            },
+        },
+    });
+    delete require.cache[require.resolve('../dashboard/db')];
+    return require('../dashboard/db');
+}
+
+test('a heartbeat with a guild count but no member count still reports servers', async () => {
+    const db = stubDashboardWithLiveRow({ guild_count: 51, member_count: null });
+
+    const stats = await db.getPlatformStats(null, null);
+
+    assert.equal(stats.servers, 51, 'the live server count is used even without a member count');
+    assert.equal(stats.serversSource, 'bot');
+    // Members fall through the usual chain (no heartbeat member count here).
+    assert.equal(stats.totalUsersSource, 'leveling');
+});
+
+test('serversSource labels a DB-row fallback so a configured count is never passed off as the total', async () => {
+    const db = stubDashboardWithLiveRow(null);
+
+    const stats = await db.getPlatformStats(null, null);
+
+    assert.equal(stats.serversSource, 'db');
+    assert.equal(stats.servers, 5);
+});
+
+test('serversSource is rest when the Discord REST count was supplied', async () => {
+    const db = stubDashboardWithLiveRow({ guild_count: 3, member_count: 9876 });
+
+    const stats = await db.getPlatformStats(49, null);
+
+    assert.equal(stats.servers, 49);
+    assert.equal(stats.serversSource, 'rest');
+});
+
 // ── getBotMemberCount (global fetch mocked) ─────────────────────────────────
 
 test('getBotMemberCount sums approximate_member_count across guild pages', async () => {

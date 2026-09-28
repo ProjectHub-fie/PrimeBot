@@ -56,7 +56,7 @@ function loginPage({ errorKey, turnstileSiteKey } = {}) {
           <div class="stat-card stat-primary">
             <div class="stat-icon">${svgIcon('server')}</div>
             <div class="stat-value" id="stat-servers" data-target="0">0</div>
-            <div class="stat-label">Servers configured</div>
+            <div class="stat-label" id="stat-servers-label">Servers</div>
           </div>
           <div class="stat-card">
             <div class="stat-icon">${svgIcon('users')}</div>

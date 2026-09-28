@@ -12,6 +12,10 @@
   const GUILD_ID = window.guildData && window.guildData.guildId;
   const EVENT_ID = $('#ev-manage') ? $('#ev-manage').dataset.eventId : null;
   if (!GUILD_ID || !EVENT_ID) return;
+
+  // Upcoming gate: do nothing behind the "Coming Soon" overlay (see events-hub.js).
+  if (document.querySelector('.upcoming-locked-wrap.locked, .beta-locked-wrap.locked')) return;
+
   const BASE = `/api/guilds/${GUILD_ID}/events/${EVENT_ID}`;
 
   function $(s, r = document) { return r.querySelector(s); }

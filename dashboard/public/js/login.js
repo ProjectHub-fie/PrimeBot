@@ -39,9 +39,18 @@ async function loadLoginStats() {
   const serversEl = document.getElementById('stat-servers');
   const usersEl = document.getElementById('stat-users');
   const usersLabelEl = document.getElementById('stat-users-label');
+  const serversLabelEl = document.getElementById('stat-servers-label');
   const versionEl = document.getElementById('stat-version');
   if (serversEl) animateCount(serversEl, stats.servers || 0);
   if (usersEl) animateCount(usersEl, stats.totalUsers || 0);
+  // The server number is the authoritative Discord guild count when sourced
+  // from REST ('rest') or the live bot heartbeat ('bot'). When it is neither
+  // ('db') it is only the lazy server_settings row count, which undercounts
+  // guilds that were never configured — label it honestly so a fallback is
+  // never presented as the total number of servers the bot is in.
+  if (serversLabelEl) {
+    serversLabelEl.textContent = stats.serversSource === 'db' ? 'Servers configured' : 'Servers';
+  }
   // 'bot' (heartbeat member_count) and 'rest' (summed approximate_member_count)
   // are real member totals; 'leveling' is the distinct-user count of members the
   // bot has tracked XP for, which is strictly smaller. Label them honestly so a

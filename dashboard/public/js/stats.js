@@ -37,10 +37,11 @@ function renderBotStats(data) {
   const usersLabel = liveUsers ? 'Total members (live)' : 'Total users';
   const botName = data.bot?.username || data.botName || 'PrimeBot';
   const features = data.features || {};
+  const serversLabel = data.serversSource === 'db' ? 'Servers configured' : 'Servers';
   const usersIcon = window.svgIcon ? window.svgIcon('users') : '👥';
   const cards = [
     statCardHTML('🤖', botName, 'Bot', false),
-    statCardHTML('📣', Number(servers).toLocaleString(), 'Servers', true),
+    statCardHTML('📣', Number(servers).toLocaleString(), serversLabel, true),
     statCardHTML(usersIcon, Number(totalUsers).toLocaleString(), usersLabel, false),
     statCardHTML('🏷️', esc(data.version || ''), 'Version', false),
   ].join('');

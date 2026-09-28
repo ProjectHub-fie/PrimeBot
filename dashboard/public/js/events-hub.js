@@ -16,6 +16,11 @@
   const GUILD_ID = window.guildData && window.guildData.guildId;
   if (!GUILD_ID) return;
 
+  // Event Management is an "upcoming" feature: ordinary users get a blurred,
+  // inert "Coming Soon" overlay and this script must not run any API calls or
+  // bindings behind it. Developer/owner roles bypass the gate (no overlay).
+  if (document.querySelector('.upcoming-locked-wrap.locked, .beta-locked-wrap.locked')) return;
+
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 

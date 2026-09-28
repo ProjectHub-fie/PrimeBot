@@ -39,12 +39,14 @@ function resolveDashboardBotToken(env, cwd) {
     Object.assign(process.env, env);
 
     try {
-        // Mirrors dashboard/server.js (order matters: resolve, then backfill).
+        // Mirrors dashboard/server.js (order matters: resolve, then force
+        // DISCORD_TOKEN to the resolved/dedicated token so a stale legacy
+        // DISCORD_TOKEN can never shadow the primary one).
         if (!process.env.DASHBOARD_BOT_TOKEN) {
             const resolved = resolveDiscordToken({ cwd });
             if (resolved) process.env.DASHBOARD_BOT_TOKEN = resolved;
         }
-        if (!process.env.DISCORD_TOKEN && process.env.DASHBOARD_BOT_TOKEN) {
+        if (process.env.DASHBOARD_BOT_TOKEN) {
             process.env.DISCORD_TOKEN = process.env.DASHBOARD_BOT_TOKEN;
         }
         return process.env.DISCORD_TOKEN;
@@ -78,6 +80,20 @@ test('an explicit DASHBOARD_BOT_TOKEN is never overwritten by the resolver', () 
         dir
     );
     assert.equal(token, 'dedicated.token');
+});
+
+test('a stale legacy DISCORD_TOKEN cannot shadow DISCORD_TOKEN2 (wrong server count)', () => {
+    // botHeaders() sends process.env.DISCORD_TOKEN. If a stale legacy token is
+    // present in the environment it used to survive the boot block and shadow
+    // the resolver's primary DISCORD_TOKEN2, so every REST count call 401'd and
+    // the dashboard reported the (far smaller) configured server count.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'primebot-dash-'));
+    fs.writeFileSync(path.join(dir, '.env'), '');
+    const token = resolveDashboardBotToken(
+        { DISCORD_TOKEN: 'stale.legacy.token', DISCORD_TOKEN2: 'primary.token' },
+        dir
+    );
+    assert.equal(token, 'primary.token', 'the primary token must win over a stale legacy one');
 });
 
 test('dashboard/server.js wires the shared resolver into the boot block', () => {

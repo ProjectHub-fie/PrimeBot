@@ -34,7 +34,7 @@ const TABS = [
   { key: 'tickets',        label: 'Tickets',         icon: 'ticket' },
   { key: 'live/polls',     label: 'Live Polls',      icon: 'barChart' },
   { key: 'live/giveaways', label: 'Live Giveaways',  icon: 'gift' },
-  { key: 'events',         label: 'Event Management', icon: 'calendar' },
+  { key: 'events',         label: 'Event Management', icon: 'calendar', upcoming: true },
 ];
 
 // The inlined channel/role <option> data + guild id. Pages embed this so the

@@ -48,11 +48,16 @@ if (!process.env.DASHBOARD_BOT_TOKEN) {
     const resolvedBotToken = resolveDiscordToken({ cwd: path.join(__dirname, '..') });
     if (resolvedBotToken) process.env.DASHBOARD_BOT_TOKEN = resolvedBotToken;
 }
-if (!process.env.DISCORD_TOKEN && process.env.DASHBOARD_BOT_TOKEN) {
+// DISCORD_TOKEN is what botHeaders() actually sends. It MUST be the same token
+// the resolver picked (or the explicit DASHBOARD_BOT_TOKEN) — otherwise a stale
+// legacy DISCORD_TOKEN left in the environment shadows the primary token, the
+// REST count calls 401, and the dashboard reports the (much smaller) configured
+// server count / leveling member count instead of the real totals. Only keep an
+// existing DISCORD_TOKEN when it is the one we resolved to.
+if (process.env.DASHBOARD_BOT_TOKEN) {
     process.env.DISCORD_TOKEN = process.env.DASHBOARD_BOT_TOKEN;
-}
-if (!process.env.DASHBOARD_BOT_TOKEN && process.env.DISCORD_TOKEN) {
-    process.env.DASHBOARD_BOT_TOKEN = process.env.DISCORD_TOKEN;
+} else if (!process.env.DISCORD_TOKEN) {
+    // No token anywhere — leave it unset so preflightCheck() warns.
 }
 
 const app = express();
@@ -1837,7 +1842,11 @@ app.get('/api/guilds/:guildId/live/giveaways', requireAuth, requireGuildAdmin, a
 // The bot mirrors every write: it re-reads the tables on its cache poll and
 // performs the Discord side-effects (announcements, reminders, roles).
 
-const eventPerm = (p) => [requireAuth, requireGuildAdmin, eventAuth.requireEventPermission(p)];
+// Event Management is an "upcoming" feature: its write endpoints are gated by
+// requireUpcoming (403 { reason: 'upcoming' } for ordinary users; developer/owner
+// bot roles bypass it so the feature can be exercised). Reads stay open so the
+// page can render behind the Coming Soon overlay.
+const eventPerm = (p) => [requireAuth, requireGuildAdmin, requireUpcoming, eventAuth.requireEventPermission(p)];
 
 // List events (search / filter / sort + server-side pagination).
 app.get('/api/guilds/:guildId/events', requireAuth, requireGuildAdmin, async (req, res) => {
