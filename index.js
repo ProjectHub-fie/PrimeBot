@@ -383,6 +383,10 @@ for (const file of eventFiles) {
         });
     } else {
         client.on(event.name, (...args) => {
+            // Mark the bot as active before any handler runs, so the recurring
+            // refresh loops (failover heartbeat, settings caches) stay on their
+            // snappy cadence while the bot is actually being used.
+            activityGate.touch();
             // Always log message events for debugging
             console.log(`[EVENT] Executing event: ${event.name}`);
 
@@ -469,9 +473,13 @@ client.on('shardDisconnect', async (closeEvent, shardId) => {
 });
 
 // Three-host failover (sn1 = primary, sn2 = secondary, sn3 = tertiary).
-// Controlled via NODE_ROLE env var on each host. By default this is now disabled
-// so regular hosts can connect normally; enable it explicitly with BOT_FAILOVER_ENABLED=true.
+// Controlled via NODE_ROLE env var on each host. Enabled by default so a
+// misconfigured or dead primary cannot leave the bot offline; set
+// BOT_FAILOVER_ENABLED=false explicitly on a single-host deployment to skip the
+// lease/heartbeat machinery entirely (the idle heartbeat is already backed off
+// so it does not keep Neon awake, but with no failover there is no need for it).
 const nodeFailover = require('./utils/nodeFailover');
+const activityGate = require('./utils/activityGate');
 const failoverEnabled = process.env.BOT_FAILOVER_ENABLED !== 'false';
 
 // Publish the live guild/member counts on each failover heartbeat so the
@@ -673,12 +681,22 @@ function startStandbyMonitor() {
     const STANDBY_INTERVAL  = nodeFailover.MONITOR_INTERVAL_MS;      // 10 s — pre-takeover
     const ACTIVE_INTERVAL   = Math.min(3000, nodeFailover.MONITOR_INTERVAL_MS); // 3 s — post-takeover
 
+    // Cadence selection: while a higher-priority node could return we want to
+    // step down quickly, but a fixed fast poll also wakes Neon forever. Use the
+    // fast cadence only while the bot is actually handling Discord activity;
+    // once it has been idle, back off past Neon's ~5-minute suspend window so the
+    // compute endpoint can actually go to sleep.
+    const IDLE_INTERVAL_MS = parseInt(process.env.FAILOVER_MONITOR_IDLE_INTERVAL_MS, 10) || 6 * 60 * 1000;
+
     function scheduleNext() {
-        const delay = standbyTookOver ? ACTIVE_INTERVAL : STANDBY_INTERVAL;
+        // `standbyTookOver` means this node is (or is taking over as) active.
+        const activeInterval = nodeFailover.activityIsIdle() ? IDLE_INTERVAL_MS : ACTIVE_INTERVAL;
+        const delay = standbyTookOver ? activeInterval : STANDBY_INTERVAL;
         standbyMonitorTimer = setTimeout(async () => {
             await monitorTick();
             scheduleNext();
         }, delay);
+        standbyMonitorTimer.unref?.();
     }
 
     scheduleNext();

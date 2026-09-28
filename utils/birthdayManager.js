@@ -1,7 +1,7 @@
 const { EmbedBuilder } = require('discord.js');
 const config = require('../config');
 const { birthdayPool: pool } = require('../server/birthdayDb');
-const { AdaptivePoller } = require('./adaptivePoller');
+const { getCacheScheduler } = require('./cacheScheduler');
 const ms = require('ms');
 
 // How often the manager re-reads the tables so dashboard edits (settings,
@@ -67,11 +67,7 @@ class BirthdayManager {
     // so an idle deployment stops waking Neon every 30 seconds.
     _startReloadInterval() {
         if (this._reloadTimer) return;
-        this._reloadTimer = new AdaptivePoller({
-            name: 'BIRTHDAYS',
-            task: () => this.loadBirthdays(),
-        });
-        this._reloadTimer.start();
+        this._reloadTimer = getCacheScheduler().register('BIRTHDAYS', () => this.loadBirthdays());
     }
 
     // Self-create the birthday tables if they don't exist (mirrors the

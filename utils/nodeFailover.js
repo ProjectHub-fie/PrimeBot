@@ -29,8 +29,60 @@ const NODE_NAME = process.env.NODE_NAME || (
 );
 
 const HEARTBEAT_INTERVAL_MS = parseInt(process.env.FAILOVER_HEARTBEAT_INTERVAL_MS, 10) || 30000;
+// Cadence used once the bot has seen no Discord activity for a while. It must
+// be LONGER than Neon's autosuspend idle window (5 minutes by default), or the
+// endpoint can never suspend and the free compute allowance is spent on an idle
+// bot. 6 minutes clears the window with margin.
+const IDLE_HEARTBEAT_INTERVAL_MS =
+    parseInt(process.env.FAILOVER_IDLE_HEARTBEAT_INTERVAL_MS, 10) || 6 * 60 * 1000;
+// Extra tolerance beyond a writer's own interval before its heartbeat is stale.
+// The old code compared age directly to FAILOVER_THRESHOLD_MS (45s), i.e. a
+// 15s grace on the 30s heartbeat. Keeping that grace constant means a node on
+// the fast cadence is judged exactly as before, while a node that has slowed to
+// the idle cadence gets the same 15s grace on top of its longer interval.
 const FAILOVER_THRESHOLD_MS = 45000;
+const HEARTBEAT_GRACE_MS = Math.max(0, FAILOVER_THRESHOLD_MS - HEARTBEAT_INTERVAL_MS);
 const MONITOR_INTERVAL_MS = 10000;
+
+/**
+ * Cadence to use for the next heartbeat. While the bot is handling Discord
+ * events it stays at the fast interval (failover takeover stays ~45s); once the
+ * bot has been quiet for a few minutes it drops to the idle interval so Neon can
+ * suspend between touches. A deployment that wants a fixed cadence can set
+ * FAILOVER_IDLE_HEARTBEAT_INTERVAL_MS equal to FAILOVER_HEARTBEAT_INTERVAL_MS.
+ */
+function currentHeartbeatIntervalMs() {
+    if (IDLE_HEARTBEAT_INTERVAL_MS <= HEARTBEAT_INTERVAL_MS) return HEARTBEAT_INTERVAL_MS;
+    try {
+        return require('./activityGate').isIdle()
+            ? IDLE_HEARTBEAT_INTERVAL_MS
+            : HEARTBEAT_INTERVAL_MS;
+    } catch (_) {
+        return HEARTBEAT_INTERVAL_MS;
+    }
+}
+
+/**
+ * Is a heartbeat of `ageMs` still fresh, given the writer's own interval?
+ * A node that has slowed down to the idle cadence must not be mistaken for a
+ * dead node by a peer still running the fast cadence (which would trigger a
+ * spurious takeover), so the tolerance scales with each writer's published
+ * interval rather than a single fixed value.
+ */
+function isHeartbeatFresh(ageMs, intervalMs) {
+    const base = Number(intervalMs) > 0 ? Number(intervalMs) : HEARTBEAT_INTERVAL_MS;
+    return Number(ageMs) < base + HEARTBEAT_GRACE_MS;
+}
+
+/** True when the bot has seen no Discord activity for a while (see activityGate). */
+function activityIsIdle() {
+    try {
+        return require('./activityGate').isIdle();
+    } catch (_) {
+        return false;
+    }
+}
+
 
 let heartbeatTimer = null;
 let tableReady = false;
@@ -58,6 +110,11 @@ async function ensureTable() {
     // Self-migrate older tables that predate the live-stats columns.
     await seasonDb.execute(sql`ALTER TABLE bot_node_status ADD COLUMN IF NOT EXISTS guild_count INTEGER`);
     await seasonDb.execute(sql`ALTER TABLE bot_node_status ADD COLUMN IF NOT EXISTS member_count BIGINT`);
+    // The node publishes the cadence it is currently using, so a peer decides
+    // whether the heartbeat is stale relative to the writer's own interval
+    // instead of a single fixed threshold. Without this a node that has slowed
+    // to the idle cadence would look dead to a peer on the fast cadence.
+    await seasonDb.execute(sql`ALTER TABLE bot_node_status ADD COLUMN IF NOT EXISTS heartbeat_interval_ms INTEGER`);
     tableReady = true;
 }
 
@@ -91,15 +148,17 @@ async function writeHeartbeat(role, active) {
             console.warn('[FAILOVER] stats provider failed (heartbeat continues):', err.message);
         }
     }
+    const intervalMs = currentHeartbeatIntervalMs();
     await seasonDb.execute(sql`
-        INSERT INTO bot_node_status (role, node_name, last_heartbeat, active, guild_count, member_count)
-        VALUES (${role}, ${NODE_NAME}, NOW(), ${active}, ${guildCount}, ${memberCount})
+        INSERT INTO bot_node_status (role, node_name, last_heartbeat, active, guild_count, member_count, heartbeat_interval_ms)
+        VALUES (${role}, ${NODE_NAME}, NOW(), ${active}, ${guildCount}, ${memberCount}, ${intervalMs})
         ON CONFLICT (role) DO UPDATE SET
             node_name = EXCLUDED.node_name,
             last_heartbeat = NOW(),
             active = EXCLUDED.active,
             guild_count = EXCLUDED.guild_count,
-            member_count = EXCLUDED.member_count
+            member_count = EXCLUDED.member_count,
+            heartbeat_interval_ms = EXCLUDED.heartbeat_interval_ms
     `);
 }
 
@@ -133,16 +192,18 @@ async function writeHeartbeatWithLease(role) {
         }
     }
 
+    const intervalMs = currentHeartbeatIntervalMs();
     const result = await seasonDb.execute(sql`
         WITH hb AS (
-            INSERT INTO bot_node_status (role, node_name, last_heartbeat, active, guild_count, member_count)
-            VALUES (${role}, ${NODE_NAME}, NOW(), true, ${guildCount}, ${memberCount})
+            INSERT INTO bot_node_status (role, node_name, last_heartbeat, active, guild_count, member_count, heartbeat_interval_ms)
+            VALUES (${role}, ${NODE_NAME}, NOW(), true, ${guildCount}, ${memberCount}, ${intervalMs})
             ON CONFLICT (role) DO UPDATE SET
                 node_name = EXCLUDED.node_name,
                 last_heartbeat = NOW(),
                 active = EXCLUDED.active,
                 guild_count = EXCLUDED.guild_count,
-                member_count = EXCLUDED.member_count
+                member_count = EXCLUDED.member_count,
+                heartbeat_interval_ms = EXCLUDED.heartbeat_interval_ms
             RETURNING 1
         )
         UPDATE bot_failover_lock
@@ -183,7 +244,8 @@ async function getOtherActiveNode(selfNodeName, selfRole) {
     await ensureTable();
     const result = await seasonDb.execute(sql`
         SELECT role, node_name, last_heartbeat, active,
-               EXTRACT(EPOCH FROM (NOW() - last_heartbeat)) * 1000 AS age_ms
+               EXTRACT(EPOCH FROM (NOW() - last_heartbeat)) * 1000 AS age_ms,
+               heartbeat_interval_ms
         FROM bot_node_status
         WHERE active = true AND node_name != ${selfNodeName}
     `);
@@ -191,7 +253,7 @@ async function getOtherActiveNode(selfNodeName, selfRole) {
     const selfPriority = ROLE_PRIORITY[selfRole] ?? 99;
     for (const row of rows) {
         const ageMs = Number(row.age_ms);
-        if (ageMs > FAILOVER_THRESHOLD_MS) continue;
+        if (!isHeartbeatFresh(ageMs, row.heartbeat_interval_ms)) continue;
         const otherPriority = ROLE_PRIORITY[row.role] ?? 99;
         // Only return nodes that have HIGHER priority (lower number) than us,
         // so sn2 never steps down because sn3 became active.
@@ -203,17 +265,22 @@ async function getOtherActiveNode(selfNodeName, selfRole) {
 
 function startHeartbeatLoop(role, onLeaseStolen) {
     stopHeartbeatLoop();
-    console.log(`[FAILOVER] Starting heartbeat loop for role=${role} node=${NODE_NAME}`);
+    console.log(`[FAILOVER] Starting heartbeat loop for role=${role} node=${NODE_NAME} (fast=${HEARTBEAT_INTERVAL_MS}ms idle=${IDLE_HEARTBEAT_INTERVAL_MS}ms)`);
     writeHeartbeat(role, true)
         .then(() => refreshLease(NODE_NAME, role))
         .then(() => console.log(`[FAILOVER] Initial heartbeat written for role=${role} node=${NODE_NAME}`))
         .catch(err => console.error(`[FAILOVER] Heartbeat write failed for ${role}:`, err.message));
-    heartbeatTimer = setInterval(() => {
+
+    // Self-scheduling tick instead of setInterval: each tick re-reads the
+    // activity gate and picks the fast cadence while the bot is in use, or the
+    // long idle cadence once it has gone quiet so Neon can suspend. A fixed
+    // 30s loop kept the compute endpoint awake 24/7 and spent the whole free
+    // allowance on an idle bot — the actual cause of the overage.
+    const tick = () => {
         // One combined statement instead of the previous heartbeat-write +
-        // lease-refresh pair. This loop runs for the life of the process, so
-        // halving its round trips is a permanent saving. If the combined
-        // statement ever fails, fall back to the two original calls so failover
-        // correctness never depends on the optimisation.
+        // lease-refresh pair. If the combined statement ever fails, fall back to
+        // the two original calls so failover correctness never depends on the
+        // optimisation.
         writeHeartbeatWithLease(role)
             .then(stillHaveLease => {
                 if (!stillHaveLease && typeof onLeaseStolen === 'function') {
@@ -231,13 +298,23 @@ function startHeartbeatLoop(role, onLeaseStolen) {
                         }
                     })
                     .catch(err => console.error(`[FAILOVER] Heartbeat write failed for ${role}:`, err.message));
+            })
+            .finally(() => {
+                if (!heartbeatTimer) return; // stopped during the write
+                heartbeatTimer = setTimeout(tick, currentHeartbeatIntervalMs());
+                heartbeatTimer.unref?.();
             });
-    }, HEARTBEAT_INTERVAL_MS);
+    };
+    heartbeatTimer = setTimeout(tick, HEARTBEAT_INTERVAL_MS);
+    heartbeatTimer.unref?.();
 }
 
 function stopHeartbeatLoop() {
     if (heartbeatTimer) {
-        clearInterval(heartbeatTimer);
+        // The loop is self-scheduling with setTimeout; clearTimeout also clears
+        // a timeout handle, and the pending tick checks the handle before
+        // rescheduling, so no tick is left armed.
+        clearTimeout(heartbeatTimer);
         heartbeatTimer = null;
     }
 }
@@ -472,6 +549,10 @@ module.exports = {
     NODE_NAME,
     ROLE_PRIORITY,
     HEARTBEAT_INTERVAL_MS,
+    IDLE_HEARTBEAT_INTERVAL_MS,
+    currentHeartbeatIntervalMs,
+    isHeartbeatFresh,
+    activityIsIdle,
     FAILOVER_THRESHOLD_MS,
     MONITOR_INTERVAL_MS,
     ensureTable,

@@ -4,7 +4,7 @@ const {
     ModalBuilder, TextInputBuilder, TextInputStyle,
 } = require('discord.js');
 const { ticketPool } = require('../server/ticketDb');
-const { AdaptivePoller } = require('./adaptivePoller');
+const { getCacheScheduler } = require('./cacheScheduler');
 const { trolePool, ensureTicketRoleTable } = require('../server/troleDb');
 const { tclaimPool, ensureTicketClaimsTable } = require('../server/tclaimDb');
 const { tlogPool, ensureTlogTables } = require('../server/tlogDb');
@@ -410,11 +410,7 @@ class TicketPanelManager {
         // waking Neon. Each tick now runs ONE cheap fingerprint query; the full
         // reload only runs when that fingerprint actually changed, and the
         // interval backs off while the ticket tables are quiet.
-        this._reloadTimer = new AdaptivePoller({
-            name: 'TICKETS',
-            task: () => this._poll(),
-        });
-        this._reloadTimer.start();
+        this._reloadTimer = getCacheScheduler().register('TICKETS', () => this._poll());
     }
 
     /**

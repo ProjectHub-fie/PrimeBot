@@ -15,7 +15,7 @@
  */
 
 const { anukePool: pool } = require('../server/anukeDb');
-const { AdaptivePoller } = require('./adaptivePoller');
+const { getCacheScheduler } = require('./cacheScheduler');
 const {
     normalizeAntiNukeSettings, defaultAntiNukeSettings,
 } = require('./antiNukeRules');
@@ -61,11 +61,7 @@ class AntiNukeManager {
 
     _startReloadInterval() {
         if (this._reloadTimer) return;
-        this._reloadTimer = new AdaptivePoller({
-            name: 'ANTINUKE',
-            task: () => this._refreshFromDatabase(),
-        });
-        this._reloadTimer.start();
+        this._reloadTimer = getCacheScheduler().register('ANTINUKE', () => this._refreshFromDatabase());
     }
 
     async _loadAll() {
