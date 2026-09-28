@@ -1839,6 +1839,14 @@ async function _liveBotCounts() {
             WHERE active = true
               AND (guild_count IS NOT NULL OR member_count IS NOT NULL)
               AND NOW() - last_heartbeat < INTERVAL '90 seconds'
+              AND member_count IS NOT NULL
+              AND NOW() - last_heartbeat < (
+                  -- Honour the interval the writer published, so a node that has
+                  -- slowed to its idle cadence (which lets Neon suspend) is not
+                  -- mistaken for offline. Falls back to 30s for rows written
+                  -- before heartbeat_interval_ms existed.
+                  INTERVAL '5 seconds' * (COALESCE(heartbeat_interval_ms, 30000) / 1000 + 90)
+              )
             ORDER BY last_heartbeat DESC
             LIMIT 1
         `);

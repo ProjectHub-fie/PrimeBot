@@ -1,5 +1,5 @@
 const { welcomePool } = require('../server/welcomeDb');
-const { AdaptivePoller } = require('./adaptivePoller');
+const { getCacheScheduler } = require('./cacheScheduler');
 const fs   = require('fs');
 const path = require('path');
 
@@ -54,11 +54,7 @@ class WelcomeSettingsManager {
      */
     _startReloadInterval() {
         if (this._reloadTimer) return;
-        this._reloadTimer = new AdaptivePoller({
-            name: 'WELCOME SETTINGS',
-            task: () => this._refreshFromDatabase(),
-        });
-        this._reloadTimer.start();
+        this._reloadTimer = getCacheScheduler().register('WELCOME SETTINGS', () => this._refreshFromDatabase());
     }
 
     async _refreshFromDatabase() {

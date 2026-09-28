@@ -708,3 +708,43 @@ lets the database suspend. The rules below are the invariants to preserve.
   an explicit column list, not `SELECT *`, so a large JSON config column is not
   pulled when the feature does not use it.
 
+## Neon compute: the always-awake failure mode
+
+The free Neon allowance is billed in CU-hours and a suspended compute endpoint is
+effectively free. The endpoint only suspends after a period with **no active
+connection** (~5 minutes by default), so a query landing more often than that
+keeps it awake around the clock. One always-on 0.25-CU endpoint running for a
+month is ~182 CU-hr against a ~192 CU-hr Free allowance — meaning a *single*
+recurring query faster than every five minutes consumes essentially the whole
+month's compute on an idle bot. This is why "add caching" alone never moved the
+bill: the wake-ups, not the query cost, are what is billed.
+
+Anything that queries on a timer must therefore go quiet when the bot is quiet.
+Three rules follow, and they are the difference between usage that fits and usage
+that does not:
+
+- **One shared scheduler, not a timer per manager.** Every settings re-read goes
+  through `utils/cacheScheduler.js` (`getCacheScheduler().register(name, task)`),
+  which runs all registered reloads off a single timer. ~15 individually jittered
+  pollers could never let a 5-minute quiet window elapse — there was always one
+  due — so they kept Neon awake even at zero activity. `register()` returns a
+  handle whose `stop()` unregisters the task; `notifyActivity()` snaps the shared
+  cadence back to the fast interval after an in-process write.
+- **A quiet bot uses the long idle cadence.** `utils/activityGate.js` records
+  Discord activity (every event handler calls `touch()`); the shared scheduler
+  and the failover loops call `isIdle()`. When idle they jump straight to their
+  long interval (scheduler 30 min, failover heartbeat/monitor 6 min) instead of
+  ramping up through sub-5-minute touches, so the endpoint can actually suspend.
+  Tune with `BOT_IDLE_AFTER_MS` (default 4 min).
+- **The failover heartbeat is activity-adaptive.** `utils/nodeFailover.js` beats
+  every `FAILOVER_HEARTBEAT_INTERVAL_MS` (30s) while the bot is active and every
+  `FAILOVER_IDLE_HEARTBEAT_INTERVAL_MS` (6 min) once idle. It publishes the
+  cadence it is using on `bot_node_status.heartbeat_interval_ms`, and a peer
+  judges staleness as `age < interval + grace` (`isHeartbeatFresh`) rather than a
+  single fixed threshold — without that a node that slowed down would look dead
+  to a fast peer and trigger a spurious takeover. The same published interval is
+  honoured by the dashboard's live-count query (`dashboard/db.js` `_liveBotCounts`)
+  and the standby monitor. A constant 30s heartbeat is an always-awake endpoint
+  on its own, so never make it unconditional again.
+
+

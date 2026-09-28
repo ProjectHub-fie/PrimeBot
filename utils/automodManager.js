@@ -1,5 +1,5 @@
 const { automodPool: pool } = require('../server/automodDb');
-const { AdaptivePoller } = require('./adaptivePoller');
+const { getCacheScheduler } = require('./cacheScheduler');
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 const {
     normalizeRules, metaFor, normalizeAction, normalizeActions,
@@ -246,11 +246,7 @@ class AutomodManager {
         // One adaptive poller replaces the fixed 60s reload + 15s refresh pair
         // (both ran a full table read of automod_settings). It backs off while
         // the table is quiet so a dormant deployment stops waking Neon.
-        this._reloadTimer = new AdaptivePoller({
-            name: 'AUTOMOD',
-            task: () => this._refreshFromDatabase(),
-        });
-        this._reloadTimer.start();
+        this._reloadTimer = getCacheScheduler().register('AUTOMOD', () => this._refreshFromDatabase());
     }
 
     /**

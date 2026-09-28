@@ -1,7 +1,7 @@
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, MessageFlags } = require('discord.js');
 const { safeReply } = require('./stabilityUtils');
 const { appealPool: pool } = require('../server/appealDb');
-const { AdaptivePoller } = require('./adaptivePoller');
+const { getCacheScheduler } = require('./cacheScheduler');
 
 /**
  * AppealManager — the ban-DM + appeal subsystem.
@@ -91,11 +91,7 @@ class AppealManager {
         if (this._reloadTimer) return;
         // One adaptive poller replaces the fixed 60s reload + 15s refresh pair
         // (both ran a full table read of appeal_settings).
-        this._reloadTimer = new AdaptivePoller({
-            name: 'APPEAL',
-            task: () => this._refreshFromDatabase(),
-        });
-        this._reloadTimer.start();
+        this._reloadTimer = getCacheScheduler().register('APPEAL', () => this._refreshFromDatabase());
     }
 
     async _refreshFromDatabase() {

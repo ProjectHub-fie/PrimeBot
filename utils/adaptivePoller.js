@@ -22,6 +22,15 @@ function envMs(name, fallback) {
     return Number.isFinite(raw) && raw > 0 ? raw : fallback;
 }
 
+/** True when the bot has seen no Discord activity for a while. */
+function activityIsIdle() {
+    try {
+        return require('./activityGate').isIdle();
+    } catch (_) {
+        return false;
+    }
+}
+
 // Fast interval: how soon after a change we re-check (and how long a poll cycle
 // takes on a busy table). Max interval: the idle floor cost of one manager.
 //
@@ -132,6 +141,13 @@ class AdaptivePoller {
         if (changed) {
             this.quietStreak = 0;
             this.currentMs = this.cfg.initialMs;
+        } else if (activityIsIdle()) {
+            // Nothing is happening on Discord, so jump straight to the idle floor
+            // instead of ramping there through sub-5-minute touches. That ramp is
+            // what kept a Neon compute endpoint from ever suspending after a quiet
+            // period; going straight to the long interval lets it sleep.
+            this.currentMs = this.cfg.maxMs;
+            this.quietStreak = 0;
         } else {
             this.quietStreak++;
             if (this.quietStreak > this.cfg.quietTicks) {

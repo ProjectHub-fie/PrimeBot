@@ -1,5 +1,5 @@
 const config = require("../config");
-const { AdaptivePoller } = require('./adaptivePoller');
+const { getCacheScheduler } = require('./cacheScheduler');
 const { pool } = require('../server/db');
 const { normalizeGuildPrefix } = require('./prefixHelper');
 
@@ -91,11 +91,7 @@ class ServerSettingsManager {
      */
     _startReloadInterval() {
         if (this._reloadTimer) return;
-        this._reloadTimer = new AdaptivePoller({
-            name: 'SERVER SETTINGS',
-            task: () => this._refreshFromDatabase(),
-        });
-        this._reloadTimer.start();
+        this._reloadTimer = getCacheScheduler().register('SERVER SETTINGS', () => this._refreshFromDatabase());
     }
 
     /**
