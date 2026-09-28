@@ -125,7 +125,16 @@ class PollManager {
     // ─── Public API ───────────────────────────────────────────────────────────
 
     startCheckingPolls() {
-        setInterval(() => this.checkPolls(), 30000);
+        // AdaptivePoller instead of a fixed 30s interval: a quiet server with no
+        // open polls stops waking the database entirely between polls, and
+        // createPoll() nudges it back to the fast interval for a new one.
+        const { AdaptivePoller } = require('./adaptivePoller');
+        this._checkPoller = new AdaptivePoller({
+            name: 'POLLS',
+            task: () => this.checkPolls(),
+            initialMs: 30000,
+        });
+        this._checkPoller.start();
         console.log('[POLLS] Poll checking system started.');
     }
 
@@ -208,6 +217,10 @@ class PollManager {
             ended: false,
         };
         this.polls.set(message.id, pollData);
+
+        // A new poll is due at `endTime`; nudge the poller so the fast
+        // interval resumes and it is ended promptly.
+        this._checkPoller?.notifyActivity();
 
         return message;
     }

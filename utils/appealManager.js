@@ -90,7 +90,7 @@ class AppealManager {
     _startReloadInterval() {
         if (this._reloadTimer) return;
         // One adaptive poller replaces the fixed 60s reload + 15s refresh pair
-        // (both ran a full `SELECT * FROM appeal_settings`).
+        // (both ran a full table read of appeal_settings).
         this._reloadTimer = new AdaptivePoller({
             name: 'APPEAL',
             task: () => this._refreshFromDatabase(),
@@ -100,7 +100,7 @@ class AppealManager {
 
     async _refreshFromDatabase() {
         await this._ensureTable();
-        const res = await pool.query('SELECT * FROM appeal_settings');
+        const res = await pool.query('SELECT guild_id, dm_user, use_appeal, appeal_channel_id, ban_embed_fields, updated_at FROM appeal_settings');
         let changed = false;
         for (const row of res.rows) {
             const next = this._rowToSettings(row);
@@ -115,7 +115,7 @@ class AppealManager {
 
     async _loadAll() {
         try {
-            const res = await pool.query('SELECT * FROM appeal_settings');
+            const res = await pool.query('SELECT guild_id, dm_user, use_appeal, appeal_channel_id, ban_embed_fields, updated_at FROM appeal_settings');
             for (const row of res.rows) {
                 this._cache.set(row.guild_id, this._rowToSettings(row));
             }

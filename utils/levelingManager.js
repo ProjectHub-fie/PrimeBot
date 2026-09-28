@@ -217,6 +217,7 @@ class LevelingManager {
                 w.entry.messages -= w.messages;
                 if (w.entry.xp <= 0 && w.entry.messages <= 0) this._xpPending.delete(w.key);
             }
+            require('./dbUsage').recordBatch(written.length);
             return written.length;
         } catch (err) {
             console.error('[LEVELING] Batched XP flush failed:', err.message);

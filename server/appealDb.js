@@ -1,4 +1,3 @@
-const { Pool } = require('pg');
 const { resolveDbUrl } = require('./resolveDbUrl');
 
 /**
@@ -28,41 +27,16 @@ function resolveConnectionString() {
     return resolveDbUrl('APPEAL_DATABASE_URL');
 }
 
+const { createPool } = require('./createPool');
+
 const cs = resolveConnectionString();
 
 if (!cs) {
     console.warn('⚠️ APPEAL_DATABASE_URL (or FALLBACK_DATABASE_URL/DATABASE_URL) not set — ban-DM appeals will have no database.');
 }
 
-function shouldEnableSsl(connectionStr) {
-    return /sslmode\s*=\s*(require|prefer|verify-ca|verify-full|allow)/i.test(connectionStr || '')
-        || process.env.DB_SSL === 'require';
-}
+const appealPool = createPool(cs, { label: 'APPEAL DB' });
 
-function configFromUrl(connectionStr) {
-    const url = new URL(connectionStr);
-    url.searchParams.delete('sslmode');
-    return {
-        connectionString: url.toString(),
-        ssl: shouldEnableSsl(connectionStr) ? { rejectUnauthorized: false } : false,
-    };
-}
-
-const appealPool = new Pool(
-    cs
-        ? {
-              ...configFromUrl(cs),
-              max: 5,
-              idleTimeoutMillis: 30000,
-              connectionTimeoutMillis: 10000,
-              allowExitOnIdle: true,
-          }
-        : { max: 0 } // no-op pool; queries will throw and be handled gracefully
-);
-
-appealPool.on('error', (err) => {
-    console.error('[APPEAL DB] Unexpected pool error:', err.message);
-});
 
 async function testAppealConnection() {
     try {

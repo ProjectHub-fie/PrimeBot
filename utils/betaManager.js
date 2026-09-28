@@ -88,6 +88,7 @@ async function allowServer(guildId) {
                 set: { allowed: true, updatedAt: new Date() },
             });
         return true;
+        invalidateBetaCache(guildId);
     } catch (err) {
         console.error('[BETA] allowServer DB error:', err.message);
         return false;
@@ -107,6 +108,7 @@ async function denyServer(guildId) {
                 set: { allowed: false, enabled: false, updatedAt: new Date() },
             });
         return true;
+        invalidateBetaCache(guildId);
     } catch (err) {
         console.error('[BETA] denyServer DB error:', err.message);
         return false;
@@ -143,6 +145,7 @@ async function enable(guildId) {
                 set: { enabled: true, updatedAt: new Date() },
             });
         return true;
+        invalidateBetaCache(guildId);
     } catch (err) {
         console.error('[BETA] enable DB error:', err.message);
         return false;
@@ -162,6 +165,7 @@ async function disable(guildId) {
                 set: { enabled: false, updatedAt: new Date() },
             });
         return true;
+        invalidateBetaCache(guildId);
     } catch (err) {
         console.error('[BETA] disable DB error:', err.message);
         return false;
@@ -176,13 +180,54 @@ function isBetaFeature(commandName) {
 }
 
 /**
- * Can this guild access beta features right now? (async — DB)
+ * Can this guild access beta features right now?
+ *
+ * This is called from the message hot path (every message on a server where an
+ * emoji/badges/sync command is attempted) and previously ran two separate
+ * single-row SELECTs every time. Both flags change only when a developer or the
+ * guild owner runs a beta command, so they are cached per guild with a short
+ * TTL and invalidated on every write (allowServer/denyServer/enable/disable).
+ * A cache miss costs one combined query instead of two.
  */
+const ACCESS_TTL_MS = parseInt(process.env.BETA_ACCESS_CACHE_MS, 10) || 5 * 60 * 1000;
+const _accessCache = new Map(); // guildId -> { at, allowed, enabled }
+
+function invalidateBetaCache(guildId) {
+    if (guildId) _accessCache.delete(String(guildId));
+    else _accessCache.clear();
+}
+
+async function _loadFlags(guildId) {
+    await ensureBetaTable();
+    const rows = await betaDb
+        .select({ allowed: betaSettings.allowed, enabled: betaSettings.enabled })
+        .from(betaSettings)
+        .where(eq(betaSettings.guildId, guildId))
+        .limit(1);
+    const row = rows[0];
+    return { allowed: !!(row && row.allowed === true), enabled: !!(row && row.enabled === true) };
+}
+
 async function canAccess(guildId) {
+    if (!guildId) return false;
+    // Config seed list is a hard override and never needs a query.
+    if (Array.isArray(config.betaServers) && config.betaServers.includes(guildId)) {
+        const cached = _accessCache.get(String(guildId));
+        if (cached && cached.allowed && cached.enabled && Date.now() - cached.at < ACCESS_TTL_MS) return true;
+    }
+    const key = String(guildId);
+    const cached = _accessCache.get(key);
+    if (cached && Date.now() - cached.at < ACCESS_TTL_MS) {
+        try { require('./dbUsage').recordCache('betaAccess', true); } catch { /* monitor only */ }
+        return cached.allowed && cached.enabled;
+    }
     try {
-        const allowed = await isAllowed(guildId);
-        const enabled = await isEnabled(guildId);
-        return allowed && enabled;
+        try { require('./dbUsage').recordCache('betaAccess', false); } catch { /* monitor only */ }
+        const flags = await _loadFlags(guildId);
+        // A guild in the config seed list is always "allowed".
+        if (Array.isArray(config.betaServers) && config.betaServers.includes(guildId)) flags.allowed = true;
+        _accessCache.set(key, { at: Date.now(), ...flags });
+        return flags.allowed && flags.enabled;
     } catch (err) {
         console.error('[BETA] canAccess error:', err?.message || err);
         module.exports._lastError = err;
@@ -201,4 +246,4 @@ async function checkDbHealth() {
     }
 }
 
-module.exports = { isAllowed, isEnabled, enable, disable, isBetaFeature, canAccess, allowServer, denyServer, listAllowedServers, checkDbHealth, _lastError: null };
+module.exports = { isAllowed, isEnabled, enable, disable, isBetaFeature, canAccess, allowServer, denyServer, listAllowedServers, checkDbHealth, invalidateBetaCache, _accessCache, _lastError: null };

@@ -1,37 +1,7 @@
-const { Pool } = require('pg');
 const { drizzle } = require('drizzle-orm/node-postgres');
 const schema = require("../shared/schema.js");
-
-// Decide whether SSL should be enabled for a connection. Managed Postgres on
-// Vercel/Neon/Supabase requires SSL; we accept self-signed certs via
-// rejectUnauthorized:false so connections still succeed without a CA bundle.
-function shouldEnableSsl(connectionStr) {
-  return /sslmode\s*=\s*(require|prefer|verify-ca|verify-full|allow)/i.test(connectionStr || '')
-    || process.env.DB_SSL === 'require';
-}
-
-// Build an explicit pool config from a postgres:// connection string. We parse
-// the URL ourselves and DROP the `sslmode` query param before handing the
-// string to `pg`. Reason: pg-connection-string (used by `pg`) treats
-// `sslmode=require/prefer/verify-ca` as aliases for `verify-full` (strict cert
-// validation), which (a) prints a deprecation/security warning on every boot
-// and (b) breaks connections to hosts whose cert chain can't be fully verified
-// (common with managed DBs). We instead set `ssl` explicitly here.
-function configFromUrl(connectionStr) {
-  const url = new URL(connectionStr);
-  const sslmode = url.searchParams.get('sslmode');
-  url.searchParams.delete('sslmode');
-  // Re-serialize the cleaned query string (URL strips empty `?` automatically).
-  const clean = url.toString();
-  return {
-    connectionString: clean,
-    ssl: shouldEnableSsl(connectionStr) ? { rejectUnauthorized: false } : false,
-    max: 10,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 10000,
-    _sslmode: sslmode, // for logging only
-  };
-}
+const { configFromUrl, poolOptions } = require('./poolConfig');
+const { createPool } = require('./createPool');
 
 // Parse PostgreSQL connection string. The main pool prefers DATABASE_URL;
 // FALLBACK_DATABASE_URL is used when it is unset so a deployment can run the
@@ -42,7 +12,8 @@ function parseConnectionString() {
     try {
       const sourceVar = process.env.DATABASE_URL ? 'DATABASE_URL' : 'FALLBACK_DATABASE_URL';
       console.log(`✅ Using PostgreSQL ${sourceVar} (sslmode=${/sslmode=([^&]+)/.exec(mainUrl)?.[1] || 'off'})`);
-      return configFromUrl(mainUrl);
+      const cfg = configFromUrl(mainUrl);
+      if (cfg) return cfg;
     } catch (error) {
       console.warn('Failed to parse database URL, falling back to individual env vars:', error.message);
     }
@@ -51,16 +22,13 @@ function parseConnectionString() {
   }
 
   const dbHost = process.env.DB_HOST || '';
-  
+
   // Check if DB_HOST is a full PostgreSQL connection string
   if (dbHost.includes('postgresql://') || dbHost.includes('postgres://')) {
-    try {
-      return configFromUrl(dbHost);
-    } catch (error) {
-      console.warn('Failed to parse PostgreSQL connection string, using individual env vars:', error.message);
-    }
+    const cfg = configFromUrl(dbHost);
+    if (cfg) return cfg;
   }
-  
+
   // Fallback to individual environment variables
   return {
     host: process.env.DB_HOST || 'localhost',
@@ -69,22 +37,19 @@ function parseConnectionString() {
     password: process.env.DB_PASSWORD || '',
     database: process.env.DB_NAME || 'discord_bot',
     ssl: process.env.DB_SSL === 'require' ? { rejectUnauthorized: false } : false,
-    max: 10, // Connection pool size
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 10000,
   };
 }
 
 const dbConfig = parseConnectionString();
 
-// Create PostgreSQL connection pool with better timeout settings
-const pool = new Pool({
-    ...dbConfig,
-    connectionTimeoutMillis: 10000, // 10 seconds
-    idleTimeoutMillis: 30000, // 30 seconds
-    max: 10, // maximum number of connections
-    allowExitOnIdle: true
-});
+// The main pool is the only one that needs real concurrency (commands,
+// dashboard, managers). It goes through the shared factory so it is registered
+// like every feature pool and can never be duplicated on a module reload; the
+// explicit `max` overrides the small feature-pool default.
+const pool = createPool(
+    dbConfig.connectionString || dbConfig,
+    { label: 'MAIN DB', max: poolOptions({ max: 8 }).max }
+);
 
 // Initialize Drizzle with PostgreSQL
 const db = drizzle(pool, { schema });

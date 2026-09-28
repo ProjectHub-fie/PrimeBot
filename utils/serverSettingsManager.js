@@ -312,9 +312,14 @@ class ServerSettingsManager {
     }
 
     getGuildSettings(guildId) {
-        if (!this.serverSettings.has(guildId)) {
+        const hit = this.serverSettings.has(guildId);
+        if (!hit) {
             this.serverSettings.set(guildId, this._defaultSettings());
         }
+        // In-memory config lookup — the hot path never touches Postgres here.
+        // Counted so the dashboard can show the cache hit rate the architecture
+        // is built around.
+        try { require('./dbUsage').recordCache('guildSettings', hit); } catch { /* monitor only */ }
         return this.serverSettings.get(guildId);
     }
 

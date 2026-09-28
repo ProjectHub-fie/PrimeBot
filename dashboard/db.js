@@ -117,19 +117,32 @@ function getBirthdayPool() {
     return birthdayPool;
 }
 
+// ── Schema bootstrap: run each DDL statement at most once per process ────────
+//
+// Every reader used to `await ensureXxxTable()` on every call, which re-ran
+// `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`
+// before *every* settings read and write. Those are catalog writes: they take
+// locks and force Postgres to flush a commit, so on Neon they keep the compute
+// endpoint busy and dirty the catalog for a no-op. The schema never changes
+// after the first successful run, so the result is memoized for the life of the
+// process (shared with the rest of the bot via server/schemaBootstrap.js).
+const { once } = require('../server/schemaBootstrap');
+
 async function ensureLevelingRoleRewardsTable() {
-    await getLevelingPool().query(`
-        CREATE TABLE IF NOT EXISTS leveling_role_rewards (
-            id          SERIAL PRIMARY KEY,
-            guild_id    VARCHAR(50) NOT NULL,
-            level       INTEGER NOT NULL,
-            role_id     VARCHAR(50) NOT NULL,
-            created_at  TIMESTAMP DEFAULT NOW(),
-            UNIQUE (guild_id, level)
-        );
-        CREATE INDEX IF NOT EXISTS leveling_role_rewards_guild_idx
-            ON leveling_role_rewards (guild_id);
-    `);
+    return once('levelingRoleRewardsTable', async () => {
+        await getLevelingPool().query(`
+            CREATE TABLE IF NOT EXISTS leveling_role_rewards (
+                id          SERIAL PRIMARY KEY,
+                guild_id    VARCHAR(50) NOT NULL,
+                level       INTEGER NOT NULL,
+                role_id     VARCHAR(50) NOT NULL,
+                created_at  TIMESTAMP DEFAULT NOW(),
+                UNIQUE (guild_id, level)
+            );
+            CREATE INDEX IF NOT EXISTS leveling_role_rewards_guild_idx
+                ON leveling_role_rewards (guild_id);
+        `);
+    });
 }
 
 async function getLevelingRoleRewards(guildId) {
@@ -170,26 +183,28 @@ async function setLevelingRoleRewards(guildId, rewards) {
 // effect without a bot restart.
 
 async function ensureBirthdayTables() {
-    const pool = getBirthdayPool();
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS birthdays_guilds (
-            guild_id varchar(50) PRIMARY KEY,
-            announcement_channel varchar(50),
-            role_id varchar(50),
-            embed_image_url text
-        );
-        ALTER TABLE birthdays_guilds ADD COLUMN IF NOT EXISTS embed_image_url text;
-        CREATE TABLE IF NOT EXISTS birthdays (
-            id serial PRIMARY KEY,
-            guild_id varchar(50) NOT NULL,
-            user_id varchar(50) NOT NULL,
-            month integer NOT NULL,
-            day integer NOT NULL,
-            year integer,
-            last_celebrated varchar(50)
-        );
-        CREATE UNIQUE INDEX IF NOT EXISTS birthdays_guild_user_uniq ON birthdays (guild_id, user_id);
-    `);
+    return once('birthdayTables', async () => {
+        const pool = getBirthdayPool();
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS birthdays_guilds (
+                guild_id varchar(50) PRIMARY KEY,
+                announcement_channel varchar(50),
+                role_id varchar(50),
+                embed_image_url text
+            );
+            ALTER TABLE birthdays_guilds ADD COLUMN IF NOT EXISTS embed_image_url text;
+            CREATE TABLE IF NOT EXISTS birthdays (
+                id serial PRIMARY KEY,
+                guild_id varchar(50) NOT NULL,
+                user_id varchar(50) NOT NULL,
+                month integer NOT NULL,
+                day integer NOT NULL,
+                year integer,
+                last_celebrated varchar(50)
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS birthdays_guild_user_uniq ON birthdays (guild_id, user_id);
+        `);
+    });
 }
 
 async function getGuildBirthdaySettings(guildId) {
@@ -280,24 +295,26 @@ async function removeGuildBirthday(guildId, userId) {
 // automatically on level-up and are not awardable from the dashboard.
 
 async function ensureUserBadgesTable() {
-    await getLevelingPool().query(`
-        CREATE TABLE IF NOT EXISTS user_badges (
-            id              SERIAL PRIMARY KEY,
-            guild_id        VARCHAR(50) NOT NULL,
-            user_id         VARCHAR(50) NOT NULL,
-            badge_id        VARCHAR(100) NOT NULL,
-            badge_name      VARCHAR(255) NOT NULL,
-            badge_emoji     VARCHAR(10) NOT NULL,
-            badge_color     VARCHAR(50) NOT NULL,
-            badge_description TEXT NOT NULL,
-            badge_type      VARCHAR(50) NOT NULL,
-            earned_at       TIMESTAMP NOT NULL,
-            created_at      TIMESTAMP DEFAULT NOW()
-        );
-        CREATE INDEX IF NOT EXISTS user_badges_guild_idx ON user_badges (guild_id);
-        -- Badge lookups/removals are always scoped to a guild + user.
-        CREATE INDEX IF NOT EXISTS user_badges_guild_user_idx ON user_badges (guild_id, user_id);
-    `);
+    return once('userBadgesTable', async () => {
+        await getLevelingPool().query(`
+            CREATE TABLE IF NOT EXISTS user_badges (
+                id              SERIAL PRIMARY KEY,
+                guild_id        VARCHAR(50) NOT NULL,
+                user_id         VARCHAR(50) NOT NULL,
+                badge_id        VARCHAR(100) NOT NULL,
+                badge_name      VARCHAR(255) NOT NULL,
+                badge_emoji     VARCHAR(10) NOT NULL,
+                badge_color     VARCHAR(50) NOT NULL,
+                badge_description TEXT NOT NULL,
+                badge_type      VARCHAR(50) NOT NULL,
+                earned_at       TIMESTAMP NOT NULL,
+                created_at      TIMESTAMP DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS user_badges_guild_idx ON user_badges (guild_id);
+            -- Badge lookups/removals are always scoped to a guild + user.
+            CREATE INDEX IF NOT EXISTS user_badges_guild_user_idx ON user_badges (guild_id, user_id);
+        `);
+    });
 }
 
 // All badge rows for a guild (optionally filtered to one user). Each row is
@@ -404,27 +421,29 @@ const SERVER_SETTINGS_COLUMNS = `
 `;
 
 async function ensureServerSettingsTable() {
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS server_settings (
-            guild_id              VARCHAR(50) PRIMARY KEY,
-            receive_broadcasts    BOOLEAN NOT NULL DEFAULT true,
-            broadcast_channel_id  VARCHAR(50),
-            leveling_enabled      BOOLEAN NOT NULL DEFAULT true,
-            leveling_channel_id   VARCHAR(50),
-            xp_multiplier         REAL NOT NULL DEFAULT 1.0,
-            xp_cooldown           INTEGER NOT NULL DEFAULT 60000,
-            auto_reactions_enabled BOOLEAN NOT NULL DEFAULT false,
-            auto_reactions         JSONB NOT NULL DEFAULT '[]',
-            auto_responder_enabled BOOLEAN NOT NULL DEFAULT false,
-            auto_responder         JSONB NOT NULL DEFAULT '[]',
-            no_prefix_users        JSONB NOT NULL DEFAULT '{}',
-            prefix                 VARCHAR(10) DEFAULT '${config.prefix}',
-            updated_at             TIMESTAMP DEFAULT NOW()
-        )
-    `);
-    await pool.query(`ALTER TABLE server_settings ADD COLUMN IF NOT EXISTS prefix VARCHAR(10) DEFAULT '${config.prefix}'`);
-    await pool.query(`ALTER TABLE server_settings ADD COLUMN IF NOT EXISTS auto_responder_enabled BOOLEAN NOT NULL DEFAULT false`);
-    await pool.query(`ALTER TABLE server_settings ADD COLUMN IF NOT EXISTS auto_responder JSONB NOT NULL DEFAULT '[]'`);
+    return once('serverSettingsTable', async () => {
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS server_settings (
+                guild_id              VARCHAR(50) PRIMARY KEY,
+                receive_broadcasts    BOOLEAN NOT NULL DEFAULT true,
+                broadcast_channel_id  VARCHAR(50),
+                leveling_enabled      BOOLEAN NOT NULL DEFAULT true,
+                leveling_channel_id   VARCHAR(50),
+                xp_multiplier         REAL NOT NULL DEFAULT 1.0,
+                xp_cooldown           INTEGER NOT NULL DEFAULT 60000,
+                auto_reactions_enabled BOOLEAN NOT NULL DEFAULT false,
+                auto_reactions         JSONB NOT NULL DEFAULT '[]',
+                auto_responder_enabled BOOLEAN NOT NULL DEFAULT false,
+                auto_responder         JSONB NOT NULL DEFAULT '[]',
+                no_prefix_users        JSONB NOT NULL DEFAULT '{}',
+                prefix                 VARCHAR(10) DEFAULT '${config.prefix}',
+                updated_at             TIMESTAMP DEFAULT NOW()
+            )
+        `);
+        await pool.query(`ALTER TABLE server_settings ADD COLUMN IF NOT EXISTS prefix VARCHAR(10) DEFAULT '${config.prefix}'`);
+        await pool.query(`ALTER TABLE server_settings ADD COLUMN IF NOT EXISTS auto_responder_enabled BOOLEAN NOT NULL DEFAULT false`);
+        await pool.query(`ALTER TABLE server_settings ADD COLUMN IF NOT EXISTS auto_responder JSONB NOT NULL DEFAULT '[]'`);
+    });
 }
 
 async function getServerSettings(guildId) {
@@ -580,24 +599,26 @@ function rowToServerSettings(row) {
 // ── welcome_settings ────────────────────────────────────────────────────────
 
 async function ensureWelcomeTable() {
-    await getWelcomePool().query(`
-        CREATE TABLE IF NOT EXISTS welcome_settings (
-            guild_id              VARCHAR(50) PRIMARY KEY,
-            enabled               BOOLEAN NOT NULL DEFAULT false,
-            channel_id            VARCHAR(50),
-            message               TEXT DEFAULT 'Welcome to the server, {member}! Enjoy your stay!',
-            banner_url            TEXT,
-            color                 VARCHAR(20) DEFAULT '#5865F2',
-            dm_enabled            BOOLEAN NOT NULL DEFAULT false,
-            dm_message            TEXT DEFAULT 'Hey {username}! Welcome to **{server}**!',
-            show_member_count     BOOLEAN NOT NULL DEFAULT true,
-            show_join_date        BOOLEAN NOT NULL DEFAULT true,
-            show_account_age      BOOLEAN NOT NULL DEFAULT true,
-            custom_title          VARCHAR(255),
-            custom_footer         VARCHAR(255),
-            updated_at            TIMESTAMP DEFAULT NOW()
-        )
-    `);
+    return once('welcomeTable', async () => {
+        await getWelcomePool().query(`
+            CREATE TABLE IF NOT EXISTS welcome_settings (
+                guild_id              VARCHAR(50) PRIMARY KEY,
+                enabled               BOOLEAN NOT NULL DEFAULT false,
+                channel_id            VARCHAR(50),
+                message               TEXT DEFAULT 'Welcome to the server, {member}! Enjoy your stay!',
+                banner_url            TEXT,
+                color                 VARCHAR(20) DEFAULT '#5865F2',
+                dm_enabled            BOOLEAN NOT NULL DEFAULT false,
+                dm_message            TEXT DEFAULT 'Hey {username}! Welcome to **{server}**!',
+                show_member_count     BOOLEAN NOT NULL DEFAULT true,
+                show_join_date        BOOLEAN NOT NULL DEFAULT true,
+                show_account_age      BOOLEAN NOT NULL DEFAULT true,
+                custom_title          VARCHAR(255),
+                custom_footer         VARCHAR(255),
+                updated_at            TIMESTAMP DEFAULT NOW()
+            )
+        `);
+    });
 }
 
 async function getWelcomeSettings(guildId) {
@@ -689,23 +710,25 @@ function rowToWelcomeSettings(row) {
 // ── logging_settings ───────────────────────────────────────────────────────
 
 async function ensureLoggingTable() {
-    await getLogPool().query(`
-        CREATE TABLE IF NOT EXISTS logging_settings (
-            guild_id              VARCHAR(50) PRIMARY KEY,
-            enabled               BOOLEAN NOT NULL DEFAULT false,
-            channel_id            VARCHAR(50),
-            webhook_url           TEXT,
-            webhook_name          VARCHAR(100) DEFAULT 'PrimeBot Logs',
-            events                JSONB NOT NULL DEFAULT '[]',
-            include_bots          BOOLEAN NOT NULL DEFAULT false,
-            color                 VARCHAR(20) DEFAULT '#5865F2',
-            updated_at            TIMESTAMP DEFAULT NOW()
-        )
-    `);
-    await getLogPool().query(`ALTER TABLE logging_settings ADD COLUMN IF NOT EXISTS webhook_name  VARCHAR(100) DEFAULT 'PrimeBot Logs'`);
-    await getLogPool().query(`ALTER TABLE logging_settings ADD COLUMN IF NOT EXISTS events        JSONB NOT NULL DEFAULT '[]'`);
-    await getLogPool().query(`ALTER TABLE logging_settings ADD COLUMN IF NOT EXISTS include_bots  BOOLEAN NOT NULL DEFAULT false`);
-    await getLogPool().query(`ALTER TABLE logging_settings ADD COLUMN IF NOT EXISTS color         VARCHAR(20) DEFAULT '#5865F2'`);
+    return once('loggingTable', async () => {
+        await getLogPool().query(`
+            CREATE TABLE IF NOT EXISTS logging_settings (
+                guild_id              VARCHAR(50) PRIMARY KEY,
+                enabled               BOOLEAN NOT NULL DEFAULT false,
+                channel_id            VARCHAR(50),
+                webhook_url           TEXT,
+                webhook_name          VARCHAR(100) DEFAULT 'PrimeBot Logs',
+                events                JSONB NOT NULL DEFAULT '[]',
+                include_bots          BOOLEAN NOT NULL DEFAULT false,
+                color                 VARCHAR(20) DEFAULT '#5865F2',
+                updated_at            TIMESTAMP DEFAULT NOW()
+            )
+        `);
+        await getLogPool().query(`ALTER TABLE logging_settings ADD COLUMN IF NOT EXISTS webhook_name  VARCHAR(100) DEFAULT 'PrimeBot Logs'`);
+        await getLogPool().query(`ALTER TABLE logging_settings ADD COLUMN IF NOT EXISTS events        JSONB NOT NULL DEFAULT '[]'`);
+        await getLogPool().query(`ALTER TABLE logging_settings ADD COLUMN IF NOT EXISTS include_bots  BOOLEAN NOT NULL DEFAULT false`);
+        await getLogPool().query(`ALTER TABLE logging_settings ADD COLUMN IF NOT EXISTS color         VARCHAR(20) DEFAULT '#5865F2'`);
+    });
 }
 
 async function getLoggingSettings(guildId) {
@@ -792,19 +815,21 @@ function getAlogPool() {
 }
 
 async function ensureWebsiteLogsTable() {
-    await getAlogPool().query(`
-        CREATE TABLE IF NOT EXISTS website_logs (
-            id              SERIAL PRIMARY KEY,
-            guild_id        VARCHAR(50) NOT NULL,
-            admin_user_id   VARCHAR(50) NOT NULL,
-            admin_username  VARCHAR(100) NOT NULL,
-            content         TEXT NOT NULL,
-            created_at      TIMESTAMP DEFAULT NOW()
-        )
-    `);
-    await getAlogPool().query(
-        `CREATE INDEX IF NOT EXISTS website_logs_guild_idx ON website_logs (guild_id, created_at DESC)`
-    );
+    return once('websiteLogsTable', async () => {
+        await getAlogPool().query(`
+            CREATE TABLE IF NOT EXISTS website_logs (
+                id              SERIAL PRIMARY KEY,
+                guild_id        VARCHAR(50) NOT NULL,
+                admin_user_id   VARCHAR(50) NOT NULL,
+                admin_username  VARCHAR(100) NOT NULL,
+                content         TEXT NOT NULL,
+                created_at      TIMESTAMP DEFAULT NOW()
+            )
+        `);
+        await getAlogPool().query(
+            `CREATE INDEX IF NOT EXISTS website_logs_guild_idx ON website_logs (guild_id, created_at DESC)`
+        );
+    });
 }
 
 async function addWebsiteLog(guildId, { adminUserId, adminUsername, content }) {
@@ -855,42 +880,44 @@ function getReactionPool() {
 }
 
 async function ensureReactionTables() {
-    await getReactionPool().query(`
-        CREATE TABLE IF NOT EXISTS reaction_roles (
-            id                   SERIAL PRIMARY KEY,
-            guild_id             VARCHAR(50) NOT NULL,
-            channel_id           VARCHAR(50) NOT NULL,
-            message_id           VARCHAR(50) NOT NULL,
-            title                VARCHAR(255),
-            description          TEXT,
-            color                VARCHAR(20) DEFAULT '#5865F2',
-            mode                 VARCHAR(20) DEFAULT 'normal',
-            persistent           BOOLEAN DEFAULT true,
-            include_bots         BOOLEAN DEFAULT false,
-            required_role_id     VARCHAR(50),
-            exclusive_role_id    VARCHAR(50),
-            created_by           VARCHAR(50),
-            enabled              BOOLEAN DEFAULT true,
-            created_at           TIMESTAMP DEFAULT NOW(),
-            updated_at           TIMESTAMP DEFAULT NOW()
-        );
-        CREATE UNIQUE INDEX IF NOT EXISTS reaction_roles_message_idx
-            ON reaction_roles (guild_id, channel_id, message_id);
-        CREATE INDEX IF NOT EXISTS reaction_roles_guild_idx
-            ON reaction_roles (guild_id);
-        CREATE TABLE IF NOT EXISTS reaction_role_mappings (
-            id         SERIAL PRIMARY KEY,
-            menu_id    INTEGER NOT NULL REFERENCES reaction_roles(id) ON DELETE CASCADE,
-            emoji      VARCHAR(100) NOT NULL,
-            role_id    VARCHAR(50) NOT NULL,
-            label      VARCHAR(255),
-            created_at TIMESTAMP DEFAULT NOW()
-        );
-        CREATE INDEX IF NOT EXISTS reaction_role_mappings_menu_idx
-            ON reaction_role_mappings (menu_id);
-        CREATE UNIQUE INDEX IF NOT EXISTS reaction_role_mappings_menu_emoji_idx
-            ON reaction_role_mappings (menu_id, emoji);
-    `);
+    return once('reactionTables', async () => {
+        await getReactionPool().query(`
+            CREATE TABLE IF NOT EXISTS reaction_roles (
+                id                   SERIAL PRIMARY KEY,
+                guild_id             VARCHAR(50) NOT NULL,
+                channel_id           VARCHAR(50) NOT NULL,
+                message_id           VARCHAR(50) NOT NULL,
+                title                VARCHAR(255),
+                description          TEXT,
+                color                VARCHAR(20) DEFAULT '#5865F2',
+                mode                 VARCHAR(20) DEFAULT 'normal',
+                persistent           BOOLEAN DEFAULT true,
+                include_bots         BOOLEAN DEFAULT false,
+                required_role_id     VARCHAR(50),
+                exclusive_role_id    VARCHAR(50),
+                created_by           VARCHAR(50),
+                enabled              BOOLEAN DEFAULT true,
+                created_at           TIMESTAMP DEFAULT NOW(),
+                updated_at           TIMESTAMP DEFAULT NOW()
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS reaction_roles_message_idx
+                ON reaction_roles (guild_id, channel_id, message_id);
+            CREATE INDEX IF NOT EXISTS reaction_roles_guild_idx
+                ON reaction_roles (guild_id);
+            CREATE TABLE IF NOT EXISTS reaction_role_mappings (
+                id         SERIAL PRIMARY KEY,
+                menu_id    INTEGER NOT NULL REFERENCES reaction_roles(id) ON DELETE CASCADE,
+                emoji      VARCHAR(100) NOT NULL,
+                role_id    VARCHAR(50) NOT NULL,
+                label      VARCHAR(255),
+                created_at TIMESTAMP DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS reaction_role_mappings_menu_idx
+                ON reaction_role_mappings (menu_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS reaction_role_mappings_menu_emoji_idx
+                ON reaction_role_mappings (menu_id, emoji);
+        `);
+    });
 }
 
 const VALID_RR_MODES = new Set(['normal', 'sticky', 'verify', 'unique']);
@@ -1428,7 +1455,9 @@ const ANTINUKE_DDL = `
 `;
 
 async function ensureAutomodIncidentsTable() {
-    await getAutomodPool().query(AUTOMOD_INCIDENTS_DDL);
+    return once('automodIncidentsTable', async () => {
+        await getAutomodPool().query(AUTOMOD_INCIDENTS_DDL);
+    });
 }
 
 function rowToAutomodIncident(row) {
@@ -1537,8 +1566,10 @@ async function getAutomodAnalytics(guildId, { days = 30 } = {}) {
 // sit in a separate database like every other feature.
 
 async function ensureAntiNukeTable() {
-    const { anukePool } = require('../server/anukeDb');
-    await anukePool.query(ANTINUKE_DDL);
+    return once('antiNukeTable', async () => {
+        const { anukePool } = require('../server/anukeDb');
+        await anukePool.query(ANTINUKE_DDL);
+    });
 }
 
 async function getAntiNukeSettings(guildId) {
@@ -1944,133 +1975,135 @@ async function getPlatformStats(serverCountOverride, memberCountOverride) {
 // ticket commands are disabled and reply with a notice.
 
 async function ensureTicketTables() {
-    const pool = getTicketPool();
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS ticket_panels (
-            id              SERIAL PRIMARY KEY,
-            guild_id        VARCHAR(50) NOT NULL,
-            name            VARCHAR(100) NOT NULL DEFAULT 'Support Ticket',
-            channel_id      VARCHAR(50),
-            message_id      VARCHAR(50),
-            message_type    VARCHAR(20) NOT NULL DEFAULT 'embed',
-            title           VARCHAR(255),
-            description     TEXT,
-            color           VARCHAR(20) DEFAULT '#5865F2',
-            thumbnail_url   TEXT,
-            image_url       TEXT,
-            footer_text     VARCHAR(255),
-            content         TEXT,
-            button_label    VARCHAR(80) NOT NULL DEFAULT 'Open Ticket',
-            button_style    VARCHAR(20) NOT NULL DEFAULT 'Primary',
-            button_emoji    VARCHAR(100),
-            category        VARCHAR(50) DEFAULT 'general',
-            ticket_name     VARCHAR(100),
-            support_role_ids    JSONB NOT NULL DEFAULT '[]',
-            ping_role_ids       JSONB NOT NULL DEFAULT '[]',
-            ticket_category_id  VARCHAR(50),
-            cooldown_seconds        INTEGER NOT NULL DEFAULT 0,
-            max_open_per_user      INTEGER NOT NULL DEFAULT 1,
-            ask_reason             BOOLEAN NOT NULL DEFAULT false,
-            reason_placeholder     VARCHAR(255),
-            welcome_message        TEXT,
-            close_button_label     VARCHAR(80) DEFAULT 'Close Ticket',
-            close_button_emoji     VARCHAR(100),
-            close_button_style     VARCHAR(20) DEFAULT 'Danger',
-            claim_button_label     VARCHAR(80),
-            claim_button_emoji     VARCHAR(100),
-            claim_button_style     VARCHAR(20) DEFAULT 'Secondary',
-            close_flow             JSONB,
-            embed_fields           JSONB,
-            enabled             BOOLEAN NOT NULL DEFAULT true,
-            created_by          VARCHAR(50),
-            created_at          TIMESTAMP DEFAULT NOW(),
-            updated_at          TIMESTAMP DEFAULT NOW()
-        );
-        CREATE INDEX IF NOT EXISTS ticket_panels_guild_idx ON ticket_panels (guild_id);
-        CREATE UNIQUE INDEX IF NOT EXISTS ticket_panels_guild_name_idx ON ticket_panels (guild_id, name);
-        CREATE TABLE IF NOT EXISTS ticket_instances (
-            id                  SERIAL PRIMARY KEY,
-            panel_id            INTEGER REFERENCES ticket_panels(id) ON DELETE SET NULL,
-            guild_id            VARCHAR(50) NOT NULL,
-            channel_id          VARCHAR(50) NOT NULL,
-            user_id             VARCHAR(50) NOT NULL,
-            category            VARCHAR(50) DEFAULT 'general',
-            is_thread           BOOLEAN NOT NULL DEFAULT false,
-            parent_channel_id   VARCHAR(50),
-            control_message_id  VARCHAR(50),
-            reason              TEXT,
-            status              VARCHAR(20) NOT NULL DEFAULT 'open',
-            claimed_by          VARCHAR(50),
-            created_at          BIGINT NOT NULL,
-            closed_at           BIGINT,
-            closed_by           VARCHAR(50),
-            reopened_at         BIGINT,
-            reopened_by         VARCHAR(50)
-        );
-        CREATE UNIQUE INDEX IF NOT EXISTS ticket_instances_channel_idx ON ticket_instances (channel_id);
-        CREATE INDEX IF NOT EXISTS ticket_instances_guild_idx ON ticket_instances (guild_id);
-        CREATE INDEX IF NOT EXISTS ticket_instances_panel_idx ON ticket_instances (panel_id);
-        CREATE INDEX IF NOT EXISTS ticket_instances_guild_user_idx ON ticket_instances (guild_id, user_id);
-        ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS open_name_template     VARCHAR(100);
-        ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS claimed_name_template VARCHAR(100);
-        ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS closed_name_template   VARCHAR(100);
-        ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS close_button_style    VARCHAR(20) DEFAULT 'Danger';
-        ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS claim_button_style   VARCHAR(20) DEFAULT 'Secondary';
-        ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS close_flow            JSONB;
-        ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS author_name         VARCHAR(255);
-        ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS author_icon_url     TEXT;
-        ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS claim_enabled        BOOLEAN NOT NULL DEFAULT true;
-        ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS panel_version         INTEGER NOT NULL DEFAULT 1;
-        ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS author_url           TEXT;
-        ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS title_url            TEXT;
-        ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS footer_icon_url     TEXT;
-        ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS timestamp_enabled    BOOLEAN NOT NULL DEFAULT true;
-        ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS embed_fields          JSONB;
-        CREATE TABLE IF NOT EXISTS ticket_panel_components (
-            id                      SERIAL PRIMARY KEY,
-            panel_id                INTEGER NOT NULL REFERENCES ticket_panels(id) ON DELETE CASCADE,
-            type                    VARCHAR(20) NOT NULL DEFAULT 'button',
-            position                 INTEGER NOT NULL DEFAULT 0,
-            label                   VARCHAR(80),
-            style                   VARCHAR(20) DEFAULT 'Primary',
-            emoji                   VARCHAR(100),
-            action                  VARCHAR(20) NOT NULL DEFAULT 'ticket',
-            url                     TEXT,
-            placeholder              VARCHAR(150),
-            min_values               INTEGER,
-            max_values               INTEGER,
-            claim_enabled            BOOLEAN NOT NULL DEFAULT true,
-            ticket_configuration     JSONB,
-            created_at              TIMESTAMP DEFAULT NOW(),
-            updated_at              TIMESTAMP DEFAULT NOW()
-        );
-        CREATE INDEX IF NOT EXISTS ticket_panel_components_panel_idx ON ticket_panel_components (panel_id);
-        CREATE TABLE IF NOT EXISTS ticket_panel_options (
-            id                      SERIAL PRIMARY KEY,
-            component_id            INTEGER NOT NULL REFERENCES ticket_panel_components(id) ON DELETE CASCADE,
-            label                   VARCHAR(80) NOT NULL,
-            value                   VARCHAR(100) NOT NULL,
-            description             VARCHAR(150),
-            emoji                   VARCHAR(100),
-            position                 INTEGER NOT NULL DEFAULT 0,
-            ticket_configuration     JSONB,
-            created_at              TIMESTAMP DEFAULT NOW(),
-            updated_at              TIMESTAMP DEFAULT NOW()
-        );
-        CREATE INDEX IF NOT EXISTS ticket_panel_options_component_idx ON ticket_panel_options (component_id);
-        CREATE TABLE IF NOT EXISTS ticket_panel_messages (
-            id                      SERIAL PRIMARY KEY,
-            panel_id                INTEGER NOT NULL REFERENCES ticket_panels(id) ON DELETE CASCADE,
-            guild_id                VARCHAR(50) NOT NULL,
-            channel_id              VARCHAR(50) NOT NULL,
-            message_id              VARCHAR(50) NOT NULL,
-            panel_version            INTEGER NOT NULL DEFAULT 1,
-            created_at              TIMESTAMP DEFAULT NOW(),
-            updated_at              TIMESTAMP DEFAULT NOW(),
-            UNIQUE (panel_id, channel_id, message_id)
-        );
-        CREATE INDEX IF NOT EXISTS ticket_panel_messages_panel_idx ON ticket_panel_messages (panel_id);
-    `);
+    return once('ticketTables', async () => {
+        const pool = getTicketPool();
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS ticket_panels (
+                id              SERIAL PRIMARY KEY,
+                guild_id        VARCHAR(50) NOT NULL,
+                name            VARCHAR(100) NOT NULL DEFAULT 'Support Ticket',
+                channel_id      VARCHAR(50),
+                message_id      VARCHAR(50),
+                message_type    VARCHAR(20) NOT NULL DEFAULT 'embed',
+                title           VARCHAR(255),
+                description     TEXT,
+                color           VARCHAR(20) DEFAULT '#5865F2',
+                thumbnail_url   TEXT,
+                image_url       TEXT,
+                footer_text     VARCHAR(255),
+                content         TEXT,
+                button_label    VARCHAR(80) NOT NULL DEFAULT 'Open Ticket',
+                button_style    VARCHAR(20) NOT NULL DEFAULT 'Primary',
+                button_emoji    VARCHAR(100),
+                category        VARCHAR(50) DEFAULT 'general',
+                ticket_name     VARCHAR(100),
+                support_role_ids    JSONB NOT NULL DEFAULT '[]',
+                ping_role_ids       JSONB NOT NULL DEFAULT '[]',
+                ticket_category_id  VARCHAR(50),
+                cooldown_seconds        INTEGER NOT NULL DEFAULT 0,
+                max_open_per_user      INTEGER NOT NULL DEFAULT 1,
+                ask_reason             BOOLEAN NOT NULL DEFAULT false,
+                reason_placeholder     VARCHAR(255),
+                welcome_message        TEXT,
+                close_button_label     VARCHAR(80) DEFAULT 'Close Ticket',
+                close_button_emoji     VARCHAR(100),
+                close_button_style     VARCHAR(20) DEFAULT 'Danger',
+                claim_button_label     VARCHAR(80),
+                claim_button_emoji     VARCHAR(100),
+                claim_button_style     VARCHAR(20) DEFAULT 'Secondary',
+                close_flow             JSONB,
+                embed_fields           JSONB,
+                enabled             BOOLEAN NOT NULL DEFAULT true,
+                created_by          VARCHAR(50),
+                created_at          TIMESTAMP DEFAULT NOW(),
+                updated_at          TIMESTAMP DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS ticket_panels_guild_idx ON ticket_panels (guild_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS ticket_panels_guild_name_idx ON ticket_panels (guild_id, name);
+            CREATE TABLE IF NOT EXISTS ticket_instances (
+                id                  SERIAL PRIMARY KEY,
+                panel_id            INTEGER REFERENCES ticket_panels(id) ON DELETE SET NULL,
+                guild_id            VARCHAR(50) NOT NULL,
+                channel_id          VARCHAR(50) NOT NULL,
+                user_id             VARCHAR(50) NOT NULL,
+                category            VARCHAR(50) DEFAULT 'general',
+                is_thread           BOOLEAN NOT NULL DEFAULT false,
+                parent_channel_id   VARCHAR(50),
+                control_message_id  VARCHAR(50),
+                reason              TEXT,
+                status              VARCHAR(20) NOT NULL DEFAULT 'open',
+                claimed_by          VARCHAR(50),
+                created_at          BIGINT NOT NULL,
+                closed_at           BIGINT,
+                closed_by           VARCHAR(50),
+                reopened_at         BIGINT,
+                reopened_by         VARCHAR(50)
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS ticket_instances_channel_idx ON ticket_instances (channel_id);
+            CREATE INDEX IF NOT EXISTS ticket_instances_guild_idx ON ticket_instances (guild_id);
+            CREATE INDEX IF NOT EXISTS ticket_instances_panel_idx ON ticket_instances (panel_id);
+            CREATE INDEX IF NOT EXISTS ticket_instances_guild_user_idx ON ticket_instances (guild_id, user_id);
+            ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS open_name_template     VARCHAR(100);
+            ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS claimed_name_template VARCHAR(100);
+            ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS closed_name_template   VARCHAR(100);
+            ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS close_button_style    VARCHAR(20) DEFAULT 'Danger';
+            ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS claim_button_style   VARCHAR(20) DEFAULT 'Secondary';
+            ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS close_flow            JSONB;
+            ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS author_name         VARCHAR(255);
+            ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS author_icon_url     TEXT;
+            ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS claim_enabled        BOOLEAN NOT NULL DEFAULT true;
+            ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS panel_version         INTEGER NOT NULL DEFAULT 1;
+            ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS author_url           TEXT;
+            ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS title_url            TEXT;
+            ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS footer_icon_url     TEXT;
+            ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS timestamp_enabled    BOOLEAN NOT NULL DEFAULT true;
+            ALTER TABLE ticket_panels ADD COLUMN IF NOT EXISTS embed_fields          JSONB;
+            CREATE TABLE IF NOT EXISTS ticket_panel_components (
+                id                      SERIAL PRIMARY KEY,
+                panel_id                INTEGER NOT NULL REFERENCES ticket_panels(id) ON DELETE CASCADE,
+                type                    VARCHAR(20) NOT NULL DEFAULT 'button',
+                position                 INTEGER NOT NULL DEFAULT 0,
+                label                   VARCHAR(80),
+                style                   VARCHAR(20) DEFAULT 'Primary',
+                emoji                   VARCHAR(100),
+                action                  VARCHAR(20) NOT NULL DEFAULT 'ticket',
+                url                     TEXT,
+                placeholder              VARCHAR(150),
+                min_values               INTEGER,
+                max_values               INTEGER,
+                claim_enabled            BOOLEAN NOT NULL DEFAULT true,
+                ticket_configuration     JSONB,
+                created_at              TIMESTAMP DEFAULT NOW(),
+                updated_at              TIMESTAMP DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS ticket_panel_components_panel_idx ON ticket_panel_components (panel_id);
+            CREATE TABLE IF NOT EXISTS ticket_panel_options (
+                id                      SERIAL PRIMARY KEY,
+                component_id            INTEGER NOT NULL REFERENCES ticket_panel_components(id) ON DELETE CASCADE,
+                label                   VARCHAR(80) NOT NULL,
+                value                   VARCHAR(100) NOT NULL,
+                description             VARCHAR(150),
+                emoji                   VARCHAR(100),
+                position                 INTEGER NOT NULL DEFAULT 0,
+                ticket_configuration     JSONB,
+                created_at              TIMESTAMP DEFAULT NOW(),
+                updated_at              TIMESTAMP DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS ticket_panel_options_component_idx ON ticket_panel_options (component_id);
+            CREATE TABLE IF NOT EXISTS ticket_panel_messages (
+                id                      SERIAL PRIMARY KEY,
+                panel_id                INTEGER NOT NULL REFERENCES ticket_panels(id) ON DELETE CASCADE,
+                guild_id                VARCHAR(50) NOT NULL,
+                channel_id              VARCHAR(50) NOT NULL,
+                message_id              VARCHAR(50) NOT NULL,
+                panel_version            INTEGER NOT NULL DEFAULT 1,
+                created_at              TIMESTAMP DEFAULT NOW(),
+                updated_at              TIMESTAMP DEFAULT NOW(),
+                UNIQUE (panel_id, channel_id, message_id)
+            );
+            CREATE INDEX IF NOT EXISTS ticket_panel_messages_panel_idx ON ticket_panel_messages (panel_id);
+        `);
+    });
 }
 
 const VALID_TICKET_BUTTON_STYLES = new Set(['Primary', 'Secondary', 'Success', 'Danger']);
@@ -2673,29 +2706,31 @@ function normalizeTicketRoleSettings(settings = {}) {
 }
 
 async function ensureTicketRoleTable() {
-    await getTrolePool().query(`
-        CREATE TABLE IF NOT EXISTS ticket_role_settings (
-            id              SERIAL PRIMARY KEY,
-            panel_id        INTEGER NOT NULL UNIQUE,
-            guild_id        VARCHAR(50) NOT NULL,
-            open_enabled   BOOLEAN NOT NULL DEFAULT false,
-            open_name       VARCHAR(100),
-            open_show_user  BOOLEAN NOT NULL DEFAULT false,
-            open_show_count BOOLEAN NOT NULL DEFAULT false,
-            open_add_role   VARCHAR(50),
-            open_remove_role VARCHAR(50),
-            close_enabled   BOOLEAN NOT NULL DEFAULT false,
-            close_name       VARCHAR(100),
-            close_show_user  BOOLEAN NOT NULL DEFAULT false,
-            close_show_count BOOLEAN NOT NULL DEFAULT false,
-            close_add_role   VARCHAR(50),
-            close_remove_role VARCHAR(50),
-            created_at      TIMESTAMP DEFAULT NOW(),
-            updated_at      TIMESTAMP DEFAULT NOW()
-        );
-        CREATE INDEX IF NOT EXISTS ticket_role_settings_guild_idx
-            ON ticket_role_settings (guild_id);
-    `);
+    return once('ticketRoleTable', async () => {
+        await getTrolePool().query(`
+            CREATE TABLE IF NOT EXISTS ticket_role_settings (
+                id              SERIAL PRIMARY KEY,
+                panel_id        INTEGER NOT NULL UNIQUE,
+                guild_id        VARCHAR(50) NOT NULL,
+                open_enabled   BOOLEAN NOT NULL DEFAULT false,
+                open_name       VARCHAR(100),
+                open_show_user  BOOLEAN NOT NULL DEFAULT false,
+                open_show_count BOOLEAN NOT NULL DEFAULT false,
+                open_add_role   VARCHAR(50),
+                open_remove_role VARCHAR(50),
+                close_enabled   BOOLEAN NOT NULL DEFAULT false,
+                close_name       VARCHAR(100),
+                close_show_user  BOOLEAN NOT NULL DEFAULT false,
+                close_show_count BOOLEAN NOT NULL DEFAULT false,
+                close_add_role   VARCHAR(50),
+                close_remove_role VARCHAR(50),
+                created_at      TIMESTAMP DEFAULT NOW(),
+                updated_at      TIMESTAMP DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS ticket_role_settings_guild_idx
+                ON ticket_role_settings (guild_id);
+        `);
+    });
 }
 
 async function getTicketRoleSettings(panelId) {
@@ -2765,20 +2800,22 @@ function getTlogPool() {
 }
 
 async function ensureTicketLoggingTable() {
-    await getTlogPool().query(`
-        CREATE TABLE IF NOT EXISTS ticket_logging_settings (
-            panel_id    INTEGER PRIMARY KEY,
-            guild_id    VARCHAR(50) NOT NULL,
-            enabled     BOOLEAN NOT NULL DEFAULT false,
-            channel_id  VARCHAR(50),
-            events      JSONB NOT NULL DEFAULT '[]',
-            updated_at  TIMESTAMP DEFAULT NOW()
-        );
-        ALTER TABLE ticket_logging_settings ADD COLUMN IF NOT EXISTS channel_id VARCHAR(50);
-        ALTER TABLE ticket_logging_settings ADD COLUMN IF NOT EXISTS events     JSONB NOT NULL DEFAULT '[]';
-        CREATE INDEX IF NOT EXISTS ticket_logging_guild_idx
-            ON ticket_logging_settings (guild_id);
-    `);
+    return once('ticketLoggingTable', async () => {
+        await getTlogPool().query(`
+            CREATE TABLE IF NOT EXISTS ticket_logging_settings (
+                panel_id    INTEGER PRIMARY KEY,
+                guild_id    VARCHAR(50) NOT NULL,
+                enabled     BOOLEAN NOT NULL DEFAULT false,
+                channel_id  VARCHAR(50),
+                events      JSONB NOT NULL DEFAULT '[]',
+                updated_at  TIMESTAMP DEFAULT NOW()
+            );
+            ALTER TABLE ticket_logging_settings ADD COLUMN IF NOT EXISTS channel_id VARCHAR(50);
+            ALTER TABLE ticket_logging_settings ADD COLUMN IF NOT EXISTS events     JSONB NOT NULL DEFAULT '[]';
+            CREATE INDEX IF NOT EXISTS ticket_logging_guild_idx
+                ON ticket_logging_settings (guild_id);
+        `);
+    });
 }
 
 function normalizeTicketLoggingDb(raw = {}) {
@@ -3031,40 +3068,42 @@ const VALID_EVENT_ACTIONS = new Set([
 const VALID_EVENT_STATUSES = new Set(['scheduled', 'running', 'completed', 'cancelled']);
 
 async function ensureEventTables() {
-    await getEventPool().query(`
-        CREATE TABLE IF NOT EXISTS event_schedules (
-            id                SERIAL PRIMARY KEY,
-            guild_id          VARCHAR(50) NOT NULL,
-            name              VARCHAR(100) NOT NULL,
-            description       TEXT,
-            status            VARCHAR(20) NOT NULL DEFAULT 'scheduled',
-            countdown_seconds INTEGER NOT NULL DEFAULT 0,
-            start_at          TIMESTAMP,
-            triggered         BOOLEAN NOT NULL DEFAULT false,
-            enabled           BOOLEAN NOT NULL DEFAULT true,
-            created_by_id     VARCHAR(50),
-            created_at        TIMESTAMP DEFAULT NOW(),
-            updated_at        TIMESTAMP DEFAULT NOW()
-        );
-        CREATE INDEX IF NOT EXISTS event_schedules_guild_idx ON event_schedules (guild_id);
-        CREATE TABLE IF NOT EXISTS event_tasks (
-            id                SERIAL PRIMARY KEY,
-            schedule_id       INTEGER NOT NULL REFERENCES event_schedules(id) ON DELETE CASCADE,
-            offset_seconds    INTEGER NOT NULL DEFAULT 0,
-            action            VARCHAR(30) NOT NULL,
-            target_type       VARCHAR(20) NOT NULL DEFAULT 'channel',
-            target_ids        JSONB NOT NULL DEFAULT '[]',
-            message_content   TEXT,
-            embed_title       VARCHAR(255),
-            embed_description TEXT,
-            embed_color       VARCHAR(20) DEFAULT '#5865F2',
-            embed_image_url   TEXT,
-            channel_id        VARCHAR(50),
-            executed_at       TIMESTAMP,
-            created_at        TIMESTAMP DEFAULT NOW()
-        );
-        CREATE INDEX IF NOT EXISTS event_tasks_schedule_idx ON event_tasks (schedule_id);
-    `);
+    return once('eventTables', async () => {
+        await getEventPool().query(`
+            CREATE TABLE IF NOT EXISTS event_schedules (
+                id                SERIAL PRIMARY KEY,
+                guild_id          VARCHAR(50) NOT NULL,
+                name              VARCHAR(100) NOT NULL,
+                description       TEXT,
+                status            VARCHAR(20) NOT NULL DEFAULT 'scheduled',
+                countdown_seconds INTEGER NOT NULL DEFAULT 0,
+                start_at          TIMESTAMP,
+                triggered         BOOLEAN NOT NULL DEFAULT false,
+                enabled           BOOLEAN NOT NULL DEFAULT true,
+                created_by_id     VARCHAR(50),
+                created_at        TIMESTAMP DEFAULT NOW(),
+                updated_at        TIMESTAMP DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS event_schedules_guild_idx ON event_schedules (guild_id);
+            CREATE TABLE IF NOT EXISTS event_tasks (
+                id                SERIAL PRIMARY KEY,
+                schedule_id       INTEGER NOT NULL REFERENCES event_schedules(id) ON DELETE CASCADE,
+                offset_seconds    INTEGER NOT NULL DEFAULT 0,
+                action            VARCHAR(30) NOT NULL,
+                target_type       VARCHAR(20) NOT NULL DEFAULT 'channel',
+                target_ids        JSONB NOT NULL DEFAULT '[]',
+                message_content   TEXT,
+                embed_title       VARCHAR(255),
+                embed_description TEXT,
+                embed_color       VARCHAR(20) DEFAULT '#5865F2',
+                embed_image_url   TEXT,
+                channel_id        VARCHAR(50),
+                executed_at       TIMESTAMP,
+                created_at        TIMESTAMP DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS event_tasks_schedule_idx ON event_tasks (schedule_id);
+        `);
+    });
 }
 
 function eventRowToSchedule(row, taskRows = []) {
@@ -3245,28 +3284,30 @@ const FAILOVER_THRESHOLD_MS = 45000; // mirrors utils/nodeFailover.js
 const NODE_ROLES = ['sn1', 'sn2', 'sn3'];
 
 async function ensureNodeStatusTables() {
-    const p = getSeasonPool();
-    await p.query(`
-        CREATE TABLE IF NOT EXISTS bot_node_status (
-            role VARCHAR(20) PRIMARY KEY,
-            node_name VARCHAR(255) NOT NULL,
-            last_heartbeat TIMESTAMP NOT NULL DEFAULT NOW(),
-            active BOOLEAN NOT NULL DEFAULT false
-        )
-    `);
-    // Live guild/member counts written by the active bot node's heartbeat
-    // (utils/nodeFailover.js). Self-migrate tables created before these existed.
-    await p.query(`ALTER TABLE bot_node_status ADD COLUMN IF NOT EXISTS guild_count INTEGER`).catch(() => {});
-    await p.query(`ALTER TABLE bot_node_status ADD COLUMN IF NOT EXISTS member_count BIGINT`).catch(() => {});
-    await p.query(`
-        CREATE TABLE IF NOT EXISTS bot_failover_lock (
-            id INTEGER PRIMARY KEY DEFAULT 1,
-            owner_node_name VARCHAR(255) NOT NULL,
-            owner_role VARCHAR(20) NOT NULL,
-            acquired_at TIMESTAMP NOT NULL DEFAULT NOW(),
-            last_seen TIMESTAMP NOT NULL DEFAULT NOW()
-        )
-    `);
+    return once('nodeStatusTables', async () => {
+        const p = getSeasonPool();
+        await p.query(`
+            CREATE TABLE IF NOT EXISTS bot_node_status (
+                role VARCHAR(20) PRIMARY KEY,
+                node_name VARCHAR(255) NOT NULL,
+                last_heartbeat TIMESTAMP NOT NULL DEFAULT NOW(),
+                active BOOLEAN NOT NULL DEFAULT false
+            )
+        `);
+        // Live guild/member counts written by the active bot node's heartbeat
+        // (utils/nodeFailover.js). Self-migrate tables created before these existed.
+        await p.query(`ALTER TABLE bot_node_status ADD COLUMN IF NOT EXISTS guild_count INTEGER`).catch(() => {});
+        await p.query(`ALTER TABLE bot_node_status ADD COLUMN IF NOT EXISTS member_count BIGINT`).catch(() => {});
+        await p.query(`
+            CREATE TABLE IF NOT EXISTS bot_failover_lock (
+                id INTEGER PRIMARY KEY DEFAULT 1,
+                owner_node_name VARCHAR(255) NOT NULL,
+                owner_role VARCHAR(20) NOT NULL,
+                acquired_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                last_seen TIMESTAMP NOT NULL DEFAULT NOW()
+            )
+        `);
+    });
 }
 
 async function getNodeStats() {
@@ -3347,21 +3388,23 @@ function getEmbedPool() {
 }
 
 async function ensureSavedEmbedsTable() {
-    const p = getEmbedPool();
-    await p.query(`
-        CREATE TABLE IF NOT EXISTS saved_embeds (
-            id SERIAL PRIMARY KEY,
-            guild_id VARCHAR(50) NOT NULL,
-            name VARCHAR(100) NOT NULL,
-            payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-            created_by VARCHAR(50),
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-    `);
-    await p.query(`
-        CREATE INDEX IF NOT EXISTS saved_embeds_guild_uniq ON saved_embeds (guild_id, lower(name))
-    `).catch(() => {});
+    return once('savedEmbedsTable', async () => {
+        const p = getEmbedPool();
+        await p.query(`
+            CREATE TABLE IF NOT EXISTS saved_embeds (
+                id SERIAL PRIMARY KEY,
+                guild_id VARCHAR(50) NOT NULL,
+                name VARCHAR(100) NOT NULL,
+                payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+                created_by VARCHAR(50),
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        `);
+        await p.query(`
+            CREATE INDEX IF NOT EXISTS saved_embeds_guild_uniq ON saved_embeds (guild_id, lower(name))
+        `).catch(() => {});
+    });
 }
 
 // Map a saved_embeds row → the camelCase JSON the page expects.

@@ -70,7 +70,7 @@ class AntiNukeManager {
 
     async _loadAll() {
         try {
-            const res = await pool.query('SELECT * FROM antinuke_settings');
+            const res = await pool.query('SELECT guild_id, enabled, alert_channel_id, responses, trusted_user_ids, trusted_role_ids, watched, dry_run, updated_at FROM antinuke_settings');
             for (const row of res.rows) this._cache.set(row.guild_id, rowToSettings(row));
             console.log(`[ANTINUKE] Loaded settings for ${this._cache.size} servers.`);
         } catch (err) {
@@ -80,7 +80,7 @@ class AntiNukeManager {
 
     async _refreshFromDatabase() {
         await this._ensureTable();
-        const res = await pool.query('SELECT * FROM antinuke_settings');
+        const res = await pool.query('SELECT guild_id, enabled, alert_channel_id, responses, trusted_user_ids, trusted_role_ids, watched, dry_run, updated_at FROM antinuke_settings');
         let changed = false;
         for (const row of res.rows) {
             const next = rowToSettings(row);

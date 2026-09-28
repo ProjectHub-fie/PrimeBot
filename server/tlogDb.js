@@ -1,5 +1,5 @@
-const { Pool } = require('pg');
 const { resolveDbUrl } = require('./resolveDbUrl');
+const { once } = require('./schemaBootstrap');
 
 /**
  * Dedicated PostgreSQL pool for per-panel ticket logging configuration.
@@ -21,41 +21,16 @@ function resolveConnectionString() {
     return resolveDbUrl('TLOG_DATABASE_URL');
 }
 
+const { createPool } = require('./createPool');
+
 const cs = resolveConnectionString();
 
 if (!cs) {
     console.warn('⚠️ TLOG_DATABASE_URL (or FALLBACK_DATABASE_URL/DATABASE_URL) not set — ticket logging will have no database.');
 }
 
-function shouldEnableSsl(connectionStr) {
-    return /sslmode\s*=\s*(require|prefer|verify-ca|verify-full|allow)/i.test(connectionStr || '')
-        || process.env.DB_SSL === 'require';
-}
+const tlogPool = createPool(cs, { label: 'TLOG DB' });
 
-function configFromUrl(connectionStr) {
-    const url = new URL(connectionStr);
-    url.searchParams.delete('sslmode');
-    return {
-        connectionString: url.toString(),
-        ssl: shouldEnableSsl(connectionStr) ? { rejectUnauthorized: false } : false,
-    };
-}
-
-const tlogPool = new Pool(
-    cs
-        ? {
-              ...configFromUrl(cs),
-              max: 5,
-              idleTimeoutMillis: 30000,
-              connectionTimeoutMillis: 10000,
-              allowExitOnIdle: true,
-          }
-        : { max: 0 } // no-op pool; queries will throw and be handled gracefully
-);
-
-tlogPool.on('error', (err) => {
-    console.error('[TLOG DB] Unexpected pool error:', err.message);
-});
 
 const CREATE_TABLE_SQL = `
     CREATE TABLE IF NOT EXISTS ticket_logging_settings (
@@ -71,13 +46,16 @@ const CREATE_TABLE_SQL = `
 `;
 
 async function ensureTlogTables() {
-    try {
+    return once('tlogTables', async () => {
         const client = await tlogPool.connect();
-        await client.query(CREATE_TABLE_SQL);
-        client.release();
-    } catch (err) {
+        try {
+            await client.query(CREATE_TABLE_SQL);
+        } finally {
+            client.release();
+        }
+    }).catch((err) => {
         console.error('[TLOG DB] Table init failed:', err.message);
-    }
+    });
 }
 
 async function testTlogConnection() {

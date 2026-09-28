@@ -108,6 +108,15 @@ if (process.env.DB_QUERY_MONITOR === 'true' || process.env.DB_QUERY_MONITOR === 
     }
 }
 
+// Always-on, in-memory database usage counters. The shared pool factory
+// (server/createPool.js) instruments every pool it creates, so this only needs
+// to start the periodic log line. It writes nothing to the database.
+try {
+    require('./utils/dbUsage').startReporting();
+} catch (err) {
+    console.error('[DB USAGE] Failed to start reporter:', err.message);
+}
+
 // Initialize beta features manager (lightweight — DB only, no intervals)
 const betaManager = require('./utils/betaManager');
 client.betaManager = betaManager;
@@ -732,6 +741,14 @@ async function gracefulShutdown() {
         }
     } catch (err) {
         console.error('[LEVELING] Final XP flush failed:', err.message);
+    }
+    // Flush debounced counting-game writes the same way.
+    try {
+        if (client?.countingManager?.flushSaves) {
+            await client.countingManager.flushSaves();
+        }
+    } catch (err) {
+        console.error('[COUNTING] Final save flush failed:', err.message);
     }
     await stepDown('SIGTERM/SIGINT received');
 }

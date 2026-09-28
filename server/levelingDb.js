@@ -1,4 +1,3 @@
-const { Pool } = require('pg');
 const { resolveDbUrl } = require('./resolveDbUrl');
 const { drizzle } = require('drizzle-orm/node-postgres');
 const { userLevels, userBadges, userLevelsRelations, userBadgesRelations } = require('../shared/schema');
@@ -17,41 +16,16 @@ function resolveConnectionString() {
     return resolveDbUrl('LEVELING_DATABASE_URL');
 }
 
+const { createPool } = require('./createPool');
+
 const cs = resolveConnectionString();
 
 if (!cs) {
     console.warn('⚠️ LEVELING_DATABASE_URL (or FALLBACK_DATABASE_URL/DATABASE_URL) not set — leveling feature will have no database.');
 }
 
-function shouldEnableSsl(connectionStr) {
-    return /sslmode\s*=\s*(require|prefer|verify-ca|verify-full|allow)/i.test(connectionStr || '')
-        || process.env.DB_SSL === 'require';
-}
+const levelingPool = createPool(cs, { label: 'LEVELING DB' });
 
-function configFromUrl(connectionStr) {
-    const url = new URL(connectionStr);
-    url.searchParams.delete('sslmode');
-    return {
-        connectionString: url.toString(),
-        ssl: shouldEnableSsl(connectionStr) ? { rejectUnauthorized: false } : false,
-    };
-}
-
-const levelingPool = new Pool(
-    cs
-        ? {
-              ...configFromUrl(cs),
-              max: 10,
-              idleTimeoutMillis: 30000,
-              connectionTimeoutMillis: 10000,
-              allowExitOnIdle: true,
-          }
-        : { max: 0 } // no-op pool; queries will throw and be handled gracefully
-);
-
-levelingPool.on('error', (err) => {
-    console.error('[LEVELING DB] Unexpected pool error:', err.message);
-});
 
 const levelingSchema = { userLevels, userBadges, userLevelsRelations, userBadgesRelations };
 const levelingDb = drizzle(levelingPool, { schema: levelingSchema });

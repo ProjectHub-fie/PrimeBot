@@ -1,5 +1,5 @@
-const { Pool } = require('pg');
 const { resolveDbUrl } = require('./resolveDbUrl');
+const { once } = require('./schemaBootstrap');
 
 /**
  * Dedicated PostgreSQL pool for the bot logging feature + dashboard website logs.
@@ -25,41 +25,16 @@ function resolveConnectionString() {
     return resolveDbUrl('LOG_DATABASE_URL');
 }
 
+const { createPool } = require('./createPool');
+
 const cs = resolveConnectionString();
 
 if (!cs) {
     console.warn('⚠️ LOG_DATABASE_URL (or FALLBACK_DATABASE_URL/DATABASE_URL) not set — logging feature will have no database.');
 }
 
-function shouldEnableSsl(connectionStr) {
-    return /sslmode\s*=\s*(require|prefer|verify-ca|verify-full|allow)/i.test(connectionStr || '')
-        || process.env.DB_SSL === 'require';
-}
+const logPool = createPool(cs, { label: 'LOG DB' });
 
-function configFromUrl(connectionStr) {
-    const url = new URL(connectionStr);
-    url.searchParams.delete('sslmode');
-    return {
-        connectionString: url.toString(),
-        ssl: shouldEnableSsl(connectionStr) ? { rejectUnauthorized: false } : false,
-    };
-}
-
-const logPool = new Pool(
-    cs
-        ? {
-              ...configFromUrl(cs),
-              max: 5,
-              idleTimeoutMillis: 30000,
-              connectionTimeoutMillis: 10000,
-              allowExitOnIdle: true,
-          }
-        : { max: 0 } // no-op pool; queries will throw and be handled gracefully
-);
-
-logPool.on('error', (err) => {
-    console.error('[LOG DB] Unexpected pool error:', err.message);
-});
 
 const CREATE_TABLES_SQL = `
     CREATE TABLE IF NOT EXISTS logging_settings (
@@ -90,13 +65,16 @@ const CREATE_TABLES_SQL = `
 `;
 
 async function ensureLogTables() {
-    try {
+    return once('logTables', async () => {
         const client = await logPool.connect();
-        await client.query(CREATE_TABLES_SQL);
-        client.release();
-    } catch (err) {
+        try {
+            await client.query(CREATE_TABLES_SQL);
+        } finally {
+            client.release();
+        }
+    }).catch((err) => {
         console.error('[LOG DB] Table init failed:', err.message);
-    }
+    });
 }
 
 async function testLogConnection() {

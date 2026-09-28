@@ -1,5 +1,5 @@
-const { Pool } = require('pg');
 const { resolveDbUrl } = require('./resolveDbUrl');
+const { once } = require('./schemaBootstrap');
 
 /**
  * Dedicated PostgreSQL pool for Anti-Nuke protection settings.
@@ -21,41 +21,16 @@ function resolveConnectionString() {
     return resolveDbUrl('ANUKE_DATABASE_URL');
 }
 
+const { createPool } = require('./createPool');
+
 const cs = resolveConnectionString();
 
 if (!cs) {
     console.warn('⚠️ ANUKE_DATABASE_URL (or FALLBACK_DATABASE_URL/DATABASE_URL) not set — anti-nuke will have no database.');
 }
 
-function shouldEnableSsl(connectionStr) {
-    return /sslmode\s*=\s*(require|prefer|verify-ca|verify-full|allow)/i.test(connectionStr || '')
-        || process.env.DB_SSL === 'require';
-}
+const anukePool = createPool(cs, { label: 'ANUKE DB' });
 
-function configFromUrl(connectionStr) {
-    const url = new URL(connectionStr);
-    url.searchParams.delete('sslmode');
-    return {
-        connectionString: url.toString(),
-        ssl: shouldEnableSsl(connectionStr) ? { rejectUnauthorized: false } : false,
-    };
-}
-
-const anukePool = new Pool(
-    cs
-        ? {
-              ...configFromUrl(cs),
-              max: 5,
-              idleTimeoutMillis: 30000,
-              connectionTimeoutMillis: 10000,
-              allowExitOnIdle: true,
-          }
-        : { max: 0 } // no-op pool; queries will throw and be handled gracefully
-);
-
-anukePool.on('error', (err) => {
-    console.error('[ANUKE DB] Unexpected pool error:', err.message);
-});
 
 const CREATE_TABLE_SQL = `
     CREATE TABLE IF NOT EXISTS antinuke_settings (
@@ -72,13 +47,16 @@ const CREATE_TABLE_SQL = `
 `;
 
 async function ensureAnukeTables() {
-    try {
+    return once('anukeTables', async () => {
         const client = await anukePool.connect();
-        await client.query(CREATE_TABLE_SQL);
-        client.release();
-    } catch (err) {
+        try {
+            await client.query(CREATE_TABLE_SQL);
+        } finally {
+            client.release();
+        }
+    }).catch((err) => {
         console.error('[ANUKE DB] Table init failed:', err.message);
-    }
+    });
 }
 
 async function testAnukeConnection() {

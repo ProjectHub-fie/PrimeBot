@@ -1,4 +1,3 @@
-const { Pool } = require('pg');
 const { resolveDbUrl } = require('./resolveDbUrl');
 const { drizzle } = require('drizzle-orm/node-postgres');
 const schema = require('../shared/schema');
@@ -26,45 +25,18 @@ function resolveConnectionString() {
     return resolveDbUrl('BETA_DATABASE_URL');
 }
 
+const { createPool } = require('./createPool');
+
 const cs = resolveConnectionString();
 
 if (!cs) {
     console.warn('⚠️ BETA_DATABASE_URL (or FALLBACK_DATABASE_URL/DATABASE_URL) not set — beta settings will have no database.');
 }
 
-function shouldEnableSsl(connectionStr) {
-    return /sslmode\s*=\s*(require|prefer|verify-ca|verify-full|allow)/i.test(connectionStr || '')
-        || process.env.DB_SSL === 'require';
-}
+const betaPool = createPool(cs, { label: 'BETA DB' });
 
-function configFromUrl(connectionStr) {
-    const url = new URL(connectionStr);
-    url.searchParams.delete('sslmode');
-    return {
-        connectionString: url.toString(),
-        ssl: shouldEnableSsl(connectionStr) ? { rejectUnauthorized: false } : false,
-    };
-}
-
-const betaPool = new Pool(
-    cs
-        ? {
-              ...configFromUrl(cs),
-              max: 5,
-              idleTimeoutMillis: 30000,
-              connectionTimeoutMillis: 10000,
-              allowExitOnIdle: true,
-          }
-        : { max: 0 } // no-op pool; queries will throw and be handled gracefully
-);
-
-// drizzle instance bound to the beta pool so betaManager's typed queries
-// (.select/.insert/.onConflictDoUpdate on betaSettings) hit the beta database.
+// Drizzle instance for the beta pool — betaManager uses the query builder.
 const betaDb = drizzle(betaPool, { schema });
-
-betaPool.on('error', (err) => {
-    console.error('[BETA DB] Unexpected pool error:', err.message);
-});
 
 async function testBetaConnection() {
     try {

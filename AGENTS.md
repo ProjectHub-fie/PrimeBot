@@ -600,3 +600,60 @@ from `eventScheduleDb.js`) which remains for timed lock/unlock channel schedules
   page renders (hero/stats/empty state/wizard steps/manage tabs/participants),
   the `$test` command, and the no-per-second-poll / client-countdown /
   serial-queue invariants.
+
+## Neon CU-hour reduction — shared pool, batching, adaptive polling
+
+PrimeBot's compute allowance is billed by how often the Neon endpoint is woken
+and how long it stays busy, so the architecture is built so a *quiet* deployment
+lets the database suspend. The rules below are the invariants to preserve.
+
+- **One shared pool factory.** `server/createPool.js` is the only place a `pg`
+  `Pool` is constructed. It registers pools on `globalThis.__primebotPgPools`
+  keyed by the normalized connection string, so (a) a hot-reload/duplicate
+  `require` returns the existing pool instead of leaking a new one, and (b) every
+  feature that falls back to `DATABASE_URL` shares *one* pool. A single-DB
+  deployment therefore opens one pool, not twenty. `server/poolConfig.js` owns
+  the conservative defaults (`DB_POOL_MAX`, idle/connection/statement timeouts,
+  `allowExitOnIdle`). A feature pool is a stub that throws on use when its URL is
+  unset — never `new Pool({ connectionString: undefined })`.
+- **Schema DDL runs once.** `server/schemaBootstrap.js` memoizes each
+  `CREATE TABLE IF NOT EXISTS` / `ALTER TABLE ADD COLUMN IF NOT EXISTS` step for
+  the life of the process (keyed on `globalThis.__primebotSchemaOnce`). The DDL
+  used to be awaited before every read/write — a catalog write that takes a lock
+  and dirties the catalog for a no-op. A failed attempt is evicted so the next
+  caller retries.
+- **Config lives in memory.** Guild settings, automod, anti-nuke, appeal,
+  reaction roles, tickets, welcome, logging, events, leveling role rewards and
+  beta access are all cached in memory and re-read from Postgres only by an
+  `AdaptivePoller`. The message hot path (`messageCreate` → automod scan,
+  leveling, counting, auto-react) reads the cache, not the database.
+- **`AdaptivePoller` backs off.** `utils/adaptivePoller.js` grows the interval
+  geometrically while a table is quiet (default fast 2 min → idle 30 min,
+  jittered, unref'd) and snaps back to fast on a change or a `notifyActivity()`
+  call. A write path can call `notifyActivity()` so an admin's save applies
+  immediately. Never reintroduce a fixed `setInterval` that re-reads a settings
+  table.
+- **XP is batched.** `LevelingManager` accumulates XP deltas in memory and
+  flushes them in two set-based statements (`INSERT … WHERE NOT EXISTS` +
+  `UPDATE … FROM (VALUES …)`) per flush window (`LEVELING_FLUSH_INTERVAL_MS`,
+  default 30s). A level-up flushes that user immediately; graceful shutdown
+  flushes synchronously. Never write XP per message.
+- **Counting is debounced.** `CountingManager` keeps authoritative state in
+  memory and debounces a normal count's row write (`COUNTING_FLUSH_INTERVAL_MS`,
+  default 5s); resets, wins and game end save immediately. Shutdown flushes.
+- **Dashboard stats are cached.** Expensive aggregate/adoption counts are
+  memoized with a TTL (`dashboard/db.js` `_platformCounts`); the dashboard does
+  not run them on every page view.
+- **Retries are bounded.** `withRetry` (max 3, exponential backoff) and the
+  progressive Discord reconnect schedule are the only retry loops; a DB failure
+  cannot produce an unbounded retry storm.
+- **Monitoring writes nothing.** `utils/dbUsage.js` counts queries/reads/writes/
+  slow/failed/batch and cache hit-rate in memory (instrumented centrally from
+  `createPool`), logs a compact report every `DB_USAGE_LOG_MS` (default 15 min),
+  and exposes a snapshot at `GET /api/stats/db`. It never writes metrics to
+  Postgres. `utils/dbMonitor.js` remains the opt-in per-statement profiler
+  (`DB_QUERY_MONITOR=true`).
+- **`SELECT` only the columns a mapper needs.** The polled settings reloads read
+  an explicit column list, not `SELECT *`, so a large JSON config column is not
+  pulled when the feature does not use it.
+
