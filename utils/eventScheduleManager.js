@@ -1,7 +1,7 @@
 const { EmbedBuilder, ChannelType, PermissionFlagsBits } = require('discord.js');
 const config = require('../config');
 const { eventPool } = require('../server/eventDb');
-const { AdaptivePoller } = require('./adaptivePoller');
+const { getCacheScheduler } = require('./cacheScheduler');
 
 /** Deep comparison of two schedule snapshots (used for poller backoff). */
 function sameEventSnapshot(prevById, nextById, prevByGuild, nextByGuild) {
@@ -117,11 +117,7 @@ class EventManager {
         if (this._reloadTimer) return;
         // One adaptive poller replaces the fixed 60s timer and backs off while
         // the schedule table is quiet, so an idle deployment stops waking Neon.
-        this._reloadTimer = new AdaptivePoller({
-            name: 'EVENTS',
-            task: () => this._loadAll(),
-        });
-        this._reloadTimer.start();
+        this._reloadTimer = getCacheScheduler().register('EVENTS', () => this._loadAll());
     }
 
     _startExecLoop() {

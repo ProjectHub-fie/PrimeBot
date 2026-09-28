@@ -1,5 +1,5 @@
 const { logPool } = require('../server/logDb');
-const { AdaptivePoller } = require('./adaptivePoller');
+const { getCacheScheduler } = require('./cacheScheduler');
 const { DEFAULT_ENABLED_EVENTS, normalizeEvents } = require('./logEvents');
 
 const CREATE_TABLE_SQL = `
@@ -60,11 +60,7 @@ class LoggingSettingsManager {
      *  the table is quiet so a dormant deployment stops waking Neon. */
     _startReloadInterval() {
         if (this._reloadTimer) return;
-        this._reloadTimer = new AdaptivePoller({
-            name: 'LOGGING SETTINGS',
-            task: () => this._refreshFromDatabase(),
-        });
-        this._reloadTimer.start();
+        this._reloadTimer = getCacheScheduler().register('LOGGING SETTINGS', () => this._refreshFromDatabase());
     }
 
     async _refreshFromDatabase() {

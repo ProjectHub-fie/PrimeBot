@@ -18,6 +18,7 @@
 
 const { EmbedBuilder } = require('discord.js');
 const { AdaptivePoller } = require('./adaptivePoller');
+const { getCacheScheduler } = require('./cacheScheduler');
 const repo = require('../server/eventMgmtRepo');
 const {
     buildAnnouncementPayload, buildEventComponents, buildParticipantsEmbed,
@@ -80,8 +81,7 @@ class EventMgmtManager {
 
     _startReload() {
         if (this._reloadTimer) return;
-        this._reloadTimer = new AdaptivePoller({ name: 'EVENTS', task: () => this._reloadAll() });
-        this._reloadTimer.start();
+        this._reloadTimer = getCacheScheduler().register('EVENTS', () => this._reloadAll());
     }
 
     _startScheduler() {
@@ -90,7 +90,9 @@ class EventMgmtManager {
             name: 'EVENT SCHEDULER',
             task: () => this._tick(),
             initialMs: SCHED_INTERVAL_MS,
-            maxMs: Math.max(SCHED_INTERVAL_MS, 5 * 60 * 1000),
+            // Idle floor must clear Neon's ~5-minute suspend window, so an idle
+            // deployment (no live/relevant events) stops waking the endpoint.
+            maxMs: Math.max(SCHED_INTERVAL_MS, 10 * 60 * 1000),
         });
         this._schedTimer.start();
     }
@@ -193,6 +195,16 @@ class EventMgmtManager {
      * "Remind Me" subscribers on the final (closest) reminder, queued.
      */
     async _sendDueReminders() {
+        // Skip the due-reminders query entirely when no event can have a
+        // pending reminder. Reminders belong to events, so with every cached
+        // event terminal (or no events at all) the query can only ever return
+        // zero rows — previously it still ran a `SELECT ... WHERE send_at <= now`
+        // on the reminder table every scheduler tick, waking Neon for nothing.
+        const hasLiveEvent = Array.from(this._byId.values()).some(
+            (ev) => ev.status !== 'completed' && ev.status !== 'cancelled' && ev.status !== 'draft'
+        );
+        if (!hasLiveEvent) return false;
+
         const due = await repo.getDueReminders(new Date(), 50);
         if (due.length === 0) return false;
         let sent = false;

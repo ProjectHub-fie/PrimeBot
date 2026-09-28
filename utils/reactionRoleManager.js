@@ -1,5 +1,5 @@
 const { reactionPool } = require('../server/reactionDb');
-const { AdaptivePoller } = require('./adaptivePoller');
+const { getCacheScheduler } = require('./cacheScheduler');
 const { EmbedBuilder } = require('discord.js');
 
 /**
@@ -94,11 +94,7 @@ class ReactionRoleManager {
         if (this._reloadTimer) return;
         // One adaptive poller replaces the fixed 60s reload + 15s refresh pair
         // (both re-read every menu + mapping). Backs off while the table is quiet.
-        this._reloadTimer = new AdaptivePoller({
-            name: 'REACTION ROLES',
-            task: () => this._refreshFromDatabase(),
-        });
-        this._reloadTimer.start();
+        this._reloadTimer = getCacheScheduler().register('REACTION ROLES', () => this._refreshFromDatabase());
     }
 
     async _refreshFromDatabase() {

@@ -7,7 +7,7 @@
 
 const { EmbedBuilder } = require('discord.js');
 const { eq, and, desc, count } = require('drizzle-orm');
-const { AdaptivePoller } = require('./adaptivePoller');
+const { getCacheScheduler } = require('./cacheScheduler');
 const fs = require('fs');
 const path = require('path');
 const config = require('../config');
@@ -45,6 +45,15 @@ class LevelingManager {
         this._xpPending = new Map(); // `${guildId}:${userId}` -> accumulated delta
         this._xpFlushing = false;
         this._xpFlushTimer = null;
+
+        // Last-known authoritative totals per user, so a flush no longer needs a
+        // `_loadXpBase` SELECT for every active user every window. The first
+        // message from a user in a process still reads the row once; every
+        // subsequent window seeds from here and the flush advances it by exactly
+        // what it wrote. Bounded so a huge guild set cannot grow it forever;
+        // entries are eviction-ordered and re-seeded by a fresh read on miss.
+        this._xpBase = new Map(); // `${guildId}:${userId}` -> { xp, level, messages }
+        this._xpBaseLimit = parseInt(process.env.LEVELING_BASE_CACHE_MAX, 10) || 50000;
 
         // Purge expired cooldown entries every 5 minutes to prevent unbounded Map growth
         this.cooldownCleanupInterval = setInterval(() => {
@@ -92,9 +101,20 @@ class LevelingManager {
         if (!entry) {
             entry = { guildId, userId, base: null, xp: 0, messages: 0, lastMessage: new Date() };
             this._xpPending.set(key, entry);
-            entry._basePromise = this._loadXpBase(guildId, userId)
-                .then(base => { entry.base = base; })
-                .catch(() => { entry.base = null; });
+            // Seed the base from the last-known totals when we have them, so a
+            // user who spoke in a previous window costs no SELECT at all. Only a
+            // first-ever touch (or an evicted entry) hits `_loadXpBase`.
+            const cachedBase = this._xpBase.get(key);
+            if (cachedBase) {
+                entry.base = cachedBase;
+            } else {
+                entry._basePromise = this._loadXpBase(guildId, userId)
+                    .then(base => {
+                        entry.base = base;
+                        this._rememberBase(key, base);
+                    })
+                    .catch(() => { entry.base = null; });
+            }
         }
 
         entry.xp += xpGain;
@@ -110,6 +130,16 @@ class LevelingManager {
             messages: base.messages + entry.messages,
             lastMessage: new Date(),
         };
+    }
+
+    /** Bound the base cache so a huge guild set cannot grow it without limit. */
+    _rememberBase(key, base) {
+        if (this._xpBase.has(key)) this._xpBase.delete(key); // re-insert = most recent
+        this._xpBase.set(key, base);
+        if (this._xpBase.size > this._xpBaseLimit) {
+            // Map preserves insertion order, so the first key is the oldest.
+            this._xpBase.delete(this._xpBase.keys().next().value);
+        }
     }
 
     /** Read a user's current totals (once per flush window, not per message). */
@@ -156,11 +186,20 @@ class LevelingManager {
         for (const [key, entry] of this._xpPending.entries()) {
             if (entry._basePromise) await entry._basePromise;
             if (!entry.base) {
-                // Retry the base read on the next tick instead of dropping XP.
-                entry._basePromise = this._loadXpBase(entry.guildId, entry.userId)
-                    .then(base => { entry.base = base; })
-                    .catch(() => { entry.base = null; });
-                continue;
+                // Seeded base missing — look it up before falling back to a read.
+                const cachedBase = this._xpBase.get(key);
+                if (cachedBase) {
+                    entry.base = cachedBase;
+                } else {
+                    // Retry the base read on the next tick instead of dropping XP.
+                    entry._basePromise = this._loadXpBase(entry.guildId, entry.userId)
+                        .then(base => {
+                            entry.base = base;
+                            this._rememberBase(key, base);
+                        })
+                        .catch(() => { entry.base = null; });
+                    continue;
+                }
             }
             written.push({ key, entry, xp: entry.xp, messages: entry.messages });
         }
@@ -171,9 +210,14 @@ class LevelingManager {
         let p = 1;
         for (const w of written) {
             valuesSql.push(`($${p++}, $${p++}, $${p++}, $${p++}, $${p++})`);
-            params.push(w.entry.guildId, w.entry.userId, w.entry.base.xp + w.xp,
+            // v.xp / v.messages are DELTAS: the UPDATE increments
+            // `u.xp = u.xp + v.xp`, so passing the absolute total here would
+            // double-count an existing row (and did, once the base was a real
+            // value rather than the test stub's zero). v.level is the resulting
+            // level, computed from the resulting message total.
+            params.push(w.entry.guildId, w.entry.userId, w.xp,
                 this.calculateLevel(w.entry.base.messages + w.messages),
-                w.entry.base.messages + w.messages);
+                w.messages);
         }
         const values = `(VALUES ${valuesSql.join(', ')}) AS v(guild_id, user_id, xp, level, messages)`;
 
@@ -213,6 +257,10 @@ class LevelingManager {
             for (const w of written) {
                 w.entry.base.xp += w.xp;
                 w.entry.base.messages += w.messages;
+                w.entry.base.level = this.calculateLevel(w.entry.base.messages);
+                // Keep the cross-window base cache in step with what we just
+                // committed, so the next window's first message needs no SELECT.
+                this._rememberBase(w.key, w.entry.base);
                 w.entry.xp -= w.xp;
                 w.entry.messages -= w.messages;
                 if (w.entry.xp <= 0 && w.entry.messages <= 0) this._xpPending.delete(w.key);
@@ -289,11 +337,7 @@ class LevelingManager {
         // ran the same full-table read of leveling_role_rewards). It refreshes
         // quickly after a dashboard edit and backs off while the table is quiet,
         // so an idle deployment stops waking Neon.
-        this._roleRewardsTimer = new AdaptivePoller({
-            name: 'LEVELING',
-            task: () => this._loadRoleRewards(),
-        });
-        this._roleRewardsTimer.start();
+        this._roleRewardsTimer = getCacheScheduler().register('LEVELING', () => this._loadRoleRewards());
     }
 
     /**
