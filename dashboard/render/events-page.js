@@ -15,6 +15,18 @@
 const { esc, channelOptions, roleOptions, svgIcon, jsonForScript } = require('./layout');
 const { guildDataScript, guildHeaderHTML, tabNavHTML } = require('./guild');
 
+// Re-use the shared "Coming Soon" overlay so Event Management matches the
+// Anti-Nuke tab exactly. Required lazily inside wrapUpcoming() to avoid a
+// circular require (guild-pages -> events-page -> guild-pages).
+function wrapUpcoming(innerHTML, guild) {
+    // Developer/owner bot roles bypass the upcoming gate (guild._bypassUpcoming,
+    // set by requireGuildAdminPage) so the feature can be exercised before it
+    // ships — the same bypass eventsPage/Anti-Nuke honor.
+    if (guild && guild._bypassUpcoming) return innerHTML;
+    const { upcomingOverlayWrap } = require('./guild-pages');
+    return upcomingOverlayWrap(innerHTML, { icon: 'calendar', title: 'Event Management' });
+}
+
 const {
     EVENT_TYPES, EVENT_STATUSES, REGISTRATION_MODES, LOCATION_TYPES,
     REMINDER_PRESETS, EVENT_PERMISSIONS, EVENT_TEMPLATES,
@@ -201,11 +213,13 @@ function eventsPage({ guild, user }) {
       </section>
     </div>`;
 
-    // Event Management ships released (not an "upcoming" feature).
+    // Event Management is an upcoming feature: ordinary users see the Coming
+    // Soon overlay; developer/owner roles bypass it (guild._bypassUpcoming).
+    const panelHTML = wrapUpcoming(innerPanelHTML, guild);
     const body = `
     ${guildHeaderHTML(guild)}
     ${tabNavHTML(guild.id, 'events')}
-    ${innerPanelHTML}
+    ${panelHTML}
     ${guildDataScript({ guildId: guild.id, channels: guild._channels, roles: guild._roles, extra: { eventPolicy: policy } })}
     <script>
       window.__EVENT_TYPES=${jsonForScript(EVENT_TYPES)};
@@ -430,7 +444,7 @@ function eventWizardPage({ guild, user, template = 'custom' }) {
     const body = `
     ${guildHeaderHTML(guild)}
     ${tabNavHTML(guild.id, 'events')}
-    ${innerPanelHTML}
+    ${wrapUpcoming(innerPanelHTML, guild)}
     ${guildDataScript({ guildId: guild.id, channels: guild._channels, roles: guild._roles, extra: {} })}
     <script>
       window.__EVENT_TYPES=${jsonForScript(EVENT_TYPES)};
@@ -639,7 +653,7 @@ function eventManagePage({ guild, user, event, participants = [], activity = [],
     const body = `
     ${guildHeaderHTML(guild)}
     ${tabNavHTML(guild.id, 'events')}
-    ${innerPanelHTML}
+    ${wrapUpcoming(innerPanelHTML, guild)}
     ${guildDataScript({ guildId: guild.id, channels: guild._channels, roles: guild._roles, extra: {
         event,
         eventParticipants: participants,

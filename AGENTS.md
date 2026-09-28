@@ -439,6 +439,36 @@ A **🎂 Birthdays** tab (sidebar key `birthdays`, icon `cake`) at `/guild/:guil
 - **Env vars:** `BIRTHDAY_DATABASE_URL` (optional, falls back to `FALLBACK_DATABASE_URL`/`DATABASE_URL`), `BIRTHDAY_RELOAD_INTERVAL_MS` (optional, default 5000). Set in Vercel → Environment Variables.
 - **Tests:** `tests/birthdaysDashboard.test.js` (page render + SVG icons + pre-population; manager `setEmbedImage` write-through, custom-image embed override, object-style `setBirthday`, reload-loop startup — pg pool stubbed, same pattern as `serverSettingsInit.test.js`); `birthdaysPage` is in the `redesignSmoke.test.js` guild-page loop.
 
+## Dashboard server-count correctness (guild_count ≠ member_count) — wrong "Servers" number
+
+The dashboard's **Servers** number (login screen + Stats page) can read lower than
+Discord does (e.g. 49 instead of 51). Two independent causes; both are fixed.
+
+- **A stale legacy `DISCORD_TOKEN` shadowed the primary token.** `dashboard/discord.js`
+  `botHeaders()` sends `Authorization: Bot ${process.env.DISCORD_TOKEN}`. The boot
+  block in `dashboard/server.js` resolves the token via `utils/tokenResolver`
+  (`DISCORD_TOKEN2` first) into `DASHBOARD_BOT_TOKEN`, but it used to only copy that
+  back onto `DISCORD_TOKEN` **when `DISCORD_TOKEN` was unset**. So if a stale legacy
+  `DISCORD_TOKEN` was still in the environment it won, every REST count call 401'd
+  (and `getBotGuildCount`/`getBotMemberCount` swallow the 401 → `null`), and the
+  count silently fell through to the lazy `server_settings` row count. The boot
+  block now **forces `DISCORD_TOKEN = DASHBOARD_BOT_TOKEN`** whenever the latter is
+  set, so the resolver's primary token always wins.
+- **`guild_count` was gated behind `member_count`.** `dashboard/db.js`
+  `_liveBotCounts()` used to `WHERE member_count IS NOT NULL`, so a heartbeat row
+  that carried a guild count but a NULL member count (pre-upgrade row, or the member
+  half of the stats provider failing) was discarded entirely — dropping the server
+  count to the DB row count. It now accepts a row where **either** count is present
+  and returns each independently (`memberCount` may be `null`).
+- **`serversSource`** is now returned by `getPlatformStats` (`'rest'` = Discord REST
+  guild count, `'bot'` = live heartbeat `guild_count`, `'db'` = lazy `server_settings`
+  row count). The login card (`dashboard/public/js/login.js` `#stat-servers-label`)
+  and the Stats page (`dashboard/public/js/stats.js`) relabel to **"Servers
+  configured"** when it is `'db'`, so a fallback is never presented as the real total.
+- **Tests:** `tests/memberCountFallback.test.js` (guild-count-without-member-count,
+  `serversSource` labeling), `tests/loginMemberCountAndProfileMenu.test.js`
+  (stale-token-shadow regression).
+
 ## Member-count fallback + ticket editor modal + audit-log pagination
 
 - **Stats "Total members" fallback chain.** `dashboard/db.js` `getPlatformStats(serverCountOverride, memberCountOverride)` resolves `totalUsers` in order: (1) live bot heartbeat `member_count` (`guild.memberCount` from index.js's `setStatsProvider`), (2) REST-summed `guild.approximate_member_count` across the bot's guilds — `dashboard/discord.js` `getBotMemberCount()` (paginates `/users/@me/guilds?with_counts=true` with the bot token, 60s cached — the REST equivalent of `guild.memberCount`; fixes the "showed 320 instead of 4318" leveling-fallback bug), (3) leveling distinct-user fallback. `totalUsersSource` is `bot|rest|leveling`; the Stats page labels bot/rest as "Total members (live)". Tests: `tests/memberCountFallback.test.js` (global fetch mocked).
@@ -516,13 +546,34 @@ The page uses the floating `saveBar` (see "Dashboard save pattern"): every field
 
 **Gotcha when adding an out-of-band save:** any control the page persists on its own (rather than through the floating bar) must call `window.saveBar.syncControl(el)` on success. Without it the bar shows a permanent, unsaveable "unsaved changes" state for that field. Do NOT call `syncControl` on failure — the control must stay dirty so the user can retry. `saveBar.syncControl` only re-baselines the one element (a full `resnapshot()` would swallow unrelated pending edits).
 
-## Event Management feature (📅 Event Management tab) — released
+## Event Management feature (📅 Event Management tab) — SOON (developer-exercisable)
 
 The premium event platform: create → schedule → publish → register → remind →
 attend → complete, entirely dashboard-configured, with the bot doing the Discord
-work. **Event Management is RELEASED** — the `upcoming: true` flag was removed
-from the `events` tab in `render/guild.js` TABS and the write endpoints no longer
-use `requireUpcoming`. It is a NEW subsystem, separate from the older legacy
+work. **Event Management is now gated as an "upcoming" feature** — the `events`
+tab in `render/guild.js` TABS carries `upcoming: true` again, so ordinary users
+get the blurred "Coming Soon……" overlay on the hub (`/guild/:id/events`), the
+wizard (`/guild/:id/events/new`) and the manage page (`/guild/:id/events/:id`),
+and the write endpoints are `403 { reason: 'upcoming' }`. Developer/owner bot
+roles (`guild._bypassUpcoming`, set by `requireGuildAdminPage`) bypass the gate
+and get the full editor, so the feature stays usable for devs while it is
+"coming soon" for everyone else.
+- **Page render:** `dashboard/render/events-page.js` `wrapUpcoming(innerHTML, guild)`
+  returns the raw markup when `guild._bypassUpcoming`, else delegates to
+  `guild-pages.js` `upcomingOverlayWrap(...)` (required lazily inside the function
+  to avoid the `guild-pages → events-page → guild-pages` require cycle). All
+  three page functions wrap their panel with it. The client scripts
+  (`events-hub.js` / `events-wizard.js` / `events-manage.js`) early-return when
+  `.upcoming-locked-wrap.locked` is present so nothing runs behind the overlay.
+- **API guard:** the `eventPerm()` helper in `dashboard/server.js` now composes
+  `requireAuth, requireGuildAdmin, requireUpcoming, eventAuth.requireEventPermission(p)`,
+  so every write (create/patch/delete/publish/announce/cancel/complete/duplicate/
+  participants) is gated; reads stay open so the page renders behind the overlay.
+- **Tests:** `tests/upcomingBypass.test.js` + `tests/eventManagement.test.js` assert
+  the overlay for ordinary users and the real editor for bypass users; the shared
+  render smoke test still passes because `upcomingOverlayWrap` output contains SVG.
+
+It is a NEW subsystem, separate from the older legacy
 **event schedules** (`event_schedules`/`event_tasks`, `EVENT_DATABASE_URL`,
 `utils/eventScheduleManager.js`, `server/eventDb.js` — that pool file was renamed
 from `eventScheduleDb.js`) which remains for timed lock/unlock channel schedules.

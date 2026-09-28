@@ -11,6 +11,9 @@
   const GUILD_ID = window.guildData && window.guildData.guildId;
   if (!GUILD_ID) return;
 
+  // Upcoming gate: do nothing behind the "Coming Soon" overlay (see events-hub.js).
+  if (document.querySelector('.upcoming-locked-wrap.locked, .beta-locked-wrap.locked')) return;
+
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
   const form = $('#ev-wizard-form');
