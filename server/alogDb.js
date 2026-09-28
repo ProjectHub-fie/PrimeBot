@@ -1,5 +1,5 @@
-const { Pool } = require('pg');
 const { resolveDbUrl } = require('./resolveDbUrl');
+const { once } = require('./schemaBootstrap');
 
 /**
  * Dedicated PostgreSQL pool for the dashboard per-server audit log
@@ -21,41 +21,16 @@ function resolveConnectionString() {
     return resolveDbUrl('ALOG_DATABASE_URL');
 }
 
+const { createPool } = require('./createPool');
+
 const cs = resolveConnectionString();
 
 if (!cs) {
     console.warn('⚠️ ALOG_DATABASE_URL (or FALLBACK_DATABASE_URL/DATABASE_URL) not set — dashboard audit log will have no database.');
 }
 
-function shouldEnableSsl(connectionStr) {
-    return /sslmode\s*=\s*(require|prefer|verify-ca|verify-full|allow)/i.test(connectionStr || '')
-        || process.env.DB_SSL === 'require';
-}
+const alogPool = createPool(cs, { label: 'ALOG DB' });
 
-function configFromUrl(connectionStr) {
-    const url = new URL(connectionStr);
-    url.searchParams.delete('sslmode');
-    return {
-        connectionString: url.toString(),
-        ssl: shouldEnableSsl(connectionStr) ? { rejectUnauthorized: false } : false,
-    };
-}
-
-const alogPool = new Pool(
-    cs
-        ? {
-              ...configFromUrl(cs),
-              max: 5,
-              idleTimeoutMillis: 30000,
-              connectionTimeoutMillis: 10000,
-              allowExitOnIdle: true,
-          }
-        : { max: 0 } // no-op pool; queries will throw and be handled gracefully
-);
-
-alogPool.on('error', (err) => {
-    console.error('[ALOG DB] Unexpected pool error:', err.message);
-});
 
 const CREATE_TABLES_SQL = `
     CREATE TABLE IF NOT EXISTS website_logs (
@@ -70,13 +45,16 @@ const CREATE_TABLES_SQL = `
 `;
 
 async function ensureAlogTables() {
-    try {
+    return once('alogTables', async () => {
         const client = await alogPool.connect();
-        await client.query(CREATE_TABLES_SQL);
-        client.release();
-    } catch (err) {
+        try {
+            await client.query(CREATE_TABLES_SQL);
+        } finally {
+            client.release();
+        }
+    }).catch((err) => {
         console.error('[ALOG DB] Table init failed:', err.message);
-    }
+    });
 }
 
 async function testAlogConnection() {

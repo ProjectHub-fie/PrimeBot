@@ -1,5 +1,5 @@
-const { Pool } = require('pg');
 const { resolveDbUrl } = require('./resolveDbUrl');
+const { once } = require('./schemaBootstrap');
 
 /**
  * Dedicated PostgreSQL pool for the ticket role add/remove settings.
@@ -21,41 +21,16 @@ function resolveConnectionString() {
     return resolveDbUrl('TROLE_DATABASE_URL');
 }
 
+const { createPool } = require('./createPool');
+
 const cs = resolveConnectionString();
 
 if (!cs) {
     console.warn('⚠️ TROLE_DATABASE_URL (or FALLBACK_DATABASE_URL/DATABASE_URL) not set — ticket role settings will have no database.');
 }
 
-function shouldEnableSsl(connectionStr) {
-    return /sslmode\s*=\s*(require|prefer|verify-ca|verify-full|allow)/i.test(connectionStr || '')
-        || process.env.DB_SSL === 'require';
-}
+const trolePool = createPool(cs, { label: 'TROLE DB' });
 
-function configFromUrl(connectionStr) {
-    const url = new URL(connectionStr);
-    url.searchParams.delete('sslmode');
-    return {
-        connectionString: url.toString(),
-        ssl: shouldEnableSsl(connectionStr) ? { rejectUnauthorized: false } : false,
-    };
-}
-
-const trolePool = new Pool(
-    cs
-        ? {
-              ...configFromUrl(cs),
-              max: 5,
-              idleTimeoutMillis: 30000,
-              connectionTimeoutMillis: 10000,
-              allowExitOnIdle: true,
-          }
-        : { max: 0 } // no-op pool; queries will throw and be handled gracefully
-);
-
-trolePool.on('error', (err) => {
-    console.error('[TROLE DB] Unexpected pool error:', err.message);
-});
 
 // Per-panel role add/remove settings (on open / on close). Keyed by panel id
 // so panels can keep their own role grants/revocations. Self-created at first
@@ -81,14 +56,16 @@ const CREATE_TABLE_SQL = `
 `;
 
 async function ensureTicketRoleTable() {
-    try {
+    return once('troleTables', async () => {
         const client = await trolePool.connect();
-        await client.query(CREATE_TABLE_SQL);
-        client.release();
-    } catch (err) {
-        // Table init failure is non-fatal — callers surface that gracefully.
+        try {
+            await client.query(CREATE_TABLE_SQL);
+        } finally {
+            client.release();
+        }
+    }).catch((err) => {
         console.error('[TROLE DB] Table init failed:', err.message);
-    }
+    });
 }
 
 async function testTroleConnection() {

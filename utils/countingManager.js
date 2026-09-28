@@ -7,6 +7,16 @@ class CountingManager {
         this.client = client;
         this.counting = new Map();
 
+        // Counting channels are chatty: one message per number. Writing the row
+        // on every message meant one UPSERT per count. The authoritative state
+        // stays in memory (a wrong number is judged from `this.counting`, not the
+        // row), so a normal count is only debounced — while resets, wins and
+        // game-ending actions save immediately so nothing important is at risk.
+        this._pendingSaves = new Set();
+        this._saveTimer = null;
+        this._saveFlushMs = parseInt(process.env.COUNTING_FLUSH_INTERVAL_MS, 10);
+        if (!Number.isFinite(this._saveFlushMs)) this._saveFlushMs = 5000;
+
         this.loadCounting().catch(err =>
             console.error('[COUNTING] Failed to load counting games:', err.message)
         );
@@ -55,7 +65,8 @@ class CountingManager {
         }
     }
 
-    async saveCounting(channelId) {
+    /** Write the row for one channel right now. */
+    async _writeCounting(channelId) {
         const game = this.counting.get(channelId);
         if (!game) return;
         try {
@@ -84,6 +95,40 @@ class CountingManager {
         } catch (error) {
             console.error(`[COUNTING] Error saving game for channel ${channelId}:`, error);
         }
+    }
+
+    /**
+     * Persist a counting game.
+     *
+     * @param {string} channelId
+     * @param {{ immediate?: boolean }} [opts] — `immediate` writes now (resets,
+     *   wins, game end); otherwise the write is debounced and coalesced.
+     */
+    async saveCounting(channelId, opts = {}) {
+        if (opts.immediate) {
+            this._pendingSaves.delete(channelId);
+            await this._writeCounting(channelId);
+            return;
+        }
+        this._pendingSaves.add(channelId);
+        if (!this._saveTimer && this._saveFlushMs > 0) {
+            this._saveTimer = setTimeout(() => { this.flushSaves(); }, this._saveFlushMs);
+            this._saveTimer.unref?.();
+        }
+    }
+
+    /** Flush every channel with a debounced write pending. */
+    async flushSaves() {
+        if (this._saveTimer) {
+            clearTimeout(this._saveTimer);
+            this._saveTimer = null;
+        }
+        const pending = [...this._pendingSaves];
+        this._pendingSaves.clear();
+        for (const channelId of pending) {
+            await this._writeCounting(channelId);
+        }
+        if (pending.length) require('./dbUsage').recordBatch(pending.length);
     }
 
     async processCountingMessage(message) {
@@ -116,7 +161,7 @@ class CountingManager {
             game.currentNumber = game.startNumber - 1;
             game.lastUserId = null;
             this.counting.set(channelId, game);
-            await this.saveCounting(channelId);
+            await this.saveCounting(channelId, { immediate: true });
             return true; // message was handled — stop further processing (XP, auto-react)
         }
 
@@ -132,7 +177,7 @@ class CountingManager {
             game.currentNumber = game.startNumber - 1;
             game.lastUserId = null;
             this.counting.set(channelId, game);
-            await this.saveCounting(channelId);
+            await this.saveCounting(channelId, { immediate: true });
             return true; // message was handled
         }
 
@@ -185,7 +230,7 @@ class CountingManager {
         game.lastUserId = null;
         game.participants = {};
         this.counting.set(channelId, game);
-        await this.saveCounting(channelId);
+        await this.saveCounting(channelId, { immediate: true });
     }
 
     /**
@@ -213,7 +258,7 @@ class CountingManager {
             participants: {},
         };
         this.counting.set(channelId, game);
-        await this.saveCounting(channelId);
+        await this.saveCounting(channelId, { immediate: true });
         return game;
     }
 

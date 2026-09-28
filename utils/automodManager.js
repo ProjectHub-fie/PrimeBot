@@ -244,7 +244,7 @@ class AutomodManager {
     _startReloadInterval() {
         if (this._reloadTimer) return;
         // One adaptive poller replaces the fixed 60s reload + 15s refresh pair
-        // (both ran a full `SELECT * FROM automod_settings`). It backs off while
+        // (both ran a full table read of automod_settings). It backs off while
         // the table is quiet so a dormant deployment stops waking Neon.
         this._reloadTimer = new AdaptivePoller({
             name: 'AUTOMOD',
@@ -334,7 +334,7 @@ class AutomodManager {
 
     async _refreshFromDatabase() {
         await this._ensureTable();
-        const res = await pool.query('SELECT * FROM automod_settings');
+        const res = await pool.query('SELECT guild_id, enabled, log_channel_id, mute_role_id, exempt_role_ids, exempt_channel_ids, exempt_user_ids, rules, warn_threshold, warn_action, warn_actions, warn_ladder, dm_enabled, dm_messages, dm_user, use_appeal, appeal_channel_id, dry_run, raid_lockdown, raid_alert_channel_id, incident_retention_days FROM automod_settings');
         let changed = false;
         for (const row of res.rows) {
             const next = this._rowToSettings(row);
@@ -352,7 +352,7 @@ class AutomodManager {
 
     async _loadAll() {
         try {
-            const res = await pool.query('SELECT * FROM automod_settings');
+            const res = await pool.query('SELECT guild_id, enabled, log_channel_id, mute_role_id, exempt_role_ids, exempt_channel_ids, exempt_user_ids, rules, warn_threshold, warn_action, warn_actions, warn_ladder, dm_enabled, dm_messages, dm_user, use_appeal, appeal_channel_id, dry_run, raid_lockdown, raid_alert_channel_id, incident_retention_days FROM automod_settings');
             for (const row of res.rows) {
                 this._cache.set(row.guild_id, this._rowToSettings(row));
             }

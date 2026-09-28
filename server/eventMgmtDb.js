@@ -17,41 +17,22 @@
  * works even if migrations were never applied.
  */
 
-const { Pool } = require('pg');
 const { resolveDbUrl } = require('./resolveDbUrl');
 
 function resolveConnectionString() {
     return resolveDbUrl('EVENTMGMT_DATABASE_URL');
 }
 
-function shouldEnableSsl(connectionStr) {
-    return /sslmode\s*=\s*(require|prefer|verify-ca|verify-full|allow)/i.test(connectionStr || '')
-        || process.env.DB_SSL === 'require';
-}
-
-function configFromUrl(connectionStr) {
-    const url = new URL(connectionStr);
-    url.searchParams.delete('sslmode');
-    return {
-        connectionString: url.toString(),
-        ssl: shouldEnableSsl(connectionStr) ? { rejectUnauthorized: false } : false,
-    };
-}
+const { createPool } = require('./createPool');
 
 const cs = resolveConnectionString();
+
 if (!cs) {
-    console.warn('⚠️ EVENTMGMT_DATABASE_URL (or FALLBACK_DATABASE_URL/DATABASE_URL) not set — Event Management will have no database.');
+    console.warn('⚠️ EVENTMGMT_DATABASE_URL (or FALLBACK_DATABASE_URL/DATABASE_URL) not set — event management will have no database.');
 }
 
-const eventMgmtPool = new Pool(
-    cs
-        ? { ...configFromUrl(cs), max: 5, idleTimeoutMillis: 30000, connectionTimeoutMillis: 10000, allowExitOnIdle: true }
-        : { max: 0 }
-);
+const eventMgmtPool = createPool(cs, { label: 'EVENT MGMT DB' });
 
-eventMgmtPool.on('error', (err) => {
-    console.error('[EVENTMGMT DB] Unexpected pool error:', err.message);
-});
 
 const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS em_events (

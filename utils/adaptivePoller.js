@@ -24,13 +24,21 @@ function envMs(name, fallback) {
 
 // Fast interval: how soon after a change we re-check (and how long a poll cycle
 // takes on a busy table). Max interval: the idle floor cost of one manager.
+//
+// The defaults are deliberately long. ~12 managers each ran their own poller,
+// and at a 30s fast / 10m max cadence a *quiet* deployment still woke Neon
+// every 10 minutes per manager — enough, in aggregate, to stop it ever
+// suspending. 2 minutes is still snappy for "an admin just saved a setting"
+// (and a write can call `notifyActivity()` to get an immediate re-check), while
+// the 30-minute idle floor means a dormant bot touches the database a handful
+// of times an hour instead of ~72.
 function resolveConfig(overrides = {}) {
     const initialMs =
         overrides.initialMs ||
-        envMs('SETTINGS_POLL_INTERVAL_MS', envMs('SETTINGS_REFRESH_INTERVAL_MS', 30000));
+        envMs('SETTINGS_POLL_INTERVAL_MS', envMs('SETTINGS_REFRESH_INTERVAL_MS', 120000));
     const maxMs =
         overrides.maxMs ||
-        envMs('SETTINGS_POLL_MAX_INTERVAL_MS', envMs('SETTINGS_RELOAD_INTERVAL_MS', 600000));
+        envMs('SETTINGS_POLL_MAX_INTERVAL_MS', envMs('SETTINGS_RELOAD_INTERVAL_MS', 1800000));
     return {
         initialMs: Math.max(5000, initialMs),
         maxMs: Math.max(initialMs, maxMs),

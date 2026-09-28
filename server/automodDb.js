@@ -1,4 +1,3 @@
-const { Pool } = require('pg');
 const { resolveDbUrl } = require('./resolveDbUrl');
 
 /**
@@ -16,41 +15,16 @@ function resolveConnectionString() {
     return resolveDbUrl('AUTOMOD_DATABASE_URL');
 }
 
+const { createPool } = require('./createPool');
+
 const cs = resolveConnectionString();
 
 if (!cs) {
     console.warn('⚠️ AUTOMOD_DATABASE_URL (or FALLBACK_DATABASE_URL/DATABASE_URL) not set — automod will have no database.');
 }
 
-function shouldEnableSsl(connectionStr) {
-    return /sslmode\s*=\s*(require|prefer|verify-ca|verify-full|allow)/i.test(connectionStr || '')
-        || process.env.DB_SSL === 'require';
-}
+const automodPool = createPool(cs, { label: 'AUTOMOD DB' });
 
-function configFromUrl(connectionStr) {
-    const url = new URL(connectionStr);
-    url.searchParams.delete('sslmode');
-    return {
-        connectionString: url.toString(),
-        ssl: shouldEnableSsl(connectionStr) ? { rejectUnauthorized: false } : false,
-    };
-}
-
-const automodPool = new Pool(
-    cs
-        ? {
-              ...configFromUrl(cs),
-              max: 5,
-              idleTimeoutMillis: 30000,
-              connectionTimeoutMillis: 10000,
-              allowExitOnIdle: true,
-          }
-        : { max: 0 } // no-op pool; queries will throw and be handled gracefully
-);
-
-automodPool.on('error', (err) => {
-    console.error('[AUTOMOD DB] Unexpected pool error:', err.message);
-});
 
 async function testAutomodConnection() {
     try {

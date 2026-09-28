@@ -1,4 +1,3 @@
-const { Pool } = require('pg');
 const { resolveDbUrl } = require('./resolveDbUrl');
 const { drizzle } = require('drizzle-orm/node-postgres');
 const schema = require('../shared/schema.js');
@@ -25,41 +24,16 @@ function resolveConnectionString() {
     return resolveDbUrl('SEASON_DATABASE_URL');
 }
 
+const { createPool } = require('./createPool');
+
 const cs = resolveConnectionString();
 
 if (!cs) {
     console.warn('⚠️ SEASON_DATABASE_URL (or FALLBACK_DATABASE_URL/DATABASE_URL) not set — dashboard sessions / shardnode failover will have no database.');
 }
 
-function shouldEnableSsl(connectionStr) {
-    return /sslmode\s*=\s*(require|prefer|verify-ca|verify-full|allow)/i.test(connectionStr || '')
-        || process.env.DB_SSL === 'require';
-}
+const seasonPool = createPool(cs, { label: 'SEASON DB' });
 
-function configFromUrl(connectionStr) {
-    const url = new URL(connectionStr);
-    url.searchParams.delete('sslmode');
-    return {
-        connectionString: url.toString(),
-        ssl: shouldEnableSsl(connectionStr) ? { rejectUnauthorized: false } : false,
-    };
-}
-
-const seasonPool = new Pool(
-    cs
-        ? {
-              ...configFromUrl(cs),
-              max: 5,
-              idleTimeoutMillis: 30000,
-              connectionTimeoutMillis: 10000,
-              allowExitOnIdle: true,
-          }
-        : { max: 0 } // no-op pool; queries will throw and be handled gracefully
-);
-
-seasonPool.on('error', (err) => {
-    console.error('[SEASON DB] Unexpected pool error:', err.message);
-});
 
 // Drizzle instance for the season pool — used by nodeFailover.js, which runs
 // raw SQL via `db.execute(sql`...`)` against the bot_node_status +

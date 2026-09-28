@@ -264,10 +264,18 @@ class GiveawayManager {
     startCheckingGiveaways() {
         // Add a delay before starting the checking system to avoid startup spam
         setTimeout(() => {
-            this.checkInterval = setInterval(() => {
-                this.checkGiveaways();
-            }, config.giveaway.checkInterval);
-            
+            // AdaptivePoller instead of a fixed 30s interval: it backs off while
+            // nothing is due (up to 30 min) and snaps back to the fast interval
+            // the moment one is found. notifyActivity() (called when a giveaway
+            // starts) forces an immediate re-check of a freshly created one.
+            const { AdaptivePoller } = require('./adaptivePoller');
+            this._checkPoller = new AdaptivePoller({
+                name: 'GIVEAWAY',
+                task: () => this.checkGiveaways(),
+                initialMs: config.giveaway.checkInterval,
+            });
+            this._checkPoller.start();
+
             console.log('[GIVEAWAY] Checking system started.');
         }, 10000); // Wait 10 seconds after startup before starting checks
     }
@@ -415,7 +423,11 @@ class GiveawayManager {
             
             this.giveaways.set(giveawayMessage.id, giveaway);
             console.log(`[GIVEAWAY] Started giveaway in channel ${channelId} with ID ${giveawayMessage.id}`);
-            
+
+            // A new giveaway is due at `endTime`; nudge the poller so the fast
+            // interval resumes and it is ended promptly.
+            this._checkPoller?.notifyActivity();
+
             return giveaway;
         } catch (error) {
             console.error('Error starting giveaway:', error);

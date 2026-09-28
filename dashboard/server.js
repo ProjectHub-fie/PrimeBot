@@ -16,7 +16,6 @@
  */
 
 const path = require('path');
-const { Pool } = require('pg');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
 const express = require('express');
@@ -118,10 +117,9 @@ function buildSessionStore() {
     if (!pool) {
         const fallbackUrl = process.env.FALLBACK_DATABASE_URL || process.env.DATABASE_URL;
         if (fallbackUrl) {
-            pool = new Pool({
-                connectionString: fallbackUrl,
-                ssl: /sslmode=require/.test(fallbackUrl) ? { rejectUnauthorized: false } : (process.env.DB_SSL === 'require' ? { rejectUnauthorized: false } : undefined),
-            });
+            // Shared factory: same conservative timeouts as every other pool and
+            // registered so a module reload can't leak a second session pool.
+            pool = require('../server/createPool').createPool(fallbackUrl, { label: 'SESSION DB' });
         }
     }
     if (pool) {
@@ -420,6 +418,20 @@ app.get('/api/stats/nodes', requireAuth, async (req, res) => {
     } catch (err) {
         console.error('[API] /api/stats/nodes error:', err.message);
         res.status(500).json({ error: 'Failed to load node stats.' });
+    }
+});
+
+// In-memory database usage counters for this dashboard process. Read-only and
+// computed entirely from counters already in memory, so it never touches
+// Postgres. The dashboard is a separate process from the bot, so this reports
+// the dashboard's own workload; the bot logs the same report on its own
+// interval (utils/dbUsage.js).
+app.get('/api/stats/db', requireAuth, (req, res) => {
+    try {
+        res.json(require('../utils/dbUsage').snapshot());
+    } catch (err) {
+        console.error('[API] /api/stats/db error:', err.message);
+        res.status(500).json({ error: 'Failed to load DB usage.' });
     }
 });
 

@@ -1,4 +1,3 @@
-const { Pool } = require('pg');
 const { resolveDbUrl } = require('./resolveDbUrl');
 const { drizzle } = require('drizzle-orm/node-postgres');
 const schema = require('../shared/schema.js');
@@ -31,41 +30,16 @@ function resolveConnectionString() {
     return resolveDbUrl('COMMUNITY_DATABASE_URL');
 }
 
+const { createPool } = require('./createPool');
+
 const cs = resolveConnectionString();
 
 if (!cs) {
     console.warn('⚠️ COMMUNITY_DATABASE_URL (or FALLBACK_DATABASE_URL/DATABASE_URL) not set — polls / giveaways / counting will have no database.');
 }
 
-function shouldEnableSsl(connectionStr) {
-    return /sslmode\s*=\s*(require|prefer|verify-ca|verify-full|allow)/i.test(connectionStr || '')
-        || process.env.DB_SSL === 'require';
-}
+const communityPool = createPool(cs, { label: 'COMMUNITY DB' });
 
-function configFromUrl(connectionStr) {
-    const url = new URL(connectionStr);
-    url.searchParams.delete('sslmode');
-    return {
-        connectionString: url.toString(),
-        ssl: shouldEnableSsl(connectionStr) ? { rejectUnauthorized: false } : false,
-    };
-}
-
-const communityPool = new Pool(
-    cs
-        ? {
-              ...configFromUrl(cs),
-              max: 5,
-              idleTimeoutMillis: 30000,
-              connectionTimeoutMillis: 10000,
-              allowExitOnIdle: true,
-          }
-        : { max: 0 } // no-op pool; queries will throw and be handled gracefully
-);
-
-communityPool.on('error', (err) => {
-    console.error('[COMMUNITY DB] Unexpected pool error:', err.message);
-});
 
 // Drizzle instance for the community pool — used by giveawayManager (drizzle
 // query builder against the giveaways + giveaway_participants tables).

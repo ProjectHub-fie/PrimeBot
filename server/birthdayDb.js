@@ -1,4 +1,3 @@
-const { Pool } = require('pg');
 const { resolveDbUrl } = require('./resolveDbUrl');
 
 /**
@@ -21,41 +20,16 @@ function resolveConnectionString() {
     return resolveDbUrl('BIRTHDAY_DATABASE_URL');
 }
 
+const { createPool } = require('./createPool');
+
 const cs = resolveConnectionString();
 
 if (!cs) {
     console.warn('⚠️ BIRTHDAY_DATABASE_URL (or FALLBACK_DATABASE_URL/DATABASE_URL) not set — the birthday feature will have no database.');
 }
 
-function shouldEnableSsl(connectionStr) {
-    return /sslmode\s*=\s*(require|prefer|verify-ca|verify-full|allow)/i.test(connectionStr || '')
-        || process.env.DB_SSL === 'require';
-}
+const birthdayPool = createPool(cs, { label: 'BIRTHDAY DB' });
 
-function configFromUrl(connectionStr) {
-    const url = new URL(connectionStr);
-    url.searchParams.delete('sslmode');
-    return {
-        connectionString: url.toString(),
-        ssl: shouldEnableSsl(connectionStr) ? { rejectUnauthorized: false } : false,
-    };
-}
-
-const birthdayPool = new Pool(
-    cs
-        ? {
-              ...configFromUrl(cs),
-              max: 5,
-              idleTimeoutMillis: 30000,
-              connectionTimeoutMillis: 10000,
-              allowExitOnIdle: true,
-          }
-        : { max: 0 } // no-op pool; queries will throw and be handled gracefully
-);
-
-birthdayPool.on('error', (err) => {
-    console.error('[BIRTHDAY DB] Unexpected pool error:', err.message);
-});
 
 async function testBirthdayConnection() {
     try {
