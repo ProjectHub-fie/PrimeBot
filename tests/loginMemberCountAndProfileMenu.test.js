@@ -106,14 +106,15 @@ test('dashboard/server.js wires the shared resolver into the boot block', () => 
 
 // ── 2. Login page labels the fallback honestly ──────────────────────────────
 
-test('login page labels the member card and relabels a leveling fallback', () => {
+test('login page labels the member card and dashes when no Discord count is available', () => {
     const page = require('../dashboard/render/pages');
     const html = page.loginPage({});
     assert.match(html, /id="stat-users-label">Total members</, 'default label matches the member semantics');
 
     const js = read('dashboard/public/js/login.js');
     assert.match(js, /totalUsersSource === 'bot' \|\| stats\.totalUsersSource === 'rest'/, 'treats bot+rest as member counts');
-    assert.match(js, /'Members tracked \(leveling\)'/, 'relabels the fallback so it is not passed off as the member total');
+    assert.match(js, /'Members unavailable'/, 'labels the no-Discord-count state honestly');
+    assert.ok(!js.includes('Members tracked (leveling)'), 'never presents a leveling-tracked count as the member total');
 });
 
 test('/api/stats error fallback reports a null totalUsersSource', () => {

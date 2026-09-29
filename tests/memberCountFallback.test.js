@@ -27,15 +27,16 @@ const discord = require('../dashboard/discord');
 
 // ── getPlatformStats source selection ───────────────────────────────────────
 
-test('REST member-count override wins over the leveling fallback', async () => {
+test('REST member-count override wins over any fallback', async () => {
     const stats = await dashboardDb.getPlatformStats(null, 4318);
     assert.equal(stats.totalUsers, 4318);
     assert.equal(stats.totalUsersSource, 'rest');
 });
 
-test('without an override it degrades to the leveling count', async () => {
+test('without any Discord count totalUsers is null (never the leveling count)', async () => {
     const stats = await dashboardDb.getPlatformStats(null, null);
-    assert.equal(stats.totalUsersSource, 'leveling');
+    assert.equal(stats.totalUsers, null);
+    assert.equal(stats.totalUsersSource, null);
 });
 
 test('an explicit server-count override (Discord REST) still wins', async () => {
@@ -83,8 +84,9 @@ test('a heartbeat with a guild count but no member count still reports servers',
 
     assert.equal(stats.servers, 51, 'the live server count is used even without a member count');
     assert.equal(stats.serversSource, 'bot');
-    // Members fall through the usual chain (no heartbeat member count here).
-    assert.equal(stats.totalUsersSource, 'leveling');
+    // No Discord member count on this row → totalUsers is null (never leveling).
+    assert.equal(stats.totalUsers, null);
+    assert.equal(stats.totalUsersSource, null);
 });
 
 test('serversSource labels a DB-row fallback so a configured count is never passed off as the total', async () => {

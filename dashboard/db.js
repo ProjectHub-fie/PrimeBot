@@ -1808,16 +1808,6 @@ async function _ticketCount(query, fallback = 0) {
     }
 }
 
-async function _levelingCount(query, fallback = 0) {
-    try {
-        const res = await getLevelingPool().query(query);
-        return Number(res.rows[0]?.count ?? fallback);
-    } catch (err) {
-        console.error('[DASHBOARD DB] leveling stats count failed:', err.message);
-        return fallback;
-    }
-}
-
 // Live guild/member counts reported by the ACTIVE bot node on its failover
 // heartbeat (bot_node_status.guild_count / member_count). This is the only
 // source of the ACTUAL Discord member count: the dashboard runs as a separate
@@ -1838,8 +1828,6 @@ async function _liveBotCounts() {
             FROM bot_node_status
             WHERE active = true
               AND (guild_count IS NOT NULL OR member_count IS NOT NULL)
-              AND NOW() - last_heartbeat < INTERVAL '90 seconds'
-              AND member_count IS NOT NULL
               AND NOW() - last_heartbeat < (
                   -- Honour the interval the writer published, so a node that has
                   -- slowed to its idle cadence (which lets Neon suspend) is not
@@ -1885,7 +1873,6 @@ async function _platformCounts() {
     const [
         serverCounts,
         welcomeEnabled,
-        trackedUsers,
         automodEnabled,
         ticketPanels,
     ] = await Promise.all([
@@ -1899,9 +1886,6 @@ async function _platformCounts() {
                     COUNT(*) FILTER (WHERE receive_broadcasts = true) AS broadcasts
                 FROM server_settings WHERE guild_id <> 'global'`),
         _welcomeCount(`SELECT COUNT(*) FROM welcome_settings WHERE enabled = true`),
-        // Total unique users the bot has tracked via leveling (across all guilds).
-        // Fallback for totalUsers only — see liveCounts below.
-        _levelingCount(`SELECT COUNT(DISTINCT user_id) FROM user_levels`),
         _automodCount(`SELECT COUNT(*) FROM automod_settings WHERE enabled = true`),
         _ticketCount(`SELECT COUNT(*) FROM ticket_panels WHERE enabled = true`),
     ]);
@@ -1913,7 +1897,6 @@ async function _platformCounts() {
         autoReactionsEnabled: Number(serverRows.auto_reactions) || 0,
         broadcastEnabled: Number(serverRows.broadcasts) || 0,
         welcomeEnabled: Number(welcomeEnabled) || 0,
-        trackedUsers: Number(trackedUsers) || 0,
         automodEnabled: Number(automodEnabled) || 0,
         ticketPanels: Number(ticketPanels) || 0,
     };
@@ -1923,7 +1906,7 @@ async function _platformCounts() {
 
 // memberCountOverride — the REST-summed "guild.memberCount" across bot guilds
 // (dashboard/discord.js getBotMemberCount). Used when the live bot heartbeat
-// isn't reporting, before the leveling fallback.
+// isn't reporting.
 async function getPlatformStats(serverCountOverride, memberCountOverride) {
     const counts = await _platformCounts();
     const {
@@ -1932,7 +1915,6 @@ async function getPlatformStats(serverCountOverride, memberCountOverride) {
         welcomeEnabled,
         autoReactionsEnabled,
         broadcastEnabled,
-        trackedUsers,
         automodEnabled,
         ticketPanels,
     } = counts;
@@ -1953,19 +1935,21 @@ async function getPlatformStats(serverCountOverride, memberCountOverride) {
         ? 'rest'
         : (liveCounts && liveCounts.guildCount != null ? 'bot' : 'db');
 
-    // The ACTUAL member count across all guilds. Prefer the live bot's
-    // heartbeat report (guild.memberCount); when the bot isn't reporting
-    // (offline / failover disabled / pre-upgrade rows) fall back to the
-    // REST-summed guild.memberCount, then to the leveling-tracked count.
+    // The ACTUAL member count across all guilds. It is only ever sourced from
+    // Discord — the live bot heartbeat (guild.memberCount) or the REST-summed
+    // guild.memberCount. The leveling distinct-user count is deliberately NOT
+    // used: it counts only members the bot has tracked XP for, which is not the
+    // member total, and reporting it as such is misleading. When neither Discord
+    // source is available totalUsers is 0 / null (the UI labels it accordingly).
     const liveMemberCount = liveCounts && liveCounts.memberCount != null
         ? liveCounts.memberCount
         : null;
     const totalUsers = liveMemberCount != null
         ? liveMemberCount
-        : (memberCountOverride != null ? memberCountOverride : trackedUsers);
+        : (memberCountOverride != null ? memberCountOverride : null);
     const totalUsersSource = liveMemberCount != null
         ? 'bot'
-        : (memberCountOverride != null ? 'rest' : 'leveling');
+        : (memberCountOverride != null ? 'rest' : null);
 
     // Adoption ratios (guard against divide-by-zero). These drive the donut charts.
     const pct = (n, d) => (d > 0 ? Math.round((n / d) * 100) : 0);
@@ -1985,7 +1969,7 @@ async function getPlatformStats(serverCountOverride, memberCountOverride) {
         totalUsers,
         // 'bot' = live member count from the active bot node's heartbeat;
         // 'rest' = REST-summed guild.memberCount (getBotMemberCount);
-        // 'leveling' = fallback distinct-count of leveling-tracked users.
+        // null = no Discord member count available (never the leveling count).
         totalUsersSource,
         // Where the `servers` number came from (see above). The UI uses it to
         // say "configured" when it can only show the lazy DB row count.
