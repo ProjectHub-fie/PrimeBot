@@ -4,7 +4,8 @@
 // client.guilds.cache, so the bot publishes its live guild/member counts on
 // the failover heartbeat row (bot_node_status.guild_count / member_count) and
 // the dashboard's getPlatformStats prefers those over the leveling-tracked
-// distinct user count. These tests stub the season DB (same justified-mock
+// distinct user count (which is deliberately NEVER used as the member total).
+// These tests stub the season DB (same justified-mock
 // pattern as serverSettingsInit.test.js / botRoles.test.js — no Postgres in CI)
 // and assert both ends of the bridge.
 
@@ -130,19 +131,19 @@ test('getPlatformStats uses the live member count from the active bot node', asy
 
     const stats = await db.getPlatformStats(null);
 
-    assert.equal(stats.totalUsers, 9876, 'real member count wins over the leveling fallback');
+    assert.equal(stats.totalUsers, 9876, 'Discord member count is used');
     assert.equal(stats.totalUsersSource, 'bot');
     assert.equal(stats.servers, 3, 'live guild count beats the lazy server_settings row count');
 });
 
-test('getPlatformStats falls back to the leveling user count when the bot is not reporting', async () => {
+test('getPlatformStats never falls back to the leveling user count', async () => {
     const db = stubDashboardPools({ liveRow: null });
 
     const stats = await db.getPlatformStats(null);
 
-    assert.equal(stats.totalUsers, 42);
-    assert.equal(stats.totalUsersSource, 'leveling');
-    assert.equal(stats.servers, 5, 'falls back to the server_settings row count');
+    assert.equal(stats.totalUsers, null, 'no Discord member count → null, not the leveling count');
+    assert.equal(stats.totalUsersSource, null);
+    assert.equal(stats.servers, 5, 'server count still falls back to the server_settings row count');
 });
 
 test('an explicit server-count override (Discord REST) still wins', async () => {

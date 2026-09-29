@@ -460,18 +460,28 @@ Discord does (e.g. 49 instead of 51). Two independent causes; both are fixed.
   half of the stats provider failing) was discarded entirely — dropping the server
   count to the DB row count. It now accepts a row where **either** count is present
   and returns each independently (`memberCount` may be `null`).
-- **`serversSource`** is now returned by `getPlatformStats` (`'rest'` = Discord REST
+- **Member counts are never tracked by leveling.** `getPlatformStats` sources
+  `totalUsers` ONLY from Discord — the live heartbeat `member_count` (`'bot'`) or
+  the REST-summed `guild.memberCount` (`'rest'`). The old leveling
+  `COUNT(DISTINCT user_id)` fallback (and the `_levelingCount` helper + the
+  `trackedUsers` field) has been **removed**: it counted only members the bot had
+  XP for, so presenting it as the member total was misleading. When neither
+  Discord source is available `totalUsers` is `null` / `totalUsersSource` is
+  `null`, and the login card (`dashboard/public/js/login.js`) and Stats page
+  (`dashboard/public/js/stats.js`) render a dash labelled **"Members unavailable"**.
+- **`serversSource`** is returned by `getPlatformStats` (`'rest'` = Discord REST
   guild count, `'bot'` = live heartbeat `guild_count`, `'db'` = lazy `server_settings`
   row count). The login card (`dashboard/public/js/login.js` `#stat-servers-label`)
   and the Stats page (`dashboard/public/js/stats.js`) relabel to **"Servers
   configured"** when it is `'db'`, so a fallback is never presented as the real total.
 - **Tests:** `tests/memberCountFallback.test.js` (guild-count-without-member-count,
-  `serversSource` labeling), `tests/loginMemberCountAndProfileMenu.test.js`
-  (stale-token-shadow regression).
+  no-leveling-fallback, `serversSource` labeling), `tests/liveMemberCount.test.js`
+  (never falls back to leveling), `tests/loginMemberCountAndProfileMenu.test.js`
+  (stale-token-shadow regression, no leveling label).
 
 ## Member-count fallback + ticket editor modal + audit-log pagination
 
-- **Stats "Total members" fallback chain.** `dashboard/db.js` `getPlatformStats(serverCountOverride, memberCountOverride)` resolves `totalUsers` in order: (1) live bot heartbeat `member_count` (`guild.memberCount` from index.js's `setStatsProvider`), (2) REST-summed `guild.approximate_member_count` across the bot's guilds — `dashboard/discord.js` `getBotMemberCount()` (paginates `/users/@me/guilds?with_counts=true` with the bot token, 60s cached — the REST equivalent of `guild.memberCount`; fixes the "showed 320 instead of 4318" leveling-fallback bug), (3) leveling distinct-user fallback. `totalUsersSource` is `bot|rest|leveling`; the Stats page labels bot/rest as "Total members (live)". Tests: `tests/memberCountFallback.test.js` (global fetch mocked).
+- **Stats "Total members" chain (no leveling).** `dashboard/db.js` `getPlatformStats(serverCountOverride, memberCountOverride)` resolves `totalUsers` ONLY from Discord: (1) live bot heartbeat `member_count` (`guild.memberCount` from index.js's `setStatsProvider`), (2) REST-summed `guild.memberCount` across the bot's guilds — `dashboard/discord.js` `getBotMemberCount()` (paginates `/users/@me/guilds?with_counts=true` with the bot token, 60s cached). The leveling distinct-user fallback has been **removed** (it was never the member total). `totalUsersSource` is `bot|rest|null`; the Stats/login pages show a dash + "Members unavailable" when null.
 - **Ticket panel editor is modal-only.** `ticketsPage` no longer renders the editor form inline — the page shows the panel list + a **Create a panel** button; the full form lives in a hidden `#tk-modal` overlay. `tickets.js` opens it in create mode (POST) via the button, or edit mode (PATCH) via each card's **Edit** button (fetches the list and finds the id). The PATCH endpoint reuses `dashboard/db.js` `updateTicketPanel`. `requireUpcoming` guards PATCH like the other ticket writes. Tests: `tests/ticketsEditor.test.js` (page render + db helper), `tests/ticketsEditorClient.test.js` (vm-sandbox modal flow).
 - **Audit log paginates 10/page client-side.** `general.js` fetches `limit=500` and renders a windowed numbered bar (first/last + current±2 + ellipses) plus ‹ Prev/Next ›; serial numbers are global across pages. Tests: `tests/auditLogPagination.test.js` (vm fake-DOM).
 
