@@ -42,7 +42,16 @@ async function loadLoginStats() {
   const serversLabelEl = document.getElementById('stat-servers-label');
   const versionEl = document.getElementById('stat-version');
   if (serversEl) animateCount(serversEl, stats.servers || 0);
-  if (usersEl) animateCount(usersEl, stats.totalUsers || 0);
+  // The member count is only ever a real Discord total (live heartbeat 'bot' or
+  // REST-summed 'rest'). We do NOT track members via leveling XP, so when
+  // neither Discord source is available there is no number to show — render a
+  // dash rather than a misleading 0 / leveling count.
+  const hasMemberCount = stats.totalUsers != null
+    && (stats.totalUsersSource === 'bot' || stats.totalUsersSource === 'rest');
+  if (usersEl) {
+    if (hasMemberCount) animateCount(usersEl, stats.totalUsers || 0);
+    else usersEl.textContent = '—';
+  }
   // The server number is the authoritative Discord guild count when sourced
   // from REST ('rest') or the live bot heartbeat ('bot'). When it is neither
   // ('db') it is only the lazy server_settings row count, which undercounts
@@ -51,13 +60,8 @@ async function loadLoginStats() {
   if (serversLabelEl) {
     serversLabelEl.textContent = stats.serversSource === 'db' ? 'Servers configured' : 'Servers';
   }
-  // 'bot' (heartbeat member_count) and 'rest' (summed approximate_member_count)
-  // are real member totals; 'leveling' is the distinct-user count of members the
-  // bot has tracked XP for, which is strictly smaller. Label them honestly so a
-  // fallback number is never presented as the true member count.
   if (usersLabelEl) {
-    const isMemberCount = stats.totalUsersSource === 'bot' || stats.totalUsersSource === 'rest';
-    usersLabelEl.textContent = isMemberCount ? 'Total members' : 'Members tracked (leveling)';
+    usersLabelEl.textContent = hasMemberCount ? 'Total members' : 'Members unavailable';
   }
   if (versionEl) versionEl.textContent = stats.botVersion ? `v${esc(stats.botVersion)}` : '—';
 

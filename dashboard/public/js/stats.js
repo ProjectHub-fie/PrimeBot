@@ -31,18 +31,21 @@ function renderBotStats(data) {
   if (!wrap) return;
   const servers = data.servers ?? 0;
   const totalUsers = data.totalUsers ?? 0;
-  // 'bot' = real member count reported by the bot; 'rest' = REST-summed
-  // guild.memberCount; 'leveling' = last-resort distinct-user fallback.
-  const liveUsers = data.totalUsersSource === 'bot' || data.totalUsersSource === 'rest';
-  const usersLabel = liveUsers ? 'Total members (live)' : 'Total users';
+  // The member count is only ever a real Discord total: 'bot' = live heartbeat
+  // member_count, 'rest' = REST-summed guild.memberCount. Members are NOT
+  // tracked via leveling, so when neither is available we show a dash.
+  const hasMemberCount = data.totalUsers != null
+    && (data.totalUsersSource === 'bot' || data.totalUsersSource === 'rest');
+  const usersLabel = hasMemberCount ? 'Total members (live)' : 'Members unavailable';
   const botName = data.bot?.username || data.botName || 'PrimeBot';
   const features = data.features || {};
   const serversLabel = data.serversSource === 'db' ? 'Servers configured' : 'Servers';
   const usersIcon = window.svgIcon ? window.svgIcon('users') : '👥';
+  const usersValue = hasMemberCount ? Number(totalUsers).toLocaleString() : '—';
   const cards = [
     statCardHTML('🤖', botName, 'Bot', false),
     statCardHTML('📣', Number(servers).toLocaleString(), serversLabel, true),
-    statCardHTML(usersIcon, Number(totalUsers).toLocaleString(), usersLabel, false),
+    statCardHTML(usersIcon, usersValue, usersLabel, false),
     statCardHTML('🏷️', esc(data.version || ''), 'Version', false),
   ].join('');
 
