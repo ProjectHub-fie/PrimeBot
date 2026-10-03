@@ -10,10 +10,14 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const nodeFailover = require('../utils/nodeFailover');
 const activityGate = require('../utils/activityGate');
 const { HEARTBEAT_INTERVAL_MS, IDLE_HEARTBEAT_INTERVAL_MS, isHeartbeatFresh, currentHeartbeatIntervalMs } = nodeFailover;
+
+const SOURCE = fs.readFileSync(path.join(__dirname, '..', 'utils', 'nodeFailover.js'), 'utf8');
 
 test('the idle cadence is longer than Neon\'s suspend window', () => {
     // If the idle heartbeat were under ~5 minutes it would wake the endpoint
@@ -46,6 +50,47 @@ test('a missing/legacy interval column falls back to the fast assumption', () =>
     // them as a fast writer preserves the exact old behaviour.
     assert.equal(isHeartbeatFresh(40000, null), true);
     assert.equal(isHeartbeatFresh(70000, null), false);
+});
+
+test('a holder with a fresh heartbeat is never considered dead (sn1-startup race)', () => {
+    // A starting node has a fresh heartbeat but the lease can briefly look stale
+    // before its combined heartbeat+lease statement runs. A lower-priority peer
+    // must not take over.
+    assert.equal(nodeFailover.isHolderConsideredAlive(60000, true), true, 'fresh heartbeat keeps the holder alive');
+    assert.equal(nodeFailover.isHolderConsideredAlive(60000, false), false, 'stale lease + no heartbeat = dead');
+    assert.equal(nodeFailover.isHolderConsideredAlive(10000, false), true, 'fresh lease alone is enough');
+});
+
+test('the lower-priority takeover requires the holder to be dead', () => {
+    // Static guard: sn2/sn3 must not seize while the holder has a fresh heartbeat,
+    // and must consult the shared helper rather than only the lease age.
+    assert.ok(
+        /isHolderConsideredAlive\(ageMs, holderHeartbeatFresh\)/.test(SOURCE),
+        'takeover must use the lease-or-heartbeat liveness check'
+    );
+});
+
+test('markInactive disarms the heartbeat before writing active=false', () => {
+    // The step-down race (a zombie heartbeat resurrecting a stepped-down node)
+    // is closed by setting inactiveMarked and stopping the loop before the write.
+    const body = SOURCE.match(/async function markInactive\(role\)\s*\{[\s\S]*?\n\}/)[0];
+    const stopIdx = body.indexOf('stopHeartbeatLoop()');
+    const markIdx = body.indexOf('inactiveMarked = true');
+    const writeIdx = body.indexOf('writeHeartbeat(role, false)');
+    assert.ok(stopIdx !== -1 && markIdx !== -1 && writeIdx !== -1, 'markInactive must stop, flag, then write');
+    assert.ok(stopIdx < writeIdx, 'the loop must be stopped before marking inactive');
+    assert.ok(markIdx < writeIdx, 'the inactive flag must be set before the write');
+});
+
+test('an active heartbeat is refused after step-down', () => {
+    assert.ok(
+        /if \(active && inactiveMarked\) return;/.test(SOURCE),
+        'writeHeartbeat must refuse to resurrect a stepped-down node'
+    );
+    assert.ok(
+        /if \(inactiveMarked\) return false;/.test(SOURCE),
+        'writeHeartbeatWithLease must refuse after step-down'
+    );
 });
 
 test('currentHeartbeatIntervalMs picks fast while busy and idle once quiet', () => {

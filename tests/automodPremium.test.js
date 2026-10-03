@@ -250,3 +250,15 @@ test('action catalog keys are all real and unique', () => {
     assert.equal(new Set(ACTION_KEYS).size, ACTION_KEYS.length);
     for (const a of ACTIONS) assert.ok(a.label && a.iconName, `action ${a.key} missing label/iconName`);
 });
+
+// ── AutomodManager import hygiene ───────────────────────────────────────────
+
+test('automodManager imports AdaptivePoller (init previously threw "AdaptivePoller is not defined")', () => {
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const src = fs.readFileSync(path.join(__dirname, '..', 'utils', 'automodManager.js'), 'utf8');
+    assert.match(src, /const\s*\{\s*AdaptivePoller\s*\}\s*=\s*require\('\.\/adaptivePoller'\)/,
+        'AdaptivePoller must be imported at the top of automodManager.js');
+    // The module must also load cleanly (no ReferenceError at require time).
+    assert.doesNotThrow(() => require('../utils/automodManager'));
+});

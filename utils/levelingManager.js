@@ -209,15 +209,23 @@ class LevelingManager {
         const params = [];
         let p = 1;
         for (const w of written) {
-            valuesSql.push(`($${p++}, $${p++}, $${p++}, $${p++}, $${p++})`);
+            // The expression columns are cast to their real column types. In a
+            // `VALUES` list Postgres infers every numeric literal as `numeric`,
+            // and an untyped parameter takes the type of the expression beside
+            // it — so the `level` placeholder becomes `numeric`/`text`, not the
+            // `integer` the column wants, and the whole insert/update fails with
+            // "column \"level\" is of type integer but expression is of type
+            // text". Casting each expression (including the integer params)
+            // makes the statements type-stable regardless of driver inference.
+            valuesSql.push(`($${p++}::varchar, $${p++}::varchar, $${p++}::integer, $${p++}::integer, $${p++}::integer)`);
             // v.xp / v.messages are DELTAS: the UPDATE increments
             // `u.xp = u.xp + v.xp`, so passing the absolute total here would
             // double-count an existing row (and did, once the base was a real
             // value rather than the test stub's zero). v.level is the resulting
             // level, computed from the resulting message total.
-            params.push(w.entry.guildId, w.entry.userId, w.xp,
+            params.push(w.entry.guildId, w.entry.userId, Math.trunc(w.xp),
                 this.calculateLevel(w.entry.base.messages + w.messages),
-                w.messages);
+                Math.trunc(w.messages));
         }
         const values = `(VALUES ${valuesSql.join(', ')}) AS v(guild_id, user_id, xp, level, messages)`;
 
