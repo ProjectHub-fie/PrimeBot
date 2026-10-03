@@ -1,5 +1,6 @@
 const { automodPool: pool } = require('../server/automodDb');
 const { getCacheScheduler } = require('./cacheScheduler');
+const { AdaptivePoller } = require('./adaptivePoller');
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 const {
     normalizeRules, metaFor, normalizeAction, normalizeActions,

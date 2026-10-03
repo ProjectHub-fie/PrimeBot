@@ -74,6 +74,19 @@ function isHeartbeatFresh(ageMs, intervalMs) {
     return Number(ageMs) < base + HEARTBEAT_GRACE_MS;
 }
 
+/**
+ * Whether the current lease holder should be considered alive. A holder is
+ * alive when its lease is fresh OR it has a fresh bot_node_status heartbeat.
+ * The heartbeat arm matters because the lease's `last_seen` is not refreshed
+ * until the holder's combined heartbeat+lease statement runs; a holder that is
+ * still booting therefore has a fresh heartbeat but a briefly-stale lease, and
+ * a lower-priority peer must NOT seize the lease from it (the "sn2/sn3 interact
+ * while sn1 is online" race). Pure so it can be tested without a database.
+ */
+function isHolderConsideredAlive(leaseAgeMs, holderHeartbeatFresh) {
+    return Number(leaseAgeMs) <= FAILOVER_THRESHOLD_MS || holderHeartbeatFresh === true;
+}
+
 /** True when the bot has seen no Discord activity for a while (see activityGate). */
 function activityIsIdle() {
     try {
@@ -87,6 +100,14 @@ function activityIsIdle() {
 let heartbeatTimer = null;
 let tableReady = false;
 let leaseTableReady = false;
+// Set once this node has deliberately stepped down. A step-down calls
+// markInactive() (heartbeat active=false) and then exits, but an in-flight
+// heartbeat tick can land AFTER the active=false write and flip the row back
+// to active=true — a "zombie" heartbeat that makes peers think a stepped-down
+// node is still alive and keeps the fleet in a confused dual-active state.
+// Once marked inactive, an active heartbeat is refused until the next explicit
+// startHeartbeatLoop() (which clears the flag for a fresh takeover).
+let inactiveMarked = false;
 
 // Optional provider of live bot runtime stats (guild + member counts) that only
 // the connected Discord client knows. Set via setStatsProvider() from index.js;
@@ -133,6 +154,9 @@ async function ensureLeaseTable() {
 }
 
 async function writeHeartbeat(role, active) {
+    // Refuse to resurrect a node that has deliberately stepped down (see
+    // inactiveMarked). markInactive() itself passes active=false and is allowed.
+    if (active && inactiveMarked) return;
     await ensureTable();
     // Live guild/member counts from the connected client, when a provider is
     // registered (only the ACTIVE node is logged in, so only it has counts).
@@ -175,6 +199,10 @@ async function writeHeartbeat(role, active) {
  * @returns {Promise<boolean>} true when this node still holds the lease.
  */
 async function writeHeartbeatWithLease(role) {
+    // A stepped-down node must not overwrite its active=false row from a
+    // still-armed tick. Treat it as "lease not held" so the caller takes the
+    // same step-down path instead of resurrecting the node.
+    if (inactiveMarked) return false;
     await ensureTable();
     if (!leaseTableReady) {
         try { await ensureLeaseTable(); } catch (_) { /* handled below */ }
@@ -222,7 +250,7 @@ async function getStatus(role) {
     // can make a perfectly fresh heartbeat look stale (or vice versa),
     // causing both nodes to think they should be active at the same time.
     const result = await seasonDb.execute(sql`
-        SELECT node_name, last_heartbeat, active,
+        SELECT node_name, last_heartbeat, active, heartbeat_interval_ms,
                EXTRACT(EPOCH FROM (NOW() - last_heartbeat)) * 1000 AS age_ms
         FROM bot_node_status
         WHERE role = ${role}
@@ -265,6 +293,9 @@ async function getOtherActiveNode(selfNodeName, selfRole) {
 
 function startHeartbeatLoop(role, onLeaseStolen) {
     stopHeartbeatLoop();
+    // A fresh takeover clears any previous step-down so this node may heartbeat
+    // active again. stopHeartbeatLoop() above already disarms the old timer.
+    inactiveMarked = false;
     console.log(`[FAILOVER] Starting heartbeat loop for role=${role} node=${NODE_NAME} (fast=${HEARTBEAT_INTERVAL_MS}ms idle=${IDLE_HEARTBEAT_INTERVAL_MS}ms)`);
     writeHeartbeat(role, true)
         .then(() => refreshLease(NODE_NAME, role))
@@ -320,6 +351,11 @@ function stopHeartbeatLoop() {
 }
 
 async function markInactive(role) {
+    // Disarm the loop and block any further active heartbeat BEFORE writing
+    // active=false, so an in-flight tick cannot race past us and flip the row
+    // back to true after we have stepped down.
+    stopHeartbeatLoop();
+    inactiveMarked = true;
     try {
         await writeHeartbeat(role, false);
     } catch (err) {
@@ -368,6 +404,20 @@ async function acquireLease(role, nodeName) {
         const myPriority    = ROLE_PRIORITY[role]            ?? 99;
         const holderPriority = ROLE_PRIORITY[row.owner_role] ?? 99;
 
+        // Is the CURRENT holder alive? The lease's own `last_seen` is only
+        // refreshed by (a) the holder's combined heartbeat+lease statement and
+        // (b) the holder's startup acquireLease(). A holder that is mid-startup
+        // can leave a lease that looks stale for a few seconds even though its
+        // bot_node_status heartbeat is perfectly fresh. Treating that as "stale"
+        // is what let a lower-priority node (sn2/sn3) seize the lease from a
+        // healthy sn1 that was still booting — the "sn2 and sn3 interact while
+        // sn1 is online" symptom. So a holder is considered alive when EITHER
+        // its lease is fresh OR it has a fresh heartbeat.
+        const holderStatus = await getStatus(row.owner_role);
+        const holderHeartbeatFresh = Boolean(holderStatus)
+            && holderStatus.active
+            && isHeartbeatFresh(Number(holderStatus.age_ms), holderStatus.heartbeat_interval_ms);
+
         // Higher-priority node always reclaims the lease unconditionally.
         // sn1 > sn2 > sn3.  This makes "set NODE_ROLE=sn1 and restart" the
         // reliable way to promote a host without manual DB edits.
@@ -379,7 +429,9 @@ async function acquireLease(role, nodeName) {
             `);
             // Distinguish a normal "I was offline, lower-priority covered, now I'm back"
             // reclaim from a genuine dual-active conflict where the other node is still fresh.
-            const wasCovering = ageMs < FAILOVER_THRESHOLD_MS;
+            // A fresh heartbeat counts as "was covering" even if the lease briefly
+            // looked stale (the starting-node race).
+            const wasCovering = ageMs < FAILOVER_THRESHOLD_MS || holderHeartbeatFresh;
             if (wasCovering) {
                 console.log(`[FAILOVER] ${role} returning — reclaiming lease from ${row.owner_node_name} (role=${row.owner_role}) which was covering while offline (lease age=${Math.round(ageMs / 1000)}s). It will step down shortly.`);
             } else {
@@ -388,8 +440,11 @@ async function acquireLease(role, nodeName) {
             return { acquired: true, ownerNodeName: nodeName, ownerRole: role, stolen: true, wasCovering };
         }
 
-        // Lower-priority node (or equal) only takes over when the lease is stale.
-        if (ageMs > FAILOVER_THRESHOLD_MS) {
+        // Lower-priority node (or equal) only takes over when the holder is not
+        // considered alive (stale lease AND no fresh heartbeat). Requiring both
+        // closes the race where a healthy starting node (fresh heartbeat,
+        // briefly stale lease) was displaced by sn2/sn3.
+        if (myPriority >= holderPriority && !isHolderConsideredAlive(ageMs, holderHeartbeatFresh)) {
             await seasonDb.execute(sql`
                 UPDATE bot_failover_lock
                 SET owner_node_name = ${nodeName}, owner_role = ${role}, acquired_at = NOW(), last_seen = NOW()
@@ -399,7 +454,10 @@ async function acquireLease(role, nodeName) {
             return { acquired: true, ownerNodeName: nodeName, ownerRole: role, stolen: true };
         }
 
-        console.warn(`[FAILOVER] Lease is held by ${row.owner_node_name} (role=${row.owner_role}) age=${Math.round(ageMs / 1000)}s; standing by`);
+        const why = holderHeartbeatFresh
+            ? `holder ${row.owner_node_name} (role=${row.owner_role}) has a fresh heartbeat`
+            : `lease held by ${row.owner_node_name}`;
+        console.warn(`[FAILOVER] ${why} (lease age=${Math.round(ageMs / 1000)}s); ${role} standing by`);
         return { acquired: false, ownerNodeName: row.owner_node_name, ownerRole: row.owner_role, ageMs };
     } catch (err) {
         console.error('[FAILOVER] Lease acquisition failed:', err.message);
@@ -552,6 +610,7 @@ module.exports = {
     IDLE_HEARTBEAT_INTERVAL_MS,
     currentHeartbeatIntervalMs,
     isHeartbeatFresh,
+    isHolderConsideredAlive,
     activityIsIdle,
     FAILOVER_THRESHOLD_MS,
     MONITOR_INTERVAL_MS,

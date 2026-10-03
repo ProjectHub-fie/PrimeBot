@@ -46,8 +46,13 @@ const dbConfig = parseConnectionString();
 // dashboard, managers). It goes through the shared factory so it is registered
 // like every feature pool and can never be duplicated on a module reload; the
 // explicit `max` overrides the small feature-pool default.
+// Pass the parsed CONFIG (which carries `ssl`), never `dbConfig.connectionString`.
+// Re-parsing the bare connection string inside createPool drops the `ssl` we
+// just computed (configFromUrl strips `sslmode` from the URL and expresses SSL
+// as the config's `ssl` field) — pg then connects without TLS and managed
+// Postgres (Neon/Supabase) rejects every query with "connection is insecure".
 const pool = createPool(
-    dbConfig.connectionString || dbConfig,
+    dbConfig,
     { label: 'MAIN DB', max: poolOptions({ max: 8 }).max }
 );
 

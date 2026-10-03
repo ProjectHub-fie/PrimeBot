@@ -221,6 +221,29 @@ test('batching can be disabled with LEVELING_FLUSH_INTERVAL_MS=0', () => {
     else process.env.LEVELING_FLUSH_INTERVAL_MS = prev;
 });
 
+test('the flush VALUES cast every expression to its real column type', async () => {
+    const { mgr, fakePool } = loadManager();
+
+    mgr._accumulateXp('g1', 'u1', 10);
+    await mgr.flushXp();
+
+    const sql = fakePool.calls.map((c) => c.sql).join('\n');
+    // In a VALUES list Postgres infers numeric literals as `numeric`; without
+    // explicit casts the untyped `level` parameter is inferred from the
+    // expression beside it and the statement fails with
+    // "column \"level\" is of type integer but expression is of type text".
+    assert.match(sql, /\$1::varchar/, 'guild_id must be cast');
+    assert.match(sql, /::integer/, 'numeric columns must be cast to integer');
+    for (const call of fakePool.calls) {
+        // params are groups of 5: (guild_id, user_id, xp, level, messages).
+        for (let i = 0; i < call.params.length; i += 5) {
+            for (const p of call.params.slice(i + 2, i + 5)) {
+                assert.equal(typeof p, 'number', 'every numeric param is passed as a JS number');
+            }
+        }
+    }
+});
+
 test('a very long session still only writes in constant-size batches', async () => {
     const { mgr, fakePool } = loadManager();
 
