@@ -480,6 +480,7 @@ client.on('shardDisconnect', async (closeEvent, shardId) => {
 // so it does not keep Neon awake, but with no failover there is no need for it).
 const nodeFailover = require('./utils/nodeFailover');
 const activityGate = require('./utils/activityGate');
+const standbyKeepAlive = require('./utils/standbyKeepAlive');
 const failoverEnabled = process.env.BOT_FAILOVER_ENABLED !== 'false';
 
 // Publish the live guild/member counts on each failover heartbeat so the
@@ -563,6 +564,15 @@ async function connectBot(leaseAlreadyAcquired = false) {
         console.log('✅ Bot successfully logged in and is now online!');
         debug('Bot successfully logged in');
 
+        // This node now holds a live Discord gateway connection, which is itself
+        // a ref'd handle keeping the process alive. Drop the standby keep-alive
+        // so a connected node relies on the socket alone (and a quiet node can
+        // still let Neon suspend — the keep-alive interval would otherwise be a
+        // permanent wake source).
+        if (standbyKeepAlive.clear()) {
+            console.log('[FAILOVER] Cleared standby keep-alive timer (Discord connection now keeps the process alive).');
+        }
+
         if (failoverEnabled) {
             // ── Step 2: confirm we still hold the lease after login ────────
             // Another higher-priority node might have stolen it during the login
@@ -625,6 +635,13 @@ function startStandbyMonitor() {
         console.log('[FAILOVER] Standby monitor disabled because failover is off.');
         return;
     }
+
+    // A standby node holds no Discord connection and all of its timers are
+    // unref'd, so without a ref'd handle the process would exit cleanly and the
+    // panel would restart it in a loop. This arms the single ref'd timer that
+    // keeps a waiting node alive; it is cleared on login (see connectBot).
+    standbyKeepAlive.arm();
+    console.log('[FAILOVER] Armed standby keep-alive timer (prevents clean-exit restart loop while waiting to take over).');
 
     console.log(`[FAILOVER] Running as STANDBY node (${nodeFailover.NODE_NAME}, configured role: ${nodeFailover.NODE_ROLE}). Watching for another active node...`);
     wh.send({
