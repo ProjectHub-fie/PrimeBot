@@ -743,18 +743,32 @@ that does not:
 - **A quiet bot uses the long idle cadence.** `utils/activityGate.js` records
   Discord activity (every event handler calls `touch()`); the shared scheduler
   and the failover loops call `isIdle()`. When idle they jump straight to their
-  long interval (scheduler 30 min, failover heartbeat/monitor 6 min) instead of
-  ramping up through sub-5-minute touches, so the endpoint can actually suspend.
-  Tune with `BOT_IDLE_AFTER_MS` (default 4 min).
-- **The failover heartbeat is activity-adaptive.** `utils/nodeFailover.js` beats
-  every `FAILOVER_HEARTBEAT_INTERVAL_MS` (30s) while the bot is active and every
-  `FAILOVER_IDLE_HEARTBEAT_INTERVAL_MS` (6 min) once idle. It publishes the
-  cadence it is using on `bot_node_status.heartbeat_interval_ms`, and a peer
+  long interval (scheduler 30 min) instead of ramping up through sub-5-minute
+  touches, so the endpoint can actually suspend. Tune with `BOT_IDLE_AFTER_MS`
+  (default 4 min).
+- **The failover heartbeat defaults to the FAST cadence (liveness first).**
+  `utils/nodeFailover.js` beats every `FAILOVER_HEARTBEAT_INTERVAL_MS` (30s) while
+  active. `FAILOVER_IDLE_HEARTBEAT_INTERVAL_MS` **defaults to the same 30s** — do
+  NOT reintroduce a multi-minute default. Failover is a liveness guarantee: a
+  standby can only notice the active node has died if that node keeps publishing a
+  heartbeat on a short, predictable cadence, so a long idle cadence means the
+  standby stands by for that whole window (plus grace) after the active node's
+  last heartbeat — ~6.25 min at the old 6-min default, which read in the field as
+  "sn2 never wakes while sn1 is offline". Setting the idle cadence long is an
+  explicit opt-in trade-off (Neon compute vs. slow failover). The node publishes
+  the cadence it is using on `bot_node_status.heartbeat_interval_ms`, and a peer
   judges staleness as `age < interval + grace` (`isHeartbeatFresh`) rather than a
-  single fixed threshold — without that a node that slowed down would look dead
-  to a fast peer and trigger a spurious takeover. The same published interval is
+  single fixed threshold — without that a node that slowed down would look dead to
+  a fast peer and trigger a spurious takeover. The same published interval is
   honoured by the dashboard's live-count query (`dashboard/db.js` `_liveBotCounts`)
-  and the standby monitor. A constant 30s heartbeat is an always-awake endpoint
-  on its own, so never make it unconditional again.
+  and the standby monitor.
+- **The post-takeover monitor also defaults to the fast cadence.** Once a node is
+  active, `index.js` `startStandbyMonitor` polls `FAILOVER_MONITOR_IDLE_INTERVAL_MS`
+  (default = the 3s ACTIVE interval) to detect a returning higher-priority node and
+  step down. A multi-minute default there leaves an active-but-idle node
+  interacting with Discord (dual-active) for minutes after sn1 reclaims the lease —
+  the "sn2 not shutting down while sn1 is online" symptom. A blocked standby also
+  logs a throttled "Standing by — higher-priority node … heartbeat is Ns old"
+  line so a wait is diagnosable instead of silent.
 
 

@@ -630,6 +630,9 @@ let standbyTookOver = false;
 // Interval handle kept so we can swap between slow (pre-takeover) and fast
 // (post-takeover) check cadences.
 let standbyMonitorTimer = null;
+// Throttle for the "standing by" diagnostic so a long wait is visible in the
+// logs at most once a minute rather than on every fast monitor tick.
+let lastStandbyLogAt = 0;
 function startStandbyMonitor() {
     if (!failoverEnabled) {
         console.log('[FAILOVER] Standby monitor disabled because failover is off.');
@@ -663,6 +666,20 @@ function startStandbyMonitor() {
                 standbyTookOver = true;
                 console.warn('[FAILOVER] No other active node detected. Acquiring lease and taking over.');
                 await connectBot(false); // acquires lease before login
+
+            } else if (!standbyTookOver && other) {
+                // We are deliberately waiting for a higher-priority node that is
+                // still considered alive. Surface WHY (throttled) so a "standby
+                // never takes over" report is diagnosable instead of silent: the
+                // usual cause is the holder's heartbeat being within its own
+                // published interval + grace (an idle node on the slow cadence
+                // can look alive for minutes after it has actually died).
+                const now = Date.now();
+                if (now - lastStandbyLogAt > 60000) {
+                    lastStandbyLogAt = now;
+                    const ageSec = Math.round((other.ageMs || 0) / 1000);
+                    console.log(`[FAILOVER] Standing by — higher-priority node ${other.role} (${other.nodeName}) heartbeat is ${ageSec}s old (still within its freshness window).`);
+                }
 
             } else if (standbyTookOver) {
                 // A higher-priority node may be back. Check two independent signals:
@@ -698,12 +715,16 @@ function startStandbyMonitor() {
     const STANDBY_INTERVAL  = nodeFailover.MONITOR_INTERVAL_MS;      // 10 s — pre-takeover
     const ACTIVE_INTERVAL   = Math.min(3000, nodeFailover.MONITOR_INTERVAL_MS); // 3 s — post-takeover
 
-    // Cadence selection: while a higher-priority node could return we want to
-    // step down quickly, but a fixed fast poll also wakes Neon forever. Use the
-    // fast cadence only while the bot is actually handling Discord activity;
-    // once it has been idle, back off past Neon's ~5-minute suspend window so the
-    // compute endpoint can actually go to sleep.
-    const IDLE_INTERVAL_MS = parseInt(process.env.FAILOVER_MONITOR_IDLE_INTERVAL_MS, 10) || 6 * 60 * 1000;
+    // Once this node is the active one, the monitor exists only to notice a
+    // returning higher-priority node and step down. An active-but-idle node must
+    // STILL check on the fast cadence: if it backed off to the long idle interval
+    // a returning sn1 could steal the lease and this node would keep interacting
+    // with Discord for up to that whole interval (dual-active). Prompt step-down
+    // is part of the failover guarantee, so — like the heartbeat — this DEFAULTS
+    // TO THE FAST ACTIVE INTERVAL. Setting it longer is an explicit trade-off
+    // that accepts a longer dual-active window for less Neon compute.
+    const IDLE_INTERVAL_MS =
+        parseInt(process.env.FAILOVER_MONITOR_IDLE_INTERVAL_MS, 10) || ACTIVE_INTERVAL;
 
     function scheduleNext() {
         // `standbyTookOver` means this node is (or is taking over as) active.

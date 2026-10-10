@@ -29,12 +29,21 @@ const NODE_NAME = process.env.NODE_NAME || (
 );
 
 const HEARTBEAT_INTERVAL_MS = parseInt(process.env.FAILOVER_HEARTBEAT_INTERVAL_MS, 10) || 30000;
-// Cadence used once the bot has seen no Discord activity for a while. It must
-// be LONGER than Neon's autosuspend idle window (5 minutes by default), or the
-// endpoint can never suspend and the free compute allowance is spent on an idle
-// bot. 6 minutes clears the window with margin.
+// Cadence used once the bot has seen no Discord activity for a while.
+//
+// Failover is a liveness guarantee: a standby must be able to detect that the
+// active node has died and take over. That only works if the active node keeps
+// publishing a liveness signal on a short, predictable cadence, so this
+// DEFAULTS TO THE FAST CADENCE — an idle-but-alive active node keeps
+// heartbeating every 30s and a standby takes over within ~45s of it actually
+// dying.
+//
+// Setting it LONGER than Neon's ~5-minute suspend window (e.g. 360000) is an
+// explicit trade-off: the endpoint can suspend and the Neon bill drops, but a
+// standby then needs that whole window (idle cadence + grace) to notice the
+// active node is gone. Do not set it unless you accept slow failover.
 const IDLE_HEARTBEAT_INTERVAL_MS =
-    parseInt(process.env.FAILOVER_IDLE_HEARTBEAT_INTERVAL_MS, 10) || 6 * 60 * 1000;
+    parseInt(process.env.FAILOVER_IDLE_HEARTBEAT_INTERVAL_MS, 10) || HEARTBEAT_INTERVAL_MS;
 // Extra tolerance beyond a writer's own interval before its heartbeat is stale.
 // The old code compared age directly to FAILOVER_THRESHOLD_MS (45s), i.e. a
 // 15s grace on the 30s heartbeat. Keeping that grace constant means a node on
