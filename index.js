@@ -500,13 +500,27 @@ const wh = require('./utils/webhookLogger');
 // Called from any path that determines this node should yield to another.
 // Guards against double-invocation with `steppingDown`.
 let steppingDown = false;
+// Exit code used when this node yields to a higher-priority one.
+//
+// A step-down is NOT "we are done" — it means "I should re-enter standby and
+// wait to cover the next failure". But this process has already destroyed its
+// Discord client and cannot re-login in-process (discord.js marks its WS
+// manager destroyed and reuses the dead manager on a same-token login), so it
+// MUST be replaced by a fresh process that boots straight back into standby.
+//
+// Exiting 0 defeats that: both the local launcher (start-bot.js) and a hosting
+// panel (Wispbyte/Pterodactyl) read code 0 as a clean, intentional shutdown and
+// do NOT restart — so a stepped-down sn2 vanished permanently while sn1 was
+// online, instead of waiting to cover the next outage. A non-zero code is the
+// portable "restart me" signal (see utils/failoverExit.js).
+const { STEP_DOWN_EXIT_CODE } = require('./utils/failoverExit');
 async function stepDown(reason) {
     if (steppingDown) return;
     steppingDown = true;
     console.warn(`[FAILOVER] Stepping down (${reason}). Releasing lease and disconnecting.`);
     wh.send({
         title: '🔴 Shard Node Offline',
-        description: 'This node is stepping down and releasing the active lease.',
+        description: 'This node is stepping down and will restart into standby to cover the next failure.',
         type: 'offline',
         reason,
     });
@@ -515,7 +529,9 @@ async function stepDown(reason) {
     await nodeFailover.markInactive(nodeFailover.NODE_ROLE).catch(() => {});
     await nodeFailover.releaseLease(nodeFailover.NODE_NAME).catch(() => {});
     try { client.destroy(); } catch (_) {}
-    setTimeout(() => process.exit(0), 500);
+    // Non-zero so the supervisor restarts us; the fresh process acquires no
+    // lease (a higher-priority node holds it) and re-enters standby.
+    setTimeout(() => process.exit(STEP_DOWN_EXIT_CODE), 500);
 }
 
 // ── Connect bot ────────────────────────────────────────────────────────────

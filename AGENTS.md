@@ -322,6 +322,16 @@ Bot reconnect attempts use a progressive delay schedule instead of a fixed 5s: 1
 - **Tests:** `tests/reconnectAndTicketList.test.js` — 6 cases: schedule array, `reconnectDelayFor` edge cases (0, -1, 99), index.js uses serial + resets counter; connection-enhancer has no remaining hardcoded `5000` reconnect delays and all 3 reconnect sites use scheduleReconnect, tickets.js refreshes on load, and a vm browser-sandbox asserts server-fetched panels render into `.rr-list` on page load.
 
 
+## Failover step-down MUST exit non-zero (or the standby vanishes)
+
+When a higher-priority node returns, the active lower-priority node calls `index.js` `stepDown()`: it releases the lease, marks itself inactive, and destroys its Discord client. **A step-down is not "we are done" — the node must come back as a standby to cover the next outage.** But this process cannot re-login in-process: `client.destroy()` nulls the token and marks discord.js's WS manager `destroyed`, and a same-token `login()` reuses that dead manager (fresh token → shard workers terminated/cleared, status stays idle) and hangs. So it MUST be replaced by a fresh process that boots straight back into standby (`startWithFailoverCheck` → can't acquire the lease → `startStandbyMonitor`).
+
+- **The bug:** `stepDown()` used `process.exit(0)`. Both the hosting panel (Wispbyte/Pterodactyl) and the local launcher (`start-bot.js`) read code 0 as a *clean, intentional shutdown* and do **not** restart. So a stepped-down sn2 vanished permanently while sn1 was online — the field report "sn2 isn't in standby / crashed while sn1 came back".
+- **The fix:** step-down exits `STEP_DOWN_EXIT_CODE` (`utils/failoverExit.js`, default `75`/EX_TEMPFAIL; override with `STEP_DOWN_EXIT_CODE`, validated to 1–255 so a typo can never degrade it back to a no-restart clean exit). A non-zero code is the portable "restart me" signal for both the launcher and the panel.
+- **No dual-active risk:** `nodeFailover.releaseLease(nodeName)` deletes the lease row **only when `owner_node_name` matches self**, so sn2 releasing on step-down never clobbers the lease sn1 just stole. A fast-restarting sn2 finds sn1 owns the lease and re-enters standby.
+- **Tests:** `tests/failoverStepDown.test.js` (non-zero default, override validation incl. `0`/`abc`/`999` fallbacks, `stepDown` uses `STEP_DOWN_EXIT_CODE` and no `process.exit(0)`, regression on the removed `process.exit(0), 500` line, launcher restarts on non-zero / not on 0).
+
+
 ## 404 page (graphical catch-all)
 
 Any unknown path renders a friendly graphical 404. On Vercel, `vercel.json` routes every request to the serverless handler (`dashboard/server.js`), so a broken/mistyped link lands here.
