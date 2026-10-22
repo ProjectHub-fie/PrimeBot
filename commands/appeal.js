@@ -1,5 +1,6 @@
 const { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder, ChannelType } = require('discord.js');
 const { ACTIONS, normalizeAction, metaFor } = require('../utils/automodRules');
+const config = require('../config');
 
 /**
  * /appeal — let members appeal an automod punishment, and let moderators
@@ -72,7 +73,7 @@ module.exports = {
                     const ch = await interaction.client.channels.fetch(channelId).catch(() => null);
                     if (ch && ch.isTextBased?.() && ch.type !== ChannelType.DM) {
                         const embed = new EmbedBuilder()
-                            .setColor(0xFEE75C)
+                            .setColor(config.colors.warning)
                             .setTitle(`📨 New appeal #${appeal.id}`)
                             .addFields(
                                 { name: 'Member', value: `<@${interaction.user.id}>`, inline: true },
@@ -110,7 +111,7 @@ module.exports = {
                     return `**#${a.id}** · \`${a.action}\` · ${a.status} · <@${a.userId}> — ${a.reason || '—'} _(${when})_`;
                 });
                 const embed = new EmbedBuilder()
-                    .setColor(0x5865F2)
+                    .setColor(config.colors.primary)
                     .setTitle('📨 Appeals')
                     .setDescription(lines.join('\n\n'))
                     .setFooter({ text: 'PrimeBot Automod · appeals' });

@@ -13,13 +13,13 @@
 // `icon` is an emoji (used inside Discord embeds for flavour), `iconName` is an
 // SVG icon name from dashboard/public/js/icons.js (dashboard chrome only).
 const EVENT_TYPES = [
-    { key: 'community', label: 'Community Event', icon: '🌍', iconName: 'users',    color: '#5865F2', description: 'A general community gathering.' },
-    { key: 'gaming',    label: 'Gaming Event',    icon: '🎮', iconName: 'gamepad',  color: '#57F287', description: 'A gaming session with the server.' },
-    { key: 'tournament',label: 'Tournament',      icon: '🏆', iconName: 'trophy',   color: '#FFD700', description: 'A competitive bracket with winners.' },
-    { key: 'giveaway',  label: 'Giveaway Event',  icon: '🎁', iconName: 'gift',     color: '#EB459E', description: 'An event where prizes are given out.' },
-    { key: 'meeting',   label: 'Meeting',         icon: '🗣️', iconName: 'message',  color: '#FEE75C', description: 'A staff or community meeting.' },
-    { key: 'watchparty',label: 'Watch Party',     icon: '🍿', iconName: 'playCircle',color: '#ED4245', description: 'Watch something together.' },
-    { key: 'custom',    label: 'Custom Event',    icon: '✨', iconName: 'star',     color: '#9B59B6', description: 'Anything that does not fit a category.' },
+    { key: 'community', label: 'Community Event', icon: '🌍', iconName: 'users',    color: '#7B2CBF', description: 'A general community gathering.' },
+    { key: 'gaming',    label: 'Gaming Event',    icon: '🎮', iconName: 'gamepad',  color: '#2E9D75', description: 'A gaming session with the server.' },
+    { key: 'tournament',label: 'Tournament',      icon: '🏆', iconName: 'trophy',   color: '#C18D32', description: 'A competitive bracket with winners.' },
+    { key: 'giveaway',  label: 'Giveaway Event',  icon: '🎁', iconName: 'gift',     color: '#C18D32', description: 'An event where prizes are given out.' },
+    { key: 'meeting',   label: 'Meeting',         icon: '🗣️', iconName: 'message',  color: '#D99A35', description: 'A staff or community meeting.' },
+    { key: 'watchparty',label: 'Watch Party',     icon: '🍿', iconName: 'playCircle',color: '#D94F5D', description: 'Watch something together.' },
+    { key: 'custom',    label: 'Custom Event',    icon: '✨', iconName: 'star',     color: '#572080', description: 'Anything that does not fit a category.' },
 ];
 
 const EVENT_TYPE_KEYS = EVENT_TYPES.map(t => t.key);
@@ -37,13 +37,13 @@ function eventTypeMeta(key) {
 // → live → completed, with `cancelled` reachable from anywhere except a
 // completed event.
 const EVENT_STATUSES = [
-    { key: 'draft',                label: 'Draft',               icon: 'fileText',    color: '#95A5A6' },
-    { key: 'scheduled',            label: 'Scheduled',           icon: 'calendar',    color: '#5865F2' },
-    { key: 'registration_open',    label: 'Registration Open',   icon: 'userCheck',   color: '#57F287' },
-    { key: 'registration_closed',  label: 'Registration Closed', icon: 'userX',       color: '#FEE75C' },
-    { key: 'live',                 label: 'Live',                icon: 'activity',    color: '#ED4245' },
-    { key: 'completed',            label: 'Completed',           icon: 'check',       color: '#2ECC71' },
-    { key: 'cancelled',            label: 'Cancelled',           icon: 'ban',         color: '#95A5A6' },
+    { key: 'draft',                label: 'Draft',               icon: 'fileText',    color: '#929BA6' },
+    { key: 'scheduled',            label: 'Scheduled',           icon: 'calendar',    color: '#7B2CBF' },
+    { key: 'registration_open',    label: 'Registration Open',   icon: 'userCheck',   color: '#2E9D75' },
+    { key: 'registration_closed',  label: 'Registration Closed', icon: 'userX',       color: '#D99A35' },
+    { key: 'live',                 label: 'Live',                icon: 'activity',    color: '#D94F5D' },
+    { key: 'completed',            label: 'Completed',           icon: 'check',       color: '#2E9D75' },
+    { key: 'cancelled',            label: 'Cancelled',           icon: 'ban',         color: '#929BA6' },
 ];
 
 const EVENT_STATUS_KEYS = EVENT_STATUSES.map(s => s.key);
@@ -124,9 +124,9 @@ const REMINDER_KEYS = REMINDER_PRESETS.map(r => r.key);
 
 // ── Participant statuses ────────────────────────────────────────────────────
 const PARTICIPANT_STATUSES = [
-    { key: 'registered', label: 'Registered', color: '#5865F2' },
-    { key: 'waiting',    label: 'Waiting list', color: '#FEE75C' },
-    { key: 'removed',    label: 'Removed',     color: '#ED4245' },
+    { key: 'registered', label: 'Registered', color: '#7B2CBF' },
+    { key: 'waiting',    label: 'Waiting list', color: '#D99A35' },
+    { key: 'removed',    label: 'Removed',     color: '#D94F5D' },
 ];
 
 const PARTICIPANT_STATUS_KEYS = PARTICIPANT_STATUSES.map(p => p.key);
@@ -137,9 +137,9 @@ function normalizeParticipantStatus(key) {
 
 // ── Attendance ──────────────────────────────────────────────────────────────
 const ATTENDANCE_STATUSES = [
-    { key: 'unknown', label: 'Not checked in', color: '#95A5A6' },
-    { key: 'present', label: 'Checked in',     color: '#57F287' },
-    { key: 'absent',  label: 'Absent',         color: '#ED4245' },
+    { key: 'unknown', label: 'Not checked in', color: '#929BA6' },
+    { key: 'present', label: 'Checked in',     color: '#2E9D75' },
+    { key: 'absent',  label: 'Absent',         color: '#D94F5D' },
 ];
 
 function normalizeAttendanceStatus(key) {
