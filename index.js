@@ -1,6 +1,8 @@
 const debug = require('debug')('bot:main');
 
-const { Client, GatewayIntentBits, Collection, ActivityType, Options } = require('discord.js');
+const discord = require('discord.js');
+require('./utils/embedTheme').installEmbedTheme(discord);
+const { Client, GatewayIntentBits, Collection, ActivityType, Options } = discord;
 const fs = require('fs');
 const path = require('path');
 const { resolveDiscordToken } = require('./utils/tokenResolver');

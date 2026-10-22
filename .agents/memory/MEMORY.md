@@ -1,1 +1,2 @@
 - [Discord.js runtime compatibility](discordjs-runtime-compatibility.md) — keep the Node runtime modern and avoid the malformed Discord utility package release.
+- [Discord embed style](discord-embed-style.md) — follow the Page 1 dark embed with semantic accent colors; custom emoji placement is deferred to the user.

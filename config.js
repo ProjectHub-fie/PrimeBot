@@ -37,16 +37,16 @@ module.exports = {
     
     // Colors for embeds
     colors: {
-        primary: '#5865F2', // Discord blurple color
-        secondary: '#4752C4', // Discord dark blurple (moderation/secondary)
-        success: '#57F287', // Green color for success messages
-        error: '#ED4245',   // Red color for error messages
-        warning: '#FEE75C',  // Yellow color for warning messages
-        Gold: "#FFD700",
-        bronze: "#CD7F32",   // Bronze color for lower level badges
-        silver: "#C0C0C0",   // Silver color for mid-level badges
-        gold: "#FFD700",     // Gold color for high-level badges
-        platinum: "#E5E4E2"  // Platinum color for highest level badges
+        primary: '#7B2CBF',  // Figma-inspired violet accent
+        secondary: '#572080', // Deeper violet for secondary states
+        success: '#2E9D75',  // Muted green
+        error: '#D94F5D',    // Muted red
+        warning: '#D99A35',  // Muted amber
+        Gold: '#C18D32',
+        bronze: '#A7653A',
+        silver: '#929BA6',
+        gold: '#C18D32',
+        platinum: '#788493'
     },
     
     // Welcome system configuration
