@@ -126,7 +126,7 @@ test('the embed colour follows the event, falling back to the type colour', () =
     const withColor = M.buildAnnouncementPayload(sampleEvent({ embedColor: '#ABCDEF' })).embeds[0];
     assert.equal(withColor.color, 0xABCDEF);
     const noColor = M.buildAnnouncementPayload(sampleEvent({ embedColor: null })).embeds[0];
-    assert.equal(noColor.color, 0x57F287); // gaming green
+    assert.equal(noColor.color, 0x2E9D75); // gaming type color (palette success)
 });
 
 test('reminder payload includes the event name and the humanized offset', () => {

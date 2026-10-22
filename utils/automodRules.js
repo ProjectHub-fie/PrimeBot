@@ -44,10 +44,10 @@ const ACTION_BY_KEY = Object.fromEntries(ACTIONS.map(a => [a.key, a]));
 // `color` is the integer Discord embed color; `colorHex` is the same value as a
 // CSS hex string so the dashboard's charts/badges can use the exact same palette.
 const SEVERITIES = [
-    { key: 'low',      label: 'Low',      color: 0x57F287, colorHex: '#57F287', iconName: 'info' },
-    { key: 'medium',   label: 'Medium',   color: 0xFEE75C, colorHex: '#FEE75C', iconName: 'alertTriangle' },
-    { key: 'high',     label: 'High',     color: 0xED8A5C, colorHex: '#ED8A5C', iconName: 'shieldAlert' },
-    { key: 'critical', label: 'Critical', color: 0xED4245, colorHex: '#ED4245', iconName: 'octagonX' },
+    { key: 'low',      label: 'Low',      color: 0x2E9D75, colorHex: '#2E9D75', iconName: 'info' },
+    { key: 'medium',   label: 'Medium',   color: 0xD99A35, colorHex: '#D99A35', iconName: 'alertTriangle' },
+    { key: 'high',     label: 'High',     color: 0xC18D32, colorHex: '#C18D32', iconName: 'shieldAlert' },
+    { key: 'critical', label: 'Critical', color: 0xD94F5D, colorHex: '#D94F5D', iconName: 'octagonX' },
 ];
 const SEVERITY_KEYS = SEVERITIES.map(s => s.key);
 const SEVERITY_BY_KEY = Object.fromEntries(SEVERITIES.map(s => [s.key, s]));

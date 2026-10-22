@@ -1006,7 +1006,7 @@ module.exports = {
 
                     const content = record.content || '*No text content*';
                     const embed = new EmbedBuilder()
-                        .setColor(0xffd700)
+                        .setColor(config.colors.gold)
                         .setTitle('🗑️ Recently Deleted Message')
                         .setDescription(content)
                         .addFields(
@@ -1992,7 +1992,7 @@ module.exports = {
                                 const MONTHS_BD = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
                                 const upcomingEmbed = new EmbedBuilder()
-                                    .setColor("#FFC0CB")
+                                    .setColor(config.colors.primary)
                                     .setTitle("🎂 Server Birthdays")
                                     .setThumbnail("https://i.imgur.com/1XXtUx0.gif")
                                     // Custom dashboard image when set, else the hardcoded default.
@@ -2059,7 +2059,7 @@ module.exports = {
                                 
                                 // Create embed
                                 const checkEmbed = new EmbedBuilder()
-                                    .setColor("#FFC0CB") // Pink
+                                    .setColor(config.colors.primary)
                                     .setTitle(`🎂 ${targetMember.displayName}'s Birthday`)
                                     .setDescription(`**${checkedFormattedDate}${checkedYearText}**\nComing up: ${daysText}`)
                                     .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }));

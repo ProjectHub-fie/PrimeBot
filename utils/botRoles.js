@@ -22,31 +22,31 @@ const ROLE_INFO = {
     user: {
         label: 'User',
         emoji: '👤',
-        color: '#99AAB5',
+        color: '#929BA6',
         description: 'The respective user of PrimeBot',
     },
     moderator: {
         label: 'Moderator',
         emoji: '🛡️',
-        color: '#57F287',
+        color: '#2E9D75',
         description: 'Moderator has the power to manage support server of PrimeBot',
     },
     admin: {
         label: 'Admin',
         emoji: '⚙️',
-        color: '#FEE75C',
+        color: '#D99A35',
         description: 'Admin has the power to manage support server and manage hosting technology',
     },
     developer: {
         label: 'Developer',
         emoji: '🧑‍💻',
-        color: '#5865F2',
+        color: '#7B2CBF',
         description: 'Developer has the power to manage the bot',
     },
     owner: {
         label: 'Owner',
         emoji: '👑',
-        color: '#FFD700',
+        color: '#C18D32',
         description: 'The superior of the bot and support server',
     },
 };

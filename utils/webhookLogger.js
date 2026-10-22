@@ -8,15 +8,17 @@
 
 const https = require('https');
 const { URL } = require('url');
+const config = require('../config');
 
-// ── Constants ──────────────────────────────────────────────────────────────
-
+// Palette-mapped colors (config.colors) so the failover webhook embeds match
+// every other PrimeBot embed. The webhook posts a raw embed object, so it
+// never passes through the theme layer — map here explicitly.
 const COLORS = {
-    online:  0x57F287, // green
-    offline: 0xED4245, // red
-    standby: 0xFEE75C, // yellow
-    warning: 0xFFA500, // orange
-    info:    0x5865F2, // blurple
+    online:  parseInt(config.colors.success.replace(/^#/, ''), 16),
+    offline: parseInt(config.colors.error.replace(/^#/, ''), 16),
+    standby: parseInt(config.colors.warning.replace(/^#/, ''), 16),
+    warning: parseInt(config.colors.gold.replace(/^#/, ''), 16),
+    info:    parseInt(config.colors.primary.replace(/^#/, ''), 16),
 };
 
 const STATUS_ICONS = {

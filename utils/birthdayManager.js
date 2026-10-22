@@ -239,7 +239,7 @@ class BirthdayManager {
 
         const embedStyles = [
             () => new EmbedBuilder()
-                .setColor('#FF69B4')
+                .setColor(config.colors.primary)
                 .setTitle('🎂 Happy Birthday!')
                 .setDescription(`Today is **${member.displayName}**'s birthday! 🎉\n\nWishing you a wonderful day filled with joy and happiness! 🎈`)
                 .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
@@ -247,14 +247,14 @@ class BirthdayManager {
                 .setFooter({ text: `🎁 Make it a special day!` })
                 .setTimestamp(),
             () => new EmbedBuilder()
-                .setColor('#FFD700')
+                .setColor(config.colors.gold)
                 .setTitle('🎉 Birthday Celebration!')
                 .setDescription(`🥳 Everyone wish **${member.displayName}** a Happy Birthday! 🥳\n\n🌟 May all your wishes come true! 🌟`)
                 .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
                 .setImage('https://media.giphy.com/media/artj92V8o75VPL7AeQ/giphy.gif')
                 .setTimestamp(),
             () => new EmbedBuilder()
-                .setColor('#9B59B6')
+                .setColor(config.colors.secondary)
                 .setTitle('🎊 It\'s a Special Day!')
                 .setDescription(`🎂 Today we celebrate **${member.displayName}**! 🎂\n\n✨ Wishing you the best birthday ever! ✨`)
                 .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
@@ -262,7 +262,7 @@ class BirthdayManager {
                 .setFooter({ text: '🎈 Have an amazing day!' })
                 .setTimestamp(),
             () => new EmbedBuilder()
-                .setColor('#2ECC71')
+                .setColor(config.colors.success)
                 .setTitle('🌟 Birthday Alert!')
                 .setDescription(`📣 Say Happy Birthday to **${member.displayName}**! 🎁\n\n💫 Another year of awesome adventures ahead! 💫`)
                 .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))

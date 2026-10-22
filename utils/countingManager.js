@@ -149,7 +149,7 @@ class CountingManager {
             game.failCount++;
             await message.react('❌').catch(() => {});
             const embed = new EmbedBuilder()
-                .setColor('#FF0000')
+                .setColor(config.colors.error)
                 .setTitle('❌ Wrong Number!')
                 .setDescription(`The next number was **${expectedNumber}**, not **${number}**.\nCount resets to **${game.startNumber}**!`)
                 .addFields(
@@ -169,7 +169,7 @@ class CountingManager {
             game.failCount++;
             await message.react('❌').catch(() => {});
             const embed = new EmbedBuilder()
-                .setColor('#FFA500')
+                .setColor(config.colors.warning)
                 .setTitle('⚠️ No Consecutive Counting!')
                 .setDescription(`You can't count twice in a row! Count resets to **${game.startNumber}**!`)
                 .setTimestamp();
@@ -212,7 +212,7 @@ class CountingManager {
         ).join('\n') || 'No participants';
 
         const embed = new EmbedBuilder()
-            .setColor('#FFD700')
+            .setColor(config.colors.gold)
             .setTitle('🎉 Counting Goal Reached!')
             .setDescription(`Amazing! You reached **${game.goalNumber}**! 🎊\n\nNew goal: **${game.goalNumber * 2}**`)
             .addFields(
