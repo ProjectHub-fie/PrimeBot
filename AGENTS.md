@@ -102,7 +102,7 @@ The dashboard login page is protected by an **invisible Cloudflare Turnstile** w
 
 ## Env vars (Vercel)
 
-On Vercel, set in Settings → Environment Variables: `DISCORD_TOKEN2` (the primary bot token — checked first by `utils/tokenResolver.js`), `DISCORD_TOKEN` (legacy fallback), `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DATABASE_URL` (with `?sslmode=require` if the host needs SSL), `FALLBACK_DATABASE_URL` (optional shared fallback for every per-feature pool whose own var is unset — see "Database connection fallback — FALLBACK_DATABASE_URL" above), `SESSION_SECRET`, `DASHBOARD_BASE_URL` (= `https://<prod>.vercel.app`), `DISCORD_REDIRECT_URI` (= `<DASHBOARD_BASE_URL>/auth/callback`, registered in the Discord Developer Portal), `WELCOME_DATABASE_URL` (separate pool for welcome settings), `REACTION_DATABASE_URL` (separate pool for reaction-role menus; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `AUTOMOD_DATABASE_URL` (separate pool for automod settings/warnings; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `TICKET_DATABASE_URL` (separate pool for ticket panels/instances; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `TCLAIM_DATABASE_URL` (separate pool for the ticket claim system — `ticket_claims` table via `server/tclaimDb.js` `tclaimPool`; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `LIVE_DATABASE_URL` (separate pool for live giveaways AND live polls; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `EVENT_DATABASE_URL` (separate pool for event schedules/tasks; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `LOG_DATABASE_URL` (separate pool for server logging settings + website logs; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `ALOG_DATABASE_URL` (separate pool for the dashboard **audit log** `website_logs` table — `server/alogDb.js`; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `TROLE_DATABASE_URL` (separate pool for per-panel ticket role add/remove settings — `server/troleDb.js`; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `TLOG_DATABASE_URL` (separate pool for per-panel **ticket logging** settings — `ticket_logging_settings` in `server/tlogDb.js`; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `BETA_DATABASE_URL` (separate pool for beta settings; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `SEASON_DATABASE_URL` (separate pool for the dashboard session store `primebot_dashboard_session` + the shardnode failover service `bot_node_status`/`bot_failover_lock` tables; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset — works in single-DB setups with zero extra config), and `COMMUNITY_DATABASE_URL` (separate pool for the per-server static polls `polls`/`poll_options`/`poll_votes`, static giveaways `giveaways`/`giveaway_participants`/`giveaway_winners`, and the counting game `counting_games`; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset — works in single-DB setups with zero extra config). `EVENT_EXEC_INTERVAL_MS` (optional, default 5000) controls how often the bot's event scheduler wakes to fire due tasks. `SESSION_IDLE_TIMEOUT_MS` (optional, default 1800000 = 30 min) is the dashboard idle auto-logout window in ms, `SESSION_WARNING_MS` (optional, default 1500000 = 25 min) starts the client-only warning countdown, and `SESSION_ACTIVITY_REFRESH_INTERVAL_MS` (optional, default 600000 = 10 min) throttles server-side session-activity writes — see "Idle auto-logout (tab inactivity) — Neon-optimized" above. `TURNSTILE_SITE_KEY` + `TURNSTILE_SECRET_KEY` (optional pair) enable the invisible Cloudflare Turnstile login gate — see "Cloudflare Turnstile (invisible) login gate" above.
+On Vercel, set in Settings → Environment Variables: `DISCORD_TOKEN2` (the primary bot token — checked first by `utils/tokenResolver.js`), `DISCORD_TOKEN` (legacy fallback), `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DATABASE_URL` (with `?sslmode=require` if the host needs SSL), `FALLBACK_DATABASE_URL` (optional shared fallback for every per-feature pool whose own var is unset — see "Database connection fallback — FALLBACK_DATABASE_URL" above), `SESSION_SECRET`, `DASHBOARD_BASE_URL` (= `https://<prod>.vercel.app`), `DISCORD_REDIRECT_URI` (= `<DASHBOARD_BASE_URL>/auth/callback`, registered in the Discord Developer Portal), `WELCOME_DATABASE_URL` (separate pool for welcome settings), `REACTION_DATABASE_URL` (separate pool for reaction-role menus; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `AUTOMOD_DATABASE_URL` (separate pool for automod settings/warnings; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `ANUKE_DATABASE_URL` (separate pool for the Anti-Nuke settings/incidents/dedup/lockdown tables; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset — all shard nodes must share it), `TICKET_DATABASE_URL` (separate pool for ticket panels/instances; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `TCLAIM_DATABASE_URL` (separate pool for the ticket claim system — `ticket_claims` table via `server/tclaimDb.js` `tclaimPool`; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `LIVE_DATABASE_URL` (separate pool for live giveaways AND live polls; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `EVENT_DATABASE_URL` (separate pool for event schedules/tasks; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `LOG_DATABASE_URL` (separate pool for server logging settings + website logs; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `ALOG_DATABASE_URL` (separate pool for the dashboard **audit log** `website_logs` table — `server/alogDb.js`; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `TROLE_DATABASE_URL` (separate pool for per-panel ticket role add/remove settings — `server/troleDb.js`; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `TLOG_DATABASE_URL` (separate pool for per-panel **ticket logging** settings — `ticket_logging_settings` in `server/tlogDb.js`; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `BETA_DATABASE_URL` (separate pool for beta settings; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `SEASON_DATABASE_URL` (separate pool for the dashboard session store `primebot_dashboard_session` + the shardnode failover service `bot_node_status`/`bot_failover_lock` tables; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset — works in single-DB setups with zero extra config), and `COMMUNITY_DATABASE_URL` (separate pool for the per-server static polls `polls`/`poll_options`/`poll_votes`, static giveaways `giveaways`/`giveaway_participants`/`giveaway_winners`, and the counting game `counting_games`; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset — works in single-DB setups with zero extra config). `EVENT_EXEC_INTERVAL_MS` (optional, default 5000) controls how often the bot's event scheduler wakes to fire due tasks. `SESSION_IDLE_TIMEOUT_MS` (optional, default 1800000 = 30 min) is the dashboard idle auto-logout window in ms, `SESSION_WARNING_MS` (optional, default 1500000 = 25 min) starts the client-only warning countdown, and `SESSION_ACTIVITY_REFRESH_INTERVAL_MS` (optional, default 600000 = 10 min) throttles server-side session-activity writes — see "Idle auto-logout (tab inactivity) — Neon-optimized" above. `TURNSTILE_SITE_KEY` + `TURNSTILE_SECRET_KEY` (optional pair) enable the invisible Cloudflare Turnstile login gate — see "Cloudflare Turnstile (invisible) login gate" above.
 
 ## Beta program feature
 
@@ -302,11 +302,11 @@ A second gating layer alongside beta. Any tab in `render/guild.js` `TABS` can ca
 - **Tab nav:** a tab with `upcoming: true` shows a **SOON** badge (`render/guild.js` `tabNavHTML` → `.soon-badge`).
 - **Page render:** `dashboard/render/guild-pages.js` `upcomingOverlayWrap(innerPanelHTML, { icon, title })` wraps the real panel markup in a `.upcoming-locked-wrap.locked` (blurred + `pointer-events:none` + `user-select:none`) with a `.upcoming-locked-overlay` containing a `.upcoming-graphic` (orb + animated dots) + `.upcoming-title` (`<title>……`) + a "still in the workshop, check back soon" message. The underlying editor markup is kept (just blurred) so flipping `upcoming: false` later re-enables the feature with no markup rewrite.
 - **Client guard:** `dashboard/public/js/events.js` (and any upcoming-gated page's JS) early-exits when it detects `.upcoming-locked-wrap.locked` (in addition to `.beta-locked-wrap.locked`) so no API calls/bindings run behind the overlay.
-- **API guard:** `dashboard/auth.js` `requireUpcoming` middleware — returns `403 { reason: 'upcoming' }` for ordinary users (the feature isn't usable from the API either). Applied to the events write endpoints (POST/PATCH/DELETE/POST start/cancel) **and the Anti-Nuke write endpoint** (`PATCH /api/guilds/:guildId/antinuke`) in `dashboard/server.js`, replacing the previous `requireBeta` on the events routes (upcoming takes priority). Read endpoints (GET) stay open. **Developer/owner bot roles bypass it** (`canBypassFeatureGates`), so privileged users can exercise the feature from the API too.
-- **Developer/owner bypass is consistent across EVERY upcoming page.** `requireGuildAdminPage` sets `req.guild._bypassUpcoming` (from `canBypassFeatureGates`), and each upcoming page must skip the overlay when it is set: `eventsPage` and `antiNukePageHTML` both do `guild._bypassUpcoming ? innerPanelHTML : upcomingOverlayWrap(innerPanelHTML)`. Anti-Nuke originally wrapped unconditionally, so developer/owner users still saw "Coming Soon" there even though Events worked — the two must stay in lockstep. `tests/upcomingBypass.test.js` covers both pages.
+- **API guard:** `dashboard/auth.js` `requireUpcoming` middleware — returns `403 { reason: 'upcoming' }` for ordinary users (the feature isn't usable from the API either). Applied to the Event Management write endpoints (POST/PATCH/DELETE/POST start/cancel) in `dashboard/server.js`. Read endpoints (GET) stay open. **Developer/owner bot roles bypass it** (`canBypassFeatureGates`), so privileged users can exercise the feature from the API too. **Anti-Nuke no longer carries this gate** — see "Anti-Nuke protection system (released)".
+- **Developer/owner bypass applies to every upcoming page.** `requireGuildAdminPage` sets `req.guild._bypassUpcoming` (from `canBypassFeatureGates`), and each upcoming page must skip the overlay when it is set. `eventsPage` is the remaining upcoming page; Anti-Nuke was RELEASED and renders its real content for every authorized admin. `tests/upcomingBypass.test.js` covers both.
 - **Tickets is RELEASED (not upcoming):** the 🎫 Tickets tab has no `upcoming`/`beta` flag, `ticketsPage` renders the panel list directly (no overlay), and the ticket write endpoints use only `requireAuth + requireGuildAdmin` (no `requireUpcoming`). `public/js/tickets.js` binds unconditionally. Tests: `tests/upcomingBypass.test.js` still covers `eventsPage` (which remains upcoming).
 - **Event Management:** the 📅 Events tab is `upcoming: true` (it was previously beta-gated). It stays visible in the sidebar (discoverable) but shows the "Coming Soon……" overlay for ordinary users; developer/owner bot roles get the real editor.
-- **Anti-Nuke:** the ️ Anti-Nuke tab is also `upcoming: true` and follows the SAME bypass — developer/owner bot roles (`guild._bypassUpcoming`) get the real editor so the feature can be exercised, ordinary users see the overlay.
+- **Anti-Nuke is RELEASED (not upcoming):** the 🛡️ Anti-Nuke tab has no `upcoming`/`beta` flag, `antiNukePage` renders the real setup chooser / wizard / console directly (no overlay), and every `/api/guilds/:guildId/antinuke*` endpoint uses only `requireAuth + requireGuildAdmin`. See "Anti-Nuke protection system (released)".
 - **CSS:** `.soon-badge`, `.upcoming-locked-wrap`, `.upcoming-locked-overlay`, `.upcoming-graphic`, `.upcoming-title` in `dashboard/public/styles.css`.
 - **Tickets tab panel list refreshes on page load:** `ticketsPage` renders an empty `.rr-list` placeholder server-side — panel cards are rendered client-side by `dashboard/public/js/tickets.js` `refreshTicketList()`. The script calls `refreshTicketList()` once on load (right after `bindTicketCardActions()`), so existing panels appear in the tab without any interaction. **Tickets is RELEASED** (the `upcoming: true` flag was removed from `render/guild.js` `TABS`, and the `requireUpcoming` guard was dropped from the ticket write endpoints) — there is no lock overlay anymore. If someone reports "created panels don't show in Tickets tab", check that `refreshTicketList()` runs — previously it was only called by the Create/Resend flows, so a page-load never populated the list.
 
@@ -515,9 +515,9 @@ The Embed Builder saves embeds, but posting one from Discord needed two new comm
 - **Premium badge helper:** the pages use one `.embed-builder-badge` (reusing the Embed Builder styling) wrapped in `.card-title-actions` alongside any Refresh button, so the badge and action sit in a right-hand cluster. `Live Polls`, `Live Giveaways`, `Role Rewards` and `Badges` pages carry it; the Embed Builder page also documents "how to send the embed" via a page-only `.embed-send-hint` block — **NOT a nav entry**.
 - **Tests:** `tests/embedPayload.test.js` (12) + `tests/embedSendCommand.test.js` (30). The latter drives the prefix path **through the real `messageCreate` handler** (needs `global.botActive = true` — the handler silently drops everything otherwise — and a channel stub whose `permissionsFor().has()` answers the EmbedLinks check), which is what caught bug #1. When stubbing this way, re-require `events/messageCreate.js` after installing the store stub AND keep the stub installed for the whole test (a `loadCommand()` that deletes the store from `require.cache` wipes it).
 
-## AutoMod premium redesign + Anti-Nuke tab (Coming Soon)
+## AutoMod premium redesign + Anti-Nuke tab (released)
 
-The Automod dashboard tab was rebuilt as a premium moderation console, and **Anti-Nuke was split into its own sidebar tab** flagged `upcoming: true` (renders the standard "Coming Soon……" overlay).
+The Automod dashboard tab was rebuilt as a premium moderation console, and **Anti-Nuke was split into its own sidebar tab**. Anti-Nuke is now RELEASED — it renders a real setup wizard + protection console (no "Coming Soon" overlay); see "Anti-Nuke protection system (released)" below.
 
 ### Dashboard structure
 
@@ -555,6 +555,105 @@ The page uses the floating `saveBar` (see "Dashboard save pattern"): every field
 **Gotcha when adding an API route:** the route list in `automodHttp.test.js` is enumerated by hand. A new endpoint without a 401 assertion is untested — add it there.
 
 **Gotcha when adding an out-of-band save:** any control the page persists on its own (rather than through the floating bar) must call `window.saveBar.syncControl(el)` on success. Without it the bar shows a permanent, unsaveable "unsaved changes" state for that field. Do NOT call `syncControl` on failure — the control must stay dirty so the user can retry. `saveBar.syncControl` only re-baselines the one element (a full `resnapshot()` would swallow unrelated pending edits).
+
+## Anti-Nuke protection system (released)
+
+Per-guild protection against destructive admin actions, built on the pre-existing
+`utils/antiNukeManager.js` + `utils/antiNukeRules.js` foundation. **Released** — the
+`upcoming: true` flag is gone from `render/guild.js` TABS and every endpoint uses only
+`requireAuth + requireGuildAdmin`.
+
+### Pipeline (real audit-log detection, never an event guess)
+
+    gateway event → audit-log correlation → responsible user → trust check →
+    burst detector → risk evaluation → response (alert / containment / lockdown)
+
+- **`events/guildAuditLogEntryCreate.js`** consumes the live audit-log stream when
+  available (`GuildModeration` intent) and feeds `AntiNukeManager.processEvent`. A
+  single fallback listener loop in `index.js` (`ANTI_NUKE_FALLBACK_SOURCES`, 8 sources:
+  channel/role create/update/delete, guildBanAdd, guildUpdate) covers deployments where
+  the stream is unavailable — each source is registered exactly once, and
+  `processFromEvent` short-circuits once `_auditStreamAvailable` is set (no duplicate
+  API round trips). **No duplicate listeners**: one listener per event, not per module.
+- **`utils/antiNukeAudit.js`** correlates a gateway event to its audit entry: target-id
+  validation, timestamp window, bounded retry, duplicate-audit-entry protection, and
+  `missingPermission` detection when the bot lacks View Audit Log. An unattributable
+  burst alerts but **never contains** (`_handleUnattributed`).
+- **`utils/antiNukeDetector.js`** — bounded `SlidingWindow` per (guild, action, executor):
+  4000 windows max, 200 entries/window, 30s prune. No unbounded Maps, no per-message DB.
+- **`utils/antiNukeContainment.js`** — `buildSecurityAlertEmbed` (severity colours,
+  never pings @everyone/@here), `computeDangerousRoleRemovals` + `stripDangerousRoles`
+  (removes only roles granting the configured dangerous permissions, never owner/bot/
+  trusted, never a role ≥ the bot's highest), `applyLockdown` / `restoreLockdown` /
+  `planInvitePause` (reversible; refuses to restore over an admin change made after
+  lockdown). `validateBotPermissions` / `validatePermissionsFromBitfield` power the
+  honest missing-permission warning. `overwriteBits()` tolerates both a discord.js
+  `Permissions` instance and a raw bitfield so restore never assumes `.deny.bitfield`.
+
+### Seven protection modules (all from the `NUKE_ACTIONS` catalog)
+
+channel (deletion/creation/update/category deletion/overwrite changes), role
+(deletion/creation/permission changes), member (mass ban/kick/role changes), webhook
+(create/delete/change), bot (addition/permission escalation), server (name/icon/
+verification), permission (Administrator + Manage-* grants). Every action maps to a
+`discord.js` `AuditLogEvent`; the catalog is the single source of truth.
+
+### Setup wizard (automatic + manual) with real progress
+
+- **`utils/antiNukeSetup.js`** — step catalogs (`AUTOMATIC_STEPS` 8 required,
+  `MANUAL_SECTIONS` 10 with `trust` optional), `normalizeSetupState`, `applyStep`,
+  `computeProgress` (percentage derived from **real step state**, optional steps never
+  in the denominator), `isComplete`, `diffRecommended`. Pure, no DB/Discord.
+- **`utils/antiNukeSetupRunner.js`** — `runNextStep` / `runAll` execute the ACTUAL
+  backend operation per step (inspection → permissions → settings → rules → thresholds
+  → alert channel → save → validate). `resolveAlertChannel` accepts both a live
+  discord.js guild and the dashboard's REST descriptor shim (a descriptor has no
+  `.send`), so the wizard can complete from the dashboard too.
+- **`dashboard/antiNukeActions.js`** — dashboard-side lockdown/restore over REST
+  (`engageLockdown`/`restoreLockdown`/`saveLockdown`/`recordLockdownIncident`) plus
+  `buildDashboardGuildShim` / `buildDashboardManagerShim` for the setup runner.
+- Progress persists in `antinuke_settings.setup_state` (JSONB) — survives refresh,
+  browser close, bot restart. Resume re-reads state and re-validates permissions.
+
+### Storage — ANUKE_DATABASE_URL (no new database)
+
+`server/anukeDb.js` → `anukePool` (`ANUKE_DATABASE_URL` → `FALLBACK_DATABASE_URL` →
+`DATABASE_URL`). Tables: `antinuke_settings` (existing columns preserved + `setup_method`
+/ `setup_status` / `setup_state` / `dangerous_permissions` / `response_cooldown_seconds` /
+`lockdown`), `antinuke_incidents` (indexed on guild_id + created_at + executor_id + action),
+`antinuke_dedup` (atomic cross-node claim via PRIMARY KEY + `ON CONFLICT DO NOTHING`),
+`antinuke_lockdowns`. Migration `migrations/0027_add_antinuke_protection.sql` is idempotent
+and mirrors `shared/schema.js`.
+
+### Cross-node (three shard nodes)
+
+Only the node that owns a guild's shard receives its gateway events (Discord delivers to
+that node), so no node processes a guild it does not have cached. When a response is about
+to fire, the incident is claimed atomically in `antinuke_dedup` — a DB-backed lock, **not**
+an in-memory Map — so a duplicate observation (audit retry, reconnect replay) on another
+node cannot double-respond. All nodes share one `ANUKE_DATABASE_URL`.
+
+### Dashboard + commands
+
+- Console (`/guild/:guildId/antinuke`): protection overview, master toggle, threat
+  detection per module, trusted users/roles, response configuration, alert channel,
+  dry-run, lockdown controls, security activity table. Setup chooser + manual wizard.
+- API: GET/PATCH `/api/guilds/:guildId/antinuke`, POST `.../toggle`, GET `.../incidents`,
+  POST `.../lockdown`, and `.../setup` (start/resume/progress/step/complete/reset). All
+  validated server-side; guild ids come from the authenticated route param.
+- `/antinuke` + prefix `antinuke`/`an` (ManageGuild): status / setup / enable / disable /
+  whitelist / lockdown / restore. Setup buttons: `antinuke:setup:automatic|manual|progress`.
+- **Dry-run is the default** for a newly enabled config: detection + alerting, zero
+  containment. Never auto-ban/kick a moderator.
+
+### Tests
+
+`tests/antiNuke.test.js` (47) — catalog, detector, trust/owner/bot exemption, thresholds,
+dedup, dry-run, containment planning, lockdown reversibility, alert-channel resolution.
+`tests/automodHttp.test.js` — the real dashboard boot with a signed session: all 12
+Anti-Nuke routes 401 unauthenticated, validation rejects, guild isolation, and the
+authenticated admin happy path. `tests/upcomingBypass.test.js` + `tests/automodDashboard.test.js`
+assert the RELEASED state (no overlay, real controls, no pre-activated master switch).
 
 ## Event Management feature (📅 Event Management tab) — SOON (developer-exercisable)
 

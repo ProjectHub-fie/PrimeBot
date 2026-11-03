@@ -16,7 +16,13 @@ const { PRESETS: AUTOMOD_PRESETS } = require('../utils/automodPresets');
 const {
     NUKE_ACTIONS: ANTINUKE_ACTIONS,
     NUKE_RESPONSES: ANTINUKE_RESPONSES,
+    NUKE_MODULES: ANTINUKE_MODULES,
+    DANGEROUS_PERMISSIONS: ANTINUKE_DANGEROUS_PERMISSIONS,
 } = require('../utils/antiNukeRules');
+const {
+    AUTOMATIC_STEPS: ANTINUKE_AUTO_STEPS,
+    MANUAL_SECTIONS: ANTINUKE_MANUAL_SECTIONS,
+} = require('../utils/antiNukeSetup');
 
 module.exports = {
     // OAuth scopes requested at login. "guilds" lets us list the admin's servers.
@@ -101,9 +107,15 @@ module.exports = {
     // Ready-made protection profiles (utils/automodPresets.js).
     AUTOMOD_PRESETS,
 
-    // Anti-Nuke catalogs (utils/antiNukeRules.js) for the upcoming Anti-Nuke tab.
+    // Anti-Nuke catalogs (utils/antiNukeRules.js) for the Anti-Nuke tab.
     ANTINUKE_ACTIONS,
     ANTINUKE_RESPONSES,
+    ANTINUKE_MODULES,
+    ANTINUKE_DANGEROUS_PERMISSIONS,
+    // Setup wizard catalogs (utils/antiNukeSetup.js) — shared by the dashboard
+    // and the /antinuke setup command so both describe the same steps.
+    ANTINUKE_AUTO_STEPS,
+    ANTINUKE_MANUAL_SECTIONS,
 
     // Incident retention choices offered on the Automod → Settings section.
     AUTOMOD_RETENTION_OPTIONS: [

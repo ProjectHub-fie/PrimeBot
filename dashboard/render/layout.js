@@ -32,7 +32,9 @@ function esc(str) {
  * to inline. Use this for every `window.__X = ...` injection.
  */
 function jsonForScript(value) {
-    return JSON.stringify(value === undefined ? null : value)
+    // BigInt is not JSON-serializable; render it as a string (a permission
+    // bitfield is only ever compared, never arithmetic'd, client-side).
+    return JSON.stringify(value === undefined ? null : value, (k, v) => (typeof v === 'bigint' ? v.toString() : v))
         .replace(/</g, '\\u003c')
         .replace(/\u2028/g, '\\u2028')
         .replace(/\u2029/g, '\\u2029');

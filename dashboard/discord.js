@@ -227,6 +227,49 @@ async function getBotHighestRolePosition(guildId) {
     }
 }
 
+// ── Guild mutation helpers (used by the dashboard's Anti-Nuke lockdown) ─────
+//
+// The dashboard is a separate process from the bot, so a lockdown it triggers
+// cannot call discord.js guild methods — it performs the same operations over
+// REST with the bot token. These are the minimal primitives.
+
+/** Raw guild object (includes `verification_level`, `name`, `icon`). */
+async function getGuildRaw(guildId) {
+    return fetchJson(`${API_BASE}/guilds/${guildId}`, { headers: botHeaders() });
+}
+
+/** Patch guild settings (e.g. `{ verification_level: 3 }`). */
+async function patchGuild(guildId, body = {}) {
+    return fetchJson(`${API_BASE}/guilds/${guildId}`, {
+        method: 'PATCH',
+        headers: { ...botHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+}
+
+/** All channels of every type (includes `permission_overwrites`). */
+async function getGuildChannelsRaw(guildId) {
+    const channels = await fetchJson(`${API_BASE}/guilds/${guildId}/channels`, { headers: botHeaders() });
+    return Array.isArray(channels) ? channels : [];
+}
+
+/** Upsert a channel permission overwrite. `body` = { allow, deny, type }. */
+async function putChannelOverwrite(channelId, overwriteId, body = {}) {
+    return fetchJson(`${API_BASE}/channels/${channelId}/permissions/${overwriteId}`, {
+        method: 'PUT',
+        headers: { ...botHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+}
+
+/** Delete a channel permission overwrite (restores the inherited state). */
+async function deleteChannelOverwrite(channelId, overwriteId) {
+    return fetchJson(`${API_BASE}/channels/${channelId}/permissions/${overwriteId}`, {
+        method: 'DELETE',
+        headers: botHeaders(),
+    });
+}
+
 /**
  * Get text channels of a guild for channel selectors.
  */
@@ -355,6 +398,42 @@ function canManageGuild(permissions) {
            (p & BigInt(MANAGE_GUILD_PERMISSION)) !== 0n;
 }
 
+/**
+ * Compute the bot's permissions in a guild from its roles, so the dashboard can
+ * show an honest "missing permissions" warning for Anti-Nuke. The bot's member
+ * object carries its role ids; the guild's roles carry the permission bits.
+ * A role with Administrator implies every permission.
+ *
+ * Returns a BigInt bitfield, or null when it cannot be determined.
+ */
+function computeBotPermissions(guildId, botUserId) {
+    return (async () => {
+        try {
+            const member = await getBotMember(guildId, botUserId);
+            const botRoleIds = Array.isArray(member && member.roles) ? member.roles : [];
+            const roles = await fetchJson(`${API_BASE}/guilds/${guildId}/roles`, { headers: botHeaders() });
+            let perms = 0n;
+            const byId = new Map((roles || []).map(r => [r.id, r]));
+            // @everyone's permissions apply to every member.
+            const everyone = (roles || []).find(r => r.id === guildId);
+            if (everyone && everyone.permissions != null) perms |= BigInt(everyone.permissions);
+            for (const id of botRoleIds) {
+                const role = byId.get(id);
+                if (role && role.permissions != null) perms |= BigInt(role.permissions);
+            }
+            const ADMIN = 8n;
+            if ((perms & ADMIN) === ADMIN) return ADMINISTRATOR_PERMISSION_FULL;
+            return perms;
+        } catch (err) {
+            console.warn('[DASHBOARD] computeBotPermissions failed:', err.message);
+            return null;
+        }
+    })();
+}
+
+// Every permission bit Discord defines (administrator implies all of them).
+const ADMINISTRATOR_PERMISSION_FULL = 0xFFFFFFFFFFFFFn;
+
 module.exports = {
     API_BASE,
     exchangeCode,
@@ -371,6 +450,12 @@ module.exports = {
     getGuildMemberRoles,
     getGuildRoles,
     canManageGuild,
+    computeBotPermissions,
+    getGuildRaw,
+    patchGuild,
+    getGuildChannelsRaw,
+    putChannelOverwrite,
+    deleteChannelOverwrite,
     fetchJson,
     sendChannelMessage,
     editChannelMessage,

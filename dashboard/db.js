@@ -1454,6 +1454,60 @@ const ANTINUKE_DDL = `
     );
 `;
 
+// Extended columns (safe migration via ADD COLUMN IF NOT EXISTS).
+const ANTINUKE_ALTER_SQL = [
+    `ALTER TABLE antinuke_settings ADD COLUMN IF NOT EXISTS dangerous_permissions JSONB NOT NULL DEFAULT '["Administrator","ManageGuild","ManageRoles","ManageChannels"]'`,
+    `ALTER TABLE antinuke_settings ADD COLUMN IF NOT EXISTS lockdown JSONB NOT NULL DEFAULT '{"enabled":true,"verificationLevel":"high","pauseInvites":true}'`,
+    `ALTER TABLE antinuke_settings ADD COLUMN IF NOT EXISTS response_cooldown_seconds INTEGER NOT NULL DEFAULT 30`,
+    `ALTER TABLE antinuke_settings ADD COLUMN IF NOT EXISTS setup_method VARCHAR(20)`,
+    `ALTER TABLE antinuke_settings ADD COLUMN IF NOT EXISTS setup_status VARCHAR(20) NOT NULL DEFAULT 'not_started'`,
+    `ALTER TABLE antinuke_settings ADD COLUMN IF NOT EXISTS setup_state JSONB NOT NULL DEFAULT '{}'`,
+];
+
+const ANTINUKE_INCIDENT_DDL = `
+    CREATE TABLE IF NOT EXISTS antinuke_incidents (
+        id                SERIAL PRIMARY KEY,
+        guild_id          VARCHAR(50) NOT NULL,
+        executor_id       VARCHAR(50),
+        executor_name     VARCHAR(120),
+        action            VARCHAR(60) NOT NULL,
+        module            VARCHAR(30),
+        severity          VARCHAR(20) NOT NULL DEFAULT 'medium',
+        count             INTEGER NOT NULL DEFAULT 0,
+        threshold         INTEGER NOT NULL DEFAULT 0,
+        window_seconds    INTEGER NOT NULL DEFAULT 0,
+        response_taken    JSONB NOT NULL DEFAULT '[]',
+        response_result   JSONB NOT NULL DEFAULT '{}',
+        response_ok       BOOLEAN NOT NULL DEFAULT false,
+        dry_run           BOOLEAN NOT NULL DEFAULT false,
+        attribution       VARCHAR(30) NOT NULL DEFAULT 'unknown',
+        details           TEXT NOT NULL DEFAULT '',
+        created_at        TIMESTAMP DEFAULT NOW()
+    );
+`;
+const ANTINUKE_INCIDENT_INDEX_SQL = [
+    `CREATE INDEX IF NOT EXISTS antinuke_incidents_guild_created_idx ON antinuke_incidents (guild_id, created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS antinuke_incidents_guild_action_idx ON antinuke_incidents (guild_id, action)`,
+    `CREATE INDEX IF NOT EXISTS antinuke_incidents_executor_idx ON antinuke_incidents (guild_id, executor_id)`,
+];
+
+const ANTINUKE_LOCKDOWN_DDL = `
+    CREATE TABLE IF NOT EXISTS antinuke_lockdowns (
+        guild_id        VARCHAR(50) PRIMARY KEY,
+        active          BOOLEAN NOT NULL DEFAULT false,
+        started_at      TIMESTAMP DEFAULT NOW(),
+        started_by      VARCHAR(50),
+        reason          TEXT NOT NULL DEFAULT '',
+        state           JSONB NOT NULL DEFAULT '{}',
+        updated_at      TIMESTAMP DEFAULT NOW()
+    );
+`;
+
+const ANTINUKE_SETTINGS_COLUMNS = `guild_id, enabled, alert_channel_id, responses,
+    trusted_user_ids, trusted_role_ids, watched, dry_run,
+    dangerous_permissions, lockdown, response_cooldown_seconds,
+    setup_method, setup_status, setup_state, updated_at`;
+
 async function ensureAutomodIncidentsTable() {
     return once('automodIncidentsTable', async () => {
         await getAutomodPool().query(AUTOMOD_INCIDENTS_DDL);
@@ -1569,17 +1623,18 @@ async function ensureAntiNukeTable() {
     return once('antiNukeTable', async () => {
         const { anukePool } = require('../server/anukeDb');
         await anukePool.query(ANTINUKE_DDL);
+        for (const sql of ANTINUKE_ALTER_SQL) await anukePool.query(sql);
+        await anukePool.query(ANTINUKE_INCIDENT_DDL);
+        for (const sql of ANTINUKE_INCIDENT_INDEX_SQL) await anukePool.query(sql);
+        await anukePool.query(ANTINUKE_LOCKDOWN_DDL);
     });
 }
 
-async function getAntiNukeSettings(guildId) {
-    await ensureAntiNukeTable();
-    const { anukePool } = require('../server/anukeDb');
+/** Map a settings row to the canonical shape (incl. setup metadata). */
+function antiNukeRowToSettings(row) {
     const { normalizeAntiNukeSettings } = require('../utils/antiNukeRules');
-    const res = await anukePool.query('SELECT * FROM antinuke_settings WHERE guild_id = $1', [guildId]);
-    if (res.rows.length === 0) return normalizeAntiNukeSettings({});
-    const row = res.rows[0];
-    return normalizeAntiNukeSettings({
+    const { normalizeSetupState } = require('../utils/antiNukeSetup');
+    const normalized = normalizeAntiNukeSettings({
         enabled: row.enabled,
         alertChannelId: row.alert_channel_id || null,
         responses: row.responses,
@@ -1587,36 +1642,156 @@ async function getAntiNukeSettings(guildId) {
         trustedRoleIds: row.trusted_role_ids,
         watched: row.watched,
         dryRun: row.dry_run !== false,
+        dangerousPermissions: row.dangerous_permissions,
+        lockdown: row.lockdown,
+        responseCooldownSeconds: row.response_cooldown_seconds,
         updatedAt: row.updated_at || null,
     });
+    normalized.setupMethod = row.setup_method || null;
+    normalized.setupStatus = row.setup_status || 'not_started';
+    normalized.setupState = normalizeSetupState(row.setup_state || {});
+    return normalized;
+}
+
+async function getAntiNukeSettings(guildId) {
+    await ensureAntiNukeTable();
+    const { anukePool } = require('../server/anukeDb');
+    const { normalizeAntiNukeSettings } = require('../utils/antiNukeRules');
+    const res = await anukePool.query(`SELECT ${ANTINUKE_SETTINGS_COLUMNS} FROM antinuke_settings WHERE guild_id = $1`, [guildId]);
+    if (res.rows.length === 0) return normalizeAntiNukeSettings({});
+    return antiNukeRowToSettings(res.rows[0]);
 }
 
 async function upsertAntiNukeSettings(guildId, patch = {}) {
     const { anukePool } = require('../server/anukeDb');
     const { normalizeAntiNukeSettings } = require('../utils/antiNukeRules');
+    const { normalizeSetupState } = require('../utils/antiNukeSetup');
     const current = await getAntiNukeSettings(guildId);
     const merged = normalizeAntiNukeSettings({ ...current, ...patch });
+    // Setup metadata is not part of the detection shape — carry it through.
+    const setupMethod = patch.setupMethod !== undefined ? patch.setupMethod : (current.setupMethod || null);
+    const setupStatus = patch.setupStatus !== undefined ? patch.setupStatus : (current.setupStatus || 'not_started');
+    const setupState = patch.setupState !== undefined
+        ? normalizeSetupState(patch.setupState)
+        : normalizeSetupState(current.setupState || {});
     await anukePool.query(`
         INSERT INTO antinuke_settings (
             guild_id, enabled, alert_channel_id, responses,
-            trusted_user_ids, trusted_role_ids, watched, dry_run, updated_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())
+            trusted_user_ids, trusted_role_ids, watched, dry_run,
+            dangerous_permissions, lockdown, response_cooldown_seconds,
+            setup_method, setup_status, setup_state, updated_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,NOW())
         ON CONFLICT (guild_id) DO UPDATE SET
-            enabled          = EXCLUDED.enabled,
-            alert_channel_id = EXCLUDED.alert_channel_id,
-            responses        = EXCLUDED.responses,
-            trusted_user_ids = EXCLUDED.trusted_user_ids,
-            trusted_role_ids = EXCLUDED.trusted_role_ids,
-            watched          = EXCLUDED.watched,
-            dry_run          = EXCLUDED.dry_run,
-            updated_at       = NOW()
+            enabled                   = EXCLUDED.enabled,
+            alert_channel_id          = EXCLUDED.alert_channel_id,
+            responses                 = EXCLUDED.responses,
+            trusted_user_ids          = EXCLUDED.trusted_user_ids,
+            trusted_role_ids          = EXCLUDED.trusted_role_ids,
+            watched                   = EXCLUDED.watched,
+            dry_run                   = EXCLUDED.dry_run,
+            dangerous_permissions     = EXCLUDED.dangerous_permissions,
+            lockdown                  = EXCLUDED.lockdown,
+            response_cooldown_seconds = EXCLUDED.response_cooldown_seconds,
+            setup_method              = EXCLUDED.setup_method,
+            setup_status              = EXCLUDED.setup_status,
+            setup_state               = EXCLUDED.setup_state,
+            updated_at                = NOW()
     `, [
         guildId, merged.enabled, merged.alertChannelId,
         JSON.stringify(merged.responses), JSON.stringify(merged.trustedUserIds),
         JSON.stringify(merged.trustedRoleIds), JSON.stringify(merged.watched),
         merged.dryRun !== false,
+        JSON.stringify(merged.dangerousPermissions), JSON.stringify(merged.lockdown),
+        merged.responseCooldownSeconds,
+        setupMethod, setupStatus, JSON.stringify(setupState),
     ]);
+    merged.setupMethod = setupMethod;
+    merged.setupStatus = setupStatus;
+    merged.setupState = setupState;
     return merged;
+}
+
+/** Read the persisted setup state only (the wizard resumes from this). */
+async function getAntiNukeSetup(guildId) {
+    const settings = await getAntiNukeSettings(guildId);
+    return {
+        method: settings.setupMethod || null,
+        status: settings.setupStatus || 'not_started',
+        state: settings.setupState || null,
+    };
+}
+
+/** Persist only the setup state (atomic single-column update). */
+async function saveAntiNukeSetup(guildId, { method = null, status = 'not_started', state = null } = {}) {
+    await ensureAntiNukeTable();
+    const { anukePool } = require('../server/anukeDb');
+    const { normalizeSetupState } = require('../utils/antiNukeSetup');
+    const normalized = normalizeSetupState(state || {});
+    await anukePool.query(`
+        INSERT INTO antinuke_settings (guild_id, setup_method, setup_status, setup_state, updated_at)
+        VALUES ($1,$2,$3,$4,NOW())
+        ON CONFLICT (guild_id) DO UPDATE SET
+            setup_method = EXCLUDED.setup_method,
+            setup_status = EXCLUDED.setup_status,
+            setup_state  = EXCLUDED.setup_state,
+            updated_at   = NOW()
+    `, [guildId, method, status, JSON.stringify(normalized)]);
+    return { method, status, state: normalized };
+}
+
+/** Paginated incident ledger (parameterized; capped). */
+async function getAntiNukeIncidents(guildId, { action = null, severity = null, executorId = null, dryRun = null, limit = 25, offset = 0 } = {}) {
+    await ensureAntiNukeTable();
+    const { anukePool } = require('../server/anukeDb');
+    const { rowToIncident } = require('../utils/antiNukeManager');
+    const where = ['guild_id = $1'];
+    const params = [String(guildId)];
+    const push = (v) => { params.push(v); return `$${params.length}`; };
+    if (action) where.push(`action = ${push(String(action))}`);
+    if (severity) where.push(`severity = ${push(String(severity))}`);
+    if (executorId) where.push(`executor_id = ${push(String(executorId))}`);
+    if (dryRun === true) where.push('dry_run = true');
+    if (dryRun === false) where.push('dry_run = false');
+    const lim = Math.min(100, Math.max(1, parseInt(limit, 10) || 25));
+    const off = Math.max(0, parseInt(offset, 10) || 0);
+    const whereSql = where.join(' AND ');
+    const [rows, count] = await Promise.all([
+        anukePool.query(`SELECT * FROM antinuke_incidents WHERE ${whereSql} ORDER BY created_at DESC LIMIT ${lim} OFFSET ${off}`, params),
+        anukePool.query(`SELECT COUNT(*)::int AS count FROM antinuke_incidents WHERE ${whereSql}`, params),
+    ]);
+    return { total: count.rows[0]?.count || 0, limit: lim, offset: off, incidents: rows.rows.map(rowToIncident) };
+}
+
+/** Aggregate incident summary for the activity overview. */
+async function getAntiNukeIncidentSummary(guildId, { days = 30 } = {}) {
+    await ensureAntiNukeTable();
+    const { anukePool } = require('../server/anukeDb');
+    const d = Math.min(365, Math.max(1, parseInt(days, 10) || 30));
+    const res = await anukePool.query(`
+        SELECT action, severity, COUNT(*)::int AS count,
+               SUM(CASE WHEN dry_run THEN 1 ELSE 0 END)::int AS dry_runs
+        FROM antinuke_incidents
+        WHERE guild_id = $1 AND created_at > NOW() - ($2 || ' days')::interval
+        GROUP BY action, severity
+        ORDER BY count DESC
+    `, [String(guildId), String(d)]);
+    const total = res.rows.reduce((sum, r) => sum + (r.count || 0), 0);
+    return { total, days: d, byAction: res.rows };
+}
+
+async function getAntiNukeLockdown(guildId) {
+    await ensureAntiNukeTable();
+    const { anukePool } = require('../server/anukeDb');
+    const res = await anukePool.query('SELECT * FROM antinuke_lockdowns WHERE guild_id = $1', [String(guildId)]);
+    if (res.rows.length === 0) return { active: false, state: null, startedAt: null, reason: '' };
+    const row = res.rows[0];
+    return {
+        active: row.active === true,
+        state: row.state || null,
+        startedAt: row.started_at || null,
+        startedBy: row.started_by || null,
+        reason: row.reason || '',
+    };
 }
 
 // ── Combined view (one fetch per guild for the settings page) ───────────────
@@ -3521,6 +3696,11 @@ module.exports = {
     getAutomodAnalytics,
     getAntiNukeSettings,
     upsertAntiNukeSettings,
+    getAntiNukeSetup,
+    saveAntiNukeSetup,
+    getAntiNukeIncidents,
+    getAntiNukeIncidentSummary,
+    getAntiNukeLockdown,
     ensureAutomodIncidentsTable,
     submitAutomodAppeal,
     getAutomodAppeals,

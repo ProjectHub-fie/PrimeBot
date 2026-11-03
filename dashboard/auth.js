@@ -300,6 +300,31 @@ async function requireGuildAdminPage(req, res, next) {
         req.guild._channels = channels;
         req.guild._roles = roles;
         req.guild._config = config;
+
+        // Anti-Nuke page extras: lockdown status, the bot's permission report
+        // (for the honest "missing permissions" warning) and the setup progress.
+        // Each degrades gracefully — a failure here must not break the page.
+        try {
+            const { validatePermissionsFromBitfield } = require('../utils/antiNukeContainment');
+            const { computeProgress } = require('../utils/antiNukeSetup');
+            const [lockdown, summary, botPerms] = await Promise.all([
+                dashboardDb.getAntiNukeLockdown(req.guild.id).catch(() => ({ active: false })),
+                dashboardDb.getAntiNukeIncidentSummary(req.guild.id).catch(() => ({ total: 0, byAction: [] })),
+                discord.computeBotPermissions(req.guild.id, process.env.DISCORD_CLIENT_ID).catch(() => null),
+            ]);
+            const antiNuke = config.antiNuke || {};
+            const method = antiNuke.setupMethod || null;
+            req.guild._config.antiNukeLockdown = lockdown;
+            req.guild._config.antiNukeSummary = summary;
+            req.guild._config.antiNukePermissions = validatePermissionsFromBitfield(botPerms);
+            req.guild._config.antiNukeSetup = {
+                method,
+                status: antiNuke.setupStatus || 'not_started',
+                progress: computeProgress(method || 'automatic', antiNuke.setupState || {}),
+            };
+        } catch (err) {
+            console.error('[AUTH] anti-nuke extras failed:', err.message);
+        }
         // Beta access flag (allowed && enabled) — developer/owner-role users
         // bypass the gate entirely (they can exercise beta features anywhere).
         // Degrades to false on any DB error so non-beta servers stay locked.

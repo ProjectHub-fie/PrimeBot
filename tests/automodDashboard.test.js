@@ -104,10 +104,27 @@ test('every element id the automod client reads is rendered by the page', () => 
 });
 
 test('every element id the antinuke client reads is rendered by the page', () => {
-    const html = renderAntiNuke();
-    const ids = idsIn(html);
+    // The console is the view that carries the settings controls, so it must
+    // render every id the client reads. Setup-only ids (an-resume-setup,
+    // an-reset-setup, an-progress-card) are rendered by the chooser, so both
+    // views are checked together.
+    const guild = fixture();
+    guild._config.antiNuke = { enabled: true, dryRun: true, watched: {}, responses: ['alertOwner'] };
+    guild._config.antiNukeSetup = { status: 'completed', progress: { percent: 100, completed: 8, total: 8, steps: [] } };
+    guild._config.antiNukePermissions = { ok: true, checks: [], missing: [] };
+    // The resume/reset buttons only render while a setup is in progress.
+    const inProgress = fixture();
+    inProgress._config.antiNukeSetup = { status: 'in_progress', progress: { percent: 25, completed: 2, total: 8, steps: [] } };
+    const ids = new Set([
+        ...idsIn(renderAntiNuke()),
+        ...idsIn(guildPages.antiNukePage({ guild, user: { username: 'u' } })),
+        ...idsIn(guildPages.antiNukePage({ guild: inProgress, user: { username: 'u' } })),
+        ...idsIn(guildPages.antiNukePage({ guild: fixture(), user: { username: 'u' }, view: 'wizard' })),
+    ]);
+    // Ids the client creates at runtime (not rendered server-side).
+    const CLIENT_CREATED = new Set(['an-activity-page']);
     const missing = [...clientIdRefs(path.join(__dirname, '..', 'dashboard', 'public', 'js', 'antinuke.js'))]
-        .filter(id => !ids.has(id));
+        .filter(id => !ids.has(id) && !CLIENT_CREATED.has(id));
     assert.deepEqual(missing, [], `client reads ids the page never renders: ${missing.join(', ')}`);
 });
 
@@ -134,38 +151,46 @@ test('the automod page loads its own script and the shared guild script', () => 
 
 // ── Anti-Nuke tab ───────────────────────────────────────────────────────────
 
-test('Anti-Nuke is its own sidebar tab and renders the Coming Soon overlay', () => {
+test('Anti-Nuke is its own RELEASED sidebar tab (no upcoming overlay)', () => {
     const tab = TABS.find(t => t.key === 'antinuke');
     assert.ok(tab, 'Anti-Nuke tab is missing from the server-features sidebar');
     assert.equal(tab.label, 'Anti-Nuke');
-    assert.equal(tab.upcoming, true, 'Anti-Nuke must be flagged upcoming (Coming Soon)');
+    assert.ok(!tab.upcoming, 'Anti-Nuke must be released — no upcoming flag');
 
     const html = renderAntiNuke();
-    assert.match(html, /upcoming-locked-wrap locked/, 'no blurred/inert wrapper');
-    assert.match(html, /Coming Soon/, 'no Coming Soon overlay');
+    assert.doesNotMatch(html, /upcoming-locked-wrap locked/, 'no blurred/inert wrapper');
+    assert.match(html, /PrimeBot Anti-Nuke/, 'the real page renders');
     assert.match(html, /antinuke\.js/, 'the Anti-Nuke page must load its client script');
 });
 
-test('the Anti-Nuke overlay blurs the real editor rather than replacing it', () => {
-    const html = renderAntiNuke();
-    // The underlying controls stay in the markup (blurred + inert), so removing
-    // the flag later re-enables the feature with no rewrite.
+test('the Anti-Nuke page renders the real editor controls (console view)', () => {
+    const guild = fixture();
+    guild._config.antiNuke = { enabled: true, dryRun: true, watched: {}, responses: ['alertOwner'] };
+    guild._config.antiNukeSetup = { status: 'completed', progress: { percent: 100, completed: 8, total: 8, steps: [] } };
+    guild._config.antiNukePermissions = { ok: true, checks: [], missing: [] };
+    const html = guildPages.antiNukePage({ guild, user: { username: 'u' } });
     assert.match(html, /id="an-enabled"/);
-    assert.match(html, /class="an-watch-card"/);
+    assert.match(html, /class="an-action-row"/);
     assert.match(html, /class="an-response"/);
 });
 
-test('the Anti-Nuke client exits when the Coming Soon overlay is present', () => {
-    const js = fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'public', 'js', 'antinuke.js'), 'utf8');
-    assert.match(js, /upcoming-locked-wrap\.locked/, 'client must detect the upcoming overlay');
-    assert.match(js, /return;/, 'client must exit early behind the overlay');
+test('the Anti-Nuke setup chooser requires an explicit action (never auto-enables)', () => {
+    const html = renderAntiNuke();
+    assert.match(html, /data-method="automatic"/);
+    assert.match(html, /data-method="manual"/);
+    // No control is pre-activated just by opening the page.
+    assert.doesNotMatch(html, /id="an-enabled"[^>]*checked/, 'the master switch must not be pre-checked');
 });
 
-test('Anti-Nuke renders watch cards for every catalog action', () => {
+test('Anti-Nuke renders watch rows for every catalog action', () => {
     const { NUKE_ACTIONS } = require('../utils/antiNukeRules');
-    const html = renderAntiNuke();
+    const guild = fixture();
+    guild._config.antiNuke = { enabled: true, dryRun: true, watched: {}, responses: ['alertOwner'] };
+    guild._config.antiNukeSetup = { status: 'completed', progress: { percent: 100, completed: 8, total: 8, steps: [] } };
+    guild._config.antiNukePermissions = { ok: true, checks: [], missing: [] };
+    const html = guildPages.antiNukePage({ guild, user: { username: 'u' } });
     for (const action of NUKE_ACTIONS) {
-        assert.ok(html.includes(`data-action="${action.key}"`), `no watch card for ${action.key}`);
+        assert.ok(html.includes(`data-action="${action.key}"`), `no watch row for ${action.key}`);
     }
 });
 
