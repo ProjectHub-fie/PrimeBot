@@ -45,6 +45,12 @@ const client = new Client({
         GatewayIntentBits.DirectMessages,
         GatewayIntentBits.DirectMessageReactions,
         GatewayIntentBits.MessageContent,
+        // GuildModeration delivers `guildAuditLogEntryCreate` — the primary,
+        // most reliable attribution source for Anti-Nuke (the audit entry names
+        // the executor directly, with no correlation guesswork). This is a
+        // privileged intent; enable it in the Discord Developer Portal →
+        // Bot → Privileged Gateway Intents.
+        GatewayIntentBits.GuildModeration,
     ],
     makeCache: Options.cacheWithLimits({
         ...Options.DefaultMakeCacheSettings,
@@ -267,6 +273,11 @@ async function initializeManagers() {
         client.antiNukeManager = {
             getSettings: () => ({ enabled: false, watched: {}, responses: [], dryRun: true }),
             updateSettings: (g, p) => ({ ...(p || {}) }),
+            isEnabled: () => false,
+            processEvent: async () => ({ handled: false, reason: 'manager_unavailable' }),
+            processFromEvent: async () => ({ handled: false, reason: 'manager_unavailable' }),
+            noteAuditStream: () => {},
+            getPermissionReport: () => ({ ok: false, checks: [], missing: [] }),
         };
     }
 
@@ -407,6 +418,44 @@ for (const file of eventFiles) {
     }
 }
 console.log('===== EVENTS LOADED =====\n');
+
+// ── Anti-Nuke per-event correlation fallback ──────────────────────────────
+//
+// The primary detection path is the `guildAuditLogEntryCreate` stream (its own
+// event file), which names the executor directly. This ONE listener covers the
+// case where that privileged intent is unavailable: each destructive gateway
+// event asks the manager to correlate the matching audit entry by target id.
+// The manager no-ops once the live stream has been observed, so on a
+// correctly-configured deployment these are free. A single listener (not one
+// per event type) keeps the listener count fixed.
+const ANTI_NUKE_FALLBACK_SOURCES = [
+    { event: 'channelCreate',    actionKey: 'channelCreate', targetId: c => c && c.id, targetType: c => (c && c.type) },
+    { event: 'channelDelete',    actionKey: 'channelDelete', targetId: c => c && c.id, targetType: c => (c && c.type) },
+    { event: 'channelUpdate',    actionKey: 'channelUpdate', targetId: c => c && c.id },
+    { event: 'roleCreate',       actionKey: 'roleCreate',    targetId: r => r && r.id },
+    { event: 'roleDelete',       actionKey: 'roleDelete',    targetId: r => r && r.id },
+    { event: 'roleUpdate',       actionKey: 'rolePermissionUpdate', targetId: r => r && r.id },
+    { event: 'guildBanAdd',      actionKey: 'memberBan',     targetId: b => b && b.user && b.user.id },
+    { event: 'guildUpdate',      actionKey: 'guildUpdate',   targetId: g => g && g.id },
+];
+for (const src of ANTI_NUKE_FALLBACK_SOURCES) {
+    client.on(src.event, (subject) => {
+        try {
+            const manager = client.antiNukeManager;
+            if (!manager || typeof manager.processFromEvent !== 'function') return;
+            const guild = subject && subject.guild ? subject.guild : null;
+            if (!guild) return;
+            const targetId = src.targetId(subject);
+            const targetType = src.targetType ? src.targetType(subject) : null;
+            manager.processFromEvent({
+                guild, actionKey: src.actionKey,
+                targetId: targetId != null ? String(targetId) : null,
+                targetType: targetType != null ? targetType : null,
+                details: { targetId: targetId != null ? String(targetId) : null },
+            }).catch(() => {});
+        } catch (_) { /* detection must never break the event pipeline */ }
+    });
+}
 
 // Add event handlers for guild join/leave to update status
 client.on('guildCreate', (guild) => {

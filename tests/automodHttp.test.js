@@ -30,6 +30,10 @@ function mockDb() {
         getAutomodWarnings: async () => [],
         getAntiNukeSettings: async () => ({}),
         upsertAntiNukeSettings: async (gid, patch) => patch,
+        getAntiNukeSetup: async () => ({ method: null, status: 'not_started', state: {} }),
+        saveAntiNukeSetup: async (gid, patch) => ({ method: patch.method, status: patch.status, state: patch.state }),
+        getAntiNukeIncidents: async () => ({ incidents: [], total: 0 }),
+        getAntiNukeLockdown: async () => ({ active: false, state: null }),
         addWebsiteLog: async () => {},
     };
 }
@@ -145,6 +149,16 @@ const AUTOMOD_ROUTES = [
     ['PATCH', `/api/guilds/${GUILD}/automod/appeals/1`],
     ['GET', `/api/guilds/${GUILD}/antinuke`],
     ['PATCH', `/api/guilds/${GUILD}/antinuke`],
+    ['POST', `/api/guilds/${GUILD}/antinuke/toggle`],
+    ['GET', `/api/guilds/${GUILD}/antinuke/incidents`],
+    ['POST', `/api/guilds/${GUILD}/antinuke/lockdown`],
+    ['GET', `/api/guilds/${GUILD}/antinuke/setup`],
+    ['POST', `/api/guilds/${GUILD}/antinuke/setup/start`],
+    ['POST', `/api/guilds/${GUILD}/antinuke/setup/resume`],
+    ['PATCH', `/api/guilds/${GUILD}/antinuke/setup/progress`],
+    ['POST', `/api/guilds/${GUILD}/antinuke/setup/step`],
+    ['POST', `/api/guilds/${GUILD}/antinuke/setup/complete`],
+    ['POST', `/api/guilds/${GUILD}/antinuke/setup/reset`],
 ];
 
 for (const [method, urlPath] of AUTOMOD_ROUTES) {
@@ -168,7 +182,10 @@ test('the guild page route redirects an unauthenticated visitor to /login', asyn
     if (r.status === 302) assert.match(r.headers.location, /\/login/);
 });
 
-// ── The upcoming gate on the Anti-Nuke write endpoint ───────────────────────
+// ── The upcoming gate still applies to the feature that has one ─────────────
+//
+// Anti-Nuke is RELEASED (no requireUpcoming). Event Management still carries the
+// gate, so the middleware itself must keep working.
 
 test('requireUpcoming 403s (reason: upcoming) for a user without a bypass role', async () => {
     // Exercise the real middleware directly: on a DB-less boot canBypassFeatureGates
@@ -186,8 +203,8 @@ test('requireUpcoming 403s (reason: upcoming) for a user without a bypass role',
     assert.equal(fakeRes.payload.reason, 'upcoming');
 });
 
-test('the Anti-Nuke page itself renders the overlay instead of the live editor', async () => {
-    // The page is reachable but locked — verify the server-rendered gate holds.
+test('the Anti-Nuke page renders its real setup wizard for an ordinary admin', async () => {
+    // Anti-Nuke is released — the page must NOT be gated behind the overlay.
     const guildPages = require('../dashboard/render/guild-pages');
     const html = guildPages.antiNukePage({
         guild: {
@@ -197,9 +214,9 @@ test('the Anti-Nuke page itself renders the overlay instead of the live editor',
         },
         user: { username: 'u' },
     });
-    assert.match(html, /upcoming-locked-wrap locked/);
-    // The page must not wire its client script's live behavior behind the lock.
-    assert.match(html, /Coming Soon/);
+    assert.ok(!html.includes('upcoming-locked-wrap locked'), 'Anti-Nuke is released — no overlay');
+    assert.match(html, /data-method="automatic"/, 'the setup chooser renders');
+    assert.match(html, /data-method="manual"/, 'the manual option renders');
 });
 
 // ── The AutoMod page is NOT gated (it is a released feature) ────────────────
@@ -294,4 +311,102 @@ test('an authenticated admin without guild rights is rejected', async () => {
         method: 'POST', body: { content: 'x' }, headers: { Cookie: cookie },
     });
     assert.equal(r.status, 403, r.body.slice(0, 300));
+});
+
+// ── Anti-Nuke authenticated happy path ──────────────────────────────────────
+//
+// Anti-Nuke is released, so a legitimate guild admin must be able to drive the
+// real handlers through the real middleware chain.
+
+async function adminCookie() {
+    mockGuilds = [{ id: GUILD, name: 'Test Guild', owner: true, permissions: String(MANAGE_GUILD) }];
+    return signIn({
+        user: { id: '1', username: 'admin', avatar: null },
+        accessToken: 'tok',
+        idleExpiresAt: Date.now() + 60 * 60 * 1000,
+    });
+}
+
+test('an authenticated admin can save Anti-Nuke settings', async () => {
+    boot();
+    const cookie = await adminCookie();
+    const r = await request(`/api/guilds/${GUILD}/antinuke`, {
+        method: 'PATCH',
+        body: { enabled: true, dryRun: true, responses: ['alertOwner', 'alertChannel'], watched: { channelDelete: { enabled: true, threshold: 3, seconds: 10 } } },
+        headers: { Cookie: cookie },
+    });
+    assert.equal(r.status, 200, r.body.slice(0, 300));
+    const payload = JSON.parse(r.body);
+    assert.equal(payload.antiNuke.enabled, true);
+});
+
+test('Anti-Nuke rejects an unknown action key and an empty response list', async () => {
+    boot();
+    const cookie = await adminCookie();
+    // An empty response list is a validation error (never silently saved).
+    const bad = await request(`/api/guilds/${GUILD}/antinuke`, {
+        method: 'PATCH', body: { responses: [] }, headers: { Cookie: cookie },
+    });
+    assert.equal(bad.status, 400, bad.body.slice(0, 200));
+    // An unknown watched action key is dropped, never persisted.
+    const r = await request(`/api/guilds/${GUILD}/antinuke`, {
+        method: 'PATCH',
+        body: { watched: { notARealAction: { enabled: true, threshold: 1, seconds: 1 }, channelDelete: { enabled: true, threshold: 2, seconds: 5 } } },
+        headers: { Cookie: cookie },
+    });
+    assert.equal(r.status, 200);
+    const payload = JSON.parse(r.body);
+    assert.ok(!('notARealAction' in (payload.antiNuke.watched || {})), 'unknown action key must be dropped');
+});
+
+test('the Anti-Nuke master toggle persists on its own', async () => {
+    boot();
+    const cookie = await adminCookie();
+    const r = await request(`/api/guilds/${GUILD}/antinuke/toggle`, {
+        method: 'POST', body: { enabled: false }, headers: { Cookie: cookie },
+    });
+    assert.equal(r.status, 200, r.body.slice(0, 300));
+    assert.equal(JSON.parse(r.body).antiNuke.enabled, false);
+});
+
+test('the manual setup wizard saves real progress and refuses to complete while required sections are pending', async () => {
+    boot();
+    const cookie = await adminCookie();
+    // Completing only "general" leaves required sections pending.
+    const partial = await request(`/api/guilds/${GUILD}/antinuke/setup/progress`, {
+        method: 'PATCH', body: { method: 'manual', completed: ['general'] }, headers: { Cookie: cookie },
+    });
+    assert.equal(partial.status, 200, partial.body.slice(0, 300));
+    assert.equal(JSON.parse(partial.body).setup.status, 'in_progress');
+
+    const complete = await request(`/api/guilds/${GUILD}/antinuke/setup/complete`, {
+        method: 'POST', body: { method: 'manual' }, headers: { Cookie: cookie },
+    });
+    assert.equal(complete.status, 400, 'setup cannot complete with required sections pending');
+});
+
+test('Anti-Nuke lockdown is refused when disabled in the configuration', async () => {
+    boot();
+    const cookie = await adminCookie();
+    // The mock getAntiNukeSettings returns {} → lockdown.enabled is undefined.
+    // The handler treats a missing/disabled lockdown config as a 400.
+    const r = await request(`/api/guilds/${GUILD}/antinuke/lockdown`, {
+        method: 'POST', body: { action: 'engage' }, headers: { Cookie: cookie },
+    });
+    assert.equal(r.status, 400, r.body.slice(0, 200));
+});
+
+test('Anti-Nuke refuses to serve a guild the admin cannot manage (guild isolation)', async () => {
+    boot();
+    // The session can manage GUILD, but not a different guild id.
+    mockGuilds = [{ id: GUILD, name: 'Test Guild', owner: true, permissions: String(MANAGE_GUILD) }];
+    const cookie = await signIn({
+        user: { id: '1', username: 'admin', avatar: null },
+        accessToken: 'tok',
+        idleExpiresAt: Date.now() + 60 * 60 * 1000,
+    });
+    const r = await request('/api/guilds/999999999999999999/antinuke', {
+        method: 'GET', headers: { Cookie: cookie },
+    });
+    assert.equal(r.status, 403, r.body.slice(0, 200));
 });

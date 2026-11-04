@@ -588,6 +588,73 @@ module.exports = {
                 try {
                     // For other buttons that use colons as separators, extract the parts
                     const [action, ...params] = customId.split(':');
+
+                    // Anti-Nuke setup buttons (customIds: antinuke:setup:automatic
+                    // | antinuke:setup:manual | antinuke:setup:progress).
+                    if (action === 'antinuke' && params[0] === 'setup') {
+                        const mode = params[1];
+                        const manager = client.antiNukeManager;
+                        if (!manager) {
+                            await safeReply(interaction, { content: 'Anti-Nuke is unavailable right now.', ephemeral: true });
+                            return;
+                        }
+                        if (mode === 'progress') {
+                            const setup = typeof manager.getSetup === 'function' ? await manager.getSetup(interaction.guild.id) : null;
+                            const progress = setup && setup.state ? require('../utils/antiNukeSetup').computeProgress(setup.method || 'automatic', setup.state) : null;
+                            await safeReply(interaction, { embeds: [require('../utils/antiNukeEmbed').setupEmbed(progress)], ephemeral: true });
+                            return;
+                        }
+                        if (mode === 'manual') {
+                            await safeReply(interaction, {
+                                content: '⚙️ Manual setup is done from the dashboard — open **Server settings → Anti-Nuke** and choose *Configure Manually*. Your progress is saved and resumable.',
+                                ephemeral: true,
+                            });
+                            return;
+                        }
+                        // The confirm button (customId antinuke:setup:automatic:confirm)
+                        // must be handled BEFORE the plain automatic branch, which
+                        // only shows the confirmation prompt.
+                        if (mode === 'automatic' && params[2] === 'confirm') {
+                            await interaction.deferReply({ ephemeral: true });
+                            try {
+                                const { runAll } = require('../utils/antiNukeSetupRunner');
+                                const res = await runAll({ client, guild: interaction.guild, options: { applyRecommended: false } });
+                                if (typeof manager.saveSetup === 'function') {
+                                    await manager.saveSetup(interaction.guild.id, {
+                                        method: 'automatic',
+                                        status: res.state.status,
+                                        state: res.state,
+                                    }).catch(() => {});
+                                }
+                                const ok = res.state.status === 'completed';
+                                await interaction.editReply({
+                                    content: ok
+                                        ? '✅ **Anti-Nuke setup completed.** Dry-run is enabled — review detection results before turning it off.'
+                                        : '⚠️ Setup finished with issues. Check the progress below, fix the failed step and retry.',
+                                    embeds: [require('../utils/antiNukeEmbed').setupEmbed(res.progress)],
+                                });
+                            } catch (err) {
+                                console.error('[ANTINUKE] setup button failed:', err.message);
+                                await interaction.editReply({ content: `⚠️ Setup failed: ${err.message}` }).catch(() => {});
+                            }
+                            return;
+                        }
+                        if (mode === 'automatic') {
+                            // Require an explicit confirm before running (never activate
+                            // protection just because the page/command was opened).
+                            const confirm = new (require('discord.js').ActionRowBuilder)().addComponents(
+                                new (require('discord.js').ButtonBuilder)().setCustomId('antinuke:setup:automatic:confirm').setLabel('Confirm automatic setup').setStyle(require('discord.js').ButtonStyle.Success).setEmoji('✅'),
+                                new (require('discord.js').ButtonBuilder)().setCustomId('antinuke:setup:progress').setLabel('View progress').setStyle(require('discord.js').ButtonStyle.Secondary),
+                            );
+                            await safeReply(interaction, {
+                                content: '⚡ **Automatic setup** will apply the recommended security configuration with dry-run ON (detect + alert only). Continue?',
+                                components: [confirm],
+                                ephemeral: true,
+                            });
+                            return;
+                        }
+                    }
+
                     // Route to the appropriate handler based on customId or action
                     if (action === 'ticketpanel') {
                         // Premium ticket panels (configured from the dashboard).

@@ -1456,17 +1456,15 @@ function automodPage({ guild, user }) {
     return render({ title, body, active: 'servers', scripts, user });
 }
 
-// ── Anti-Nuke (upcoming) ────────────────────────────────────────────────────
+// ── Anti-Nuke (released) ────────────────────────────────────────────────────
 //
-// A separate tab, marked `upcoming: true`, so it renders the standard
-// "Coming Soon……" overlay for ordinary users. Developer/owner bot roles bypass
-// the gate (guild._bypassUpcoming) and get the real editor. The editor markup
-// is kept behind the blur (flipping the flag later re-enables it with no
-// rewrite).
+// A separate, RELEASED tab. It renders the setup chooser until the wizard
+// completes, then the protection console. Gated only by requireAuth +
+// requireGuildAdminPage — no upcoming/beta overlay.
 
-function antiNukePage({ guild, user }) {
+function antiNukePage({ guild, user, view }) {
     const { antiNukePageHTML } = require('./antinuke-page');
-    const { body, scripts, title } = antiNukePageHTML({ guild, user });
+    const { body, scripts, title } = antiNukePageHTML({ guild, user, view });
     return render({ title, body, active: 'servers', scripts, user });
 }
 

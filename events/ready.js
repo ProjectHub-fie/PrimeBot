@@ -145,6 +145,36 @@ module.exports = {
                 );
             }, 6000);
         }
+
+        // Anti-Nuke readiness. The manager loads its own configuration cache in
+        // its constructor; here we only log the per-guild permission state so a
+        // misconfigured deployment (missing View Audit Log, or the
+        // GuildModeration intent disabled) is visible on boot rather than
+        // silently failing to detect anything. Detection itself is driven by
+        // events/guildAuditLogEntryCreate.js + the index.js fallback listeners.
+        if (client.antiNukeManager && typeof client.antiNukeManager.getPermissionReport === 'function') {
+            setTimeout(() => {
+                try {
+                    let enabledGuilds = 0;
+                    let withMissingPerms = 0;
+                    client.guilds.cache.forEach(guild => {
+                        try {
+                            const settings = client.antiNukeManager.getSettings(guild.id);
+                            if (!settings.enabled) return;
+                            enabledGuilds++;
+                            const report = client.antiNukeManager.getPermissionReport(guild);
+                            if (!report.ok) {
+                                withMissingPerms++;
+                                console.warn(`[ANTINUKE] ${guild.name} (${guild.id}) is missing permissions: ${report.missing.join(', ')}`);
+                            }
+                        } catch (_) { /* one bad guild must not stop the sweep */ }
+                    });
+                    console.log(`[ANTINUKE] Ready — ${enabledGuilds} guild(s) protected${withMissingPerms ? `, ${withMissingPerms} with missing permissions` : ''}.`);
+                } catch (err) {
+                    console.error('[ANTINUKE] readiness check failed:', err.message);
+                }
+            }, 4000);
+        }
     },
 };
 //

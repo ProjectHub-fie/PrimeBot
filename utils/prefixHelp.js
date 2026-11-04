@@ -155,6 +155,7 @@ const CATALOG = {
             { names: ['level-channel', 'levelchannel'], args: '#channel', desc: 'Set the level-up notification channel' },
             { names: ['level-multiplier', 'levelmultiplier'], args: '[number]', desc: 'Set the XP multiplier' },
             { names: ['dev'], args: '[@user]', desc: 'PrimeBot staff-role service (owner assigns/modifies/removes roles)' },
+            { names: ['antinuke', 'an'], args: '<status|setup|enable|disable|dryrun|thresholds|whitelist|unwhitelist|lockdown|restore>', desc: 'Configure Anti-Nuke protection' },
             { names: ['broadcastsettings', 'bsettings'], desc: 'View broadcast settings' },
         ],
     },

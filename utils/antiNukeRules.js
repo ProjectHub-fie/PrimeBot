@@ -3,40 +3,63 @@
  *
  * Anti-Nuke watches the *destructive administrative* actions a compromised or
  * malicious moderator can perform (mass channel/role deletion, mass bans/kicks,
- * webhook and bot additions, permission rewrites) and alerts the server owner.
- * It is deliberately conservative: it never punishes anyone automatically, and
- * it never touches the server owner.
+ * webhook and bot additions, permission rewrites) and — when a threshold trips —
+ * alerts the owner and applies reversible containment.
  *
- * ── Status ──────────────────────────────────────────────────────────────────
- * This module is the *data + configuration* layer. The dashboard tab is marked
- * `upcoming: true`, so the page renders the "Coming Soon……" overlay for every
- * server and the write endpoints are guarded by `requireUpcoming` (403 for
- * ordinary users; developer/owner bot roles bypass the gate so the feature can
- * be exercised). Nothing here is wired into Discord's audit-log events yet —
- * the detection executor lives behind the upcoming gate so shipping it cannot
- * surprise a guild with automatic moderation.
+ * It is deliberately conservative: it never punishes the server owner, the bot
+ * itself, trusted users/roles, or anyone whose responsibility could not be
+ * established from the audit log, and it never bans/kicks a moderator
+ * automatically.
  *
- * Everything in this file is pure (catalog + normalizers + a merge helper) so it
- * can be unit-tested without a database or a Discord client.
+ * Everything in this file is pure (catalog + normalizers + merge helpers) so it
+ * can be unit-tested without a database or a Discord client. The stateful
+ * executor lives in utils/antiNukeManager.js, the audit-log correlation in
+ * utils/antiNukeAudit.js, the sliding-window detector in
+ * utils/antiNukeDetector.js and the containment/lockdown actions in
+ * utils/antiNukeContainment.js.
  */
 
-// Every dangerous action Anti-Nuke can watch. `auditEvent` is the discord.js
-// AuditLogEvent name the future executor will subscribe to; it is recorded here
-// so the catalog stays the single source of truth.
+// ── Protection modules ──────────────────────────────────────────────────────
+//
+// Seven independent protection modules, each owning one or more watched actions.
+// `key` is stable and used by the dashboard section rail + the settings
+// normalizer; `iconName` is an SVG icon from dashboard/public/js/icons.js.
+const NUKE_MODULES = [
+    { key: 'channel',    label: 'Channel Protection',  iconName: 'hash',      description: 'Mass channel/category deletion or creation and unauthorized channel edits.' },
+    { key: 'role',       label: 'Role Protection',     iconName: 'role',      description: 'Mass role deletion/creation and dangerous role permission changes.' },
+    { key: 'member',     label: 'Member Protection',   iconName: 'users',     description: 'Mass bans, kicks and role changes across members.' },
+    { key: 'webhook',    label: 'Webhook Protection',  iconName: 'link',      description: 'Webhook creation, deletion and modification.' },
+    { key: 'bot',        label: 'Bot Protection',      iconName: 'robot',     description: 'Bots added by untrusted users and bot permission escalation.' },
+    { key: 'server',     label: 'Server Protection',   iconName: 'settings',  description: 'Sensitive server settings (name, icon, verification level).' },
+    { key: 'permission', label: 'Permission Protection', iconName: 'key',     description: 'Administrator and Manage-* permission grants.' },
+];
+const NUKE_MODULE_KEYS = NUKE_MODULES.map(m => m.key);
+const NUKE_MODULE_BY_KEY = Object.fromEntries(NUKE_MODULES.map(m => [m.key, m]));
+
+// ── Watched actions (the single source of truth) ────────────────────────────
+//
+// `auditEvent` is the discord.js AuditLogEvent name the detector correlates
+// against. `targetType` is an optional filter applied to the correlated audit
+// entry (e.g. only count ChannelDelete entries whose target was a category).
+// `permission` marks a permission-protection action (granted via a role
+// assignment or role update).
 const NUKE_ACTIONS = [
+    // ── Channel protection ──────────────────────────────────────────────────
     {
         key: 'channelDelete',
+        module: 'channel',
         label: 'Channel deletions',
         icon: '🗑️',
         iconName: 'trash',
         auditEvent: 'ChannelDelete',
-        description: 'Channels deleted in bulk.',
+        description: 'Text/voice channels deleted in bulk.',
         threshold: 3,
         seconds: 10,
         severity: 'critical',
     },
     {
         key: 'channelCreate',
+        module: 'channel',
         label: 'Channel creations',
         icon: '➕',
         iconName: 'plus',
@@ -47,7 +70,34 @@ const NUKE_ACTIONS = [
         severity: 'high',
     },
     {
+        key: 'channelUpdate',
+        module: 'channel',
+        label: 'Channel updates',
+        icon: 'pencil',
+        iconName: 'pencil',
+        auditEvent: 'ChannelUpdate',
+        description: 'Channels renamed or reconfigured unexpectedly.',
+        threshold: 5,
+        seconds: 15,
+        severity: 'medium',
+    },
+    {
+        key: 'categoryDelete',
+        module: 'channel',
+        label: 'Category deletions',
+        icon: 'trash',
+        iconName: 'trash',
+        auditEvent: 'ChannelDelete',
+        targetType: 4, // ChannelType.GuildCategory — deleting a category deletes its channels
+        description: 'Categories deleted in bulk (removes every channel inside).',
+        threshold: 2,
+        seconds: 10,
+        severity: 'critical',
+    },
+    // ── Role protection ─────────────────────────────────────────────────────
+    {
         key: 'roleDelete',
+        module: 'role',
         label: 'Role deletions',
         icon: '🗑️',
         iconName: 'trash',
@@ -59,6 +109,7 @@ const NUKE_ACTIONS = [
     },
     {
         key: 'roleCreate',
+        module: 'role',
         label: 'Role creations',
         icon: '➕',
         iconName: 'plus',
@@ -69,7 +120,21 @@ const NUKE_ACTIONS = [
         severity: 'medium',
     },
     {
+        key: 'rolePermissionUpdate',
+        module: 'role',
+        label: 'Role permission changes',
+        icon: 'key',
+        iconName: 'key',
+        auditEvent: 'RoleUpdate',
+        description: 'Role permission bits changed (privilege escalation).',
+        threshold: 3,
+        seconds: 15,
+        severity: 'high',
+    },
+    // ── Member protection ───────────────────────────────────────────────────
+    {
         key: 'memberBan',
+        module: 'member',
         label: 'Mass bans',
         icon: '🔨',
         iconName: 'ban',
@@ -81,6 +146,7 @@ const NUKE_ACTIONS = [
     },
     {
         key: 'memberKick',
+        module: 'member',
         label: 'Mass kicks',
         icon: '👢',
         iconName: 'userX',
@@ -91,7 +157,21 @@ const NUKE_ACTIONS = [
         severity: 'critical',
     },
     {
+        key: 'memberRoleUpdate',
+        module: 'member',
+        label: 'Mass role changes',
+        icon: '🎭',
+        iconName: 'role',
+        auditEvent: 'MemberRoleUpdate',
+        description: 'Roles added/removed across many members in bulk (privilege escalation).',
+        threshold: 10,
+        seconds: 20,
+        severity: 'high',
+    },
+    // ── Webhook protection ──────────────────────────────────────────────────
+    {
         key: 'webhookCreate',
+        module: 'webhook',
         label: 'Webhook creation',
         icon: '🔗',
         iconName: 'link',
@@ -103,6 +183,7 @@ const NUKE_ACTIONS = [
     },
     {
         key: 'webhookDelete',
+        module: 'webhook',
         label: 'Webhook deletion',
         icon: '🔗',
         iconName: 'linkOff',
@@ -113,7 +194,21 @@ const NUKE_ACTIONS = [
         severity: 'medium',
     },
     {
+        key: 'webhookUpdate',
+        module: 'webhook',
+        label: 'Webhook changes',
+        icon: 'pencil',
+        iconName: 'pencil',
+        auditEvent: 'WebhookUpdate',
+        description: 'Existing webhooks renamed or retargeted.',
+        threshold: 3,
+        seconds: 30,
+        severity: 'medium',
+    },
+    // ── Bot protection ──────────────────────────────────────────────────────
+    {
         key: 'botAdd',
+        module: 'bot',
         label: 'Bot additions',
         icon: '🤖',
         iconName: 'robot',
@@ -124,18 +219,21 @@ const NUKE_ACTIONS = [
         severity: 'high',
     },
     {
-        key: 'permissionUpdate',
-        label: 'Permission changes',
-        icon: '🔑',
+        key: 'botPermissionEscalation',
+        module: 'bot',
+        label: 'Bot permission escalation',
+        icon: 'key',
         iconName: 'key',
-        auditEvent: 'ChannelOverwriteUpdate',
-        description: 'Channel permission overwrites changed in bulk.',
-        threshold: 5,
-        seconds: 10,
+        auditEvent: 'MemberRoleUpdate',
+        description: 'A bot member was granted a dangerous role/permission.',
+        threshold: 1,
+        seconds: 60,
         severity: 'high',
     },
+    // ── Server protection ───────────────────────────────────────────────────
     {
         key: 'guildUpdate',
+        module: 'server',
         label: 'Server setting changes',
         icon: '⚙️',
         iconName: 'settings',
@@ -145,36 +243,136 @@ const NUKE_ACTIONS = [
         seconds: 30,
         severity: 'medium',
     },
+    // ── Permission protection ───────────────────────────────────────────────
     {
-        key: 'memberRoleUpdate',
-        label: 'Mass role changes',
-        icon: '🎭',
-        iconName: 'role',
+        key: 'permissionUpdate',
+        module: 'channel',
+        label: 'Permission overwrites',
+        icon: '🔑',
+        iconName: 'key',
+        auditEvent: 'ChannelOverwriteUpdate',
+        description: 'Channel permission overwrites changed in bulk.',
+        threshold: 5,
+        seconds: 10,
+        severity: 'high',
+    },
+    {
+        key: 'adminGrant',
+        module: 'permission',
+        label: 'Administrator grants',
+        icon: '👑',
+        iconName: 'shieldAlert',
         auditEvent: 'MemberRoleUpdate',
-        description: 'Roles added/removed across many members in bulk (privilege escalation).',
-        threshold: 10,
-        seconds: 20,
+        permission: 'Administrator',
+        description: 'The Administrator permission was granted to a member.',
+        threshold: 1,
+        seconds: 30,
+        severity: 'critical',
+    },
+    {
+        key: 'dangerousPermissionGrant',
+        module: 'permission',
+        label: 'Dangerous permission grants',
+        icon: '🔑',
+        iconName: 'key',
+        auditEvent: 'RoleUpdate',
+        permission: 'dangerous',
+        description: 'Ban/Kick/Manage-Webhooks style permissions granted to a role.',
+        threshold: 2,
+        seconds: 30,
+        severity: 'high',
+    },
+    {
+        key: 'manageGuildGrant',
+        module: 'permission',
+        label: 'Manage Server grants',
+        icon: '🔑',
+        iconName: 'key',
+        auditEvent: 'RoleUpdate',
+        permission: 'ManageGuild',
+        description: 'The Manage Server permission was granted.',
+        threshold: 1,
+        seconds: 30,
+        severity: 'high',
+    },
+    {
+        key: 'manageRolesGrant',
+        module: 'permission',
+        label: 'Manage Roles grants',
+        icon: '🔑',
+        iconName: 'key',
+        auditEvent: 'RoleUpdate',
+        permission: 'ManageRoles',
+        description: 'The Manage Roles permission was granted.',
+        threshold: 1,
+        seconds: 30,
+        severity: 'high',
+    },
+    {
+        key: 'manageChannelsGrant',
+        module: 'permission',
+        label: 'Manage Channels grants',
+        icon: '🔑',
+        iconName: 'key',
+        auditEvent: 'RoleUpdate',
+        permission: 'ManageChannels',
+        description: 'The Manage Channels permission was granted.',
+        threshold: 1,
+        seconds: 30,
         severity: 'high',
     },
 ];
 const NUKE_ACTION_KEYS = NUKE_ACTIONS.map(a => a.key);
 const NUKE_ACTION_BY_KEY = Object.fromEntries(NUKE_ACTIONS.map(a => [a.key, a]));
 
-// Response actions Anti-Nuke can take when a threshold trips. All of them are
-// alerts/containment — none of them punish a member automatically.
+/** Watched actions belonging to one protection module. */
+function actionsForModule(moduleKey) {
+    return NUKE_ACTIONS.filter(a => a.module === moduleKey);
+}
+
+// ── Response catalog ────────────────────────────────────────────────────────
+//
+// Every response is an alert or reversible containment — none of them punish a
+// member automatically. `dangerous: true` marks the responses that change
+// server/member state (the dashboard asks for confirmation before enabling
+// them, and the executor applies them only when the executor is confidently
+// identified).
 const NUKE_RESPONSES = [
-    { key: 'alertOwner',   label: 'Alert the server owner',      iconName: 'send',        description: 'DM the owner with the offending action and the responsible user.' },
-    { key: 'alertChannel', label: 'Post to the alert channel',   iconName: 'megaphone',   description: 'Post a high-priority embed to the configured alert channel.' },
-    { key: 'removeRoles',  label: 'Strip dangerous roles',       iconName: 'key',         description: 'Remove Administrator / Manage-* roles from the responsible user where safely possible.' },
-    { key: 'lockdown',     label: 'Server lockdown',             iconName: 'lock',        description: 'Raise the verification level and pause new invites while the incident is reviewed.' },
-    { key: 'logOnly',      label: 'Log only (no containment)',   iconName: 'scroll',      description: 'Record the incident and take no other action.' },
+    { key: 'alertOwner',   label: 'Alert the server owner',    iconName: 'send',      description: 'DM the owner with the offending action and the responsible user.' },
+    { key: 'alertChannel', label: 'Post to the alert channel', iconName: 'megaphone', description: 'Post a high-priority embed to the configured alert channel.' },
+    { key: 'removeRoles',  label: 'Strip dangerous roles',     iconName: 'key',       dangerous: true, description: 'Remove Administrator / Manage-* roles from the responsible user where safely possible.' },
+    { key: 'lockdown',     label: 'Server lockdown',           iconName: 'lock',      dangerous: true, description: 'Raise the verification level and pause new invites while the incident is reviewed.' },
+    { key: 'manualReview', label: 'Flag for manual review',    iconName: 'eye',       description: 'Record the incident as needing a human decision (no automatic containment).' },
+    { key: 'logOnly',      label: 'Log only (no containment)', iconName: 'scroll',    description: 'Record the incident and take no other action.' },
 ];
 const NUKE_RESPONSE_KEYS = NUKE_RESPONSES.map(r => r.key);
 const NUKE_RESPONSE_BY_KEY = Object.fromEntries(NUKE_RESPONSES.map(r => [r.key, r]));
 
 const DEFAULT_NUKE_RESPONSES = ['alertOwner', 'alertChannel', 'logOnly'];
 
-/** Default Anti-Nuke configuration (disabled until an admin opts in). */
+// ── Dangerous permissions ───────────────────────────────────────────────────
+//
+// The permissions considered dangerous for containment + permission-grant
+// detection. Admins can narrow this list from the dashboard (they cannot widen
+// it past this catalog, so the bot never strips an unexpected permission).
+const DANGEROUS_PERMISSIONS = [
+    { key: 'Administrator',  label: 'Administrator',   flag: 8n,         default: true },
+    { key: 'ManageGuild',    label: 'Manage Server',   flag: 32n,        default: true },
+    { key: 'ManageRoles',    label: 'Manage Roles',    flag: 268435456n, default: true },
+    { key: 'ManageChannels', label: 'Manage Channels', flag: 16n,        default: true },
+    { key: 'ManageWebhooks', label: 'Manage Webhooks', flag: 536870912n, default: false },
+    { key: 'BanMembers',     label: 'Ban Members',     flag: 4n,         default: false },
+    { key: 'KickMembers',    label: 'Kick Members',    flag: 2n,         default: false },
+];
+const DANGEROUS_PERMISSION_KEYS = DANGEROUS_PERMISSIONS.map(p => p.key);
+const DANGEROUS_PERMISSION_BY_KEY = Object.fromEntries(DANGEROUS_PERMISSIONS.map(p => [p.key, p]));
+
+// ── Default configuration ───────────────────────────────────────────────────
+
+/**
+ * Default Anti-Nuke configuration. Safe by default: disabled until an admin
+ * opts in, and dry-run until they explicitly turn it off.
+ */
 function defaultAntiNukeSettings() {
     const watched = {};
     for (const a of NUKE_ACTIONS) {
@@ -193,10 +391,20 @@ function defaultAntiNukeSettings() {
         trustedUserIds: [],
         trustedRoleIds: [],
         watched,
+        // Reversible-containment + lockdown configuration.
+        dangerousPermissions: DANGEROUS_PERMISSIONS.filter(p => p.default).map(p => p.key),
+        lockdown: {
+            enabled: true,
+            verificationLevel: 'high',
+            pauseInvites: true,
+        },
+        responseCooldownSeconds: 30,
         dryRun: true,
         updatedAt: null,
     };
 }
+
+// ── Normalizers ─────────────────────────────────────────────────────────────
 
 function _int(v, fallback, { min = 1, max = 1000 } = {}) {
     const n = Number(v);
@@ -218,7 +426,8 @@ function _idList(v) {
 
 /**
  * Normalize a raw Anti-Nuke config (from the DB row or an API patch) into the
- * canonical shape. Unknown action keys are dropped; thresholds are clamped.
+ * canonical shape. Unknown action keys are dropped; thresholds are clamped;
+ * trusted ids are validated; unknown responses are rejected.
  */
 function normalizeAntiNukeSettings(raw = {}) {
     const base = defaultAntiNukeSettings();
@@ -236,6 +445,23 @@ function normalizeAntiNukeSettings(raw = {}) {
     const responses = Array.isArray(src.responses)
         ? src.responses.filter(r => NUKE_RESPONSE_BY_KEY[r])
         : base.responses.slice();
+
+    // Dangerous permissions: only keys from the catalog are accepted, and at
+    // least one must remain so containment always has something to strip.
+    const dpIn = Array.isArray(src.dangerousPermissions)
+        ? Array.from(new Set(src.dangerousPermissions.filter(p => DANGEROUS_PERMISSION_KEYS.includes(p))))
+        : base.dangerousPermissions.slice();
+    const dangerousPermissions = dpIn.length ? dpIn : base.dangerousPermissions.slice();
+
+    const lockSrc = (src.lockdown && typeof src.lockdown === 'object') ? src.lockdown : {};
+    const lockdown = {
+        enabled: lockSrc.enabled !== undefined ? lockSrc.enabled !== false : base.lockdown.enabled,
+        verificationLevel: ['none', 'low', 'medium', 'high', 'veryHigh'].includes(lockSrc.verificationLevel)
+            ? lockSrc.verificationLevel
+            : base.lockdown.verificationLevel,
+        pauseInvites: lockSrc.pauseInvites !== undefined ? lockSrc.pauseInvites !== false : base.lockdown.pauseInvites,
+    };
+
     return {
         enabled: src.enabled === true,
         alertChannelId: src.alertChannelId ? String(src.alertChannelId) : null,
@@ -243,10 +469,15 @@ function normalizeAntiNukeSettings(raw = {}) {
         trustedUserIds: _idList(src.trustedUserIds),
         trustedRoleIds: _idList(src.trustedRoleIds),
         watched,
+        dangerousPermissions,
+        lockdown,
+        responseCooldownSeconds: _int(src.responseCooldownSeconds, base.responseCooldownSeconds, { min: 0, max: 3600 }),
         dryRun: src.dryRun !== false,
         updatedAt: src.updatedAt || null,
     };
 }
+
+// ── Trust + threshold helpers ───────────────────────────────────────────────
 
 /**
  * Is `userId` exempt from Anti-Nuke? The server owner always is. Trusted users
@@ -280,6 +511,7 @@ function evaluateBurst(counts, settings, now = Date.now()) {
             tripped.push({
                 action: action.key,
                 label: action.label,
+                module: action.module,
                 severity: action.severity,
                 count: recent.length,
                 threshold: watch.threshold,
@@ -291,7 +523,28 @@ function evaluateBurst(counts, settings, now = Date.now()) {
     return tripped;
 }
 
+/**
+ * Resolve the effective watched config for one action, falling back to the
+ * catalog defaults when the guild has no override. Used by the detector so an
+ * action added to the catalog after a guild saved its config still has sane
+ * bounds.
+ */
+function watchFor(settings, actionKey) {
+    const action = NUKE_ACTION_BY_KEY[actionKey];
+    if (!action) return null;
+    const w = settings && settings.watched && settings.watched[actionKey];
+    return {
+        enabled: w ? w.enabled !== false : (action.severity === 'critical' || action.severity === 'high'),
+        threshold: w && w.threshold ? w.threshold : action.threshold,
+        seconds: w && w.seconds ? w.seconds : action.seconds,
+    };
+}
+
 module.exports = {
+    NUKE_MODULES,
+    NUKE_MODULE_KEYS,
+    NUKE_MODULE_BY_KEY,
+    actionsForModule,
     NUKE_ACTIONS,
     NUKE_ACTION_KEYS,
     NUKE_ACTION_BY_KEY,
@@ -299,8 +552,12 @@ module.exports = {
     NUKE_RESPONSE_KEYS,
     NUKE_RESPONSE_BY_KEY,
     DEFAULT_NUKE_RESPONSES,
+    DANGEROUS_PERMISSIONS,
+    DANGEROUS_PERMISSION_KEYS,
+    DANGEROUS_PERMISSION_BY_KEY,
     defaultAntiNukeSettings,
     normalizeAntiNukeSettings,
     isTrusted,
     evaluateBurst,
+    watchFor,
 };

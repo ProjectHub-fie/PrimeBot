@@ -463,6 +463,46 @@ const antinukeSettings = pgTable('antinuke_settings', {
   trustedRoleIds: jsonb('trusted_role_ids').default([]).notNull(),
   watched: jsonb('watched').default({}).notNull(),
   dryRun: boolean('dry_run').default(true).notNull(),
+  dangerousPermissions: jsonb('dangerous_permissions')
+    .default(['Administrator', 'ManageGuild', 'ManageRoles', 'ManageChannels']).notNull(),
+  lockdown: jsonb('lockdown').default({ enabled: true, verificationLevel: 'high', pauseInvites: true }).notNull(),
+  responseCooldownSeconds: integer('response_cooldown_seconds').default(30).notNull(),
+  setupMethod: varchar('setup_method', { length: 20 }),
+  setupStatus: varchar('setup_status', { length: 20 }).default('not_started').notNull(),
+  setupState: jsonb('setup_state').default({}).notNull(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+// Anti-nuke incident ledger (own ANUKE_DATABASE_URL pool). Only real security
+// incidents are stored — never ordinary Discord events.
+const antinukeIncidents = pgTable('antinuke_incidents', {
+  id: serial('id').primaryKey(),
+  guildId: varchar('guild_id', { length: 50 }).notNull(),
+  executorId: varchar('executor_id', { length: 50 }),
+  executorName: varchar('executor_name', { length: 120 }),
+  action: varchar('action', { length: 60 }).notNull(),
+  module: varchar('module', { length: 30 }),
+  severity: varchar('severity', { length: 20 }).default('medium').notNull(),
+  count: integer('count').default(0).notNull(),
+  threshold: integer('threshold').default(0).notNull(),
+  windowSeconds: integer('window_seconds').default(0).notNull(),
+  responseTaken: jsonb('response_taken').default([]).notNull(),
+  responseResult: jsonb('response_result').default({}).notNull(),
+  responseOk: boolean('response_ok').default(false).notNull(),
+  dryRun: boolean('dry_run').default(false).notNull(),
+  attribution: varchar('attribution', { length: 30 }).default('unknown').notNull(),
+  details: text('details').default('').notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// Anti-nuke lockdown state (own ANUKE_DATABASE_URL pool) — reversible.
+const antinukeLockdowns = pgTable('antinuke_lockdowns', {
+  guildId: varchar('guild_id', { length: 50 }).primaryKey(),
+  active: boolean('active').default(false).notNull(),
+  startedAt: timestamp('started_at').defaultNow(),
+  startedBy: varchar('started_by', { length: 50 }),
+  reason: text('reason').default('').notNull(),
+  state: jsonb('state').default({}).notNull(),
   updatedAt: timestamp('updated_at').defaultNow(),
 });
 
@@ -880,6 +920,8 @@ module.exports = {
   automodSettings,
   automodIncidents,
   antinukeSettings,
+  antinukeIncidents,
+  antinukeLockdowns,
   automodWarnings,
   automodAppeals,
   appealSettings,

@@ -610,6 +610,81 @@ module.exports = {
 
             // Handle commands
             switch (commandName) {
+                case "antinuke":
+                case "an": {
+                    if (!message.member || !message.member.permissions.has(PermissionFlagsBits.ManageGuild)) {
+                        return message.reply('You need the Manage Server permission to configure Anti-Nuke.');
+                    }
+                    const anMgr = client.antiNukeManager;
+                    if (!anMgr) return message.reply('Anti-Nuke is unavailable right now.');
+                    const anEmbed = require('../utils/antiNukeEmbed');
+                    const anSub = (args[0] || 'status').toLowerCase();
+                    const anSettings = anMgr.getSettings(message.guild.id);
+
+                    if (anSub === 'status' || anSub === 'list') {
+                        const lockdown = typeof anMgr.getLockdown === 'function' ? await anMgr.getLockdown(message.guild.id).catch(() => null) : null;
+                        const report = typeof anMgr.getPermissionReport === 'function' ? anMgr.getPermissionReport(message.guild) : null;
+                        return message.reply({ embeds: [anEmbed.statusEmbed(anSettings, { lockdown, permissionReport: report })] });
+                    }
+                    if (anSub === 'setup') {
+                        const setup = typeof anMgr.getSetup === 'function' ? await anMgr.getSetup(message.guild.id).catch(() => null) : null;
+                        const progress = setup && setup.state ? require('../utils/antiNukeSetup').computeProgress(setup.method || 'automatic', setup.state) : null;
+                        return message.reply({ embeds: [anEmbed.setupEmbed(progress)] });
+                    }
+                    if (anSub === 'enable') {
+                        anMgr.updateSettings(message.guild.id, { enabled: true });
+                        return message.reply({ embeds: [anEmbed.successEmbed('🛡️ Anti-Nuke enabled', anSettings.dryRun !== false ? 'Dry-run is on — incidents are detected and alerted but nobody is contained.' : 'Live containment is active.')] });
+                    }
+                    if (anSub === 'disable') {
+                        anMgr.updateSettings(message.guild.id, { enabled: false });
+                        return message.reply({ embeds: [anEmbed.successEmbed('🛡️ Anti-Nuke disabled')] });
+                    }
+                    if (anSub === 'dryrun') {
+                        const val = ['on', 'true', 'enable', 'enabled'].includes((args[1] || '').toLowerCase());
+                        anMgr.updateSettings(message.guild.id, { dryRun: val });
+                        return message.reply({ embeds: [anEmbed.successEmbed(val ? '🧪 Dry-run enabled' : '⚡ Dry-run disabled')] });
+                    }
+                    if (anSub === 'thresholds') {
+                        return message.reply({ embeds: [anEmbed.thresholdsEmbed(anSettings)] });
+                    }
+                    if (anSub === 'whitelist' || anSub === 'unwhitelist') {
+                        const adding = anSub === 'whitelist';
+                        const target = message.mentions.users.first() || message.mentions.roles.first();
+                        if (!target) return message.reply('Mention a user or a role to trust.');
+                        const isRole = message.mentions.roles.has(target.id);
+                        if (!isRole) {
+                            if (target.id === client.user.id) return message.reply('PrimeBot cannot be trusted — it is always exempt.');
+                            if (message.guild.ownerId === target.id) return message.reply('The server owner is always exempt.');
+                            const list = new Set(anSettings.trustedUserIds || []);
+                            if (adding) list.add(target.id); else list.delete(target.id);
+                            anMgr.updateSettings(message.guild.id, { trustedUserIds: Array.from(list) });
+                            return message.reply({ embeds: [anEmbed.successEmbed(adding ? `✅ Trusted <@${target.id}>` : `🗑️ Removed <@${target.id}>`)] });
+                        }
+                        if (target.id === message.guild.id) return message.reply('@everyone cannot be trusted.');
+                        const me = message.guild.members.me;
+                        if (me && target.position >= me.roles.highest.position && !target.managed) {
+                            return message.reply('That role is above my highest role, so it cannot be used for trust.');
+                        }
+                        const list = new Set(anSettings.trustedRoleIds || []);
+                        if (adding) list.add(target.id); else list.delete(target.id);
+                        anMgr.updateSettings(message.guild.id, { trustedRoleIds: Array.from(list) });
+                        return message.reply({ embeds: [anEmbed.successEmbed(adding ? `✅ Trusted <@&${target.id}>` : `🗑️ Removed <@&${target.id}>`)] });
+                    }
+                    if (anSub === 'lockdown') {
+                        if (typeof anMgr.engageLockdown !== 'function') return message.reply('Lockdown is unavailable right now.');
+                        const record = await anMgr.engageLockdown(message.guild, { startedBy: message.author.id, reason: `Lockdown by ${message.author.tag}` });
+                        const warn = record.warnings && record.warnings.length ? `\nWarnings: ${record.warnings.join('; ')}` : '';
+                        return message.reply({ embeds: [anEmbed.successEmbed('🔒 Lockdown engaged', `Verification level and invites were restricted. Use \`${prefix}antinuke restore\` to reverse it.${warn}`)] });
+                    }
+                    if (anSub === 'restore') {
+                        if (typeof anMgr.liftLockdown !== 'function') return message.reply('Lockdown restore is unavailable right now.');
+                        const { warnings } = await anMgr.liftLockdown(message.guild, { reason: `Lockdown lifted by ${message.author.tag}` });
+                        const warn = warnings && warnings.length ? `\nNotes: ${warnings.join('; ')}` : '';
+                        return message.reply({ embeds: [anEmbed.successEmbed('🔓 Lockdown restored', `Pre-lockdown settings were restored where they had not been changed since.${warn}`)] });
+                    }
+                    return message.reply('Usage: `antinuke <status|setup|enable|disable|dryrun|thresholds|whitelist|unwhitelist|lockdown|restore>`');
+                }
+
                 case "prefix": {
                     if (!message.member || !message.member.permissions.has(PermissionFlagsBits.Administrator)) {
                         return message.reply('You need Administrator permission to change the server prefix.');

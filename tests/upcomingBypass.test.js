@@ -1,9 +1,10 @@
-// Anti-Nuke AND Event Management render the "Coming Soon" overlay for everyone
+// Event Management renders the "Coming Soon" overlay for everyone
 // (`upcoming: true` in render/guild.js TABS). Users holding a developer/owner bot
 // role bypass the gate: the dashboard sets guild._bypassUpcoming
 // (dashboard/auth.js) and the page then renders the real editor.
 //
-// Tickets remains RELEASED and renders its real panel list for every viewer.
+// Anti-Nuke and Tickets are RELEASED and render their real content for every
+// authorized administrator — no overlay, no gate.
 
 const { test } = require('node:test');
 const assert = require('node:assert');
@@ -36,15 +37,27 @@ test('eventsPage renders the real Event Management page for bypass users', () =>
     assert.ok(html.includes('Create Event'), 'the real create button renders for bypass users');
 });
 
-test('antiNukePage renders the Coming Soon overlay for ordinary users', () => {
+test('antiNukePage is RELEASED — no overlay for ordinary users', () => {
     const html = guildPages.antiNukePage({ guild: fakeGuild(false), user: null });
-    assert.ok(html.includes('upcoming-locked-wrap locked'), 'expected the locked overlay');
+    assert.ok(!html.includes('upcoming-locked-wrap locked'), 'Anti-Nuke is released — no overlay');
+    assert.ok(html.includes('PrimeBot Anti-Nuke'), 'the real page renders');
 });
 
-test('antiNukePage renders the real editor when guild._bypassUpcoming is set', () => {
-    const html = guildPages.antiNukePage({ guild: fakeGuild(true), user: null });
-    assert.ok(!html.includes('upcoming-locked-wrap locked'), 'overlay should be skipped');
-    assert.ok(html.includes('id="an-enabled"'), 'real Anti-Nuke editor must render');
+test('antiNukePage renders the setup chooser before setup is complete', () => {
+    const html = guildPages.antiNukePage({ guild: fakeGuild(false), user: null });
+    assert.ok(html.includes('data-method="automatic"'), 'automatic setup button renders');
+    assert.ok(html.includes('data-method="manual"'), 'manual setup button renders');
+});
+
+test('antiNukePage renders the protection console once setup is complete', () => {
+    const guild = fakeGuild(false);
+    guild._config.antiNuke = { enabled: true, dryRun: true, watched: {}, responses: ['alertOwner'] };
+    guild._config.antiNukeSetup = { status: 'completed', progress: { percent: 100, completed: 8, total: 8, steps: [] } };
+    guild._config.antiNukePermissions = { ok: true, checks: [], missing: [] };
+    const html = guildPages.antiNukePage({ guild, user: null });
+    assert.ok(html.includes('Threat detection'), 'console renders');
+    assert.ok(html.includes('DRY RUN ACTIVE'), 'dry-run banner renders');
+    assert.ok(html.includes('an-activity-table'), 'security activity table renders');
 });
 
 test('ticketsPage renders the real panel list for ordinary users (released)', () => {
