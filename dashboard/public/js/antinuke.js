@@ -67,16 +67,73 @@
     }).join('');
   }
 
+  function statusLabel(status) {
+    switch (status) {
+      case 'completed': return 'Completed';
+      case 'in_progress': return 'In progress';
+      case 'failed': return 'Failed — needs attention';
+      default: return 'Not started';
+    }
+  }
+
+  function flagsHTML(p) {
+    var chips = [];
+    if (p.failed > 0) chips.push('<span class="an-flag an-flag-failed">' + svg('x') + ' ' + p.failed + ' failed</span>');
+    if (p.skipped > 0) chips.push('<span class="an-flag an-flag-skipped">' + svg('minus') + ' ' + p.skipped + ' skipped</span>');
+    if (p.remaining > 0) chips.push('<span class="an-flag">' + svg('clock') + ' ' + p.remaining + ' remaining</span>');
+    if (p.running > 0) chips.push('<span class="an-flag an-flag-running"><span class="an-step-spin"></span> running</span>');
+    return chips.join('');
+  }
+
+  /* Render a progress object into the shared progress card. Both the automatic
+   * chooser and the manual wizard use this — the card markup is identical, so a
+   * percentage can never be shown one way in one view and differently in the
+   * other. Percent is clamped to 0-100 and always reflects real backend state. */
   function renderProgress(progress) {
     if (!progress) return;
-    var fill = $('.an-progress-fill');
-    if (fill) fill.style.width = (progress.percent || 0) + '%';
-    var meta = $('.an-progress-meta');
+    var pct = Math.max(0, Math.min(100, Number(progress.percent) || 0));
+
+    var fill = $('#an-progress-fill');
+    if (fill) fill.style.width = pct + '%';
+
+    var track = $('#an-progress-track');
+    if (track) track.setAttribute('aria-valuenow', String(pct));
+
+    var meta = $('#an-progress-meta');
     if (meta) {
-      meta.innerHTML = '<strong>' + (progress.percent || 0) + '%</strong> · ' +
+      meta.innerHTML = '<strong>' + pct + '%</strong> · ' +
         (progress.completed || 0) + ' of ' + (progress.total || 0) + ' required steps completed';
     }
-    renderStepList($('.an-step-list'), progress.steps);
+
+    var status = $('#an-progress-status');
+    if (status) {
+      var st = progress.status || 'in_progress';
+      status.className = 'an-progress-status an-progress-status-' + st;
+      status.textContent = statusLabel(st);
+    }
+
+    var flags = $('#an-progress-flags');
+    if (flags) flags.innerHTML = flagsHTML(progress);
+
+    renderStepList($('#an-step-list'), progress.steps);
+  }
+
+  /** Replace the whole progress card with a loading/error message. */
+  function progressMessage(kind, text) {
+    var card = $('#an-progress-card');
+    if (!card) return;
+    var fill = $('#an-progress-fill');
+    if (kind === 'loading') {
+      card.setAttribute('aria-busy', 'true');
+      if (fill) fill.style.width = '0%';
+      var meta = $('#an-progress-meta');
+      if (meta) meta.innerHTML = '<span class="an-muted">' + esc(text) + '</span>';
+      return;
+    }
+    // error
+    card.setAttribute('aria-busy', 'false');
+    var m = $('#an-progress-meta');
+    if (m) m.innerHTML = '<span class="an-bad">' + esc(text) + '</span>';
   }
 
   // ── Setup chooser ─────────────────────────────────────────────────────────
@@ -89,26 +146,64 @@
     if (resume) resume.addEventListener('click', function () { resumeSetup(); });
     var reset = $('#an-reset-setup');
     if (reset) reset.addEventListener('click', function () { resetSetup(); });
+    // Load the persisted setup state on page load (refresh / return / resume).
+    loadSetupState();
+  }
+
+  /* Fetch the persisted setup state so a refresh or a return to the page shows
+   * the REAL progress (never a stale in-memory value). Shows a loading state
+   * while fetching and an error state if it cannot be loaded. */
+  function loadSetupState() {
+    // The server already rendered the persisted progress, so only show the
+    // loading state when there is genuinely nothing on screen yet (avoids a
+    // flash of "Loading…" over real data).
+    var list = $('#an-step-list');
+    if (!list || !list.children.length) progressMessage('loading', 'Loading setup progress…');
+    api('/api/guilds/' + GUILD_ID + '/antinuke/setup', { method: 'GET' })
+      .then(function (data) {
+        var s = (data && data.setup) || {};
+        SETUP = { method: s.method || null, status: s.status || 'not_started', state: s.state || SETUP.state || {} };
+        renderProgress(s.progress);
+        var resumable = s.status === 'in_progress' || s.status === 'failed';
+        var resume = $('#an-resume-setup'); if (resume) resume.hidden = !resumable;
+        var reset = $('#an-reset-setup'); if (reset) reset.hidden = !resumable;
+      })
+      .catch(function (err) {
+        // Keep the last known progress; surface that it could not be refreshed.
+        progressMessage('error', 'Could not load setup progress: ' + err.message);
+      });
+  }
+
+  function setSetupButtonsBusy(busy) {
+    var resume = $('#an-resume-setup'); if (resume) resume.disabled = busy;
+    $$('.an-setup-start').forEach(function (b) { b.disabled = busy; });
   }
 
   function startSetup(method) {
+    setSetupButtonsBusy(true);
     api('/api/guilds/' + GUILD_ID + '/antinuke/setup/start', {
       method: 'POST', body: JSON.stringify({ method: method }),
     }).then(function () {
       toast('Setup started', 'success');
-      if (method === 'manual') window.location.href = window.location.pathname + '?view=wizard';
-      else runAutomaticSteps();
-    }).catch(function (err) { toast('Could not start setup: ' + err.message, 'error'); });
+      if (method === 'manual') { window.location.href = window.location.pathname + '?view=wizard'; return; }
+      // The resume/reset controls are now meaningful.
+      var resume = $('#an-resume-setup'); if (resume) resume.hidden = false;
+      var reset = $('#an-reset-setup'); if (reset) reset.hidden = false;
+      runAutomaticSteps();
+    }).catch(function (err) { setSetupButtonsBusy(false); toast('Could not start setup: ' + err.message, 'error'); });
   }
 
   function resumeSetup() {
     var method = (SETUP && SETUP.method) || 'automatic';
+    setSetupButtonsBusy(true);
     api('/api/guilds/' + GUILD_ID + '/antinuke/setup/resume', { method: 'POST', body: JSON.stringify({ method: method }) })
-      .then(function () {
-        if (method === 'manual') window.location.href = window.location.pathname + '?view=wizard';
-        else runAutomaticSteps();
+      .then(function (data) {
+        // Show the persisted progress before the next step runs.
+        if (data && data.setup) renderProgress(data.setup.progress);
+        if (method === 'manual') { window.location.href = window.location.pathname + '?view=wizard'; return; }
+        runAutomaticSteps();
       })
-      .catch(function (err) { toast('Could not resume: ' + err.message, 'error'); });
+      .catch(function (err) { setSetupButtonsBusy(false); toast('Could not resume: ' + err.message, 'error'); });
   }
 
   function resetSetup() {
@@ -121,8 +216,7 @@
   /* Drive the automatic setup one step at a time, rendering real progress after
    * each step. Stops on a failed step so the admin can see it and retry. */
   function runAutomaticSteps() {
-    var btn = $('#an-resume-setup');
-    if (btn) btn.disabled = true;
+    setSetupButtonsBusy(true);
     api('/api/guilds/' + GUILD_ID + '/antinuke/setup/step', { method: 'POST', body: JSON.stringify({ method: 'automatic' }) })
       .then(function (data) {
         renderProgress(data.progress);
@@ -132,16 +226,22 @@
           return;
         }
         if (data.progress && data.progress.failed > 0) {
+          // Retain the last accurate progress and surface a retry action.
           var failed = (data.progress.steps || []).filter(function (s) { return s.status === 'failed'; });
-          toast((failed.length ? ('Step failed: ' + failed[0].label) : 'A setup step failed.') + ' — fix it and press Resume setup to retry.', 'error');
-          if (btn) btn.disabled = false;
+          setSetupButtonsBusy(false);
+          var resume = $('#an-resume-setup'); if (resume) resume.hidden = false;
+          var reset = $('#an-reset-setup'); if (reset) reset.hidden = false;
+          toast((failed.length ? ('Step failed: ' + failed[0].label) : 'A setup step failed.') +
+            (failed.length && failed[0].error ? (' — ' + failed[0].error) : '') +
+            ' Press Resume setup to retry.', 'error');
           return;
         }
         runAutomaticSteps();
       })
       .catch(function (err) {
+        setSetupButtonsBusy(false);
+        var resume = $('#an-resume-setup'); if (resume) resume.hidden = false;
         toast('Setup step failed: ' + err.message, 'error');
-        if (btn) btn.disabled = false;
       });
   }
 
@@ -151,7 +251,15 @@
     var sections = $$('.an-wizard-section');
     if (!sections.length) return;
     var index = 0;
+    // `completed` is seeded from the persisted setup state (resume), so a
+    // refresh does not silently reset the manual wizard's progress to 0.
     var completed = {};
+    var savedState = (SETUP && SETUP.state) || {};
+    var savedSteps = savedState.steps || {};
+    sections.forEach(function (sec) {
+      var key = sec.getAttribute('data-section');
+      if (savedSteps[key] && savedSteps[key].status === 'completed') completed[key] = true;
+    });
 
     function sectionLabel(sec, n) {
       var title = sec.querySelector('.an-wizard-title');
@@ -174,16 +282,28 @@
       var steps = sections.map(function (sec, n) {
         var key = sec.getAttribute('data-section');
         var required = key !== 'trust';
+        // The section the admin is on is only "running" while it is not done;
+        // a completed section always shows completed (never regressed to
+        // running when navigated back to).
         var status = completed[key] ? 'completed' : (n === index ? 'running' : 'pending');
         return { key: key, label: sectionLabel(sec, n), required: required, status: status };
       });
-      var required = steps.filter(function (s) { return s.required; });
-      var done = required.filter(function (s) { return s.status === 'completed'; }).length;
-      var percent = required.length ? Math.round((done / required.length) * 100) : 0;
-      var fill = $('#an-wizard-fill'); if (fill) fill.style.width = percent + '%';
-      var pct = $('#an-wizard-percent'); if (pct) pct.textContent = percent + '%';
-      var count = $('#an-wizard-count'); if (count) count.textContent = done + ' of ' + required.length + ' sections completed';
-      renderStepList($('#an-wizard-steps'), steps);
+      var requiredSteps = steps.filter(function (s) { return s.required; });
+      var done = requiredSteps.filter(function (s) { return s.status === 'completed'; }).length;
+      var percent = requiredSteps.length ? Math.round((done / requiredSteps.length) * 100) : 0;
+      // Reuse the shared renderer so the wizard and the automatic setup show an
+      // identical card. Percent is clamped inside renderProgress.
+      renderProgress({
+        percent: percent,
+        completed: done,
+        total: requiredSteps.length,
+        remaining: Math.max(0, requiredSteps.length - done),
+        failed: 0,
+        skipped: 0,
+        running: requiredSteps.some(function (s) { return s.status === 'running'; }) ? 1 : 0,
+        status: percent >= 100 ? 'completed' : 'in_progress',
+        steps: steps,
+      });
     }
 
     function markCurrentComplete() {
@@ -194,6 +314,8 @@
     function persistManualProgress() {
       api('/api/guilds/' + GUILD_ID + '/antinuke/setup/progress', {
         method: 'PATCH', body: JSON.stringify({ method: 'manual', completed: Object.keys(completed) }),
+      }).then(function (data) {
+        if (data && data.setup) SETUP = { method: 'manual', status: data.setup.status, state: data.setup.state };
       }).catch(function () { /* best-effort */ });
     }
 
@@ -224,7 +346,14 @@
 
     renderTrustedUsers();
     renderTrustedRoles();
-    show(0);
+    // Resume at the first section that is not yet completed (so a return to the
+    // wizard picks up where the admin left off rather than restarting at 1).
+    var firstIncomplete = 0;
+    for (var i = 0; i < sections.length; i++) {
+      if (!completed[sections[i].getAttribute('data-section')]) { firstIncomplete = i; break; }
+      if (i === sections.length - 1) firstIncomplete = i;
+    }
+    show(firstIncomplete);
   }
 
   // ── Console ───────────────────────────────────────────────────────────────

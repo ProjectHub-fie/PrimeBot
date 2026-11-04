@@ -1456,16 +1456,23 @@ function automodPage({ guild, user }) {
     return render({ title, body, active: 'servers', scripts, user });
 }
 
-// ── Anti-Nuke (released) ────────────────────────────────────────────────────
+// ── Anti-Nuke (UPCOMING — not yet released) ─────────────────────────────────
 //
-// A separate, RELEASED tab. It renders the setup chooser until the wizard
-// completes, then the protection console. Gated only by requireAuth +
-// requireGuildAdminPage — no upcoming/beta overlay.
+// Marked `upcoming: true` in render/guild.js TABS, so ordinary users see the
+// "Coming Soon……" overlay; developer/owner bot roles (guild._bypassUpcoming)
+// get the real editor so the feature can be exercised before it ships. The
+// underlying markup is kept (blurred) so releasing it is a one-flag change.
 
 function antiNukePage({ guild, user, view }) {
     const { antiNukePageHTML } = require('./antinuke-page');
     const { body, scripts, title } = antiNukePageHTML({ guild, user, view });
     return render({ title, body, active: 'servers', scripts, user });
+}
+
+/** Wrap the Anti-Nuke panel in the shared "Coming Soon" overlay unless bypassed. */
+function wrapAntiNukeUpcoming(innerPanelHTML, guild) {
+    if (guild && guild._bypassUpcoming) return innerPanelHTML;
+    return upcomingOverlayWrap(innerPanelHTML, { icon: 'shieldAlert', title: 'Anti-Nuke' });
 }
 
 // ── Events ──────────────────────────────────────────────────────────────────

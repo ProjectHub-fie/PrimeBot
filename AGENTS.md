@@ -556,12 +556,17 @@ The page uses the floating `saveBar` (see "Dashboard save pattern"): every field
 
 **Gotcha when adding an out-of-band save:** any control the page persists on its own (rather than through the floating bar) must call `window.saveBar.syncControl(el)` on success. Without it the bar shows a permanent, unsaveable "unsaved changes" state for that field. Do NOT call `syncControl` on failure — the control must stay dirty so the user can retry. `saveBar.syncControl` only re-baselines the one element (a full `resnapshot()` would swallow unrelated pending edits).
 
-## Anti-Nuke protection system (released)
+## Anti-Nuke protection system (UPCOMING — not yet released)
 
 Per-guild protection against destructive admin actions, built on the pre-existing
-`utils/antiNukeManager.js` + `utils/antiNukeRules.js` foundation. **Released** — the
-`upcoming: true` flag is gone from `render/guild.js` TABS and every endpoint uses only
-`requireAuth + requireGuildAdmin`.
+`utils/antiNukeManager.js` + `utils/antiNukeRules.js` foundation. **Not released yet**:
+the `upcoming: true` flag is set on the Anti-Nuke tab in `render/guild.js` TABS, so
+ordinary admins see the shared "Coming Soon……" overlay and every write endpoint is
+guarded by `requireUpcoming` (403 `{ reason: 'upcoming' }`). Developer/owner bot roles
+(`guild._bypassUpcoming`) bypass both, so the feature can be exercised before it ships.
+**To release: remove `upcoming: true` from the TABS entry and drop `requireUpcoming`
+from the 9 write endpoints — nothing else.** The setup wizard + console markup already
+exists and is rendered underneath the overlay.
 
 ### Pipeline (real audit-log detection, never an event guess)
 
@@ -615,15 +620,18 @@ verification), permission (Administrator + Manage-* grants). Every action maps t
 - Progress persists in `antinuke_settings.setup_state` (JSONB) — survives refresh,
   browser close, bot restart. Resume re-reads state and re-validates permissions.
 
-### Storage — ANUKE_DATABASE_URL (no new database)
+### Storage — ANTI_DATABASE_URL (canonical) / ANUKE_DATABASE_URL (legacy alias)
 
-`server/anukeDb.js` → `anukePool` (`ANUKE_DATABASE_URL` → `FALLBACK_DATABASE_URL` →
-`DATABASE_URL`). Tables: `antinuke_settings` (existing columns preserved + `setup_method`
-/ `setup_status` / `setup_state` / `dangerous_permissions` / `response_cooldown_seconds` /
-`lockdown`), `antinuke_incidents` (indexed on guild_id + created_at + executor_id + action),
-`antinuke_dedup` (atomic cross-node claim via PRIMARY KEY + `ON CONFLICT DO NOTHING`),
-`antinuke_lockdowns`. Migration `migrations/0027_add_antinuke_protection.sql` is idempotent
-and mirrors `shared/schema.js`.
+`server/anukeDb.js` → `anukePool`. `resolveConnectionString()` prefers
+**`ANTI_DATABASE_URL`**, then the backward-compatible `ANUKE_DATABASE_URL` alias, then
+`FALLBACK_DATABASE_URL` → `DATABASE_URL` (via `server/resolveDbUrl.js`). **No new
+database** — the feature keeps its own pool so it can live in a separate DB, but works
+in single-DB setups with zero extra config. Tables: `antinuke_settings` (existing columns
+preserved + `setup_method` / `setup_status` / `setup_state` / `dangerous_permissions` /
+`response_cooldown_seconds` / `lockdown`), `antinuke_incidents` (indexed on guild_id +
+created_at + executor_id + action), `antinuke_dedup` (atomic cross-node claim via
+PRIMARY KEY + `ON CONFLICT DO NOTHING`), `antinuke_lockdowns`. Migration
+`migrations/0027_add_antinuke_protection.sql` is idempotent and mirrors `shared/schema.js`.
 
 ### Cross-node (three shard nodes)
 

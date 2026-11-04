@@ -95,6 +95,18 @@ function boot() {
         if (fromDash && request === './discord') return mockDiscord();
         if (fromDash && request === '../server/seasonDb') throw new Error('mock: no season pool');
         if (fromDash && request === 'express-session') return wrappedSession;
+        // Anti-Nuke is an UPCOMING feature: its write endpoints are gated by
+        // requireUpcoming, which 403s unless the viewer holds a developer/owner
+        // bot role. There is no DB in this boot, so mock the role lookup to
+        // report the admin as a bypass user — that is the state in which the
+        // real handlers (save/toggle/setup/lockdown) are reachable at all.
+        if (fromDash && request === '../utils/botRoles') {
+            return {
+                canBypassFeatureGates: async () => true,
+                getRole: async () => 'developer',
+                getRoleInfo: () => ({ label: 'Developer' }),
+            };
+        }
         return origLoad.apply(this, arguments);
     };
     try {
@@ -203,20 +215,25 @@ test('requireUpcoming 403s (reason: upcoming) for a user without a bypass role',
     assert.equal(fakeRes.payload.reason, 'upcoming');
 });
 
-test('the Anti-Nuke page renders its real setup wizard for an ordinary admin', async () => {
-    // Anti-Nuke is released — the page must NOT be gated behind the overlay.
+test('the Anti-Nuke page renders its real setup wizard for a bypass user', async () => {
+    // Anti-Nuke is an UPCOMING feature: an ordinary admin gets the Coming Soon
+    // overlay, and a developer/owner viewer (guild._bypassUpcoming) gets the
+    // real editor so the feature can still be exercised before it ships.
     const guildPages = require('../dashboard/render/guild-pages');
-    const html = guildPages.antiNukePage({
-        guild: {
-            id: GUILD, name: 'T', icon: null, _bypassUpcoming: false, _beta: false,
-            _config: { server: {}, welcome: {}, logging: {}, automod: {}, antiNuke: {} },
-            _channels: [], _roles: [],
-        },
-        user: { username: 'u' },
-    });
-    assert.ok(!html.includes('upcoming-locked-wrap locked'), 'Anti-Nuke is released — no overlay');
-    assert.match(html, /data-method="automatic"/, 'the setup chooser renders');
-    assert.match(html, /data-method="manual"/, 'the manual option renders');
+    const base = {
+        id: GUILD, name: 'T', icon: null, _beta: false,
+        _config: { server: {}, welcome: {}, logging: {}, automod: {}, antiNuke: {} },
+        _channels: [], _roles: [],
+    };
+
+    const ordinary = guildPages.antiNukePage({ guild: { ...base, _bypassUpcoming: false }, user: { username: 'u' } });
+    assert.ok(ordinary.includes('upcoming-locked-wrap locked'), 'ordinary users get the Coming Soon overlay');
+    assert.match(ordinary, /data-method="automatic"/, 'the real markup is still rendered underneath the overlay');
+
+    const bypass = guildPages.antiNukePage({ guild: { ...base, _bypassUpcoming: true }, user: { username: 'u' } });
+    assert.ok(!bypass.includes('upcoming-locked-wrap locked'), 'bypass users get the real editor');
+    assert.match(bypass, /data-method="automatic"/, 'the setup chooser renders');
+    assert.match(bypass, /data-method="manual"/, 'the manual option renders');
 });
 
 // ── The AutoMod page is NOT gated (it is a released feature) ────────────────
@@ -315,8 +332,11 @@ test('an authenticated admin without guild rights is rejected', async () => {
 
 // ── Anti-Nuke authenticated happy path ──────────────────────────────────────
 //
-// Anti-Nuke is released, so a legitimate guild admin must be able to drive the
-// real handlers through the real middleware chain.
+// Anti-Nuke is an UPCOMING feature, so its write endpoints are gated by
+// requireUpcoming. The boot mock reports the admin as a developer/owner (bypass)
+// user, which is the state in which the real handlers are reachable — these
+// tests then prove the handlers themselves work through the real middleware
+// chain.
 
 async function adminCookie() {
     mockGuilds = [{ id: GUILD, name: 'Test Guild', owner: true, permissions: String(MANAGE_GUILD) }];

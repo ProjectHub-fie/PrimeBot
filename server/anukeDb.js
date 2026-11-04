@@ -6,18 +6,21 @@ const { once } = require('./schemaBootstrap');
  *
  * Anti-Nuke is its own moderation subsystem (`antinuke_settings`), so — like the
  * welcome/reaction/automod/logging features — it gets a separate connection
- * string (ANUKE_DATABASE_URL) so it can live in its own database/schema if
- * desired. If ANUKE_DATABASE_URL is unset we fall back to
- * FALLBACK_DATABASE_URL (then DATABASE_URL) so the feature still works in
+ * string. `ANTI_DATABASE_URL` is the canonical variable; `ANUKE_DATABASE_URL` is
+ * kept as a backward-compatible alias so an existing deployment keeps working.
+ * Whichever is unset falls through the shared resolver to
+ * FALLBACK_DATABASE_URL (then DATABASE_URL), so the feature still works in
  * single-DB setups without any extra configuration.
  *
  * Same-DB requirement (as with the other features): for dashboard saves to
- * reach the bot, both deployments must point at the same ANUKE_DATABASE_URL
+ * reach the bot, both deployments must point at the same Anti-Nuke database
  * (or the same FALLBACK_DATABASE_URL/DATABASE_URL fallback). Different DBs →
  * dashboard writes never reach the bot regardless of caching.
  */
 
 function resolveConnectionString() {
+    // ANTI_DATABASE_URL wins; ANUKE_DATABASE_URL is the legacy alias.
+    if (process.env.ANTI_DATABASE_URL) return process.env.ANTI_DATABASE_URL;
     return resolveDbUrl('ANUKE_DATABASE_URL');
 }
 
@@ -26,7 +29,7 @@ const { createPool } = require('./createPool');
 const cs = resolveConnectionString();
 
 if (!cs) {
-    console.warn('⚠️ ANUKE_DATABASE_URL (or FALLBACK_DATABASE_URL/DATABASE_URL) not set — anti-nuke will have no database.');
+    console.warn('⚠️ ANTI_DATABASE_URL (or ANUKE_DATABASE_URL / FALLBACK_DATABASE_URL / DATABASE_URL) not set — anti-nuke will have no database.');
 }
 
 const anukePool = createPool(cs, { label: 'ANUKE DB' });
@@ -179,6 +182,7 @@ async function testAnukeConnection() {
 
 module.exports = {
     anukePool,
+    resolveConnectionString,
     testAnukeConnection,
     ensureAnukeTables,
     claimDedupKey,

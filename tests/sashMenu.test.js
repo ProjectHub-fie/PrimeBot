@@ -85,3 +85,20 @@ test('the Sash drill-down routes still line up with the catalog keys', () => {
         assert.ok(CATALOG[key], `CATALOG missing "${key}" referenced by the menu`);
     }
 });
+
+test('Anti-Nuke appears in the Sash menu (prefix) and the /help Administration menu (slash)', () => {
+    // Prefix surface: the Sash menu is derived from CATALOG, so the entry must
+    // be catalogued under admin with the documented subcommands.
+    const admin = CATALOG.admin;
+    assert.ok(admin, 'the admin category exists in the prefix catalog');
+    const an = admin.commands.find(c => c.names[0] === 'antinuke');
+    assert.ok(an, 'antinuke must be catalogued so the Sash menu shows it');
+    assert.deepEqual(an.names, ['antinuke', 'an'], 'the `an` alias is documented too');
+    for (const sub of ['status', 'setup', 'enable', 'disable', 'dryrun', 'thresholds', 'whitelist', 'unwhitelist', 'lockdown', 'restore']) {
+        assert.ok(an.args.includes(sub), `antinuke usage must mention ${sub}`);
+    }
+
+    // Slash surface: /help's Administration category lists /antinuke.
+    const helpSrc = fs.readFileSync(path.join(ROOT, 'commands', 'help.js'), 'utf8');
+    assert.match(helpSrc, /name: '\/antinuke'/, 'the /help Administration menu must list /antinuke');
+});

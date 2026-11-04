@@ -243,6 +243,7 @@ async function showCategoryHelp(interaction, category) {
                 .setTitle('⚙️ Administration')
                 .setDescription('Advanced server configuration (Admin only):')
                 .addFields(
+                    { name: '/antinuke', value: 'Configure Anti-Nuke protection: status / setup / enable / disable / dryrun / thresholds / whitelist / unwhitelist / lockdown / restore (Manage Server)', inline: false },
                     { name: '/embed send', value: 'Send an embed saved in the dashboard Embed Builder (Manage Server)', inline: true },
                     { name: '/embed list', value: 'List this server\'s saved embeds (Manage Server)', inline: true },
                     { name: '/broadcastsettings', value: 'Configure broadcast system settings', inline: true },

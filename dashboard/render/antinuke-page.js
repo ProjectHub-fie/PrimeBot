@@ -33,6 +33,55 @@ function severityBadge(sev) {
     return `<span class="an-sev an-sev-${esc(s)}">${esc(s.charAt(0).toUpperCase() + s.slice(1))}</span>`;
 }
 
+/** Human label for a setup status (shown beside the progress bar). */
+function progressStatusLabel(status) {
+    switch (status) {
+        case 'completed': return 'Completed';
+        case 'in_progress': return 'In progress';
+        case 'failed': return 'Failed — needs attention';
+        default: return 'Not started';
+    }
+}
+
+/**
+ * The setup progress card — ONE markup for both the automatic chooser and the
+ * manual wizard, so a single client function (`renderProgress`) drives both and
+ * they can never drift.
+ *
+ * It is always rendered (even at 0% / not started) so the client always has real
+ * elements to update; the earlier version omitted the card until a setup was in
+ * progress, which is why the automatic progress bar never appeared.
+ */
+function progressCardHTML({ title, iconName = 'activity', progress, status = 'not_started', actions = '' }) {
+    const p = progress || { percent: 0, completed: 0, total: 0, failed: 0, skipped: 0, steps: [] };
+    const pct = Math.max(0, Math.min(100, Number(p.percent) || 0));
+    return `
+      <section class="card an-progress-card" id="an-progress-card">
+        <div class="card-title an-progress-head">
+          <span><span class="icon">${svgIcon(iconName)}</span> ${esc(title)}</span>
+          <span class="an-progress-status an-progress-status-${esc(status)}" id="an-progress-status">${esc(progressStatusLabel(status))}</span>
+        </div>
+        <div class="an-progress-bar" id="an-progress-track" role="progressbar"
+             aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}">
+          <div class="an-progress-fill" id="an-progress-fill" style="width:${pct}%"></div>
+        </div>
+        <div class="an-progress-meta" id="an-progress-meta"><strong>${pct}%</strong> · ${p.completed || 0} of ${p.total || 0} required steps completed</div>
+        <div class="an-progress-flags" id="an-progress-flags">${progressFlagsHTML(p)}</div>
+        <ul class="an-step-list" id="an-step-list">${stepListHTML(p.steps)}</ul>
+        ${actions}
+      </section>`;
+}
+
+/** Failed / skipped / remaining chips, rendered only when they are non-zero. */
+function progressFlagsHTML(p) {
+    const chips = [];
+    if (p.failed > 0) chips.push(`<span class="an-flag an-flag-failed">${svgIcon('x')} ${p.failed} failed</span>`);
+    if (p.skipped > 0) chips.push(`<span class="an-flag an-flag-skipped">${svgIcon('minus')} ${p.skipped} skipped</span>`);
+    if (p.remaining > 0) chips.push(`<span class="an-flag">${svgIcon('clock')} ${p.remaining} remaining</span>`);
+    if (p.running > 0) chips.push(`<span class="an-flag an-flag-running"><span class="an-step-spin"></span> running</span>`);
+    return chips.join('');
+}
+
 /** One watched-action row inside a module card. */
 function actionRowHTML(action, watch) {
     return `
@@ -79,17 +128,18 @@ function moduleCardHTML(module, watched) {
 function setupChooserHTML(setup) {
     const progress = setup.progress || { percent: 0, completed: 0, total: 0, steps: [] };
     const resume = setup.status === 'in_progress' || setup.status === 'failed';
-    const progressPanel = resume ? `
-      <section class="card an-progress-card" id="an-progress-card">
-        <div class="card-title"><span><span class="icon">${svgIcon('activity')}</span> Setup in progress</span></div>
-        <div class="an-progress-bar"><div class="an-progress-fill" style="width:${progress.percent}%"></div></div>
-        <div class="an-progress-meta"><strong>${progress.percent}%</strong> · ${progress.completed} of ${progress.total} required steps completed</div>
-        <ul class="an-step-list">${stepListHTML(progress.steps)}</ul>
+    // Always rendered (even at 0% / not started) so the client always has a real
+    // element to update — see progressCardHTML.
+    const progressPanel = progressCardHTML({
+        title: 'Setup progress',
+        progress,
+        status: setup.status || 'not_started',
+        actions: `
         <div class="an-setup-actions">
-          <button class="btn btn-primary" id="an-resume-setup">${svgIcon('playCircle')} Resume setup</button>
-          <button class="btn" id="an-reset-setup">Reset progress</button>
-        </div>
-      </section>` : '';
+          <button class="btn btn-primary" id="an-resume-setup" ${resume ? '' : 'hidden'}>${svgIcon('playCircle')} Resume setup</button>
+          <button class="btn" id="an-reset-setup" ${resume ? '' : 'hidden'}>Reset progress</button>
+        </div>`,
+    });
 
     return `
     <div class="an-page an-setup-page">
@@ -164,14 +214,20 @@ function manualWizardHTML(guild, settings) {
           ${wizardSectionBody(sec.key, { guild, settings, channels, roles, trustedUsers, trustedRoles })}
         </div>`).join('');
 
+    // Same progress card as the automatic chooser, so ONE client function
+    // (renderProgress) drives both and the two views can never drift.
+    const initialSteps = ANTINUKE_MANUAL_SECTIONS.map(s => ({ key: s.key, label: s.label, required: s.required, status: 'pending' }));
+    const requiredTotal = ANTINUKE_MANUAL_SECTIONS.filter(s => s.required).length;
+    const progressCard = progressCardHTML({
+        title: 'Manual Security Setup',
+        iconName: 'sliders',
+        status: 'in_progress',
+        progress: { percent: 0, completed: 0, total: requiredTotal, failed: 0, skipped: 0, remaining: requiredTotal, running: 0, steps: initialSteps },
+    });
+
     return `
     <div class="an-page an-wizard-page">
-      <section class="card an-progress-card">
-        <div class="card-title"><span><span class="icon">${svgIcon('sliders')}</span> Manual Security Setup</span></div>
-        <div class="an-progress-bar"><div class="an-progress-fill" id="an-wizard-fill" style="width:0%"></div></div>
-        <div class="an-progress-meta"><strong id="an-wizard-percent">0%</strong> · <span id="an-wizard-count">0 of ${ANTINUKE_MANUAL_SECTIONS.length} sections completed</span></div>
-        <ul class="an-step-list" id="an-wizard-steps">${stepListHTML(ANTINUKE_MANUAL_SECTIONS.map(s => ({ key: s.key, label: s.label, required: s.required, status: 'pending' })))}</ul>
-      </section>
+      ${progressCard}
 
       <section class="card">
         ${sections}
@@ -377,6 +433,21 @@ function consoleHTML({ guild, settings, lockdown, permissionReport, summary }) {
 
 // ── Page ────────────────────────────────────────────────────────────────────
 
+/**
+ * Wrap the Anti-Nuke panel in the shared "Coming Soon……" overlay unless the
+ * viewer bypasses the upcoming gate. Required lazily to avoid the
+ * guild-pages → antinuke-page → guild-pages require cycle.
+ *
+ * Anti-Nuke is NOT released yet: `upcoming: true` in render/guild.js TABS, so
+ * ordinary users see the overlay (and the write endpoints 403 via
+ * `requireUpcoming`); developer/owner bot roles get the real editor.
+ */
+function wrapUpcoming(innerHTML, guild) {
+    if (guild && guild._bypassUpcoming) return innerHTML;
+    const { upcomingOverlayWrap } = require('./guild-pages');
+    return upcomingOverlayWrap(innerHTML, { icon: 'shieldAlert', title: 'Anti-Nuke' });
+}
+
 function antiNukePageHTML({ guild, user, view }) {
     const settings = (guild._config || {}).antiNuke || {};
     const lockdown = (guild._config || {}).antiNukeLockdown || { active: false };
@@ -399,7 +470,7 @@ function antiNukePageHTML({ guild, user, view }) {
     const body = `
     ${require('./guild').guildHeaderHTML(guild)}
     ${require('./guild').tabNavHTML(guild.id, 'antinuke')}
-    ${inner}
+    ${wrapUpcoming(inner, guild)}
     ${require('./guild').guildDataScript({
         guildId: guild.id,
         channels: guild._channels,

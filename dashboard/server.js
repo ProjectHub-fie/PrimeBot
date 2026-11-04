@@ -1196,7 +1196,7 @@ app.get('/api/guilds/:guildId/antinuke', requireAuth, requireGuildAdmin, async (
     }
 });
 
-app.patch('/api/guilds/:guildId/antinuke', requireAuth, requireGuildAdmin, async (req, res) => {
+app.patch('/api/guilds/:guildId/antinuke', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
     try {
         const { patch, error } = buildAntiNukePatch(req.body || {});
         if (error) return res.status(400).json({ error });
@@ -1211,7 +1211,7 @@ app.patch('/api/guilds/:guildId/antinuke', requireAuth, requireGuildAdmin, async
 
 // Master switch — persists immediately (a security switch must not wait on
 // unrelated dirty fields in the floating save bar).
-app.post('/api/guilds/:guildId/antinuke/toggle', requireAuth, requireGuildAdmin, async (req, res) => {
+app.post('/api/guilds/:guildId/antinuke/toggle', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
     try {
         const enabled = (req.body || {}).enabled === true;
         const updated = await dashboardDb.upsertAntiNukeSettings(req.guild.id, { enabled });
@@ -1242,7 +1242,7 @@ app.get('/api/guilds/:guildId/antinuke/incidents', requireAuth, requireGuildAdmi
 });
 
 // Lockdown controls (manual engage / restore).
-app.post('/api/guilds/:guildId/antinuke/lockdown', requireAuth, requireGuildAdmin, async (req, res) => {
+app.post('/api/guilds/:guildId/antinuke/lockdown', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
     try {
         const action = String((req.body || {}).action || '');
         const antiNukeActions = require('./antiNukeActions');
@@ -1296,6 +1296,9 @@ app.get('/api/guilds/:guildId/antinuke/setup', requireAuth, requireGuildAdmin, a
             setup: {
                 method: setup.method,
                 status: setup.status,
+                // The raw step map lets the manual wizard resume at the right
+                // section after a refresh (progress alone loses per-section state).
+                state: setup.state || {},
                 progress: computeProgress(setup.method || 'automatic', setup.state || {}),
             },
         });
@@ -1305,7 +1308,7 @@ app.get('/api/guilds/:guildId/antinuke/setup', requireAuth, requireGuildAdmin, a
     }
 });
 
-app.post('/api/guilds/:guildId/antinuke/setup/start', requireAuth, requireGuildAdmin, async (req, res) => {
+app.post('/api/guilds/:guildId/antinuke/setup/start', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
     try {
         const method = (req.body || {}).method === 'manual' ? 'manual' : 'automatic';
         const { normalizeSetupState, withStatus } = require('../utils/antiNukeSetup');
@@ -1321,7 +1324,7 @@ app.post('/api/guilds/:guildId/antinuke/setup/start', requireAuth, requireGuildA
 
 // Resume: re-read the persisted state and re-validate permissions (the guild
 // may have changed since the wizard was left).
-app.post('/api/guilds/:guildId/antinuke/setup/resume', requireAuth, requireGuildAdmin, async (req, res) => {
+app.post('/api/guilds/:guildId/antinuke/setup/resume', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
     try {
         const setup = await dashboardDb.getAntiNukeSetup(req.guild.id);
         const method = (req.body || {}).method || setup.method || 'automatic';
@@ -1335,7 +1338,7 @@ app.post('/api/guilds/:guildId/antinuke/setup/resume', requireAuth, requireGuild
 
 // Manual wizard progress (completed section keys). Never trusts a client
 // completed-step list beyond the known section keys.
-app.patch('/api/guilds/:guildId/antinuke/setup/progress', requireAuth, requireGuildAdmin, async (req, res) => {
+app.patch('/api/guilds/:guildId/antinuke/setup/progress', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
     try {
         const { normalizeSetupState, applyStep, withStatus, isComplete } = require('../utils/antiNukeSetup');
         const { MANUAL_SECTIONS } = require('../utils/antiNukeSetup');
@@ -1355,7 +1358,7 @@ app.patch('/api/guilds/:guildId/antinuke/setup/progress', requireAuth, requireGu
 });
 
 // Automatic setup: run the NEXT step and return real progress.
-app.post('/api/guilds/:guildId/antinuke/setup/step', requireAuth, requireGuildAdmin, async (req, res) => {
+app.post('/api/guilds/:guildId/antinuke/setup/step', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
     try {
         const { runNextStep } = require('../utils/antiNukeSetupRunner');
         const { computeProgress } = require('../utils/antiNukeSetup');
@@ -1385,7 +1388,7 @@ app.post('/api/guilds/:guildId/antinuke/setup/step', requireAuth, requireGuildAd
     }
 });
 
-app.post('/api/guilds/:guildId/antinuke/setup/complete', requireAuth, requireGuildAdmin, async (req, res) => {
+app.post('/api/guilds/:guildId/antinuke/setup/complete', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
     try {
         const method = (req.body || {}).method === 'manual' ? 'manual' : 'automatic';
         const setup = await dashboardDb.getAntiNukeSetup(req.guild.id);
@@ -1404,7 +1407,7 @@ app.post('/api/guilds/:guildId/antinuke/setup/complete', requireAuth, requireGui
     }
 });
 
-app.post('/api/guilds/:guildId/antinuke/setup/reset', requireAuth, requireGuildAdmin, async (req, res) => {
+app.post('/api/guilds/:guildId/antinuke/setup/reset', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
     try {
         const { normalizeSetupState } = require('../utils/antiNukeSetup');
         const state = normalizeSetupState({});
