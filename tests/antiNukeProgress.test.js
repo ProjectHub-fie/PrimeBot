@@ -77,7 +77,7 @@ function progressEls() {
     return els;
 }
 
-function boot({ view, setupResponse, els: seedEls, sections, setupState }) {
+function boot({ view, setupResponse, els: seedEls, sections, setupState, settings, saveBar: saveBarOverride }) {
     const els = seedEls || progressEls();
     const calls = { api: [] };
     const docListeners = {};
@@ -92,6 +92,10 @@ function boot({ view, setupResponse, els: seedEls, sections, setupState }) {
         querySelectorAll: sel => {
             if (sel === '.an-setup-start') return els.__startBtns || [];
             if (sel === '.an-wizard-section') return sections || [];
+            if (sel === '.an-danger-perm') return els.__dangerPerms || [];
+            if (sel === '.an-response-cb') return els.__responseCbs || [];
+            if (sel === '.an-trusted-role') return els.__trustedRoles || [];
+            if (sel === '.an-action-row') return els.__actionRows || [];
             return [];
         },
         addEventListener: (t, fn) => { (docListeners[t] = docListeners[t] || []).push(fn); },
@@ -102,7 +106,7 @@ function boot({ view, setupResponse, els: seedEls, sections, setupState }) {
     };
 
     const api = async (url, opts) => {
-        calls.api.push({ url, method: (opts && opts.method) || 'GET' });
+        calls.api.push({ url, method: (opts && opts.method) || 'GET', body: opts && opts.body });
         if (url.endsWith('/antinuke/setup')) return setupResponse;
         if (url.endsWith('/antinuke/setup/progress')) return { setup: { method: 'manual', status: 'in_progress', state: {} } };
         return {};
@@ -115,14 +119,14 @@ function boot({ view, setupResponse, els: seedEls, sections, setupState }) {
         return { ok: true, status: 200, json: async () => data };
     };
 
-    const saveBar = { register: () => {}, track: () => {}, markDirty: () => {}, markClean: () => {}, onSaved: () => {}, syncControl: () => {} };
+    const saveBar = saveBarOverride || { register: () => {}, track: () => {}, markDirty: () => {}, markClean: () => {}, onSaved: () => {}, syncControl: () => {} };
 
     const sandbox = {
         window: {
             guildData: { guildId: GUILD },
             __ANTINUKE_ACTIONS: [],
             __ANTINUKE_MODULES: [],
-            __ANTINUKE_SETTINGS: {},
+            __ANTINUKE_SETTINGS: settings || {},
             __ANTINUKE_SETUP: setupState || { status: 'not_started', state: {} },
             __ANTINUKE_VIEW: view || 'setup',
             saveBar, api,
@@ -268,3 +272,73 @@ test('the manual wizard seeds completed sections from the persisted state (resum
     assert.equal(pct, 50, `expected 50%, got ${pct}%`);
     assert.ok(pct > 0, 'the wizard must not restart at 0% after a refresh');
 });
+
+// ── Console save must not wipe the dangerous-permission list ────────────────
+//
+// The console view renders `#an-dry-run` but NO `.an-danger-perm` checkboxes.
+// `collectSettings()` used to always send `dangerousPermissions: []` from that
+// page, so saving anything (e.g. turning dry-run off) sent an empty list and the
+// server rejected it with "Keep at least one dangerous permission." The fix:
+// only send the list when the page actually renders the checkboxes; otherwise
+// preserve the saved value.
+
+function consoleEls() {
+    const els = {
+        'an-enabled': makeEl('an-enabled', { type: 'checkbox', checked: true }),
+        'an-dry-run': makeEl('an-dry-run', { type: 'checkbox', checked: true }),
+        'an-alert-channel': makeEl('an-alert-channel', { value: '' }),
+        'an-response-cooldown': makeEl('an-response-cooldown', { value: '30' }),
+        'an-lockdown-enabled': makeEl('an-lockdown-enabled', { type: 'checkbox', checked: true }),
+        'an-trusted-users': makeEl('an-trusted-users'),
+        'an-trusted-roles': makeEl('an-trusted-roles'),
+        'an-activity-body': makeEl('an-activity-body'),
+        'an-activity-page': makeEl('an-activity-page'),
+        'an-activity-prev': makeEl('an-activity-prev'),
+        'an-activity-next': makeEl('an-activity-next'),
+    };
+    // The console renders NO `.an-danger-perm` inputs.
+    els.__dangerPerms = [];
+    els.__responseCbs = [makeEl('rc', { type: 'checkbox', checked: true, value: 'alertOwner' })];
+    els.__trustedRoles = [];
+    els.__actionRows = [];
+    return els;
+}
+
+test('a console save preserves the saved dangerous-permission list (never sends [])', async () => {
+    const els = consoleEls();
+    const savers = [];
+    const saveBar = {
+        register: fn => savers.push(fn), track: () => {}, markDirty: () => {}, markClean: () => {},
+        onSaved: () => {}, syncControl: () => {},
+    };
+    const { calls } = boot({
+        view: 'console',
+        els,
+        saveBar,
+        settings: {
+            enabled: true, dryRun: true, dangerousPermissions: ['Administrator', 'ManageRoles'],
+            responses: ['alertOwner'], lockdown: { enabled: true }, responseCooldownSeconds: 30,
+            trustedUserIds: [], trustedRoleIds: [],
+        },
+        setupResponse: { setup: { method: 'automatic', status: 'completed', state: {}, progress: {} } },
+    });
+    await new Promise(r => setTimeout(r, 20));
+
+    assert.equal(savers.length, 1, 'the console registers exactly one saveBar saver');
+    // Turn dry-run OFF, then save (this is the action that used to be rejected).
+    els['an-dry-run'].checked = false;
+    const result = savers[0]();
+    if (result && result.catch) await result.catch(() => {});
+    await new Promise(r => setTimeout(r, 20));
+
+    const patch = calls.api.filter(c => c.method === 'PATCH' && c.url.endsWith('/antinuke')).pop();
+    assert.ok(patch, 'the save issued a PATCH to the Anti-Nuke endpoint');
+    const body = JSON.parse(patch.body);
+    assert.equal(body.dryRun, false, 'dry-run was turned off');
+    assert.deepEqual(
+        body.dangerousPermissions,
+        ['Administrator', 'ManageRoles'],
+        'the console must NOT send an empty list — it preserves the saved one',
+    );
+});
+

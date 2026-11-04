@@ -522,12 +522,19 @@
         seconds: secondsEl ? parseInt(secondsEl.value, 10) || undefined : undefined,
       };
     });
+    // Only send dangerousPermissions when the page actually renders the
+    // checkboxes. The console view does not, and sending an empty list there
+    // would silently wipe the admin's configured list on every save (the
+    // "Keep at least one dangerous permission" rejection).
+    var permBoxes = $$('.an-danger-perm');
     return {
       enabled: $('#an-enabled') ? $('#an-enabled').checked : (SETTINGS.enabled === true),
       dryRun: $('#an-dry-run') ? $('#an-dry-run').checked : (SETTINGS.dryRun !== false),
       alertChannelId: ($('#an-alert-channel') && $('#an-alert-channel').value) || null,
       responses: $$('.an-response-cb').filter(function (cb) { return cb.checked; }).map(function (cb) { return cb.value; }),
-      dangerousPermissions: $$('.an-danger-perm').filter(function (cb) { return cb.checked; }).map(function (cb) { return cb.value; }),
+      dangerousPermissions: permBoxes.length
+        ? permBoxes.filter(function (cb) { return cb.checked; }).map(function (cb) { return cb.value; })
+        : (SETTINGS.dangerousPermissions || []),
       trustedUserIds: SETTINGS.trustedUserIds || [],
       trustedRoleIds: $$('.an-trusted-role').filter(function (cb) { return cb.checked; }).map(function (cb) { return cb.value; }),
       watched: watched,
