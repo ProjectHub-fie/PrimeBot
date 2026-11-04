@@ -360,6 +360,28 @@ test('an authenticated admin can save Anti-Nuke settings', async () => {
     assert.equal(payload.antiNuke.enabled, true);
 });
 
+test('an empty dangerous-permission list is accepted (no "keep at least one" rejection)', async () => {
+    boot();
+    const cookie = await adminCookie();
+    // Turning dry-run off must not be blocked by the permission list. An empty
+    // list is a valid, alert-only configuration.
+    const r = await request(`/api/guilds/${GUILD}/antinuke`, {
+        method: 'PATCH',
+        body: { dryRun: false, dangerousPermissions: [] },
+        headers: { Cookie: cookie },
+    });
+    assert.equal(r.status, 200, r.body.slice(0, 300));
+    const payload = JSON.parse(r.body);
+    assert.equal(payload.antiNuke.dryRun, false, 'dry-run is turned off');
+    assert.deepEqual(payload.antiNuke.dangerousPermissions, [], 'the empty list is persisted, not rejected');
+    // Unknown keys are still dropped.
+    const r2 = await request(`/api/guilds/${GUILD}/antinuke`, {
+        method: 'PATCH', body: { dangerousPermissions: ['Bogus', 'Administrator'] }, headers: { Cookie: cookie },
+    });
+    assert.equal(r2.status, 200);
+    assert.deepEqual(JSON.parse(r2.body).antiNuke.dangerousPermissions, ['Administrator']);
+});
+
 test('Anti-Nuke rejects an unknown action key and an empty response list', async () => {
     boot();
     const cookie = await adminCookie();
