@@ -1,0 +1,43 @@
+
+name: PrimeBot Tests
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '**.js'
+      - '**.json'
+      - 'tests/**'
+      - '.github/workflows/primebot-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Run PrimeBot Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Run tests
+        run: npm test
