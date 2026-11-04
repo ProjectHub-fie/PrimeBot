@@ -21,7 +21,7 @@ const ROOT = path.join(__dirname, '..');
 
 // The DB env vars are saved/restored around each test so the suite never
 // leaks configuration into another test file sharing this process.
-const DB_VARS = ['FALLBACK_DATABASE_URL', 'DATABASE_URL', 'LOG_DATABASE_URL', 'AUTOMOD_DATABASE_URL', 'ANUKE_DATABASE_URL'];
+const DB_VARS = ['FALLBACK_DATABASE_URL', 'DATABASE_URL', 'LOG_DATABASE_URL', 'AUTOMOD_DATABASE_URL', 'ANUKE_DATABASE_URL', 'ANTI_DATABASE_URL'];
 
 function withEnv(vars, fn) {
     const saved = {};
@@ -71,6 +71,29 @@ test('resolveDbUrl returns null when nothing is configured', () => {
     });
 });
 
+test('Anti-Nuke prefers ANTI_DATABASE_URL over the legacy ANUKE_DATABASE_URL alias', () => {
+    // The pool module is re-required with a fresh env so its module-level
+    // resolveConnectionString() runs against the test values.
+    withEnv({ ANTI_DATABASE_URL: 'postgres://anti', ANUKE_DATABASE_URL: 'postgres://anuke', DATABASE_URL: 'postgres://main' }, () => {
+        const mod = require('../server/anukeDb');
+        assert.equal(mod.resolveConnectionString(), 'postgres://anti');
+    });
+});
+
+test('Anti-Nuke falls back to ANUKE_DATABASE_URL when ANTI_DATABASE_URL is unset', () => {
+    withEnv({ ANUKE_DATABASE_URL: 'postgres://anuke', DATABASE_URL: 'postgres://main' }, () => {
+        const mod = require('../server/anukeDb');
+        assert.equal(mod.resolveConnectionString(), 'postgres://anuke');
+    });
+});
+
+test('Anti-Nuke falls back to FALLBACK/DATABASE_URL when neither anti var is set', () => {
+    withEnv({ FALLBACK_DATABASE_URL: 'postgres://fallback', DATABASE_URL: 'postgres://main' }, () => {
+        const mod = require('../server/anukeDb');
+        assert.equal(mod.resolveConnectionString(), 'postgres://fallback');
+    });
+});
+
 // ── Static audit ────────────────────────────────────────────────────────────
 
 test('every dedicated pool resolves through the shared resolver', () => {
@@ -87,12 +110,15 @@ test('every dedicated pool resolves through the shared resolver', () => {
         );
         assert.match(
             src,
-            /function resolveConnectionString\(\) \{\s*return resolveDbUrl\(/,
+            /function resolveConnectionString\(\) \{[\s\S]*?resolveDbUrl\(/,
             `${file} resolveConnectionString must delegate to resolveDbUrl`
         );
+        // anukeDb.js resolves ANUKE_DATABASE_URL (the legacy alias) through the
+        // resolver, with ANTI_DATABASE_URL checked first as the canonical name.
+        const resolvedVar = file === 'anukeDb.js' ? 'ANUKE_DATABASE_URL' : expected;
         assert.ok(
-            src.includes(`resolveDbUrl('${expected}')`),
-            `${file} must resolve its own ${expected} variable`
+            src.includes(`resolveDbUrl('${resolvedVar}')`),
+            `${file} must resolve its own ${resolvedVar} variable`
         );
     }
 });

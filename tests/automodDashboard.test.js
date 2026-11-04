@@ -18,6 +18,10 @@ const { TABS } = require('../dashboard/render/guild');
 function fixture(overrides = {}) {
     return {
         id: '111111111111111111', name: 'Test Server', icon: null,
+        // Anti-Nuke is `upcoming`, so the page renders the blurred overlay for
+        // ordinary users. These tests assert the REAL markup, so the fixture
+        // represents a developer/owner viewer who bypasses the gate.
+        _bypassUpcoming: true,
         _config: {
             server: {}, welcome: {}, logging: {},
             automod: {
@@ -151,20 +155,25 @@ test('the automod page loads its own script and the shared guild script', () => 
 
 // ── Anti-Nuke tab ───────────────────────────────────────────────────────────
 
-test('Anti-Nuke is its own RELEASED sidebar tab (no upcoming overlay)', () => {
+test('Anti-Nuke is an upcoming sidebar tab (not yet released)', () => {
     const tab = TABS.find(t => t.key === 'antinuke');
     assert.ok(tab, 'Anti-Nuke tab is missing from the server-features sidebar');
     assert.equal(tab.label, 'Anti-Nuke');
-    assert.ok(!tab.upcoming, 'Anti-Nuke must be released — no upcoming flag');
+    assert.ok(tab.upcoming, 'Anti-Nuke must be marked upcoming until it is released');
 
-    const html = renderAntiNuke();
-    assert.doesNotMatch(html, /upcoming-locked-wrap locked/, 'no blurred/inert wrapper');
-    assert.match(html, /PrimeBot Anti-Nuke/, 'the real page renders');
+    // For an ordinary admin (no bypass) the page is wrapped in the blurred
+    // overlay; the real markup is still present underneath (so releasing is a
+    // one-flag flip).
+    const ordinary = fixture({ _bypassUpcoming: false });
+    const html = guildPages.antiNukePage({ guild: ordinary, user: { username: 'u' } });
+    assert.match(html, /upcoming-locked-wrap locked/, 'the Coming Soon overlay wraps the page');
+    assert.match(html, /PrimeBot Anti-Nuke/, 'the real page markup is still rendered underneath');
     assert.match(html, /antinuke\.js/, 'the Anti-Nuke page must load its client script');
 });
 
-test('the Anti-Nuke page renders the real editor controls (console view)', () => {
+test('the Anti-Nuke page renders the real editor controls for bypass users (console view)', () => {
     const guild = fixture();
+    guild._bypassUpcoming = true;
     guild._config.antiNuke = { enabled: true, dryRun: true, watched: {}, responses: ['alertOwner'] };
     guild._config.antiNukeSetup = { status: 'completed', progress: { percent: 100, completed: 8, total: 8, steps: [] } };
     guild._config.antiNukePermissions = { ok: true, checks: [], missing: [] };

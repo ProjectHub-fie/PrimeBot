@@ -320,6 +320,10 @@ async function requireGuildAdminPage(req, res, next) {
             req.guild._config.antiNukeSetup = {
                 method,
                 status: antiNuke.setupStatus || 'not_started',
+                // The raw step map so the manual wizard can resume at the right
+                // section (the computed `progress` alone cannot restore which
+                // sections are already complete).
+                state: antiNuke.setupState || {},
                 progress: computeProgress(method || 'automatic', antiNuke.setupState || {}),
             };
         } catch (err) {

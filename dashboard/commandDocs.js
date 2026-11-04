@@ -46,6 +46,21 @@ const METADATA = {
         description: "View the server's current text prefix or change it.",
         usage: ['prefix [new prefix]'],
     },
+    antinuke: {
+        category: 'Moderation', permission: 'Manage Server',
+        description: 'Anti-Nuke protection: detect and contain destructive admin actions (mass channel/role deletion, mass bans/kicks, webhook and bot additions, dangerous permission grants). Detection is driven by real Discord audit-log correlation, so nobody is ever punished on a guess. Dry-run is on by default.',
+        usage: [
+            'antinuke status',
+            'antinuke setup',
+            'antinuke enable | disable',
+            'antinuke dryrun <on|off>',
+            'antinuke thresholds',
+            'antinuke whitelist @user | @role',
+            'antinuke unwhitelist @user | @role',
+            'antinuke lockdown | restore',
+        ],
+        note: 'The full configuration console lives in the dashboard (Server settings → Anti-Nuke). Anti-Nuke is currently an unreleased (coming-soon) feature.',
+    },
     dev: {
         category: 'Configuration',
         description: 'PrimeBot bot-management role service. Shows your role (or another user\'s); the owner assigns user/moderator/admin/developer roles. The owner role is reserved for config developerIds.',

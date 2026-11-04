@@ -3,8 +3,9 @@
 // role bypass the gate: the dashboard sets guild._bypassUpcoming
 // (dashboard/auth.js) and the page then renders the real editor.
 //
-// Anti-Nuke and Tickets are RELEASED and render their real content for every
-// authorized administrator — no overlay, no gate.
+// Anti-Nuke is NOT yet released (also `upcoming: true`) and follows the same
+// rule: ordinary admins see the overlay, developer/owner roles get the editor.
+// Tickets is RELEASED and renders its real content for every administrator.
 
 const { test } = require('node:test');
 const assert = require('node:assert');
@@ -37,20 +38,27 @@ test('eventsPage renders the real Event Management page for bypass users', () =>
     assert.ok(html.includes('Create Event'), 'the real create button renders for bypass users');
 });
 
-test('antiNukePage is RELEASED — no overlay for ordinary users', () => {
+test('antiNukePage renders the Coming Soon overlay for ordinary users (upcoming)', () => {
     const html = guildPages.antiNukePage({ guild: fakeGuild(false), user: null });
-    assert.ok(!html.includes('upcoming-locked-wrap locked'), 'Anti-Nuke is released — no overlay');
-    assert.ok(html.includes('PrimeBot Anti-Nuke'), 'the real page renders');
+    assert.ok(html.includes('upcoming-locked-wrap locked'), 'Anti-Nuke is not released — ordinary users get the overlay');
+    assert.ok(html.includes('Anti-Nuke'), 'the feature is named in the overlay');
 });
 
-test('antiNukePage renders the setup chooser before setup is complete', () => {
-    const html = guildPages.antiNukePage({ guild: fakeGuild(false), user: null });
+test('antiNukePage renders the real setup wizard for bypass users', () => {
+    const html = guildPages.antiNukePage({ guild: fakeGuild(true), user: null });
+    assert.ok(!html.includes('upcoming-locked-wrap locked'), 'overlay should be skipped for bypass users');
     assert.ok(html.includes('data-method="automatic"'), 'automatic setup button renders');
     assert.ok(html.includes('data-method="manual"'), 'manual setup button renders');
 });
 
-test('antiNukePage renders the protection console once setup is complete', () => {
-    const guild = fakeGuild(false);
+test('antiNukePage renders the setup chooser (bypass) before setup is complete', () => {
+    const html = guildPages.antiNukePage({ guild: fakeGuild(true), user: null });
+    assert.ok(html.includes('data-method="automatic"'), 'automatic setup button renders');
+    assert.ok(html.includes('data-method="manual"'), 'manual setup button renders');
+});
+
+test('antiNukePage renders the protection console once setup is complete (bypass)', () => {
+    const guild = fakeGuild(true);
     guild._config.antiNuke = { enabled: true, dryRun: true, watched: {}, responses: ['alertOwner'] };
     guild._config.antiNukeSetup = { status: 'completed', progress: { percent: 100, completed: 8, total: 8, steps: [] } };
     guild._config.antiNukePermissions = { ok: true, checks: [], missing: [] };
