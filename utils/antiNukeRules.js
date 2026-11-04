@@ -446,12 +446,14 @@ function normalizeAntiNukeSettings(raw = {}) {
         ? src.responses.filter(r => NUKE_RESPONSE_BY_KEY[r])
         : base.responses.slice();
 
-    // Dangerous permissions: only keys from the catalog are accepted, and at
-    // least one must remain so containment always has something to strip.
+    // Dangerous permissions: only keys from the catalog are accepted. The list
+    // may be EMPTY — containment is opt-in and an admin may choose to strip
+    // nothing (e.g. an alert-only setup), so this is never forced back to a
+    // default. `containment` treats an empty list as "nothing to strip".
     const dpIn = Array.isArray(src.dangerousPermissions)
         ? Array.from(new Set(src.dangerousPermissions.filter(p => DANGEROUS_PERMISSION_KEYS.includes(p))))
         : base.dangerousPermissions.slice();
-    const dangerousPermissions = dpIn.length ? dpIn : base.dangerousPermissions.slice();
+    const dangerousPermissions = dpIn;
 
     const lockSrc = (src.lockdown && typeof src.lockdown === 'object') ? src.lockdown : {};
     const lockdown = {

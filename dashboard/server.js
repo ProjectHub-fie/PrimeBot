@@ -1154,10 +1154,12 @@ function buildAntiNukePatch(body) {
     if ('trustedUserIds' in body) patch.trustedUserIds = Array.isArray(body.trustedUserIds) ? body.trustedUserIds : [];
     if ('trustedRoleIds' in body) patch.trustedRoleIds = Array.isArray(body.trustedRoleIds) ? body.trustedRoleIds : [];
     if ('dangerousPermissions' in body) {
-        const list = (Array.isArray(body.dangerousPermissions) ? body.dangerousPermissions : [])
-            .filter(p => DANGEROUS_PERMISSION_KEYS.includes(p));
-        if (list.length === 0) return { error: 'Keep at least one dangerous permission.' };
-        patch.dangerousPermissions = Array.from(new Set(list));
+        // An empty list is allowed: containment is opt-in, and an admin may
+        // legitimately choose to strip nothing. Unknown keys are dropped.
+        patch.dangerousPermissions = Array.from(new Set(
+            (Array.isArray(body.dangerousPermissions) ? body.dangerousPermissions : [])
+                .filter(p => DANGEROUS_PERMISSION_KEYS.includes(p)),
+        ));
     }
     if ('responseCooldownSeconds' in body) {
         const n = parseInt(body.responseCooldownSeconds, 10);

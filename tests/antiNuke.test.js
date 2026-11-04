@@ -64,9 +64,14 @@ test('normalization clamps bad input and never drops an action from the catalog'
     assert.ok(s.watched.roleDelete, 'actions absent from the input are still present');
 });
 
-test('at least one dangerous permission always remains (containment needs a target)', () => {
+test('an empty dangerous-permission list is allowed (containment is opt-in)', () => {
     const s = rules.normalizeAntiNukeSettings({ dangerousPermissions: ['Bogus'] });
-    assert.ok(s.dangerousPermissions.length > 0);
+    assert.deepEqual(s.dangerousPermissions, [], 'unknown keys are dropped and the list stays empty');
+    const s2 = rules.normalizeAntiNukeSettings({ dangerousPermissions: [] });
+    assert.deepEqual(s2.dangerousPermissions, [], 'clearing the list is honoured, not forced back to a default');
+    // An omitted key still falls back to the catalog default.
+    const s3 = rules.normalizeAntiNukeSettings({});
+    assert.ok(s3.dangerousPermissions.length > 0, 'the default keeps a sensible starting set');
 });
 
 // ── Trust ───────────────────────────────────────────────────────────────────
@@ -470,6 +475,22 @@ test('dangerousPermissionsOnRole reports the exact permissions a role grants', (
     const hits = dangerousPermissionsOnRole(role('r', 'Admin', { grants: [ADMIN] }), ['Administrator']);
     assert.deepEqual(hits, ['Administrator']);
     assert.deepEqual(dangerousPermissionsOnRole(role('n', 'Neutral', {}), ['Administrator']), []);
+});
+
+test('an empty dangerous-permission list strips NOTHING (never widens to the catalog)', () => {
+    const ADMIN = 0x8n;
+    // A role that would match the catalog default must NOT match an empty list —
+    // otherwise "alert only" silently becomes full containment.
+    assert.deepEqual(dangerousPermissionsOnRole(role('r', 'Admin', { grants: [ADMIN] }), []), []);
+    const plan = computeDangerousRoleRemovals({
+        member: memberWith('m1', [role('r', 'Admin', { grants: [ADMIN] })]),
+        botMember: { roles: { highest: { position: 50 } } },
+        guildOwnerId: 'owner', botUserId: 'bot',
+        trustedRoleIds: [],
+        dangerousPermissions: [],
+    });
+    assert.deepEqual(plan.removable, [], 'nothing is removable when no permissions are configured');
+    assert.equal(plan.reason, null, 'this is a valid configuration, not an error');
 });
 
 // ── Lockdown: reversible, never clobbers a later admin change ───────────────

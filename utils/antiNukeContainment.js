@@ -21,7 +21,7 @@
  */
 
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
-const { DANGEROUS_PERMISSION_BY_KEY, DANGEROUS_PERMISSIONS } = require('./antiNukeRules');
+const { DANGEROUS_PERMISSION_BY_KEY } = require('./antiNukeRules');
 
 // Event-specific colours (spec: critical red, high orange, medium yellow,
 // protected green, informational blue).
@@ -141,9 +141,10 @@ function buildSecurityAlertEmbed(p = {}) {
 
 /** The permission keys (from the catalog) that a role currently grants. */
 function dangerousPermissionsOnRole(role, dangerousKeys) {
-    const keys = Array.isArray(dangerousKeys) && dangerousKeys.length
-        ? dangerousKeys
-        : DANGEROUS_PERMISSIONS.map(p => p.key);
+    // No configured dangerous permissions means "strip nothing" — NOT "strip
+    // every catalog permission". Containment is opt-in, so an empty list is a
+    // valid (alert-only) configuration and must never widen to the full catalog.
+    const keys = Array.isArray(dangerousKeys) ? dangerousKeys : [];
     const hit = [];
     for (const key of keys) {
         const meta = DANGEROUS_PERMISSION_BY_KEY[key];
