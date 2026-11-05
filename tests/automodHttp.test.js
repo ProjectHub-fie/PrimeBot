@@ -34,6 +34,11 @@ function mockDb() {
         saveAntiNukeSetup: async (gid, patch) => ({ method: patch.method, status: patch.status, state: patch.state }),
         getAntiNukeIncidents: async () => ({ incidents: [], total: 0 }),
         getAntiNukeLockdown: async () => ({ active: false, state: null }),
+        addAntiNukeAccessHistory: async () => {},
+        listAntiNukeAccessHistory: async () => [],
+        listAntiNukeAccess: async () => [],
+        upsertAntiNukeAccess: async (gid, row) => ({ ...row, guildId: gid }),
+        deleteAntiNukeAccess: async () => true,
         addWebsiteLog: async () => {},
     };
 }
@@ -215,10 +220,11 @@ test('requireUpcoming 403s (reason: upcoming) for a user without a bypass role',
     assert.equal(fakeRes.payload.reason, 'upcoming');
 });
 
-test('the Anti-Nuke page renders its real setup wizard for a bypass user', async () => {
-    // Anti-Nuke is an UPCOMING feature: an ordinary admin gets the Coming Soon
-    // overlay, and a developer/owner viewer (guild._bypassUpcoming) gets the
-    // real editor so the feature can still be exercised before it ships.
+test('the Anti-Nuke page renders its real setup wizard for the actual server owner', async () => {
+    // Anti-Nuke is gated by the owner-controlled access hierarchy: only the
+    // ACTUAL guild owner (or an explicitly assigned Co-Owner/Trusted Admin)
+    // sees the real editor. A viewer without access gets a "no access" panel,
+    // never the setup wizard.
     const guildPages = require('../dashboard/render/guild-pages');
     const base = {
         id: GUILD, name: 'T', icon: null, _beta: false,
@@ -226,14 +232,15 @@ test('the Anti-Nuke page renders its real setup wizard for a bypass user', async
         _channels: [], _roles: [],
     };
 
-    const ordinary = guildPages.antiNukePage({ guild: { ...base, _bypassUpcoming: false }, user: { username: 'u' } });
-    assert.ok(ordinary.includes('upcoming-locked-wrap locked'), 'ordinary users get the Coming Soon overlay');
-    assert.match(ordinary, /data-method="automatic"/, 'the real markup is still rendered underneath the overlay');
+    // The server owner (guild.owner_id === viewer) gets the setup chooser.
+    const owner = guildPages.antiNukePage({ guild: { ...base, owner_id: '1', _antiNukeAccess: { ok: true, isOwner: true, role: 'owner', level: 1, permissions: [] } }, user: { username: 'u' } });
+    assert.ok(!owner.includes('No Anti-Nuke access'), 'the owner must not see the no-access panel');
+    assert.match(owner, /data-method="automatic"/, 'the setup chooser renders for the owner');
 
-    const bypass = guildPages.antiNukePage({ guild: { ...base, _bypassUpcoming: true }, user: { username: 'u' } });
-    assert.ok(!bypass.includes('upcoming-locked-wrap locked'), 'bypass users get the real editor');
-    assert.match(bypass, /data-method="automatic"/, 'the setup chooser renders');
-    assert.match(bypass, /data-method="manual"/, 'the manual option renders');
+    // A non-owner (no access context resolved) gets the no-access panel.
+    const noAccess = guildPages.antiNukePage({ guild: { ...base, _antiNukeAccess: { ok: true, isOwner: false, role: 'none', level: 4, permissions: [] } }, user: { username: 'u' } });
+    assert.ok(noAccess.includes('No Anti-Nuke access'), 'a viewer without access sees the explanatory panel');
+    assert.ok(!noAccess.includes('data-method="automatic"'), 'the setup wizard is NOT rendered for a viewer without access');
 });
 
 // ── The AutoMod page is NOT gated (it is a released feature) ────────────────

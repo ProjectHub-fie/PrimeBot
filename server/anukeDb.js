@@ -61,6 +61,54 @@ const ADD_COLUMNS_SQL = [
     `ALTER TABLE antinuke_settings ADD COLUMN IF NOT EXISTS setup_state JSONB NOT NULL DEFAULT '{}'`,
 ];
 
+// ── Access control ──────────────────────────────────────────────────────────
+//
+// Bot-defined Anti-Nuke management access (Co-Owners + Trusted Admins). The
+// ACTUAL Discord guild owner is never stored here — ownership is always read
+// from Discord guild data, so the owner has implicit full access and can never
+// be demoted or removed. One row per assigned user; `role` is `coOwner` or
+// `trustedAdmin`; `permissions` is the explicit effective set the owner (or a
+// delegated manager within their own authority) granted.
+const CREATE_ACCESS_SQL = `
+    CREATE TABLE IF NOT EXISTS antinuke_access (
+        guild_id        VARCHAR(50) NOT NULL,
+        user_id         VARCHAR(50) NOT NULL,
+        role            VARCHAR(20) NOT NULL,
+        permissions     JSONB NOT NULL DEFAULT '[]',
+        preset          VARCHAR(24),
+        granted_by      VARCHAR(50),
+        granted_at      TIMESTAMP DEFAULT NOW(),
+        updated_by      VARCHAR(50),
+        updated_at      TIMESTAMP DEFAULT NOW(),
+        PRIMARY KEY (guild_id, user_id)
+    );
+`;
+const CREATE_ACCESS_INDEX_SQL = [
+    `CREATE INDEX IF NOT EXISTS antinuke_access_guild_idx ON antinuke_access (guild_id)`,
+];
+
+// Append-only audit trail for sensitive access + setup changes. No endpoint
+// deletes or rewrites rows. `previous_state` / `new_state` are JSONB snapshots
+// (never secrets — only permission ids, role ids and plain-text actions).
+const CREATE_ACCESS_HISTORY_SQL = `
+    CREATE TABLE IF NOT EXISTS antinuke_access_history (
+        id              SERIAL PRIMARY KEY,
+        guild_id        VARCHAR(50) NOT NULL,
+        actor_id        VARCHAR(50) NOT NULL,
+        target_id       VARCHAR(50),
+        action          VARCHAR(40) NOT NULL,
+        previous_state  JSONB NOT NULL DEFAULT '{}',
+        new_state       JSONB NOT NULL DEFAULT '{}',
+        result          VARCHAR(20) NOT NULL DEFAULT 'success',
+        reason          TEXT NOT NULL DEFAULT '',
+        created_at      TIMESTAMP DEFAULT NOW()
+    );
+`;
+const CREATE_ACCESS_HISTORY_INDEX_SQL = [
+    `CREATE INDEX IF NOT EXISTS antinuke_access_history_guild_created_idx ON antinuke_access_history (guild_id, created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS antinuke_access_history_guild_target_idx ON antinuke_access_history (guild_id, target_id)`,
+];
+
 // One row per tripped threshold (a security incident). Deliberately narrow:
 // ordinary Discord events are never persisted — only incidents and their
 // response results. Indexed for the dashboard's actual query shapes.
@@ -128,6 +176,10 @@ async function ensureAnukeTables() {
         try {
             await client.query(CREATE_TABLE_SQL);
             for (const sql of ADD_COLUMNS_SQL) await client.query(sql);
+            await client.query(CREATE_ACCESS_SQL);
+            for (const sql of CREATE_ACCESS_INDEX_SQL) await client.query(sql);
+            await client.query(CREATE_ACCESS_HISTORY_SQL);
+            for (const sql of CREATE_ACCESS_HISTORY_INDEX_SQL) await client.query(sql);
             await client.query(CREATE_INCIDENT_SQL);
             for (const sql of CREATE_INCIDENT_INDEXES_SQL) await client.query(sql);
             await client.query(CREATE_DEDUP_SQL);
@@ -139,6 +191,107 @@ async function ensureAnukeTables() {
     }).catch((err) => {
         console.error('[ANUKE DB] Table init failed:', err.message);
     });
+}
+
+// ── Access control queries ──────────────────────────────────────────────────
+//
+// These run against the shared ANUKE pool so every shard node and the dashboard
+// see the same rows (Same-DB requirement — never one access DB per shard).
+// Sensitive mutations use transactions + ON CONFLICT so concurrent nodes cannot
+// clobber each other; history rows are append-only.
+
+/** Load every assigned access row for a guild (owner-less; owner is implicit). */
+async function listAccessRows(guildId) {
+    const res = await anukePool.query(
+        `SELECT guild_id, user_id, role, permissions, preset, granted_by, granted_at, updated_by, updated_at
+         FROM antinuke_access WHERE guild_id = $1 ORDER BY updated_at DESC`,
+        [String(guildId)],
+    );
+    return res.rows;
+}
+
+/** One assigned row or null. */
+async function getAccessRow(guildId, userId) {
+    const res = await anukePool.query(
+        `SELECT guild_id, user_id, role, permissions, preset, granted_by, granted_at, updated_by, updated_at
+         FROM antinuke_access WHERE guild_id = $1 AND user_id = $2`,
+        [String(guildId), String(userId)],
+    );
+    return res.rows[0] || null;
+}
+
+/**
+ * Insert or update an assignment atomically (transaction + upsert). The caller
+ * has already validated authority; this is the durable write both shard nodes
+ * and the dashboard share.
+ */
+async function upsertAccessRow(guildId, { userId, role, permissions = [], preset = null, grantedBy = null, updatedBy = null }) {
+    const client = await anukePool.connect();
+    try {
+        await client.query('BEGIN');
+        await client.query(
+            `INSERT INTO antinuke_access (guild_id, user_id, role, permissions, preset, granted_by, granted_at, updated_by, updated_at)
+             VALUES ($1,$2,$3,$4,$5,$6,NOW(),$7,NOW())
+             ON CONFLICT (guild_id, user_id) DO UPDATE SET
+                role = EXCLUDED.role,
+                permissions = EXCLUDED.permissions,
+                preset = EXCLUDED.preset,
+                updated_by = EXCLUDED.updated_by,
+                updated_at = NOW()`,
+            [String(guildId), String(userId), role, JSON.stringify(permissions), preset, grantedBy ? String(grantedBy) : null, updatedBy ? String(updatedBy) : null],
+        );
+        await client.query('COMMIT');
+    } catch (err) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw err;
+    } finally {
+        client.release();
+    }
+    return true;
+}
+
+/** Remove an assignment atomically. */
+async function deleteAccessRow(guildId, userId) {
+    const client = await anukePool.connect();
+    try {
+        await client.query('BEGIN');
+        await client.query('DELETE FROM antinuke_access WHERE guild_id = $1 AND user_id = $2', [String(guildId), String(userId)]);
+        await client.query('COMMIT');
+    } catch (err) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw err;
+    } finally {
+        client.release();
+    }
+    return true;
+}
+
+/** Append a row to the access/setup audit trail. Fire-and-forget safe. */
+async function addAccessHistoryRow({ guildId, actorId, targetId = null, action, previousState = {}, newState = {}, result = 'success', reason = '' }) {
+    await ensureAnukeTables();
+    await anukePool.query(
+        `INSERT INTO antinuke_access_history (guild_id, actor_id, target_id, action, previous_state, new_state, result, reason)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [
+            String(guildId), String(actorId), targetId ? String(targetId) : null,
+            String(action).slice(0, 40),
+            JSON.stringify(previousState || {}), JSON.stringify(newState || {}),
+            ['success', 'denied', 'failed'].includes(result) ? result : 'success',
+            String(reason || '').slice(0, 2000),
+        ],
+    );
+}
+
+/** Recent audit rows for a guild (newest first, bounded). */
+async function listAccessHistory(guildId, { limit = 50 } = {}) {
+    await ensureAnukeTables();
+    const lim = Math.min(200, Math.max(1, parseInt(limit, 10) || 50));
+    const res = await anukePool.query(
+        `SELECT id, guild_id, actor_id, target_id, action, previous_state, new_state, result, reason, created_at
+         FROM antinuke_access_history WHERE guild_id = $1 ORDER BY created_at DESC LIMIT $2`,
+        [String(guildId), lim],
+    );
+    return res.rows;
 }
 
 /**
@@ -187,4 +340,10 @@ module.exports = {
     ensureAnukeTables,
     claimDedupKey,
     pruneDedupKeys,
+    listAccessRows,
+    getAccessRow,
+    upsertAccessRow,
+    deleteAccessRow,
+    addAccessHistoryRow,
+    listAccessHistory,
 };

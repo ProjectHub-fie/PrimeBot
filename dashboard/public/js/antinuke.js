@@ -17,11 +17,20 @@
   var GUILD_ID = window.guildData && window.guildData.guildId;
   if (!GUILD_ID) return;
 
+  var ACCESS = window.__ANTINUKE_ACCESS || { role: 'none', level: 4, isOwner: false, permissions: [] };
   var ACTIONS = window.__ANTINUKE_ACTIONS || [];
   var MODULES = window.__ANTINUKE_MODULES || [];
   var SETTINGS = window.__ANTINUKE_SETTINGS || {};
   var SETUP = window.__ANTINUKE_SETUP || { status: 'not_started' };
   var VIEW = window.__ANTINUKE_VIEW || 'setup';
+  // Shared with the server-rendered page: every permission id + preset catalog.
+  var PERMS = window.__ANTINUKE_PERMISSION_CATALOG || { permissions: [], groups: [], presets: [], levels: {} };
+  var PERM_BY_ID = {};
+  (PERMS.permissions || []).forEach(function (p) { PERM_BY_ID[p.id] = p; });
+
+  function hasPerm(id) {
+    return ACCESS.isOwner || (ACCESS.permissions || []).indexOf(id) >= 0;
+  }
 
   var $ = function (sel, root) { return (root || document).querySelector(sel); };
   var $$ = function (sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); };
@@ -565,7 +574,300 @@
       });
   }
 
+  // ── Owner-controlled Access Control ───────────────────────────────────────
+
+  var ACCESS_SNAPSHOT = null;
+
+  function canManageAccess() { return ACCESS.isOwner || hasPerm('antinuke.access.manage'); }
+  function canViewAccess() { return ACCESS.isOwner || hasPerm('antinuke.access.view'); }
+  function canRevokeAccess() { return ACCESS.isOwner || hasPerm('antinuke.access.revoke'); }
+
+  function levelLabel(role) {
+    var levels = PERMS.levels || {};
+    if (role === 'owner') return (levels.owner && levels.owner.label) || 'Server Owner';
+    if (role === 'coOwner') return (levels.coOwner && levels.coOwner.label) || 'Co-Owner';
+    if (role === 'trustedAdmin') return (levels.trustedAdmin && levels.trustedAdmin.label) || 'Trusted Admin';
+    return (levels.none && levels.none.label) || 'No Access';
+  }
+
+  function permissionName(id) {
+    var p = PERM_BY_ID[id];
+    return p ? p.label : id;
+  }
+
+  function permissionRowHTML(p, opts) {
+    var o = opts || {};
+    var checked = (o.checked || false) ? ' checked' : '';
+    var disabled = o.disabled ? ' disabled' : '';
+    return '<label class="an-perm-row">' +
+      '<input type="checkbox" class="an-perm-cb" value="' + esc(p.id) + '"' + checked + disabled + '/>' +
+      '<span class="an-perm-meta"><span class="an-perm-name">' + esc(p.label) +
+      (p.ownerOnly ? ' <span class="an-owner-badge">owner</span>' : '') + '</span>' +
+      '<span class="an-perm-desc">' + esc(p.description) + '</span></span></label>';
+  }
+
+  /* The permission matrix used in the editor. Groups come from the shared
+   * registry; owner-only permissions are shown but force-disabled for
+   * non-owners and never editable for the owner (they already hold them). */
+  function permissionMatrixHTML(currentPerms, editable) {
+    var groups = PERMS.groups || [];
+    if (!groups.length) return '<div class="an-access-loading">No permission catalog loaded.</div>';
+    return groups.map(function (g) {
+      return '<div class="an-perm-group"><div class="an-perm-group-title">' + esc(g.label) + '</div>' +
+        g.permissions.map(function (p) {
+          var checked = (currentPerms || []).indexOf(p.id) >= 0;
+          // Non-owners can never toggle owner-only permissions.
+          var disabled = p.ownerOnly && !ACCESS.isOwner;
+          return permissionRowHTML(p, { checked: checked, disabled: disabled || !editable });
+        }).join('') + '</div>';
+    }).join('');
+  }
+
+  function confirmSensitive(reason, extra) {
+    var msg = reason;
+    if (extra) msg += '\n\n' + extra;
+    return window.confirm(msg);
+  }
+
+  /* Render the Access Control section (owner + assignments + history). */
+  function renderAccessControl() {
+    var root = $('#an-access-root');
+    if (!root) return;
+    if (!canViewAccess()) {
+      root.innerHTML = '<div class="an-access-empty">Access Control is restricted to the server owner' +
+        ' (and Co-Owners / Trusted Admins holding the access management permissions).</div>';
+      return;
+    }
+    root.innerHTML = '<div class="an-access-loading">Loading access control…</div>';
+    api('/api/guilds/' + GUILD_ID + '/antinuke/access', { method: 'GET' })
+      .then(function (snap) {
+        ACCESS_SNAPSHOT = snap;
+        renderAccessSnapshot(snap);
+      })
+      .catch(function (err) {
+        root.innerHTML = '<div class="an-access-empty">Could not load access control: ' + esc(err.message) + '</div>';
+      });
+  }
+
+  function renderAccessSnapshot(snap) {
+    var root = $('#an-access-root');
+    if (!root) return;
+    var assignments = snap.assignments || [];
+    var history = snap.history || [];
+    var viewerLevel = ACCESS.level != null ? ACCESS.level : 4;
+    var canEdit = canManageAccess();
+
+    var ownerCard = '<div class="an-access-owner">' +
+      '<div class="an-access-avatar">' + svg('shield') + '</div>' +
+      '<div><div class="an-access-name">Server Owner <span class="an-access-tag an-access-tag-owner">' + esc(snap.ownerId || 'unknown') + '</span></div>' +
+      '<div class="an-access-desc">The actual Discord guild owner. Full access — never removable or demotable.</div></div></div>';
+
+    var assignmentCards = assignments.map(function (a) {
+      var roleLabel = levelLabel(a.role);
+      var tagCls = a.role === 'coOwner' ? 'an-access-tag-co' : 'an-access-tag-ta';
+      var shortPerms = (a.permissions || []).slice(0, 4).map(permissionName).join(', ') +
+        ((a.permissions || []).length > 4 ? '…' : '');
+      var canRemove = (ACCESS.isOwner || (canRevokeAccess() && a.level > viewerLevel)) && a.userId !== snap.ownerId;
+      var canEditRow = (ACCESS.isOwner || (canEdit && a.level > viewerLevel)) && a.userId !== snap.ownerId;
+      return '<div class="an-access-row" data-user="' + esc(a.userId) + '" data-role="' + esc(a.role) + '">' +
+        '<div class="an-access-name">' + a.userId + ' <span class="an-access-tag ' + tagCls + '">' + esc(roleLabel) + '</span></div>' +
+        '<div class="an-access-desc">' + esc(shortPerms || 'No permissions assigned') + '</div>' +
+        '<div class="an-access-row-actions">' +
+        (canEditRow ? '<button class="btn btn-mini an-access-edit" data-user="' + esc(a.userId) + '" data-role="' + esc(a.role) + '">' + svg('settings') + ' Permissions</button>' : '') +
+        (canRemove ? '<button class="btn btn-mini btn-danger-an an-access-remove" data-user="' + esc(a.userId) + '" data-role="' + esc(a.role) + '">' + svg('trash') + ' Remove</button>' : '') +
+        '</div></div>';
+    }).join('');
+
+    var addBtn = canManageAccess()
+      ? '<button class="btn btn-primary an-access-add" id="an-access-add">' + svg('userPlus') + ' Add Co-Owner / Trusted Admin</button>'
+      : '';
+
+    var historyRows = history.slice(0, 12).map(function (h) {
+      var target = h.targetId ? '→ ' + esc(h.targetId) : '';
+      return '<tr><td>' + esc(h.action) + ' ' + target + '</td><td>by ' + esc(h.actorId) + '</td>' +
+        '<td class="an-history-result an-history-' + esc(h.result) + '">' + esc(h.result) + '</td>' +
+        '<td>' + esc(new Date(h.createdAt).toLocaleString()) + '</td></tr>';
+    }).join('') || '<tr><td colspan="4" class="an-empty">No access changes recorded yet.</td></tr>';
+
+    root.innerHTML =
+      '<div class="an-access-grid">' + ownerCard +
+      '<div class="an-access-assigned"><div class="an-access-head">' +
+      '<span><span class="icon">' + svg('users') + '</span> Assigned access</span>' + addBtn + '</div>' +
+      '<div class="an-access-list">' + (assignmentCards || '<div class="an-access-empty">No Co-Owners or Trusted Admins yet.</div>') + '</div></div>' +
+      '<div class="an-access-history"><div class="an-access-head"><span><span class="icon">' + svg('scroll') + '</span> Access history</span></div>' +
+      '<table class="an-hist-table"><tbody>' + historyRows + '</tbody></table></div>' +
+      '</div>';
+
+    var add = $('#an-access-add');
+    if (add) add.addEventListener('click', function () {
+      var userId = window.prompt('Enter the Discord user id of the member to grant Anti-Nuke management access to:');
+      if (!userId) return;
+      if (!/^\d{15,22}$/.test(userId.trim())) { toast('Enter a valid 15–22 digit Discord user id', 'error'); return; }
+      var isCoOwner = window.confirm('Appoint this user as a Co-Owner? Co-Owners must be confirmed before they receive permissions.\n\nChoose OK for Co-Owner, Cancel for Trusted Admin.');
+      openAccessEditor(null, userId.trim(), isCoOwner ? 'coOwner' : 'trustedAdmin');
+    });
+
+    $$('.an-access-edit', root).forEach(function (btn) {
+      btn.addEventListener('click', function () { openAccessEditor(btn.getAttribute('data-role'), btn.getAttribute('data-user')); });
+    });
+    $$('.an-access-remove', root).forEach(function (btn) {
+      btn.addEventListener('click', function () { removeAccessRow(btn); });
+    });
+  }
+
+  /* Build (or edit) the assignment in the permission-popup modal. */
+  function openAccessEditor(role, userId, forcedRole) {
+    var isNew = !role;
+    var targetRole = forcedRole || role || 'trustedAdmin';
+    if (!canManageAccess()) { toast('You do not have permission to manage Anti-Nuke access.', 'error'); return; }
+    // Existing assignment's current permissions.
+    var existing = null;
+    if (ACCESS_SNAPSHOT && ACCESS_SNAPSHOT.assignments) {
+      existing = ACCESS_SNAPSHOT.assignments.find(function (a) { return a.userId === userId; }) || null;
+    }
+    var current = existing ? (existing.permissions || []) : [];
+    if ((existing && existing.role) && !forcedRole) targetRole = existing.role;
+    var canPickCoOwner = ACCESS.isOwner;
+    var canSave = ACCESS.isOwner || (canManageAccess() && (!existing || existing.level > ACCESS.level));
+
+    var overlay = document.createElement('div');
+    overlay.className = 'an-modal-overlay';
+    overlay.innerHTML =
+      '<div class="an-modal" role="dialog" aria-modal="true" aria-label="Edit Anti-Nuke access">' +
+      '<div class="an-modal-head"><strong>' + (isNew ? 'Grant Anti-Nuke access' : 'Edit access — ' + esc(userId)) + '</strong>' +
+      '<button class="an-modal-x" aria-label="Close">' + svg('x') + '</button></div>' +
+      '<div class="an-modal-body">' +
+      '<div class="field"><label class="field-label">Level</label>' +
+      '<select id="an-acc-level-editor">' +
+      '<option value="trustedAdmin">Trusted Admin</option>' +
+      (canPickCoOwner ? '<option value="coOwner">Co-Owner</option>' : '') +
+      '</select></div>' +
+      '<div class="field"><label class="field-label">Preset</label>' +
+      '<select id="an-acc-preset"><option value="">— Custom —</option>' +
+      (PERMS.presets || []).filter(function (pr) { return pr.key !== 'custom'; }).map(function (pr) {
+        return '<option value="' + esc(pr.key) + '">' + esc(pr.label) + '</option>';
+      }).join('') + '</select></div>' +
+      '<div class="an-perm-matrix" id="an-acc-matrix">' + permissionMatrixHTML(current, canSave) + '</div>' +
+      (!ACCESS.isOwner ? '<p class="an-acc-hint">Co-Owners can only be appointed by the server owner.</p>' : '') +
+      '</div>' +
+      '<div class="an-modal-foot">' +
+      '<button class="btn btn-mini an-acc-cancel">Cancel</button>' +
+      '<button class="btn btn-primary btn-mini an-acc-save">Save changes</button>' +
+      '</div></div>';
+    document.body.appendChild(overlay);
+
+    var levelSel = overlay.querySelector('#an-acc-level-editor');
+    var presetSel = overlay.querySelector('#an-acc-preset');
+    var matrix = overlay.querySelector('#an-acc-matrix');
+    if (levelSel) levelSel.value = targetRole;
+    if (existing && existing.preset) { if (presetSel) presetSel.value = existing.preset; }
+
+    function applyPresetToMatrix(key) {
+      var preset = (PERMS.presets || []).find(function (pr) { return pr.key === key; });
+      if (!preset) return;
+      var ids = preset.permissions || [];
+      matrix.querySelectorAll('.an-perm-cb').forEach(function (cb) {
+        cb.checked = ids.indexOf(cb.value) >= 0 && !cb.disabled;
+      });
+    }
+    if (presetSel) presetSel.addEventListener('change', function () { applyPresetToMatrix(presetSel.value); });
+    if (levelSel) levelSel.addEventListener('change', function () {
+      if (levelSel.value === 'coOwner') { applyPresetToMatrix('protectionManager'); }
+    });
+
+    overlay.querySelector('.an-modal-x').addEventListener('click', close);
+    overlay.querySelector('.an-acc-cancel').addEventListener('click', close);
+    overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
+    function close() { if (overlay.parentNode) overlay.parentNode.removeChild(overlay); }
+
+    overlay.querySelector('.an-acc-save').addEventListener('click', function () {
+      if (!canSave) { toast('You cannot manage this assignment.', 'error'); return; }
+      var perms = matrix.querySelectorAll('.an-perm-cb');
+      var selected = [];
+      perms.forEach(function (cb) { if (cb.checked) selected.push(cb.value); });
+      var selRole = levelSel ? levelSel.value : 'trustedAdmin';
+      var sensitive = selRole === 'coOwner' || (existing && existing.role === 'coOwner') ||
+        selected.indexOf('antinuke.lockdown') >= 0 || selected.indexOf('antinuke.recovery') >= 0 ||
+        selected.indexOf('antinuke.access.manage') >= 0 || selected.indexOf('antinuke.access.revoke') >= 0;
+      if (sensitive && !confirmSensitive(
+        (selRole === 'coOwner' && !existing) ? 'Appoint this user as a CO-OWNER? They will receive the selected Anti-Nuke management permissions.' :
+        ((existing && existing.role === 'coOwner' && selRole !== 'coOwner') ? 'DEMOTE this Co-Owner to a Trusted Admin?' :
+        'This change grants sensitive permissions (lockdown / recovery / access management).'),
+        'Only grant permissions you are authorized to delegate. Non-owner managers are capped to their own permission set.'
+      )) return;
+
+      var url = isNew
+        ? '/api/guilds/' + GUILD_ID + '/antinuke/access/assign'
+        : '/api/guilds/' + GUILD_ID + '/antinuke/access/' + encodeURIComponent(userId);
+      var method = isNew ? 'POST' : 'PATCH';
+      api(url, { method: method, body: JSON.stringify({ userId: userId, role: selRole, permissions: selected, preset: presetSel ? presetSel.value || null : null }) })
+        .then(function () {
+          close();
+          toast('Anti-Nuke access saved', 'success');
+          renderAccessControl();
+        })
+        .catch(function (err) { toast('Could not save access: ' + err.message, 'error'); });
+    });
+  }
+
+  function removeAccessRow(btn) {
+    var userId = btn.getAttribute('data-user');
+    var role = btn.getAttribute('data-role');
+    if (!confirmSensitive('Remove ' + (role === 'coOwner' ? 'this Co-Owner' : 'this Trusted Admin') +
+      ' from Anti-Nuke access?', 'This revokes ALL their Anti-Nuke management permissions immediately.')) return;
+    api('/api/guilds/' + GUILD_ID + '/antinuke/access/' + encodeURIComponent(userId), { method: 'DELETE', body: '{}' })
+      .then(function () { toast('Access revoked', 'success'); renderAccessControl(); })
+      .catch(function (err) { toast('Could not revoke: ' + err.message, 'error'); });
+  }
+
   // ── Boot ──────────────────────────────────────────────────────────────────
+
+  // Progress auto-refresh: the setup view polls the persisted progress at most
+  // once per 5s, stops when the setup is complete/failed, and pauses while the
+  // tab is hidden or the page is inactive. No fake increments — the API returns
+  // the actual persisted state.
+  var progressPollTimer = null;
+  var progressPollInterval = 5000;
+  function startProgressPolling() {
+    stopProgressPolling();
+    progressPollTimer = setInterval(function () {
+      if (document.hidden) return; // pausing while the tab is inactive
+      api('/api/guilds/' + GUILD_ID + '/antinuke/setup', { method: 'GET' })
+        .then(function (data) {
+          var s = (data && data.setup) || {};
+          if (s.progress) {
+            SETUP = { method: s.method || 'automatic', status: s.status || 'not_started', state: s.state || {} };
+            renderProgress(s.progress);
+          }
+          if (s.status === 'completed' || s.status === 'failed' || (s.progress && s.progress.failed > 0)) stopProgressPolling();
+        })
+        .catch(function () { /* keep polling — a transient network error must not stop progress */ });
+    }, progressPollInterval);
+  }
+  function stopProgressPolling() {
+    if (progressPollTimer) { clearInterval(progressPollTimer); progressPollTimer = null; }
+  }
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) stopProgressPolling();
+    else if (VIEW === 'setup') startProgressPolling();
+  });
+  document.addEventListener('pagehide', function () { stopProgressPolling(); });
+
+  function initConsoleViewExtra() {
+    renderAccessControl();
+  }
+
+  // Patch the existing init functions to also start polling / render access.
+  var _origInitSetup = initSetupView;
+  initSetupView = function () {
+    _origInitSetup();
+    if (SETUP.status === 'in_progress' || SETUP.status === 'failed') startProgressPolling();
+  };
+  var _origInitConsole = initConsoleView;
+  initConsoleView = function () {
+    _origInitConsole();
+    initConsoleViewExtra();
+  };
 
   if (VIEW === 'wizard') initWizardView();
   else if (VIEW === 'console') initConsoleView();

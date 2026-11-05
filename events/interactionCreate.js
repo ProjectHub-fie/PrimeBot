@@ -598,6 +598,23 @@ module.exports = {
                             await safeReply(interaction, { content: 'Anti-Nuke is unavailable right now.', ephemeral: true });
                             return;
                         }
+                        // Owner-controlled access hierarchy. Starting/confirming a
+                        // setup needs `antinuke.setup`; viewing progress needs
+                        // `antinuke.view`. The actual guild owner always passes.
+                        const required = (mode === 'progress') ? 'antinuke.view' : 'antinuke.setup';
+                        const antiNukeAccess = require('../utils/antiNukeAccess');
+                        const auth = await antiNukeAccess.authorizeAntiNuke(
+                            { id: interaction.guild.id, owner_id: interaction.guild.ownerId },
+                            interaction.user.id, required,
+                            { requireMember: true, member: { present: true, roles: [] } },
+                        );
+                        if (!auth.ok) {
+                            await safeReply(interaction, {
+                                content: `You do not have Anti-Nuke permission to do this. (Required: \`${required}\` — the server owner can grant it in the Anti-Nuke → Access Control page.)`,
+                                ephemeral: true,
+                            });
+                            return;
+                        }
                         if (mode === 'progress') {
                             const setup = typeof manager.getSetup === 'function' ? await manager.getSetup(interaction.guild.id) : null;
                             const progress = setup && setup.state ? require('../utils/antiNukeSetup').computeProgress(setup.method || 'automatic', setup.state) : null;
@@ -629,7 +646,7 @@ module.exports = {
                                 const ok = res.state.status === 'completed';
                                 await interaction.editReply({
                                     content: ok
-                                        ? '✅ **Anti-Nuke setup completed.** Dry-run is enabled — review detection results before turning it off.'
+                                        ? '🛡️ **Anti-Nuke setup completed.** Protection is active — dry-run is OFF (live, reversible containment only).'
                                         : '⚠️ Setup finished with issues. Check the progress below, fix the failed step and retry.',
                                     embeds: [require('../utils/antiNukeEmbed').setupEmbed(res.progress)],
                                 });
@@ -647,7 +664,7 @@ module.exports = {
                                 new (require('discord.js').ButtonBuilder)().setCustomId('antinuke:setup:progress').setLabel('View progress').setStyle(require('discord.js').ButtonStyle.Secondary),
                             );
                             await safeReply(interaction, {
-                                content: '⚡ **Automatic setup** will apply the recommended security configuration with dry-run ON (detect + alert only). Continue?',
+                                content: '🛡️ **Automatic setup** will apply the recommended security configuration with dry-run OFF — real (reversible) protection will be active. Existing custom settings are preserved unless you confirm otherwise. Continue?',
                                 components: [confirm],
                                 ephemeral: true,
                             });

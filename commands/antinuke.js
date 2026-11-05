@@ -16,15 +16,39 @@ const { runAll } = require('../utils/antiNukeSetupRunner');
  * /antinuke — manage Anti-Nuke protection from Discord.
  *
  * Subcommands mirror the dashboard's Anti-Nuke tab:
- *   status / enable / disable / dryrun / thresholds
+ *   status / setup / enable / disable / dryrun / thresholds
  *   whitelist user|role / unwhitelist user|role
- *   lockdown / restore / setup
+ *   lockdown / restore
  *
- * Every subcommand requires Manage Server (set as the default member
- * permission). The dangerous actions (disable, lockdown) ask for confirmation.
- * Changes made here reach the dashboard within the cache-reload window (both
- * processes share the ANUKE_DATABASE_URL table).
+ * Authorization follows the owner-controlled access hierarchy, exactly like the
+ * dashboard: the ACTUAL guild owner always passes; every other user needs the
+ * bot-defined permission for the specific subcommand. A plain Discord
+ * Administrator/Manage Server permission is NOT sufficient on its own — see
+ * `AUTH_REQUIREMENTS` below, enforced through `authorizeAntiNuke`. The
+ * `ManageGuild` default member permission is kept so Discord still hides the
+ * command from non-staff; the hierarchy is what actually gates each action.
  */
+
+// Per-subcommand bot-defined permission (from shared/antiNukePermissions).
+// View-only/setup reads are gated by the access hierarchy too — a status read
+// is only shown to someone with at least `antinuke.view`.
+const AUTH_REQUIREMENTS = {
+    status: 'antinuke.view',
+    setup: 'antinuke.setup',
+    enable: 'antinuke.config',
+    disable: 'antinuke.config',
+    dryrun: 'antinuke.responses',
+    thresholds: 'antinuke.rules',
+    whitelist: 'antinuke.trusted.manage',
+    unwhitelist: 'antinuke.trusted.manage',
+    lockdown: 'antinuke.lockdown',
+    restore: 'antinuke.recovery',
+};
+async function denyEmbed(interaction, required) {
+    const embeds = [errorEmbed(`You do not have Anti-Nuke permission to run this. (Required: \`${required}\` — the server owner can grant it in the Anti-Nuke → Access Control page.)`)];
+    if (interaction.deferred || interaction.replied) return interaction.editReply({ embeds, components: [] });
+    return interaction.reply({ embeds, flags: MessageFlags.Ephemeral, components: [] });
+}
 
 const SETUP_BUTTONS = () => new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('antinuke:setup:automatic').setLabel('Automatic Setup').setStyle(ButtonStyle.Primary).setEmoji('⚡'),
@@ -70,6 +94,21 @@ module.exports = {
         const guildId = guild.id;
         const sub = interaction.options.getSubcommand();
         const settings = manager.getSettings(guildId);
+
+        // Owner-controlled access hierarchy — every subcommand is gated by a
+        // bot-defined permission. The ACTUAL guild owner always passes; a
+        // Discord Administrator without an assignment does not.
+        const antiNukeAccess = require('../utils/antiNukeAccess');
+        const member = {
+            present: true,
+            roles: Array.from((guild.members && guild.members.me && interaction.member && interaction.member.roles)
+                ? interaction.member.roles.cache.keys() : []),
+        };
+        const auth = await antiNukeAccess.authorizeAntiNuke(
+            { id: guild.id, owner_id: guild.ownerId }, interaction.user.id,
+            AUTH_REQUIREMENTS[sub] || null, { requireMember: true, member },
+        );
+        if (!auth.ok) return denyEmbed(interaction, AUTH_REQUIREMENTS[sub] || 'any');
 
         // ── status ───────────────────────────────────────────────────────────
         if (sub === 'status') {

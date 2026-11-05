@@ -18,9 +18,11 @@ const { TABS } = require('../dashboard/render/guild');
 function fixture(overrides = {}) {
     return {
         id: '111111111111111111', name: 'Test Server', icon: null,
-        // Anti-Nuke is `upcoming`, so the page renders the blurred overlay for
-        // ordinary users. These tests assert the REAL markup, so the fixture
-        // represents a developer/owner viewer who bypasses the gate.
+        owner_id: '111111111111111111',
+        // Anti-Nuke is gated by the owner-controlled access hierarchy. These
+        // tests assert the REAL markup, so the fixture represents the actual
+        // server owner (full access).
+        _antiNukeAccess: { ok: true, isOwner: true, role: 'owner', level: 1, permissions: [], canManageAccess: true, canAppointCoOwners: true, canRevoke: true },
         _bypassUpcoming: true,
         _config: {
             server: {}, welcome: {}, logging: {},
@@ -125,8 +127,19 @@ test('every element id the antinuke client reads is rendered by the page', () =>
         ...idsIn(guildPages.antiNukePage({ guild: inProgress, user: { username: 'u' } })),
         ...idsIn(guildPages.antiNukePage({ guild: fixture(), user: { username: 'u' }, view: 'wizard' })),
     ]);
-    // Ids the client creates at runtime (not rendered server-side).
-    const CLIENT_CREATED = new Set(['an-activity-page']);
+    // Ids the client creates at runtime (modal dialog) or writes into containers
+    // it renders itself (the access section + pager), rather than reading them
+    // from the server-rendered markup.
+    const CLIENT_CREATED = new Set([
+        // Access-control modal (built by the client before querying).
+        'an-acc-level-editor', 'an-acc-preset', 'an-acc-matrix', 'an-ac-cancel',
+        'an-access-add', 'an-access-edit', 'an-access-remove',
+        // Activity pager label.
+        'an-activity-page',
+        // Collected settings that are only read when present (the console renders
+        // the dry-run switch and alert channel, not the cooldown/lockdown inputs).
+        'an-response-cooldown', 'an-lockdown-enabled',
+    ]);
     const missing = [...clientIdRefs(path.join(__dirname, '..', 'dashboard', 'public', 'js', 'antinuke.js'))]
         .filter(id => !ids.has(id) && !CLIENT_CREATED.has(id));
     assert.deepEqual(missing, [], `client reads ids the page never renders: ${missing.join(', ')}`);
@@ -155,32 +168,36 @@ test('the automod page loads its own script and the shared guild script', () => 
 
 // ── Anti-Nuke tab ───────────────────────────────────────────────────────────
 
-test('Anti-Nuke is an upcoming sidebar tab (not yet released)', () => {
+test('Anti-Nuke is an owner-gated sidebar tab (not released to administrators)', () => {
     const tab = TABS.find(t => t.key === 'antinuke');
     assert.ok(tab, 'Anti-Nuke tab is missing from the server-features sidebar');
     assert.equal(tab.label, 'Anti-Nuke');
-    assert.ok(tab.upcoming, 'Anti-Nuke must be marked upcoming until it is released');
 
-    // For an ordinary admin (no bypass) the page is wrapped in the blurred
-    // overlay; the real markup is still present underneath (so releasing is a
-    // one-flag flip).
-    const ordinary = fixture({ _bypassUpcoming: false });
-    const html = guildPages.antiNukePage({ guild: ordinary, user: { username: 'u' } });
-    assert.match(html, /upcoming-locked-wrap locked/, 'the Coming Soon overlay wraps the page');
-    assert.match(html, /PrimeBot Anti-Nuke/, 'the real page markup is still rendered underneath');
+    // The owner gets the real page.
+    const owner = fixture();
+    const html = guildPages.antiNukePage({ guild: owner, user: { username: 'u' } });
+    assert.match(html, /PrimeBot Anti-Nuke/, 'the owner sees the real page markup');
     assert.match(html, /antinuke\.js/, 'the Anti-Nuke page must load its client script');
+
+    // An ordinary Discord Administrator (no bot-defined access) gets the
+    // explanatory "no access" panel — never the real editor.
+    const ordinary = fixture({ _antiNukeAccess: { ok: true, isOwner: false, role: 'none', level: 4, permissions: [] } });
+    const html2 = guildPages.antiNukePage({ guild: ordinary, user: { username: 'u' } });
+    assert.match(html2, /No Anti-Nuke access/, 'a viewer without access sees the explanatory panel');
+    assert.doesNotMatch(html2, /id="an-enabled"/, 'the real editor is never rendered for a viewer without access');
 });
 
-test('the Anti-Nuke page renders the real editor controls for bypass users (console view)', () => {
+test('the Anti-Nuke page renders the real editor controls for the owner (console view)', () => {
     const guild = fixture();
-    guild._bypassUpcoming = true;
     guild._config.antiNuke = { enabled: true, dryRun: true, watched: {}, responses: ['alertOwner'] };
-    guild._config.antiNukeSetup = { status: 'completed', progress: { percent: 100, completed: 8, total: 8, steps: [] } };
+    guild._config.antiNukeSetup = { status: 'completed', progress: { percent: 100, completed: 16, total: 16, steps: [] } };
     guild._config.antiNukePermissions = { ok: true, checks: [], missing: [] };
     const html = guildPages.antiNukePage({ guild, user: { username: 'u' } });
     assert.match(html, /id="an-enabled"/);
     assert.match(html, /class="an-action-row"/);
     assert.match(html, /class="an-response"/);
+    assert.match(html, /Access control/, 'the Access Control section renders');
+    assert.match(html, /id="an-access-root"/, 'the Access Control container renders');
 });
 
 test('the Anti-Nuke setup chooser requires an explicit action (never auto-enables)', () => {

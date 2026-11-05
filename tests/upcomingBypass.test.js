@@ -18,7 +18,14 @@ function fakeGuild(bypass) {
         name: 'Test Guild',
         icon: null,
         approximate_member_count: 1,
+        owner_id: '1',
         _bypassUpcoming: bypass,
+        // The Anti-Nuke page is gated by the owner-controlled hierarchy (not
+        // the upcoming overlay). The `bypass` fixture doubles as the owner so
+        // the real markup is asserted; `false` doubles as a non-owner admin.
+        _antiNukeAccess: bypass
+            ? { ok: true, isOwner: true, role: 'owner', level: 1, permissions: [] }
+            : { ok: true, isOwner: false, role: 'none', level: 4, permissions: [] },
         _channels: [],
         _roles: [],
         _beta: false,
@@ -38,33 +45,37 @@ test('eventsPage renders the real Event Management page for bypass users', () =>
     assert.ok(html.includes('Create Event'), 'the real create button renders for bypass users');
 });
 
-test('antiNukePage renders the Coming Soon overlay for ordinary users (upcoming)', () => {
+test('antiNukePage renders the no-access panel for an ordinary administrator (not the overlay, not the editor)', () => {
+    // The feature is unreleased, but its gate is the owner-controlled access
+    // hierarchy (not the shared upcoming overlay). An ordinary Discord
+    // Administrator gets the explanatory panel, never the editor.
     const html = guildPages.antiNukePage({ guild: fakeGuild(false), user: null });
-    assert.ok(html.includes('upcoming-locked-wrap locked'), 'Anti-Nuke is not released — ordinary users get the overlay');
-    assert.ok(html.includes('Anti-Nuke'), 'the feature is named in the overlay');
+    assert.ok(!html.includes('upcoming-locked-wrap locked'), 'Anti-Nuke uses its own access gate, shared upcoming overlay is not used');
+    assert.ok(html.includes('No Anti-Nuke access'), 'the viewer sees the no-access panel');
+    assert.ok(!html.includes('data-method="automatic"'), 'the setup wizard is never rendered without access');
 });
 
-test('antiNukePage renders the real setup wizard for bypass users', () => {
+test('antiNukePage renders the real setup wizard for the actual server owner', () => {
     const html = guildPages.antiNukePage({ guild: fakeGuild(true), user: null });
-    assert.ok(!html.includes('upcoming-locked-wrap locked'), 'overlay should be skipped for bypass users');
+    assert.ok(!html.includes('upcoming-locked-wrap locked'), 'the owner is not wrapped in the overlay');
     assert.ok(html.includes('data-method="automatic"'), 'automatic setup button renders');
     assert.ok(html.includes('data-method="manual"'), 'manual setup button renders');
 });
 
-test('antiNukePage renders the setup chooser (bypass) before setup is complete', () => {
+test('antiNukePage renders the setup chooser (owner) before setup is complete', () => {
     const html = guildPages.antiNukePage({ guild: fakeGuild(true), user: null });
     assert.ok(html.includes('data-method="automatic"'), 'automatic setup button renders');
     assert.ok(html.includes('data-method="manual"'), 'manual setup button renders');
 });
 
-test('antiNukePage renders the protection console once setup is complete (bypass)', () => {
+test('antiNukePage renders the protection console once setup is complete (owner)', () => {
     const guild = fakeGuild(true);
-    guild._config.antiNuke = { enabled: true, dryRun: true, watched: {}, responses: ['alertOwner'] };
-    guild._config.antiNukeSetup = { status: 'completed', progress: { percent: 100, completed: 8, total: 8, steps: [] } };
+    guild._config.antiNuke = { enabled: true, dryRun: false, watched: {}, responses: ['alertOwner'] };
+    guild._config.antiNukeSetup = { status: 'completed', progress: { percent: 100, completed: 16, total: 16, steps: [] } };
     guild._config.antiNukePermissions = { ok: true, checks: [], missing: [] };
     const html = guildPages.antiNukePage({ guild, user: null });
     assert.ok(html.includes('Threat detection'), 'console renders');
-    assert.ok(html.includes('DRY RUN ACTIVE'), 'dry-run banner renders');
+    assert.ok(!html.includes('DRY RUN ACTIVE'), 'dry-run banner does NOT render — dry run is off after setup');
     assert.ok(html.includes('an-activity-table'), 'security activity table renders');
 });
 

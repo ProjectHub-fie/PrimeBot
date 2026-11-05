@@ -25,7 +25,7 @@ const PgSession = require('connect-pg-simple')(session);
 
 const discord = require('./discord');
 const turnstile = require('./turnstile');
-const { requireAuth, requireAuthReadonly, requireGuildAdmin, requireGuildAdminPage, requireBeta, requireUpcoming } = require('./auth');
+const { requireAuth, requireAuthReadonly, requireGuildAdmin, requireGuildAdminPage, requireBeta, requireUpcoming, requireAntiNukePermission } = require('./auth');
 const eventAuth = require('./eventAuth');
 const dashboardDb = require('./db');
 const constants = require('./constants');
@@ -1188,7 +1188,35 @@ function buildAntiNukePatch(body) {
     return { patch };
 }
 
-app.get('/api/guilds/:guildId/antinuke', requireAuth, requireGuildAdmin, async (req, res) => {
+// Anti-Nuke is an unreleased feature behind the owner-controlled access
+// hierarchy (utils/antiNukeAccess + shared/antiNukePermissions). The ACTUAL
+// guild owner always passes; every other user needs the bot-defined permission
+// for the specific action. The owner-controlled gate REPLACES the old blanket
+// `requireUpcoming` 403 — the feature stays unreleased because no Discord
+// Administrator (without an explicit bot-defined role) can reach it.
+
+// Anti-Nuke "any access" gate: page + read endpoints require at least
+// `antinuke.view`. Write endpoints require the specific permission below.
+const antinukeReadGate = requireAntiNukePermission('antinuke.view');
+const antinukeSetupGate = requireAntiNukePermission('antinuke.setup');
+const antinukeConfigGate = requireAntiNukePermission('antinuke.config');
+const antinukeLockdownGate = requireAntiNukePermission('antinuke.lockdown');
+const antinukeAccessGate = requireAntiNukePermission('antinuke.access.manage');
+const antinukeRevokeGate = requireAntiNukePermission('antinuke.access.revoke');
+
+/** Human-readable label for an access-control denial reason. */
+function reasonLabel(reason) {
+    const labels = {
+        cannot_modify_owner: 'The server owner cannot be modified.',
+        outside_authority: 'You cannot manage someone at or above your own access level.',
+        permission_denied: 'You do not hold the required permission.',
+        co_owner_owner_only: 'Only the server owner can appoint a Co-Owner.',
+        no_assignment: 'No access assignment found for that user.',
+    };
+    return labels[reason] || 'Anti-Nuke access control rejected that change.';
+}
+
+app.get('/api/guilds/:guildId/antinuke', requireAuth, requireGuildAdmin, antinukeReadGate, async (req, res) => {
     try {
         const settings = await dashboardDb.getAntiNukeSettings(req.guild.id);
         res.json({ antiNuke: settings });
@@ -1198,11 +1226,18 @@ app.get('/api/guilds/:guildId/antinuke', requireAuth, requireGuildAdmin, async (
     }
 });
 
-app.patch('/api/guilds/:guildId/antinuke', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
+app.patch('/api/guilds/:guildId/antinuke', requireAuth, requireGuildAdmin, antinukeConfigGate, async (req, res) => {
     try {
         const { patch, error } = buildAntiNukePatch(req.body || {});
         if (error) return res.status(400).json({ error });
+        // Sensitive protection changes are audited in the Anti-Nuke trail.
         const updated = await dashboardDb.upsertAntiNukeSettings(req.guild.id, patch);
+        if (patch.dryRun !== undefined || patch.enabled !== undefined || patch.lockdown !== undefined) {
+            await dashboardDb.addAntiNukeAccessHistory({
+                guildId: req.guild.id, actorId: req.user && req.user.id, action: 'protection_changed',
+                newState: patch,
+            }).catch(() => {});
+        }
         recordWebsiteLog(req, 'Updated anti-nuke settings');
         res.json({ antiNuke: updated });
     } catch (err) {
@@ -1211,12 +1246,16 @@ app.patch('/api/guilds/:guildId/antinuke', requireAuth, requireGuildAdmin, requi
     }
 });
 
-// Master switch — persists immediately (a security switch must not wait on
-// unrelated dirty fields in the floating save bar).
-app.post('/api/guilds/:guildId/antinuke/toggle', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
+// Master switch — persists immediately; requires the config permission (not
+// just view). The owner keeps full control.
+app.post('/api/guilds/:guildId/antinuke/toggle', requireAuth, requireGuildAdmin, antinukeConfigGate, async (req, res) => {
     try {
         const enabled = (req.body || {}).enabled === true;
         const updated = await dashboardDb.upsertAntiNukeSettings(req.guild.id, { enabled });
+        await dashboardDb.addAntiNukeAccessHistory({
+            guildId: req.guild.id, actorId: req.user && req.user.id, action: 'protection_changed',
+            newState: { enabled },
+        }).catch(() => {});
         recordWebsiteLog(req, enabled ? 'Enabled Anti-Nuke' : 'Disabled Anti-Nuke');
         res.json({ antiNuke: updated });
     } catch (err) {
@@ -1225,8 +1264,8 @@ app.post('/api/guilds/:guildId/antinuke/toggle', requireAuth, requireGuildAdmin,
     }
 });
 
-// Security activity (paginated incident ledger).
-app.get('/api/guilds/:guildId/antinuke/incidents', requireAuth, requireGuildAdmin, async (req, res) => {
+// Security activity (paginated incident ledger) — view permission.
+app.get('/api/guilds/:guildId/antinuke/incidents', requireAuth, requireGuildAdmin, antinukeReadGate, async (req, res) => {
     try {
         const data = await dashboardDb.getAntiNukeIncidents(req.guild.id, {
             action: req.query.action || null,
@@ -1243,10 +1282,20 @@ app.get('/api/guilds/:guildId/antinuke/incidents', requireAuth, requireGuildAdmi
     }
 });
 
-// Lockdown controls (manual engage / restore).
-app.post('/api/guilds/:guildId/antinuke/lockdown', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
+// Lockdown controls (manual engage / restore) — emergency permissions.
+app.post('/api/guilds/:guildId/antinuke/lockdown', requireAuth, requireGuildAdmin, antinukeLockdownGate, async (req, res) => {
     try {
         const action = String((req.body || {}).action || '');
+        if (action === 'restore') {
+            // Restore needs the recovery permission; a lockdown-holder without
+            // recovery cannot lift a lockdown.
+            const recovery = await require('../utils/antiNukeAccess').authorizeAntiNuke(
+                req.guild, req.user && req.user.id, 'antinuke.recovery',
+            );
+            if (!recovery.ok) {
+                return res.status(403).json({ error: 'You do not have permission to restore a lockdown.', reason: 'antiNuke_permission_denied', permission: 'antinuke.recovery' });
+            }
+        }
         const antiNukeActions = require('./antiNukeActions');
         const settings = await dashboardDb.getAntiNukeSettings(req.guild.id);
         if (action === 'engage') {
@@ -1263,6 +1312,10 @@ app.post('/api/guilds/:guildId/antinuke/lockdown', requireAuth, requireGuildAdmi
                 severity: 'high', responseOk: record.warnings.length === 0,
                 details: record.warnings.join('; '),
             });
+            await dashboardDb.addAntiNukeAccessHistory({
+                guildId: req.guild.id, actorId: req.user && req.user.id, action: 'lockdown_engaged',
+                newState: { active: true },
+            }).catch(() => {});
             recordWebsiteLog(req, 'Engaged Anti-Nuke lockdown');
             return res.json({ lockdown: { active: true, state: record }, warnings: record.warnings });
         }
@@ -1278,6 +1331,10 @@ app.post('/api/guilds/:guildId/antinuke/lockdown', requireAuth, requireGuildAdmi
                 guildId: req.guild.id, action: 'lockdownLifted', startedBy: req.user && req.user.id,
                 severity: 'info', responseOk: warnings.length === 0, details: warnings.join('; '),
             });
+            await dashboardDb.addAntiNukeAccessHistory({
+                guildId: req.guild.id, actorId: req.user && req.user.id, action: 'lockdown_restored',
+                newState: { active: false },
+            }).catch(() => {});
             recordWebsiteLog(req, 'Restored Anti-Nuke lockdown');
             return res.json({ lockdown: { active: false }, restored, warnings });
         }
@@ -1289,19 +1346,27 @@ app.post('/api/guilds/:guildId/antinuke/lockdown', requireAuth, requireGuildAdmi
 });
 
 // ── API: Anti-Nuke setup wizard ─────────────────────────────────────────────
+//
+// Setup requires `antinuke.setup`. Progress is persisted server-side after
+// every real step — the frontend only polls the persisted state.
 
-app.get('/api/guilds/:guildId/antinuke/setup', requireAuth, requireGuildAdmin, async (req, res) => {
+app.get('/api/guilds/:guildId/antinuke/setup', requireAuth, requireGuildAdmin, antinukeSetupGate, async (req, res) => {
     try {
         const setup = await dashboardDb.getAntiNukeSetup(req.guild.id);
         const { computeProgress } = require('../utils/antiNukeSetup');
+        const method = setup.method || 'automatic';
         res.json({
             setup: {
-                method: setup.method,
+                method,
                 status: setup.status,
+                sessionId: setup.sessionId,
                 // The raw step map lets the manual wizard resume at the right
                 // section after a refresh (progress alone loses per-section state).
                 state: setup.state || {},
-                progress: computeProgress(setup.method || 'automatic', setup.state || {}),
+                progress: computeProgress(method, setup.state || {}),
+                lastError: setup.lastError,
+                initiatedBy: setup.initiatedBy,
+                lastUpdatedBy: setup.lastUpdatedBy,
             },
         });
     } catch (err) {
@@ -1310,14 +1375,18 @@ app.get('/api/guilds/:guildId/antinuke/setup', requireAuth, requireGuildAdmin, a
     }
 });
 
-app.post('/api/guilds/:guildId/antinuke/setup/start', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
+app.post('/api/guilds/:guildId/antinuke/setup/start', requireAuth, requireGuildAdmin, antinukeSetupGate, async (req, res) => {
     try {
         const method = (req.body || {}).method === 'manual' ? 'manual' : 'automatic';
-        const { normalizeSetupState, withStatus } = require('../utils/antiNukeSetup');
-        const state = withStatus(normalizeSetupState({ method }), 'in_progress');
+        const { newSetupSession, withUpdater } = require('../utils/antiNukeSetup');
+        const state = withUpdater(newSetupSession(method), req.user && req.user.id);
         const saved = await dashboardDb.saveAntiNukeSetup(req.guild.id, { method, status: 'in_progress', state });
+        await dashboardDb.addAntiNukeAccessHistory({
+            guildId: req.guild.id, actorId: req.user && req.user.id, action: 'setup_started',
+            newState: { method, sessionId: state.sessionId },
+        }).catch(() => {});
         recordWebsiteLog(req, `Started Anti-Nuke ${method} setup`);
-        res.json({ setup: { method, status: 'in_progress', state: saved.state } });
+        res.json({ setup: { method, status: 'in_progress', state: saved.state, sessionId: saved.sessionId }, progress: require('../utils/antiNukeSetup').computeProgress(method, saved.state || {}) });
     } catch (err) {
         console.error('[API] antinuke setup start error:', err.message);
         res.status(500).json({ error: 'Failed to start setup.' });
@@ -1326,12 +1395,19 @@ app.post('/api/guilds/:guildId/antinuke/setup/start', requireAuth, requireGuildA
 
 // Resume: re-read the persisted state and re-validate permissions (the guild
 // may have changed since the wizard was left).
-app.post('/api/guilds/:guildId/antinuke/setup/resume', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
+app.post('/api/guilds/:guildId/antinuke/setup/resume', requireAuth, requireGuildAdmin, antinukeSetupGate, async (req, res) => {
     try {
         const setup = await dashboardDb.getAntiNukeSetup(req.guild.id);
         const method = (req.body || {}).method || setup.method || 'automatic';
         const { computeProgress } = require('../utils/antiNukeSetup');
-        res.json({ setup: { method, status: setup.status, state: setup.state, progress: computeProgress(method, setup.state || {}) } });
+        if (setup.state && req.user) {
+            const { withUpdater } = require('../utils/antiNukeSetup');
+            const state = withUpdater(setup.state, req.user.id);
+            await dashboardDb.saveAntiNukeSetup(req.guild.id, { method, status: setup.status, state }).catch(() => {});
+            res.json({ setup: { method, status: setup.status, state, sessionId: setup.sessionId, lastError: setup.lastError }, progress: computeProgress(method, state || {}) });
+            return;
+        }
+        res.json({ setup: { method, status: setup.status, state: setup.state, sessionId: setup.sessionId, lastError: setup.lastError }, progress: computeProgress(method, setup.state || {}) });
     } catch (err) {
         console.error('[API] antinuke setup resume error:', err.message);
         res.status(500).json({ error: 'Failed to resume setup.' });
@@ -1339,86 +1415,238 @@ app.post('/api/guilds/:guildId/antinuke/setup/resume', requireAuth, requireGuild
 });
 
 // Manual wizard progress (completed section keys). Never trusts a client
-// completed-step list beyond the known section keys.
-app.patch('/api/guilds/:guildId/antinuke/setup/progress', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
+// completed-step list beyond the known section keys — each key is validated
+// against the manual catalog, and progress updates only after the section's
+// settings were persisted by the caller first.
+app.patch('/api/guilds/:guildId/antinuke/setup/progress', requireAuth, requireGuildAdmin, antinukeSetupGate, async (req, res) => {
     try {
-        const { normalizeSetupState, applyStep, withStatus, isComplete } = require('../utils/antiNukeSetup');
+        const { normalizeSetupState, applyStep, withStatus, withUpdater, isComplete, computeProgress } = require('../utils/antiNukeSetup');
         const { MANUAL_SECTIONS } = require('../utils/antiNukeSetup');
         const allowed = new Set(MANUAL_SECTIONS.map(s => s.key));
         const body = req.body || {};
         const completed = Array.isArray(body.completed) ? body.completed.filter(k => allowed.has(k)) : [];
-        let state = normalizeSetupState({ method: 'manual' });
+        const setup = await dashboardDb.getAntiNukeSetup(req.guild.id);
+        let state = normalizeSetupState(setup.state || { method: 'manual' });
+        state.method = 'manual';
+        // Idempotent: re-marking an already-completed section cannot move the
+        // bar backwards or double-count.
         for (const key of completed) state = applyStep(state, key, { status: 'completed' });
         const status = isComplete('manual', state) ? 'completed' : 'in_progress';
-        state = withStatus(state, status);
+        state = withUpdater(withStatus(state, status), req.user && req.user.id);
         await dashboardDb.saveAntiNukeSetup(req.guild.id, { method: 'manual', status, state });
-        res.json({ setup: { method: 'manual', status, state } });
+        res.json({ setup: { method: 'manual', status, state }, progress: computeProgress('manual', state) });
     } catch (err) {
         console.error('[API] antinuke setup progress error:', err.message);
         res.status(500).json({ error: 'Failed to save setup progress.' });
     }
 });
 
-// Automatic setup: run the NEXT step and return real progress.
-app.post('/api/guilds/:guildId/antinuke/setup/step', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
+// Automatic setup: run the NEXT real automatic walkthrough step and return
+// the persisted progress. `applyRecommended` must be confirmed by the GUI
+// before the `apply` step will accept it. Setup steps are guarded against
+// concurrent execution via a lightweight per-guild lease so two shard nodes /
+// tabs cannot run the same step twice.
+const antinukeStepLeases = new Map(); // guildId → lease expiry (ts)
+const ANTI_NUKE_STEP_LEASE_MS = 30 * 1000;
+
+app.post('/api/guilds/:guildId/antinuke/setup/step', requireAuth, requireGuildAdmin, antinukeSetupGate, async (req, res) => {
     try {
-        const { runNextStep } = require('../utils/antiNukeSetupRunner');
+        const { runWalkthroughStep } = require('../utils/antiNukeSetupRunner');
         const { computeProgress } = require('../utils/antiNukeSetup');
         const body = req.body || {};
         const setup = await dashboardDb.getAntiNukeSetup(req.guild.id);
-        // The setup runner needs a discord.js-like guild. The dashboard has no
-        // gateway client, so it operates on the REST-backed shim below.
-        const antiNukeActions = require('./antiNukeActions');
-        const guild = await antiNukeActions.buildDashboardGuildShim(req.guild.id);
-        const manager = antiNukeActions.buildDashboardManagerShim(req.guild.id);
-        const client = { antiNukeManager: manager, guilds: { cache: new Map([[req.guild.id, guild]]) } };
-        const result = await runNextStep({
-            client, guild,
-            state: setup.state || { method: 'automatic' },
-            options: { applyRecommended: body.applyRecommended === true },
-        });
-        await dashboardDb.saveAntiNukeSetup(req.guild.id, {
-            method: 'automatic',
-            status: result.state.status,
-            state: result.state,
-        });
-        recordWebsiteLog(req, `Anti-Nuke setup step: ${result.lastStep || 'done'}`);
-        res.json({ setup: { method: 'automatic', status: result.state.status, state: result.state }, progress: result.progress, done: result.done, lastStep: result.lastStep });
+        const lease = antinukeStepLeases.get(req.guild.id) || 0;
+        if (lease > Date.now()) {
+            return res.status(409).json({ error: 'A setup step is already running for this server. Try again in a moment.', reason: 'setup_busy' });
+        }
+        antinukeStepLeases.set(req.guild.id, Date.now() + ANTI_NUKE_STEP_LEASE_MS);
+        try {
+            const antiNukeActions = require('./antiNukeActions');
+            const guild = await antiNukeActions.buildDashboardGuildShim(req.guild.id);
+            const manager = antiNukeActions.buildDashboardManagerShim(req.guild.id);
+            const result = await runWalkthroughStep({
+                manager, guild,
+                state: setup.state || { method: 'automatic' },
+                options: { applyRecommended: body.applyRecommended === true, confirmed: body.confirmed === true },
+                actorId: req.user && req.user.id,
+                saveListener: async (state, stepKey, done) => {
+                    const status = done ? 'completed' : 'in_progress';
+                    await dashboardDb.saveAntiNukeSetup(req.guild.id, { method: 'automatic', status, state });
+                    await dashboardDb.addAntiNukeAccessHistory({
+                        guildId: req.guild.id, actorId: req.user && req.user.id,
+                        action: done ? 'setup_completed' : 'setup_step',
+                        newState: { step: stepKey, done },
+                    }).catch(() => {});
+                },
+            });
+            const progress = computeProgress('automatic', result.state);
+            res.json({ setup: { method: 'automatic', status: result.state.status, state: result.state }, progress, done: result.done, lastStep: result.lastStep });
+        } finally {
+            antinukeStepLeases.delete(req.guild.id);
+        }
     } catch (err) {
         console.error('[API] antinuke setup step error:', err.message);
         res.status(500).json({ error: 'Setup step failed.' });
     }
 });
 
-app.post('/api/guilds/:guildId/antinuke/setup/complete', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
+app.post('/api/guilds/:guildId/antinuke/setup/complete', requireAuth, requireGuildAdmin, antinukeSetupGate, async (req, res) => {
     try {
         const method = (req.body || {}).method === 'manual' ? 'manual' : 'automatic';
         const setup = await dashboardDb.getAntiNukeSetup(req.guild.id);
-        const { isComplete, computeProgress, normalizeSetupState } = require('../utils/antiNukeSetup');
+        const { isComplete, computeProgress, normalizeSetupState, withStatus, withUpdater } = require('../utils/antiNukeSetup');
         const state = normalizeSetupState(setup.state || { method });
         // Never claim completion when a required step is unmet.
         if (!isComplete(method, state)) {
             return res.status(400).json({ error: 'Setup cannot complete — required steps are still pending or failed.', progress: computeProgress(method, state) });
         }
-        await dashboardDb.saveAntiNukeSetup(req.guild.id, { method, status: 'completed', state });
+        const final = withUpdater(withStatus(state, 'completed'), req.user && req.user.id);
+        await dashboardDb.saveAntiNukeSetup(req.guild.id, { method, status: 'completed', state: final });
+        await dashboardDb.addAntiNukeAccessHistory({
+            guildId: req.guild.id, actorId: req.user && req.user.id, action: 'setup_completed', newState: { method },
+        }).catch(() => {});
         recordWebsiteLog(req, 'Completed Anti-Nuke setup');
-        res.json({ setup: { method, status: 'completed', state }, progress: computeProgress(method, state) });
+        res.json({ setup: { method, status: 'completed', state: final }, progress: computeProgress(method, final) });
     } catch (err) {
         console.error('[API] antinuke setup complete error:', err.message);
         res.status(500).json({ error: 'Failed to complete setup.' });
     }
 });
 
-app.post('/api/guilds/:guildId/antinuke/setup/reset', requireAuth, requireGuildAdmin, requireUpcoming, async (req, res) => {
+app.post('/api/guilds/:guildId/antinuke/setup/reset', requireAuth, requireGuildAdmin, antinukeSetupGate, async (req, res) => {
     try {
-        const { normalizeSetupState } = require('../utils/antiNukeSetup');
-        const state = normalizeSetupState({});
+        const { normalizeSetupState, withUpdater } = require('../utils/antiNukeSetup');
+        const state = withUpdater(normalizeSetupState({}), req.user && req.user.id);
         await dashboardDb.saveAntiNukeSetup(req.guild.id, { method: null, status: 'not_started', state });
+        await dashboardDb.addAntiNukeAccessHistory({
+            guildId: req.guild.id, actorId: req.user && req.user.id, action: 'setup_reset', newState: {},
+        }).catch(() => {});
         recordWebsiteLog(req, 'Reset Anti-Nuke setup progress');
         res.json({ setup: { method: null, status: 'not_started', state } });
     } catch (err) {
         console.error('[API] antinuke setup reset error:', err.message);
         res.status(500).json({ error: 'Failed to reset setup.' });
+    }
+});
+
+// ── API: Anti-Nuke owner-controlled access ──────────────────────────────────
+
+// Snapshot for the Access Control section: owner + assignments + audit trail.
+app.get('/api/guilds/:guildId/antinuke/access', requireAuth, requireGuildAdmin, requireAntiNukePermission('antinuke.access.view'), async (req, res) => {
+    try {
+        const antiNukeAccess = require('../utils/antiNukeAccess');
+        const snapshot = await antiNukeAccess.buildAccessSnapshot({
+            guild: req.guild,
+            viewerUserId: req.user && req.user.id,
+        });
+        res.json(snapshot);
+    } catch (err) {
+        console.error('[API] antinuke access get error:', err.message);
+        res.status(500).json({ error: 'Failed to load Anti-Nuke access.' });
+    }
+});
+
+// Assign a Co-Owner (owner-only once confirmed server-side) or Trusted Admin.
+app.post('/api/guilds/:guildId/antinuke/access/assign', requireAuth, requireGuildAdmin, antinukeAccessGate, async (req, res) => {
+    try {
+        const { assignAccess } = require('../utils/antiNukeAccess');
+        const { normalizePermissionList } = require('../shared/antiNukePermissions');
+        const body = req.body || {};
+        const targetUserId = body.userId && /^\d{15,22}$/.test(String(body.userId)) ? String(body.userId) : null;
+        const role = body.role === 'coOwner' ? 'coOwner' : 'trustedAdmin';
+        if (!targetUserId) return res.status(400).json({ error: 'A valid Discord user id is required.' });
+        if (role === 'coOwner' && !req.antiNukeAuth.isOwner) {
+            return res.status(403).json({ error: 'Only the server owner can appoint a Co-Owner.', reason: 'co_owner_owner_only' });
+        }
+        const result = await assignAccess({
+            guild: req.guild,
+            actorUserId: req.user && req.user.id,
+            actor: req.antiNukeAuth,
+            targetUserId,
+            role,
+            permissions: normalizePermissionList(body.permissions),
+            preset: body.preset || null,
+            reason: body.reason || '',
+        });
+        if (!result.ok) return res.status(result.reason === 'co_owner_owner_only' ? 403 : 400).json({ error: reasonLabel(result.reason), reason: result.reason });
+        res.json({ ok: true, assignment: result });
+    } catch (err) {
+        console.error('[API] antinuke access assign error:', err.message);
+        res.status(500).json({ error: 'Failed to assign Anti-Nuke access.' });
+    }
+});
+
+// Update an assignment's permissions (owner, or a delegated manager within
+// their own authority — enforced server-side).
+app.patch('/api/guilds/:guildId/antinuke/access/:userId', requireAuth, requireGuildAdmin, antinukeAccessGate, async (req, res) => {
+    try {
+        const { setPermissions } = require('../utils/antiNukeAccess');
+        const { normalizePermissionList, applyPreset } = require('../shared/antiNukePermissions');
+        const targetUserId = /^\d{15,22}$/.test(req.params.userId) ? req.params.userId : null;
+        if (!targetUserId) return res.status(400).json({ error: 'Invalid user id.' });
+        const { body } = req;
+        const permissions = body && body.permissions ? normalizePermissionList(body.permissions) : [];
+        const preset = body && body.preset ? body.preset : null;
+        const result = await setPermissions({
+            guild: req.guild,
+            actorUserId: req.user && req.user.id,
+            actor: req.antiNukeAuth,
+            targetUserId,
+            permissions,
+            preset,
+            reason: body && body.reason ? body.reason : '',
+        });
+        if (!result.ok) return res.status(result.reason === 'outside_authority' ? 403 : 400).json({ error: reasonLabel(result.reason), reason: result.reason });
+        res.json({ ok: true, assignment: result });
+    } catch (err) {
+        console.error('[API] antinuke access update error:', err.message);
+        res.status(500).json({ error: 'Failed to update Anti-Nuke access.' });
+    }
+});
+
+// Revoke an assignment (owner, or a delegated manager strictly above it).
+app.delete('/api/guilds/:guildId/antinuke/access/:userId', requireAuth, requireGuildAdmin, antinukeRevokeGate, async (req, res) => {
+    try {
+        const { removeAccess } = require('../utils/antiNukeAccess');
+        const targetUserId = /^\d{15,22}$/.test(req.params.userId) ? req.params.userId : null;
+        if (!targetUserId) return res.status(400).json({ error: 'Invalid user id.' });
+        const result = await removeAccess({
+            guild: req.guild,
+            actorUserId: req.user && req.user.id,
+            actor: req.antiNukeAuth,
+            targetUserId,
+            reason: (req.body && req.body.reason) || '',
+        });
+        if (!result.ok) return res.status(result.reason === 'outside_authority' || result.reason === 'co_owner_owner_only' ? 403 : 400).json({ error: reasonLabel(result.reason), reason: result.reason });
+        // Revocation is immediate: next authorization re-reads the rows.
+        res.json({ ok: true });
+    } catch (err) {
+        console.error('[API] antinuke access revoke error:', err.message);
+        res.status(500).json({ error: 'Failed to revoke Anti-Nuke access.' });
+    }
+});
+
+// Audit trail (append-only, never deletable/rewritable).
+app.get('/api/guilds/:guildId/antinuke/access/history', requireAuth, requireGuildAdmin, requireAntiNukePermission('antinuke.access.view'), async (req, res) => {
+    try {
+        const history = await dashboardDb.listAntiNukeAccessHistory(req.guild.id, { limit: req.query.limit });
+        res.json({ history });
+    } catch (err) {
+        console.error('[API] antinuke access history error:', err.message);
+        res.status(500).json({ error: 'Failed to load Anti-Nuke audit trail.' });
+    }
+});
+
+// Discord member lookup for the access editor (renders the member's id/name).
+app.get('/api/guilds/:guildId/antinuke/member/:userId', requireAuth, requireGuildAdmin, antinukeReadGate, async (req, res) => {
+    try {
+        const userId = /^\d{15,22}$/.test(req.params.userId) ? req.params.userId : null;
+        if (!userId) return res.status(400).json({ error: 'Invalid user id.' });
+        const member = await discord.getBotMember(req.guild.id, userId).catch(() => null);
+        res.json({ member: member ? { id: member.user && member.user.id ? member.user.id : userId, username: (member.user && member.user.username) || 'Unknown user' } : null });
+    } catch (err) {
+        console.error('[API] antinuke member lookup error:', err.message);
+        res.status(500).json({ error: 'Failed to look up member.' });
     }
 });
 
@@ -2553,8 +2781,10 @@ app.get('/guild/:guildId/logging', requireAuth, requireGuildAdminPage, (req, res
     res.type('html').send(guildPages.loggingPage({ guild: req.guild, user: req.user })));
 app.get('/guild/:guildId/automod', requireAuth, requireGuildAdminPage, (req, res) =>
     res.type('html').send(guildPages.automodPage({ guild: req.guild, user: req.user })));
-// Anti-Nuke is RELEASED — the page renders the setup wizard / protection
-// console for every authorized administrator (no upcoming overlay).
+// Anti-Nuke stays behind the owner-controlled access hierarchy: the page
+// renders the setup wizard / protection console / access control only for the
+// actual guild owner and bot-defined assignments (Co-Owners / Trusted Admins).
+// Everyone else sees an explanatory "no access" panel.
 app.get('/guild/:guildId/antinuke', requireAuth, requireGuildAdminPage, (req, res) => {
     // `?view=` lets the client switch between the setup chooser, the manual
     // wizard and the protection console without a round trip. Only these three

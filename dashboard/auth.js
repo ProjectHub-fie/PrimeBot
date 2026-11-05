@@ -340,6 +340,14 @@ async function requireGuildAdminPage(req, res, next) {
         // Upcoming-gate bypass (same privileged roles). eventsPage skips the
         // "Coming Soon" overlay when this is set.
         req.guild._bypassUpcoming = bypassGates;
+        // Anti-Nuke access context (owner-controlled hierarchy). Attached for
+        // every guild page so the anti-nuke renderer can lock per-viewer.
+        try {
+            await attachAntiNukeAccess(req);
+        } catch (err) {
+            console.error('[AUTH] attachAntiNukeAccess failed:', err.message);
+            req.guild._antiNukeAccess = { ok: false, reason: 'error' };
+        }
         next();
     } catch (err) {
         console.error('[AUTH] requireGuildAdminPage error:', err.message);
@@ -387,4 +395,56 @@ async function requireUpcoming(req, res, next) {
     return res.status(403).json({ error: 'This feature is coming soon and is not available yet.', reason: 'upcoming' });
 }
 
-module.exports = { requireAuth, requireAuthReadonly, requireGuildAdmin, requireGuildAdminPage, requireBeta, requireUpcoming, touchIdleDeadline, isIdleExpired, IDLE_TIMEOUT_MS };
+/**
+ * Anti-Nuke owner-controlled access gate (API routes). Must run AFTER
+ * requireAuth + requireGuildAdmin so req.user and req.guild (Discord-derived,
+ * incl. `owner_id`) are set. The ACTUAL guild owner always passes; every other
+ * user needs the requested bot-defined permission. Results are stashed on
+ * `req.antiNukeAuth` so handlers re-check at action time instead of trusting
+ * the frontend.
+ *
+ * Anti-Nuke stays unreleased: because the tab/feature does not ship to the
+ * public yet, the bot-defined hierarchy is the *only* path in (the Discord
+ * Administrator/Manage Guild check on its own still answers 403).
+ */
+function requireAntiNukePermission(requiredPermission, opts = {}) {
+    return async (req, res, next) => {
+        try {
+            const guildId = req.params.guildId;
+            const userId = req.user && req.user.id;
+            const guild = req.guild; // { id, owner_id, ... } from Discord REST
+            const antiNukeAccess = require('../utils/antiNukeAccess');
+            const result = await antiNukeAccess.authorizeAntiNuke(guild, userId, requiredPermission || null);
+            req.antiNukeAuth = result;
+            if (result.ok) return next();
+
+            if (result.reason === 'owner_unresolved') {
+                return res.status(503).json({ error: 'Anti-Nuke ownership could not be resolved from Discord. Try again.', reason: 'owner_unresolved' });
+            }
+            if (result.reason === 'not_a_member') {
+                return res.status(403).json({ error: 'You are not a member of this server.', reason: 'antiNuke_not_member' });
+            }
+            return res.status(403).json({
+                error: 'You do not have permission for this Anti-Nuke action.',
+                reason: 'antiNuke_permission_denied',
+                permission: requiredPermission || null,
+            });
+        } catch (err) {
+            console.error('[AUTH] requireAntiNukePermission error:', err.message);
+            return res.status(500).json({ error: 'Anti-Nuke access could not be verified.', reason: 'antiNuke_error' });
+        }
+    };
+}
+
+/** Attach the viewer's Anti-Nuke access context to req.guild (page renders). */
+async function attachAntiNukeAccess(req) {
+    const antiNukeAccess = require('../utils/antiNukeAccess');
+    const userId = req.user && req.user.id;
+    if (!req.guild || !userId) return null;
+    const guild = { id: req.guild.id, owner_id: req.guild.owner_id };
+    const ctx = await antiNukeAccess.getGuildAccess(guild, userId);
+    req.guild._antiNukeAccess = ctx;
+    return ctx;
+}
+
+module.exports = { requireAuth, requireAuthReadonly, requireGuildAdmin, requireGuildAdminPage, requireBeta, requireUpcoming, requireAntiNukePermission, attachAntiNukeAccess, touchIdleDeadline, isIdleExpired, IDLE_TIMEOUT_MS };

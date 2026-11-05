@@ -24,7 +24,7 @@ const {
 } = require('./antiNukeRules');
 const { validateBotPermissions } = require('./antiNukeContainment');
 const {
-    stepsForMethod, normalizeSetupState, applyStep, withStatus, computeProgress, isComplete,
+    stepsForMethod, normalizeSetupState, applyStep, withStatus, withUpdater, computeProgress, isComplete, diffRecommended,
 } = require('./antiNukeSetup');
 
 // Channel names we look for when the guild has no alert channel configured.
@@ -32,9 +32,13 @@ const ALERT_CHANNEL_CANDIDATES = ['security-logs', 'security', 'mod-logs', 'anti
 
 /**
  * The recommended security configuration for a server that is setting up for
- * the first time. Deliberately safe: every module enabled, catalog-default
- * thresholds, alert-only responses, dry-run ON, and no automatic permanent
- * punishment.
+ * the first time. Safe defaults: every module enabled, catalog-default
+ * thresholds, alert-only responses and no automatic permanent punishment.
+ *
+ * Dry-run is OFF by default: the owner explicitly ran the setup wizard, so they
+ * are telling PrimeBot to protect the server now. Detection still never
+ * punishes the owner, the bot or trusted users/roles, never punishes without
+ * audit-log attribution, and never bans/kicks a moderator automatically.
  */
 function recommendedConfig() {
     const base = defaultAntiNukeSettings();
@@ -45,7 +49,7 @@ function recommendedConfig() {
     return normalizeAntiNukeSettings({
         ...base,
         enabled: true,
-        dryRun: true,
+        dryRun: false,
         watched,
         responses: ['alertOwner', 'alertChannel', 'logOnly'],
     });
@@ -65,7 +69,10 @@ function mergeRecommended(current, recommended, applyRecommended) {
         return normalizeAntiNukeSettings({
             ...cur,
             enabled: true,
-            dryRun: true,
+            // The owner explicitly confirmed the recommended configuration, so
+            // live protection starts now (dry-run is off). Reversible
+            // containment only — never automatic bans/kicks.
+            dryRun: false,
             watched: recommended.watched,
             responses: recommended.responses,
             dangerousPermissions: cur.dangerousPermissions && cur.dangerousPermissions.length
@@ -88,12 +95,12 @@ function mergeRecommended(current, recommended, applyRecommended) {
     }
     return normalizeAntiNukeSettings({
         ...cur,
-        // Running the wizard is the explicit setup action, so protection is
-        // activated — but always in dry-run (set in the caller) and never with
-        // a destructive response. This is the "protection ON" recommended
-        // configuration from the task, not a silent flip on page load.
+        // Preserve-except-defaults merge. Protection is activated and dry-run is
+        // turned OFF — the owner ran the setup wizard, which is the explicit
+        // opt-in to live protection. Trusted lists and custom responses are
+        // always preserved untouched.
         enabled: true,
-        dryRun: true,
+        dryRun: false,
         watched,
         responses: (cur.responses && cur.responses.length) ? cur.responses : recommended.responses,
     });
@@ -287,11 +294,145 @@ async function runAll({ client, guild, state = null, options = {} }) {
     return last || { state: s, progress: computeProgress('automatic', s), done: true };
 }
 
+/**
+ * Run one step of the dashboard's full automatic walkthrough (16 steps: the 8
+ * backend steps + restore/confirm/apply/validateModules + review/save/finished).
+ * Each step performs a REAL backend operation and persists its outcome, so the
+ * progress reflects actual work and resumes from the persisted state.
+ *
+ * `manager` is the dashboard manager shim (or the live manager for the Discord
+ * path) and `saveListener` lets the dashboard persist after each step.
+ */
+async function runWalkthroughStep({ manager, guild, state = null, options = {}, actorId = null, saveListener = null }) {
+    const catalog = stepsForMethod('automatic');
+    let s = normalizeSetupState(state);
+    s.method = 'automatic';
+    if (s.status === 'not_started') s.status = 'in_progress';
+
+    const next = catalog.find(step => {
+        const st = s.steps[step.key];
+        return !st || st.status === 'pending' || st.status === 'running' || st.status === 'failed';
+    });
+    if (!next) {
+        s = withStatus(s, isComplete('automatic', s) ? 'completed' : 'failed');
+        return { state: s, progress: computeProgress('automatic', s), done: true, lastStep: null };
+    }
+
+    s = withUpdater(applyStep(s, next.key, { status: 'running' }), actorId);
+    let result = null;
+    let error = null;
+    try {
+        result = await runWalkthroughStepOp(next.key, { manager, guild, state: s, options });
+        s = applyStep(s, next.key, { status: 'completed', result });
+    } catch (err) {
+        error = err && err.message ? err.message : String(err);
+        s = applyStep(s, next.key, { status: 'failed', error });
+    }
+    s = withUpdater(s, actorId);
+
+    const allDone = !catalog.some(step => {
+        const st = s.steps[step.key];
+        return !st || st.status === 'pending' || st.status === 'running' || st.status === 'failed';
+    });
+    if (allDone) s = withStatus(s, error ? 'failed' : 'completed');
+
+    const progress = computeProgress('automatic', s);
+    if (typeof saveListener === 'function') {
+        await saveListener(s, next.key, allDone).catch(() => {});
+    }
+    return { state: s, progress, done: allDone, lastStep: next.key };
+}
+
+/** One backend operation for the walkthrough steps. Throws to fail the step. */
+async function runWalkthroughStepOp(stepKey, { manager, guild, state, options }) {
+    const current = manager ? await manager.getSettings(guild.id) : {};
+    const recommended = recommendedConfig();
+    switch (stepKey) {
+        // ── Walkthrough steps (compose real operations) ──────────────────────
+        case 'restore': {
+            // The state was already re-read by the caller (startsWith). This
+            // step just records what is being resumed.
+            return {
+                resumedMethod: 'automatic',
+                resumedStatus: state.status,
+                existingSteps: Object.keys(state.steps || {}).length,
+            };
+        }
+        case 'confirm': {
+            if (!options.confirmed) throw new Error('Confirm the proposed changes to apply them.');
+            return { diff: diffRecommended(current, recommended) };
+        }
+        case 'apply': {
+            if (!manager || typeof manager.updateSettingsAsync !== 'function') {
+                throw new Error('Anti-Nuke manager is unavailable.');
+            }
+            const merged = mergeRecommended(current, recommended, options.applyRecommended === true);
+            const saved = await manager.updateSettingsAsync(guild.id, { ...merged });
+            return {
+                enabled: saved.enabled === true,
+                dryRun: saved.dryRun !== false,
+                alertChannelId: saved.alertChannelId || null,
+            };
+        }
+        case 'validateModules': {
+            const report = validateBotPermissions(guild);
+            return {
+                ok: report.ok,
+                moduleCount: (require('./antiNukeSetup').stepsForMethod('automatic')).length,
+                missing: report.missing,
+            };
+        }
+        case 'review': {
+            const applied = manager ? await manager.getSettings(guild.id) : {};
+            return {
+                enabled: applied.enabled === true,
+                dryRun: applied.dryRun !== false,
+                trustedUsers: Array.isArray(applied.trustedUserIds) ? applied.trustedUserIds.length : 0,
+                trustedRoles: Array.isArray(applied.trustedRoleIds) ? applied.trustedRoleIds.length : 0,
+                watchedEnabled: Object.values(applied.watched || {}).filter(w => w && w.enabled !== false).length,
+            };
+        }
+        case 'botperms': {
+            const report = validateBotPermissions(guild);
+            return { ok: report.ok, missing: report.missing || [] };
+        }
+        case 'persist': {
+            if (!manager || typeof manager.updateSettingsAsync !== 'function') throw new Error('Anti-Nuke manager is unavailable.');
+            await manager.updateSettingsAsync(guild.id, { dryRun: false });
+            return { persisted: true, configVersion: (state && state.configVersion) || 1 };
+        }
+        case 'report': {
+            const applied = manager ? await manager.getSettings(guild.id) : {};
+            return {
+                enabled: applied.enabled === true,
+                dryRun: applied.dryRun !== false,
+                alertChannelId: applied.alertChannelId || null,
+                trustedUsers: Array.isArray(applied.trustedUserIds) ? applied.trustedUserIds.length : 0,
+                trustedRoles: Array.isArray(applied.trustedRoleIds) ? applied.trustedRoleIds.length : 0,
+                watchCount: Object.keys(applied.watched || {}).length,
+            };
+        }
+        case 'save': {
+            if (!manager || typeof manager.updateSettingsAsync !== 'function') throw new Error('Anti-Nuke manager is unavailable.');
+            await manager.updateSettingsAsync(guild.id, { dryRun: false });
+            return {};
+        }
+        case 'finished': {
+            return { finished: true };
+        }
+        // ── The 8 backend steps ──────────────────────────────────────────────
+        default:
+            return runStep(stepKey, { client: { antiNukeManager: manager, guilds: { cache: new Map([[guild.id, guild]]) } }, guild, state, options });
+    }
+}
+
 module.exports = {
     recommendedConfig,
     mergeRecommended,
     resolveAlertChannel,
     runNextStep,
     runAll,
+    runWalkthroughStep,
+    runWalkthroughStepOp,
     ALERT_CHANNEL_CANDIDATES,
 };
