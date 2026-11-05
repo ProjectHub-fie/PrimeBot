@@ -612,42 +612,81 @@ module.exports = {
             switch (commandName) {
                 case "antinuke":
                 case "an": {
-                    if (!message.member || !message.member.permissions.has(PermissionFlagsBits.ManageGuild)) {
-                        return message.reply('You need the Manage Server permission to configure Anti-Nuke.');
-                    }
                     const anMgr = client.antiNukeManager;
                     if (!anMgr) return message.reply('Anti-Nuke is unavailable right now.');
                     const anEmbed = require('../utils/antiNukeEmbed');
                     const anSub = (args[0] || 'status').toLowerCase();
                     const anSettings = anMgr.getSettings(message.guild.id);
 
+                    // Owner-controlled access hierarchy (mirrors the slash path).
+                    // A plain Discord Manage Server permission is NOT sufficient —
+                    // the ACTUAL guild owner always passes; everyone else needs the
+                    // bot-defined permission for the subcommand.
+                    const anAuthRequirements = {
+                        status: 'antinuke.view', list: 'antinuke.view', setup: 'antinuke.setup',
+                        progress: 'antinuke.view', enable: 'antinuke.config', disable: 'antinuke.config',
+                        dryrun: 'antinuke.responses', thresholds: 'antinuke.rules',
+                        whitelist: 'antinuke.trusted.manage', unwhitelist: 'antinuke.trusted.manage',
+                        lockdown: 'antinuke.lockdown', restore: 'antinuke.recovery',
+                        access: 'antinuke.access.view', grant: 'antinuke.access.manage',
+                        revoke: 'antinuke.access.revoke',
+                    };
+                    const anPermissionGate = async () => {
+                        const required = anAuthRequirements[anSub];
+                        if (!required) return true;
+                        const antiNukeAccess = require('../utils/antiNukeAccess');
+                        const anAuth = await antiNukeAccess.authorizeAntiNuke(
+                            { id: message.guild.id, owner_id: message.guild.ownerId },
+                            message.author.id, required,
+                            { requireMember: true, member: { present: true, roles: Array.from((message.member && message.member.roles) ? message.member.roles.cache.keys() : []) } },
+                        );
+                        if (anAuth.ok) return true;
+                        message.reply(required === 'antinuke.view'
+                            ? 'You do not have Anti-Nuke access to view this server\'s Anti-Nuke state.'
+                            : `You need the \`${required}\` Anti-Nuke permission for that. The server owner can grant it in Anti-Nuke → Access Control.`).catch(() => {});
+                        return false;
+                    };
+
                     if (anSub === 'status' || anSub === 'list') {
+                        if (!await anPermissionGate()) return;
                         const lockdown = typeof anMgr.getLockdown === 'function' ? await anMgr.getLockdown(message.guild.id).catch(() => null) : null;
                         const report = typeof anMgr.getPermissionReport === 'function' ? anMgr.getPermissionReport(message.guild) : null;
                         return message.reply({ embeds: [anEmbed.statusEmbed(anSettings, { lockdown, permissionReport: report })] });
                     }
                     if (anSub === 'setup') {
+                        if (!await anPermissionGate()) return;
+                        const setup = typeof anMgr.getSetup === 'function' ? await anMgr.getSetup(message.guild.id).catch(() => null) : null;
+                        const progress = setup && setup.state ? require('../utils/antiNukeSetup').computeProgress(setup.method || 'automatic', setup.state) : null;
+                        return message.reply({ embeds: [anEmbed.setupEmbed(progress)] });
+                    }
+                    if (anSub === 'progress') {
+                        if (!await anPermissionGate()) return;
                         const setup = typeof anMgr.getSetup === 'function' ? await anMgr.getSetup(message.guild.id).catch(() => null) : null;
                         const progress = setup && setup.state ? require('../utils/antiNukeSetup').computeProgress(setup.method || 'automatic', setup.state) : null;
                         return message.reply({ embeds: [anEmbed.setupEmbed(progress)] });
                     }
                     if (anSub === 'enable') {
+                        if (!await anPermissionGate()) return;
                         anMgr.updateSettings(message.guild.id, { enabled: true });
                         return message.reply({ embeds: [anEmbed.successEmbed('🛡️ Anti-Nuke enabled', anSettings.dryRun !== false ? 'Dry-run is on — incidents are detected and alerted but nobody is contained.' : 'Live containment is active.')] });
                     }
                     if (anSub === 'disable') {
+                        if (!await anPermissionGate()) return;
                         anMgr.updateSettings(message.guild.id, { enabled: false });
                         return message.reply({ embeds: [anEmbed.successEmbed('🛡️ Anti-Nuke disabled')] });
                     }
                     if (anSub === 'dryrun') {
+                        if (!await anPermissionGate()) return;
                         const val = ['on', 'true', 'enable', 'enabled'].includes((args[1] || '').toLowerCase());
                         anMgr.updateSettings(message.guild.id, { dryRun: val });
                         return message.reply({ embeds: [anEmbed.successEmbed(val ? '🧪 Dry-run enabled' : '⚡ Dry-run disabled')] });
                     }
                     if (anSub === 'thresholds') {
+                        if (!await anPermissionGate()) return;
                         return message.reply({ embeds: [anEmbed.thresholdsEmbed(anSettings)] });
                     }
                     if (anSub === 'whitelist' || anSub === 'unwhitelist') {
+                        if (!await anPermissionGate()) return;
                         const adding = anSub === 'whitelist';
                         const target = message.mentions.users.first() || message.mentions.roles.first();
                         if (!target) return message.reply('Mention a user or a role to trust.');
@@ -671,18 +710,88 @@ module.exports = {
                         return message.reply({ embeds: [anEmbed.successEmbed(adding ? `✅ Trusted <@&${target.id}>` : `🗑️ Removed <@&${target.id}>`)] });
                     }
                     if (anSub === 'lockdown') {
+                        if (!await anPermissionGate()) return;
                         if (typeof anMgr.engageLockdown !== 'function') return message.reply('Lockdown is unavailable right now.');
                         const record = await anMgr.engageLockdown(message.guild, { startedBy: message.author.id, reason: `Lockdown by ${message.author.tag}` });
                         const warn = record.warnings && record.warnings.length ? `\nWarnings: ${record.warnings.join('; ')}` : '';
                         return message.reply({ embeds: [anEmbed.successEmbed('🔒 Lockdown engaged', `Verification level and invites were restricted. Use \`${prefix}antinuke restore\` to reverse it.${warn}`)] });
                     }
                     if (anSub === 'restore') {
+                        if (!await anPermissionGate()) return;
                         if (typeof anMgr.liftLockdown !== 'function') return message.reply('Lockdown restore is unavailable right now.');
                         const { warnings } = await anMgr.liftLockdown(message.guild, { reason: `Lockdown lifted by ${message.author.tag}` });
                         const warn = warnings && warnings.length ? `\nNotes: ${warnings.join('; ')}` : '';
                         return message.reply({ embeds: [anEmbed.successEmbed('🔓 Lockdown restored', `Pre-lockdown settings were restored where they had not been changed since.${warn}`)] });
                     }
-                    return message.reply('Usage: `antinuke <status|setup|enable|disable|dryrun|thresholds|whitelist|unwhitelist|lockdown|restore>`');
+
+                    // ── access (overview + list; needs access? view) ─────────
+                    if (anSub === 'access') {
+                        if (!await anPermissionGate()) return;
+                        const antiNukeAccess = require('../utils/antiNukeAccess');
+                        const { accessOverviewEmbed } = require('../utils/antiNukeEmbed');
+                        const ctx = await antiNukeAccess.authorizeAntiNuke(
+                            { id: message.guild.id, owner_id: message.guild.ownerId }, message.author.id, null,
+                            { requireMember: true, member: { present: true, roles: [] } },
+                        );
+                        const { listAccessRows } = require('../server/anukeDb');
+                        const assignments = await listAccessRows(message.guild.id).catch(() => []);
+                        const label = (r) => (r === 'coOwner' ? 'Co-Owner' : 'Trusted Admin');
+                        const rows = assignments.map(a => `${a.role === 'coOwner' ? '🤝' : '🛡️'} <@${a.user_id}> — ${label(a.role)} — preset \`${a.preset || 'custom'}\` — ${(Array.isArray(a.permissions) ? a.permissions.length : 0)} permission(s)`);
+                        const description = `The server owner has full access. ${rows.length ? 'Bot-defined assignments:\n' + rows.join('\n') : 'No Co-Owners or Trusted Admins assigned yet.'}`;
+                        return message.reply({ embeds: [accessOverviewEmbed(ctx, { description })] });
+                    }
+
+                    // ── grant: `an grant @user <coOwner|trustedAdmin> [preset]` ─
+                    if (anSub === 'grant') {
+                        if (!await anPermissionGate()) return;
+                        const target = message.mentions.users.first();
+                        const roleArg = (args[1] || '').toLowerCase().replace(/[-_\s]/g, '');
+                        const presetArg = (args[2] || 'custom').toLowerCase();
+                        if (!target || !['coowner', 'trustedadmin', 'admin'].includes(roleArg)) {
+                            return message.reply('Usage: `antinuke grant @user <coOwner|trustedAdmin> [preset]`');
+                        }
+                        const ROLES = require('../utils/antiNukeAccess').ROLES;
+                        const role = roleArg.startsWith('co') ? ROLES.coOwner : ROLES.trustedAdmin;
+                        const antiNukeAccess = require('../utils/antiNukeAccess');
+                        const { applyPreset, ANTI_NUKE_PRESET_BY_KEY } = require('../shared/antiNukePermissions');
+                        const presetKey = ANTI_NUKE_PRESET_BY_KEY[presetArg] ? presetArg : 'custom';
+                        const actor = await antiNukeAccess.authorizeAntiNuke(
+                            { id: message.guild.id, owner_id: message.guild.ownerId }, message.author.id, 'antinuke.access.manage',
+                            { requireMember: true, member: { present: true, roles: [] } },
+                        );
+                        if (!actor.ok) return message.reply('You need the `antinuke.access.manage` Anti-Nuke permission for that.');
+                        if (role === ROLES.coOwner && !actor.isOwner) return message.reply('Only the server owner can appoint a Co-Owner.');
+                        const permissions = applyPreset(presetKey, actor.isOwner ? null : actor.permissions);
+                        const res = await antiNukeAccess.assignAccess({
+                            guild: { id: message.guild.id, owner_id: message.guild.ownerId },
+                            actorUserId: message.author.id, actor,
+                            targetUserId: target.id, role, permissions, preset: presetKey,
+                            reason: `Granted via prefix by ${message.author.tag}`,
+                        });
+                        if (!res.ok) return message.reply({ embeds: [anEmbed.errorEmbed(`Could not grant: ${res.reason}`)] });
+                        return message.reply({ embeds: [anEmbed.successEmbed(role === ROLES.coOwner ? '🤝 Co-Owner appointed' : '🛡️ Trusted Admin added', `<@${target.id}> is now a ${role === ROLES.coOwner ? 'Co-Owner' : 'Trusted Admin'} with ${res.permissions.length} permission(s) (\`${presetKey}\` preset).`)] });
+                    }
+
+                    // ── revoke: `an revoke @user` ──────────────────────────────
+                    if (anSub === 'revoke') {
+                        if (!await anPermissionGate()) return;
+                        const target = message.mentions.users.first();
+                        if (!target) return message.reply('Usage: `antinuke revoke @user`');
+                        const antiNukeAccess = require('../utils/antiNukeAccess');
+                        const actor = await antiNukeAccess.authorizeAntiNuke(
+                            { id: message.guild.id, owner_id: message.guild.ownerId }, message.author.id, 'antinuke.access.revoke',
+                            { requireMember: true, member: { present: true, roles: [] } },
+                        );
+                        if (!actor.ok) return message.reply('You need the `antinuke.access.revoke` Anti-Nuke permission for that.');
+                        const res = await antiNukeAccess.removeAccess({
+                            guild: { id: message.guild.id, owner_id: message.guild.ownerId },
+                            actorUserId: message.author.id, actor, targetUserId: target.id,
+                            reason: `Revoked via prefix by ${message.author.tag}`,
+                        });
+                        if (!res.ok) return message.reply({ embeds: [anEmbed.errorEmbed(`Could not revoke: ${res.reason}`)] });
+                        return message.reply({ embeds: [anEmbed.successEmbed('🗑️ Anti-Nuke access revoked', `Removed <@${target.id}> from Anti-Nuke access control.`)] });
+                    }
+                    return message.reply('Usage: `antinuke <status|setup|progress|enable|disable|dryrun|thresholds|whitelist|unwhitelist|lockdown|restore|access|grant @user <role> [preset]|revoke @user>`');
                 }
 
                 case "prefix": {

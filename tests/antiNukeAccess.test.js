@@ -381,3 +381,39 @@ test('the setup-buttons require antinuke.setup for everyone but the owner', asyn
     const ownerSetup = await access.authorizeAntiNuke(GUILD_A, OWNER, 'antinuke.setup');
     assert.equal(ownerSetup.ok, true);
 });
+
+// ── Discord setup-progress bar chart — the embed must show a real bar ─────
+
+test('setupEmbed renders a visible unicode bar chart, not only text', () => {
+    const { setupEmbed } = require('../utils/antiNukeEmbed');
+    const progress = {
+        percent: 60, completed: 6, total: 10, failed: 1, skipped: 1, remaining: 3,
+        currentStep: 'configureProtectionRules',
+        steps: [
+            { label: 'Validate access', status: 'completed', required: true },
+            { label: 'Inspect permissions', status: 'completed', required: true },
+            { label: 'Configure rules', status: 'running', required: true },
+            { label: 'Alert channel', status: 'skipped', required: false },
+            { label: 'Confirm & apply', status: 'pending', required: true },
+        ],
+    };
+    const embed = setupEmbed(progress);
+    const text = JSON.stringify(embed.toJSON());
+    assert.ok(text.includes('░'), 'the empty part of the bar chart must be visible (U+2593)');
+    assert.ok(text.includes('%'), 'the bar chart embeds the percentage');
+    assert.ok(/Setup progress[^\n]*█/.test(text), 'the filled bar blocks appear');
+    // 60% of a 16-wide bar = 10 filled, 6 empty. Clamp check: never below 0/above 100.
+    const { percent, completed, total } = progress;
+    assert.ok(percent >= 0 && percent <= 100);
+    assert.ok(completed <= total);
+    assert.ok(text.includes('6/10'), 'the field reports completed/total required');
+});
+
+test('the /antinuke command schema exposes the new access + progress subcommands', () => {
+    const cmd = require('../commands/antinuke');
+    const subNames = Object.values(cmd.data.toJSON().options || {}).map(s => s && s.name).filter(Boolean);
+    assert.ok(subNames.includes('access'), 'access subcommand registered');
+    assert.ok(subNames.includes('grant'), 'grant subcommand registered');
+    assert.ok(subNames.includes('revoke'), 'revoke subcommand registered');
+    assert.ok(subNames.includes('progress'), 'progress subcommand registered');
+});

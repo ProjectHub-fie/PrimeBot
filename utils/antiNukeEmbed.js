@@ -100,18 +100,33 @@ function setupEmbed(progress = null) {
     const embed = new EmbedBuilder()
         .setColor(BRAND)
         .setTitle('🛡️ PrimeBot Anti-Nuke Setup')
-        .setDescription('Choose a setup method. Nothing is activated until you confirm — Anti-Nuke starts in dry-run mode, so it detects and alerts without containing anyone.');
+        .setDescription('Choose a setup method. Nothing is activated until you press **Confirm** — the recommended configuration keeps your existing custom settings.');
 
     if (progress && progress.steps && progress.steps.length) {
+        const pct = Math.max(0, Math.min(100, Number(progress.percent) || 0));
+        const width = 16;
+        const filled = Math.round((pct / 100) * width);
+        // Unicode bar chart — Discord normalizes emoji blocks, so we use the
+        // plain "█" block + "░" (U+2593) as the empty cell. A literal 10-wide
+        // render keeps the number always visible.
+        const bar = '█'.repeat(filled) + '░'.repeat(width - filled);
+
         const lines = progress.steps.map(s => {
-            const icon = s.status === 'completed' ? '✓' : s.status === 'running' ? '●' : s.status === 'failed' ? '✗' : s.status === 'skipped' ? '–' : '○';
+            const icon = s.status === 'completed' ? '✅' : s.status === 'running' ? '🔄' : s.status === 'failed' ? '❌' : s.status === 'skipped' ? '⏭️' : '⬜';
             return `${icon} ${s.label}${s.required ? '' : ' _(optional)_'}`;
         });
-        embed.addFields({
-            name: `Progress — ${progress.percent}% (${progress.completed}/${progress.total})`,
-            value: lines.join('\n').slice(0, 4000),
-            inline: false,
-        });
+        embed.addFields(
+            {
+                name: `Setup progress — ${bar} ${pct}%`,
+                value: `${progress.completed}/${progress.total} required steps · ${progress.failed || 0} failed · ${progress.skipped || 0} skipped · ${progress.remaining || 0} remaining`,
+                inline: false,
+            },
+            {
+                name: progress.currentStep ? `Current step: ${String(progress.currentStep).replace(/[A-Z]/g, c => ' ' + c.toLowerCase())}` : 'Current step: —',
+                value: lines.join('\n').slice(0, 3900),
+                inline: false,
+            },
+        );
     } else {
         embed.addFields(
             { name: '⚡ Automatic Setup', value: 'Recommended security configuration, applied for you.', inline: true },
@@ -121,6 +136,41 @@ function setupEmbed(progress = null) {
     return embed.setFooter({ text: `PrimeBot Security · v${config.version}` }).setTimestamp();
 }
 
+/**
+ * Render the owner-controlled access hierarchy for an embed.
+ *
+ * `ctx` is the result of `authorizeAntiNuke` (or `computeAccess`) — includes
+ * `role`, `level`, `isOwner`, `permissions`, `ownerId`. Title/description are
+ * overridable so the same builder serves both the overview and the
+ * "your access" views.
+ */
+function accessOverviewEmbed(ctx, { title = '🛡️ Anti-Nuke — Access Control', description = null } = {}) {
+    const labelFor = {
+        owner: '👑 Server Owner',
+        coOwner: '🤝 Co-Owner',
+        trustedAdmin: '🛡️ Trusted Admin',
+        none: '⛔ No Access',
+    };
+    const perms = ctx.isOwner ? ['Owns the server — full Anti-Nuke control'] : (ctx.permissions || []);
+    const embed = new EmbedBuilder()
+        .setColor(config.colors.primary)
+        .setTitle(title)
+        .setDescription(description || 'The Anti-Nuke access hierarchy is **owner-controlled**: only the actual server owner can appoint Co-Owners, and every other user receives only the bot-defined permissions delegated to them.')
+        .addFields(
+            { name: 'Your access level', value: labelFor[ctx.role] || labelFor.none, inline: true },
+            { name: 'Delegated', value: ctx.isOwner ? 'Full authority' : (perms.length ? `${perms.length} permission${perms.length === 1 ? '' : 's'}` : 'None'), inline: true },
+            { name: 'Can manage access', value: ctx.canManageAccess ? 'Yes' : 'No', inline: true },
+            { name: 'Can appoint Co-Owners', value: ctx.canAppointCoOwners ? 'Yes' : 'Only the server owner', inline: true },
+            { name: 'Effective permissions', value: perms.length ? perms.slice(0, 10).map(p => {
+                const meta = require('../shared/antiNukePermissions').ANTI_NUKE_PERMISSION_BY_ID[p];
+                return `• \`${p}\` — ${meta ? meta.label : p}`;
+            }).join('\n') : '_(none — ask the server owner for access)_' },
+            { name: 'Server owner', value: ctx.ownerId ? `<@${ctx.ownerId}>` : 'Unknown', inline: true },
+        )
+        .setFooter({ text: 'Management access is separate from detection trust — being trusted to manage Anti-Nuke never exempts you from it.' });
+    return embed;
+}
+
 module.exports = {
     statusEmbed,
     thresholdsEmbed,
@@ -128,5 +178,6 @@ module.exports = {
     successEmbed,
     errorEmbed,
     setupEmbed,
+    accessOverviewEmbed,
     DANGEROUS_PERMISSION_BY_KEY,
 };

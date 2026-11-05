@@ -35,6 +35,7 @@ const { runAll } = require('../utils/antiNukeSetupRunner');
 const AUTH_REQUIREMENTS = {
     status: 'antinuke.view',
     setup: 'antinuke.setup',
+    progress: 'antinuke.view',
     enable: 'antinuke.config',
     disable: 'antinuke.config',
     dryrun: 'antinuke.responses',
@@ -43,6 +44,9 @@ const AUTH_REQUIREMENTS = {
     unwhitelist: 'antinuke.trusted.manage',
     lockdown: 'antinuke.lockdown',
     restore: 'antinuke.recovery',
+    access: 'antinuke.access.view',
+    grant: 'antinuke.access.manage',
+    revoke: 'antinuke.access.revoke',
 };
 async function denyEmbed(interaction, required) {
     const embeds = [errorEmbed(`You do not have Anti-Nuke permission to run this. (Required: \`${required}\` — the server owner can grant it in the Anti-Nuke → Access Control page.)`)];
@@ -83,7 +87,30 @@ module.exports = {
             .addUserOption(o => o.setName('user').setDescription('The user to untrust (type: user)').setRequired(false))
             .addRoleOption(o => o.setName('role').setDescription('The role to untrust (type: role)').setRequired(false)))
         .addSubcommand(sub => sub.setName('lockdown').setDescription('Engage emergency lockdown'))
-        .addSubcommand(sub => sub.setName('restore').setDescription('Lift an active lockdown')),
+        .addSubcommand(sub => sub.setName('restore').setDescription('Lift an active lockdown'))
+        .addSubcommand(sub => sub.setName('progress').setDescription('Show the saved Anti-Nuke setup progress'))
+        .addSubcommand(sub => sub.setName('access')
+            .setDescription('Show the owner-controlled Anti-Nuke access assignments (or the caller\'s own access)'))
+        .addSubcommand(sub => sub.setName('grant')
+            .setDescription('Appoint a Co-Owner or Trusted Admin (owner) or delegate access (assigned manager)')
+            .addUserOption(o => o.setName('user').setDescription('The Discord member to grant access to').setRequired(true))
+            .addStringOption(o => o.setName('role').setDescription('The bot-defined position').setRequired(true)
+                .addChoices(
+                    { name: 'Co-Owner', value: 'coOwner' },
+                    { name: 'Trusted Admin', value: 'trustedAdmin' },
+                ))
+            .addStringOption(o => o.setName('preset').setDescription('Permission preset to apply').setRequired(false)
+                .addChoices(
+                    { name: 'Viewer', value: 'viewer' },
+                    { name: 'Security Monitor', value: 'securityMonitor' },
+                    { name: 'Protection Manager', value: 'protectionManager' },
+                    { name: 'Incident Manager', value: 'incidentManager' },
+                    { name: 'Emergency Responder', value: 'emergencyResponder' },
+                    { name: 'Custom', value: 'custom' },
+                )))
+        .addSubcommand(sub => sub.setName('revoke')
+            .setDescription('Revoke a Co-Owner or Trusted Admin assignment (owner, or a delegated manager above them)')
+            .addUserOption(o => o.setName('user').setDescription('The member to revoke Anti-Nuke access from').setRequired(true))),
 
     async execute(interaction) {
         const manager = interaction.client.antiNukeManager;
@@ -200,6 +227,98 @@ module.exports = {
             const { warnings } = await manager.liftLockdown(guild, { reason: `Lockdown lifted by ${interaction.user.tag}` });
             const warn = warnings && warnings.length ? `\nNotes: ${warnings.join('; ')}` : '';
             return interaction.reply({ embeds: [successEmbed('🔓 Lockdown restored', `Pre-lockdown settings were restored where they had not been changed since.${warn}`)], flags: MessageFlags.Ephemeral });
+        }
+
+        // ── progress ─────────────────────────────────────────────────────────
+        if (sub === 'progress') {
+            const setup = typeof manager.getSetup === 'function' ? await manager.getSetup(guildId).catch(() => null) : null;
+            const progress = setup && setup.state ? computeProgress(setup.method || 'automatic', setup.state) : null;
+            return interaction.reply({ embeds: [setupEmbed(progress)], flags: MessageFlags.Ephemeral });
+        }
+
+        // ── access (overview + list) ─────────────────────────────────────────
+        if (sub === 'access') {
+            const antiNukeAccess = require('../utils/antiNukeAccess');
+            const { accessOverviewEmbed } = require('../utils/antiNukeEmbed');
+            // The caller's own context (already authorized with antinuke.access.view).
+            const ctx = await antiNukeAccess.authorizeAntiNuke(
+                { id: guild.id, owner_id: guild.ownerId }, interaction.user.id,
+                null,
+                { requireMember: true, member: { present: true, roles: [] } },
+            );
+            const { listAccessRows } = require('../server/anukeDb');
+            const assignments = await listAccessRows(guild.id).catch(() => []);
+            const label = (r) => (r === 'coOwner' ? 'Co-Owner' : 'Trusted Admin');
+            const rows = assignments.map(a => `${a.role === 'coOwner' ? '🤝' : '🛡️'} <@${a.user_id}> — ${label(a.role)} — preset \`${a.preset || 'custom'}\` — ${(Array.isArray(a.permissions) ? a.permissions.length : 0)} permission(s)`);
+            const description = `The server owner has full access. ${rows.length ? 'Bot-defined assignments:\n' + rows.join('\n') : 'No Co-Owners or Trusted Admins assigned yet.'}`;
+            return interaction.reply({ embeds: [accessOverviewEmbed(ctx, { description })], flags: MessageFlags.Ephemeral });
+        }
+
+        // ── grant (appoint Co-Owner / Trusted Admin) ─────────────────────────
+        if (sub === 'grant') {
+            const target = interaction.options.getUser('user');
+            const role = interaction.options.getString('role') === 'coOwner' ? ROLES.coOwner : ROLES.trustedAdmin;
+            const preset = interaction.options.getString('preset') || 'custom';
+            if (!target) return interaction.reply({ embeds: [errorEmbed('Provide a user to grant Anti-Nuke access to.')], flags: MessageFlags.Ephemeral });
+
+            const antiNukeAccess = require('../utils/antiNukeAccess');
+            const { applyPreset } = require('../shared/antiNukePermissions');
+            const actor = await antiNukeAccess.authorizeAntiNuke(
+                { id: guild.id, owner_id: guild.ownerId }, interaction.user.id,
+                'antinuke.access.manage',
+                { requireMember: true, member: { present: true, roles: [] } },
+            );
+            if (!actor.ok) return denyEmbed(interaction, 'antinuke.access.manage');
+
+            // Co-Owner appointment is owner-only — enforced server-side.
+            if (role === ROLES.coOwner && !actor.isOwner) {
+                return interaction.reply({ embeds: [errorEmbed('Only the server owner can appoint a Co-Owner.')], flags: MessageFlags.Ephemeral });
+            }
+
+            // Initial set = the preset, capped to the actor's authority so a
+            // delegated manager can never grant what they do not hold.
+            const permissions = applyPreset(preset, actor.isOwner ? null : actor.permissions);
+            const res = await antiNukeAccess.assignAccess({
+                guild: { id: guild.id, owner_id: guild.ownerId },
+                actorUserId: interaction.user.id,
+                actor,
+                targetUserId: target.id,
+                role,
+                permissions,
+                preset,
+                reason: `Granted via /antinuke grant by ${interaction.user.tag}`,
+            });
+            if (!res.ok) return interaction.reply({ embeds: [errorEmbed(reasonLabel(res.reason))], flags: MessageFlags.Ephemeral });
+
+            return interaction.reply({
+                embeds: [successEmbed(
+                    role === ROLES.coOwner ? '🤝 Co-Owner appointed' : '🛡️ Trusted Admin added',
+                    `<@${target.id}> now has **${res.permissions.length}** Anti-Nuke permission${res.permissions.length === 1 ? '' : 's'} (\`${preset}\` preset). The assignment is persisted and shared across the dashboard — the owner can fine-tune it in Anti-Nuke → Access Control.`,
+                )],
+                flags: MessageFlags.Ephemeral,
+            });
+        }
+
+        // ── revoke (remove a Co-Owner / Trusted Admin) ───────────────────────
+        if (sub === 'revoke') {
+            const target = interaction.options.getUser('user');
+            if (!target) return interaction.reply({ embeds: [errorEmbed('Provide a user to revoke Anti-Nuke access from.')], flags: MessageFlags.Ephemeral });
+            const antiNukeAccess = require('../utils/antiNukeAccess');
+            const actor = await antiNukeAccess.authorizeAntiNuke(
+                { id: guild.id, owner_id: guild.ownerId }, interaction.user.id,
+                'antinuke.access.revoke',
+                { requireMember: true, member: { present: true, roles: [] } },
+            );
+            if (!actor.ok) return denyEmbed(interaction, 'antinuke.access.revoke');
+            const res = await antiNukeAccess.removeAccess({
+                guild: { id: guild.id, owner_id: guild.ownerId },
+                actorUserId: interaction.user.id,
+                actor,
+                targetUserId: target.id,
+                reason: `Revoked via /antinuke revoke by ${interaction.user.tag}`,
+            });
+            if (!res.ok) return interaction.reply({ embeds: [errorEmbed(reasonLabel(res.reason))], flags: MessageFlags.Ephemeral });
+            return interaction.reply({ embeds: [successEmbed('🗑️ Anti-Nuke access revoked', `Removed <@${target.id}> from the Anti-Nuke access control. Revocation is immediate — their next action is denied.`)], flags: MessageFlags.Ephemeral });
         }
     },
 
