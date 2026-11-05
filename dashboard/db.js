@@ -1627,6 +1627,8 @@ async function ensureAntiNukeTable() {
         await anukePool.query(ANTINUKE_INCIDENT_DDL);
         for (const sql of ANTINUKE_INCIDENT_INDEX_SQL) await anukePool.query(sql);
         await anukePool.query(ANTINUKE_LOCKDOWN_DDL);
+        // Access-control + setup audit tables (shared with the manager).
+        await require('../server/anukeDb').ensureAnukeTables();
     });
 }
 
@@ -1792,6 +1794,48 @@ async function getAntiNukeLockdown(guildId) {
         startedBy: row.started_by || null,
         reason: row.reason || '',
     };
+}
+
+// ── Anti-Nuke access control (shared ANUKE pool) ───────────────────────────
+//
+// Thin local wrappers over server/anukeDb.js so the dashboard NEVER constructs
+// its own access rows — it delegates to the same transactional helpers the bot
+// nodes use (Same-DB + atomic-upsert guarantee).
+
+async function listAntiNukeAccess(guildId) {
+    await ensureAntiNukeTable();
+    const { listAccessRows } = require('../server/anukeDb');
+    return listAccessRows(guildId);
+}
+
+async function getAntiNukeAccessRow(guildId, userId) {
+    await ensureAntiNukeTable();
+    const { getAccessRow } = require('../server/anukeDb');
+    return getAccessRow(guildId, userId);
+}
+
+async function upsertAntiNukeAccess(guildId, fields) {
+    await ensureAntiNukeTable();
+    const { upsertAccessRow } = require('../server/anukeDb');
+    return upsertAccessRow(guildId, fields);
+}
+
+async function deleteAntiNukeAccess(guildId, userId) {
+    await ensureAntiNukeTable();
+    const { deleteAccessRow } = require('../server/anukeDb');
+    return deleteAccessRow(guildId, userId);
+}
+
+async function addAntiNukeAccessHistory(fields) {
+    await ensureAntiNukeTable();
+    const { addAccessHistoryRow } = require('../server/anukeDb');
+    return addAccessHistoryRow(fields);
+}
+
+async function listAntiNukeAccessHistory(guildId, opts) {
+    await ensureAntiNukeTable();
+    const { listAccessHistory } = require('../server/anukeDb');
+    return listAccessHistory(guildId, opts);
 }
 
 // ── Combined view (one fetch per guild for the settings page) ───────────────
@@ -3701,6 +3745,12 @@ module.exports = {
     getAntiNukeIncidents,
     getAntiNukeIncidentSummary,
     getAntiNukeLockdown,
+    listAntiNukeAccess,
+    getAntiNukeAccessRow,
+    upsertAntiNukeAccess,
+    deleteAntiNukeAccess,
+    addAntiNukeAccessHistory,
+    listAntiNukeAccessHistory,
     ensureAutomodIncidentsTable,
     submitAutomodAppeal,
     getAutomodAppeals,

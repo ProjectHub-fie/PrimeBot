@@ -358,6 +358,14 @@ function consoleHTML({ guild, settings, lockdown, permissionReport, summary }) {
       </section>` : ''}
 
       <section class="card">
+        <div class="card-title"><span><span class="icon">${svgIcon('shield')}</span> Access control</span></div>
+        <p class="card-desc">Anti-Nuke management is restricted to the server owner and to Co-Owners / Trusted Admins explicitly appointed by the owner with the permissions below.</p>
+        <div id="an-access-root" class="an-access-root">
+          <div class="an-access-loading">Loading access control…</div>
+        </div>
+      </section>
+
+      <section class="card">
         <div class="card-title"><span><span class="icon">${svgIcon('list')}</span> Threat detection</span></div>
         <p class="card-desc">Pick which dangerous actions are monitored and how many within a window count as an attack. Thresholds are per-executor sliding windows.</p>
         <div class="an-modules">${ANTINUKE_MODULES.map(m => moduleCardHTML(m, watched)).join('')}</div>
@@ -434,18 +442,51 @@ function consoleHTML({ guild, settings, lockdown, permissionReport, summary }) {
 // ── Page ────────────────────────────────────────────────────────────────────
 
 /**
- * Wrap the Anti-Nuke panel in the shared "Coming Soon……" overlay unless the
- * viewer bypasses the upcoming gate. Required lazily to avoid the
- * guild-pages → antinuke-page → guild-pages require cycle.
+ * Decide how much of the Anti-Nuke panel a viewer may see, based on the
+ * owner-controlled access hierarchy (utils/antiNukeAccess) that
+ * `requireGuildAdminPage` attached as `guild._antiNukeAccess`. Anti-Nuke is
+ * NOT released to the public: Discord Administrator/Manage Guild grants nothing
+ * by itself — only the ACTUAL guild owner and explicitly assigned Co-Owners /
+ * Trusted Admins get in.
  *
- * Anti-Nuke is NOT released yet: `upcoming: true` in render/guild.js TABS, so
- * ordinary users see the overlay (and the write endpoints 403 via
- * `requireUpcoming`); developer/owner bot roles get the real editor.
+ * Returns { mode: 'denied'|'locked'|'granted', reason }
+ *   - denied:  not a member / access could not be resolved (no access page)
+ *   - locked:  member with no Anti-Nuke access — explanatory "no access" panel
+ *   - granted: owner or an assigned user (page renders fully)
  */
-function wrapUpcoming(innerHTML, guild) {
-    if (guild && guild._bypassUpcoming) return innerHTML;
-    const { upcomingOverlayWrap } = require('./guild-pages');
-    return upcomingOverlayWrap(innerHTML, { icon: 'shieldAlert', title: 'Anti-Nuke' });
+function accessModeFor(guild) {
+    const ctx = guild && guild._antiNukeAccess;
+    if (!ctx || !ctx.ok) return { mode: 'denied', reason: ctx && ctx.reason ? ctx.reason : 'unresolved' };
+    if (ctx.role === 'none' && !ctx.isOwner) return { mode: 'locked', reason: 'no_access' };
+    return { mode: 'granted', reason: null };
+}
+
+/**
+ * Render the "no access" panel for a logged-in guild admin who is not part of
+ * the Anti-Nuke hierarchy. This is deliberate: an ordinary Discord
+ * Administrator/Moderator has no Anti-Nuke management access by default, and
+ * only the owner (or an assigned manager) can grant it.
+ */
+function noAccessPanelHTML(guild, ctx) {
+    const ctxSafe = ctx && typeof ctx === 'object' ? ctx : {};
+    const accessState = {
+        role: ctxSafe.role || 'none',
+        level: ctxSafe.level != null ? ctxSafe.level : 4,
+        isOwner: !!ctxSafe.isOwner,
+    };
+    return `
+    <div class="card an-no-access">
+        <div class="an-no-access-icon">${svgIcon('shieldAlert')}</div>
+        <h3>No Anti-Nuke access</h3>
+        <p>Anti-Nuke configuration is restricted. You are signed in as a server
+        administrator, but this server's owner has not granted you any
+        Anti-Nuke management permission.</p>
+        <p class="an-no-access-hint">Ask the server owner to open
+        <strong>Server features → 🛡️ Anti-Nuke → Access Control</strong> and
+        assign you a role (Co-Owner or Trusted Admin) with the permissions you
+        need.</p>
+        <script>window.__ANTINUKE_ACCESS_CONTEXT=${jsonForScript(accessState)};</script>
+    </div>`;
 }
 
 function antiNukePageHTML({ guild, user, view }) {
@@ -454,12 +495,13 @@ function antiNukePageHTML({ guild, user, view }) {
     const permissionReport = (guild._config || {}).antiNukePermissions || null;
     const summary = (guild._config || {}).antiNukeSummary || { total: 0, byAction: [] };
     const setup = (guild._config || {}).antiNukeSetup || { status: 'not_started', progress: { percent: 0, completed: 0, total: 0, steps: [] } };
+    const accessCtx = (guild && guild._antiNukeAccess) || { role: 'none', level: 4, isOwner: false };
+    const { mode, reason } = accessModeFor(guild);
 
-    // The console renders once setup has been completed (or was never needed);
-    // otherwise the chooser + progress panel. `?view=console|wizard|setup`
-    // overrides it so the client can switch without a round trip.
     let inner;
-    if (view === 'wizard') {
+    if (mode !== 'granted') {
+        inner = noAccessPanelHTML(guild, accessCtx);
+    } else if (view === 'wizard') {
         inner = manualWizardHTML(guild, settings);
     } else if (view === 'console' || (setup.status === 'completed' && view !== 'setup')) {
         inner = consoleHTML({ guild, settings, lockdown, permissionReport, summary });
@@ -470,7 +512,7 @@ function antiNukePageHTML({ guild, user, view }) {
     const body = `
     ${require('./guild').guildHeaderHTML(guild)}
     ${require('./guild').tabNavHTML(guild.id, 'antinuke')}
-    ${wrapUpcoming(inner, guild)}
+    ${inner}
     ${require('./guild').guildDataScript({
         guildId: guild.id,
         channels: guild._channels,
@@ -478,6 +520,15 @@ function antiNukePageHTML({ guild, user, view }) {
         extra: { _antiNukeSettings: settings, _antiNukeLockdown: lockdown, _antiNukeSummary: summary },
     })}
     <script>
+window.__ANTINUKE_ACCESS=${jsonForScript({
+    role: accessCtx.role || 'none',
+    level: accessCtx.level != null ? accessCtx.level : 4,
+    isOwner: !!accessCtx.isOwner,
+    permissions: accessCtx.permissions || [],
+    canManageAccess: !!accessCtx.canManageAccess,
+    canAppointCoOwners: !!accessCtx.canAppointCoOwners,
+    canRevoke: !!accessCtx.canRevoke,
+})};
 window.__ANTINUKE_ACTIONS=${jsonForScript(ANTINUKE_ACTIONS)};
 window.__ANTINUKE_RESPONSES=${jsonForScript(ANTINUKE_RESPONSES)};
 window.__ANTINUKE_MODULES=${jsonForScript(ANTINUKE_MODULES)};
@@ -485,9 +536,10 @@ window.__ANTINUKE_DANGEROUS_PERMISSIONS=${jsonForScript(ANTINUKE_DANGEROUS_PERMI
 window.__ANTINUKE_SETTINGS=${jsonForScript(settings)};
 window.__ANTINUKE_SETUP=${jsonForScript(setup)};
 window.__ANTINUKE_VIEW=${jsonForScript(view || (setup.status === 'completed' ? 'console' : 'setup'))};
+window.__ANTINUKE_PERMISSION_CATALOG=${jsonForScript(require('../constants').ANTINUKE_PERMISSION_CATALOG || {})};
 </script>`;
 
     return { body, scripts: ['/js/guild-common.js', '/js/antinuke.js'], title: `PrimeBot · ${guild.name} · Anti-Nuke` };
 }
 
-module.exports = { antiNukePageHTML, moduleCardHTML, actionRowHTML, setupChooserHTML, manualWizardHTML, consoleHTML, stepListHTML };
+module.exports = { antiNukePageHTML, moduleCardHTML, actionRowHTML, setupChooserHTML, manualWizardHTML, consoleHTML, stepListHTML, accessModeFor };

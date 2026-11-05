@@ -1,4 +1,4 @@
-const { pgTable, text, integer, timestamp, boolean, varchar, serial, jsonb } = require('drizzle-orm/pg-core');
+const { pgTable, text, integer, timestamp, boolean, varchar, serial, jsonb, primaryKey } = require('drizzle-orm/pg-core');
 const { relations } = require('drizzle-orm');
 
 // Live polls table
@@ -506,6 +506,38 @@ const antinukeLockdowns = pgTable('antinuke_lockdowns', {
   updatedAt: timestamp('updated_at').defaultNow(),
 });
 
+// Bot-defined Anti-Nuke management access (Co-Owners + Trusted Admins). The
+// ACTUAL Discord guild owner is never stored — ownership is resolved from
+// Discord at authorization time, so the owner has implicit full access and
+// cannot be demoted. Same ANUKE_DATABASE_URL pool as the settings.
+const antinukeAccess = pgTable('antinuke_access', {
+  guildId: varchar('guild_id', { length: 50 }).notNull(),
+  userId: varchar('user_id', { length: 50 }).notNull(),
+  role: varchar('role', { length: 20 }).notNull(),
+  permissions: jsonb('permissions').default([]).notNull(),
+  preset: varchar('preset', { length: 24 }),
+  grantedBy: varchar('granted_by', { length: 50 }),
+  grantedAt: timestamp('granted_at').defaultNow(),
+  updatedBy: varchar('updated_by', { length: 50 }),
+  updatedAt: timestamp('updated_at').defaultNow(),
+}, (table) => [
+  primaryKey({ columns: [table.guildId, table.userId] }),
+]);
+
+// Append-only audit trail for sensitive Anti-Nuke access + setup changes.
+const antinukeAccessHistory = pgTable('antinuke_access_history', {
+  id: serial('id').primaryKey(),
+  guildId: varchar('guild_id', { length: 50 }).notNull(),
+  actorId: varchar('actor_id', { length: 50 }).notNull(),
+  targetId: varchar('target_id', { length: 50 }),
+  action: varchar('action', { length: 40 }).notNull(),
+  previousState: jsonb('previous_state').default({}).notNull(),
+  newState: jsonb('new_state').default({}).notNull(),
+  result: varchar('result', { length: 20 }).default('success').notNull(),
+  reason: text('reason').default('').notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
 // Automod warnings ledger (per-guild-per-user)
 const automodWarnings = pgTable('automod_warnings', {
   id: serial('id').primaryKey(),
@@ -922,6 +954,8 @@ module.exports = {
   antinukeSettings,
   antinukeIncidents,
   antinukeLockdowns,
+  antinukeAccess,
+  antinukeAccessHistory,
   automodWarnings,
   automodAppeals,
   appealSettings,

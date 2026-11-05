@@ -23,6 +23,9 @@ const {
     AUTOMATIC_STEPS: ANTINUKE_AUTO_STEPS,
     MANUAL_SECTIONS: ANTINUKE_MANUAL_SECTIONS,
 } = require('../utils/antiNukeSetup');
+const {
+    antiNukePermissionCatalog,
+} = require('../shared/antiNukePermissions');
 
 module.exports = {
     // OAuth scopes requested at login. "guilds" lets us list the admin's servers.
@@ -116,6 +119,11 @@ module.exports = {
     // and the /antinuke setup command so both describe the same steps.
     ANTINUKE_AUTO_STEPS,
     ANTINUKE_MANUAL_SECTIONS,
+
+    // Owner-controlled access: the immutable permission registry + presets.
+    ANTINUKE_PERMISSION_CATALOG: antiNukePermissionCatalog(),
+    ANTINUKE_PERMISSIONS: antiNukePermissionCatalog().permissions,
+    ANTINUKE_PRESETS: antiNukePermissionCatalog().presets,
 
     // Incident retention choices offered on the Automod → Settings section.
     AUTOMOD_RETENTION_OPTIONS: [

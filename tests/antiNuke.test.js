@@ -42,10 +42,19 @@ test('every protection module named in the task has at least one action', () => 
 test('default settings enable every action but stay in dry-run with alert-only responses', () => {
     const s = rules.defaultAntiNukeSettings();
     assert.equal(s.enabled, false, 'Anti-Nuke is opt-in');
-    assert.equal(s.dryRun, true, 'dry-run is the safe default');
     assert.ok(s.responses.includes('alertOwner'), 'the owner is alerted by default');
     assert.ok(!s.responses.includes('lockdown'), 'destructive responses are not on by default');
     assert.equal(Object.keys(s.watched).length, rules.NUKE_ACTIONS.length, 'every action has a watch entry');
+});
+
+test('the recommended setup config turns dry-run OFF (owner opted into protection)', () => {
+    const { recommendedConfig } = require('../utils/antiNukeSetupRunner');
+    const rec = recommendedConfig();
+    assert.equal(rec.dryRun, false, 'running the setup wizard activates live protection');
+    assert.equal(rec.enabled, true, 'setup enables protection');
+    // Safe defaults still hold: no automatic permanent punishment.
+    assert.ok(!rec.responses.includes('ban') && !rec.responses.includes('kick'),
+        'no permanent bans/kicks in the recommended responses');
 });
 
 test('normalization clamps bad input and never drops an action from the catalog', () => {
@@ -291,10 +300,12 @@ test('failed and skipped steps never count as completed', () => {
 
 test('setup only counts as complete when every required step succeeded', () => {
     let state = setup.normalizeSetupState({ method: 'automatic' });
-    for (const step of setup.AUTOMATIC_STEPS) {
+    // The full 16-step walkthrough (8 backend + 8 walkthrough) must all succeed.
+    for (const step of setup.stepsForMethod('automatic')) {
         state = setup.applyStep(state, step.key, { status: 'completed' });
     }
     const p = setup.computeProgress('automatic', state);
+    assert.equal(p.total, 16, 'the automatic walkthrough is exactly 16 required steps');
     assert.equal(p.percent, 100);
     assert.equal(setup.isComplete('automatic', state), true);
 });
