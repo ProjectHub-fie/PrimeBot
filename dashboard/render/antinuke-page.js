@@ -248,29 +248,39 @@ function wizardSectionBody(key, ctx) {
               <div class="switch-row">
                 <div class="switch-label"><div class="sl-title">Enable Anti-Nuke</div><div class="sl-desc">The server owner is never treated as a threat.</div></div>
                 <label class="switch"><input type="checkbox" id="an-enabled" ${settings.enabled ? 'checked' : ''}/><span class="slider"></span></label>
-              </div>
-              <div class="switch-row">
-                <div class="switch-label"><div class="sl-title">Dry run</div><div class="sl-desc">Detect and alert but never contain. Turn off only once you trust the thresholds.</div></div>
-                <label class="switch"><input type="checkbox" id="an-dry-run" ${settings.dryRun !== false ? 'checked' : ''}/><span class="slider"></span></label>
-              </div>
+              </div>`;
+        case 'channel':
+            return `
               <div class="field">
                 <label class="field-label" for="an-alert-channel">Alert channel</label>
                 <select id="an-alert-channel" data-channel-select>${channelOptions(channels, settings.alertChannelId)}</select>
-                <div class="field-hint">Where security alerts are posted.</div>
+                <div class="field-hint">Where security alerts are posted. PrimeBot needs View Channel + Send Messages there.</div>
               </div>`;
-        case 'trust':
+        case 'trustedUsers':
             return `
               <div class="field">
                 <label class="field-label">Trusted users</label>
                 <div class="an-trusted-input"><input type="text" id="an-trusted-user-input" placeholder="User ID (15-22 digits)"/><button class="btn" id="an-add-trusted-user">${svgIcon('userPlus')} Add</button></div>
                 <div class="rr-list" id="an-trusted-users"></div>
-                <div class="field-hint">Anyone listed here bypasses Anti-Nuke. The server owner and PrimeBot always do.</div>
-              </div>
+                <div class="field-hint">Anyone listed here bypasses Anti-Nuke detection. The server owner and PrimeBot always do. Administrators are NOT trusted automatically.</div>
+              </div>`;
+        case 'trustedRoles':
+            return `
               <div class="field">
                 <label class="field-label">Trusted roles</label>
-                <div class="rr-list" id="an-trusted-roles"></div>
+                <div class="rr-list an-trusted-roles" id="an-trusted-roles"></div>
+                <div class="field-hint">Members holding one of these roles are exempt from Anti-Nuke detection.</div>
               </div>`;
-        case 'response':
+        case 'thresholds':
+            return `
+              <p class="card-desc">How many actions within a window count as an attack. Edit a value in its protection section; this table is a summary.</p>
+              <table class="an-review-table an-threshold-table"><tbody>
+                ${ANTINUKE_ACTIONS.map(a => {
+                    const w = (settings.watched || {})[a.key] || { threshold: a.threshold, seconds: a.seconds, enabled: true };
+                    return `<tr><th>${svgIcon(a.iconName)} ${esc(a.label)}</th><td>${w.enabled !== false ? `${esc(w.threshold)} / ${esc(w.seconds)}s` : 'disabled'}</td></tr>`;
+                }).join('')}
+              </tbody></table>`;
+        case 'responses':
             return `
               <div class="an-responses">${ANTINUKE_RESPONSES.map(r => `
                 <label class="an-response">
@@ -284,6 +294,12 @@ function wizardSectionBody(key, ctx) {
                 <label class="field-label">Dangerous permissions to strip</label>
                 <div class="an-perm-list">${ANTINUKE_DANGEROUS_PERMISSIONS.map(p => `
                   <label class="an-perm"><input type="checkbox" class="an-danger-perm" value="${esc(p.key)}" ${(settings.dangerousPermissions || []).includes(p.key) ? 'checked' : ''}/> ${esc(p.label)}</label>`).join('')}</div>
+              </div>`;
+        case 'safety':
+            return `
+              <div class="switch-row">
+                <div class="switch-label"><div class="sl-title">Dry run</div><div class="sl-desc">Detect and alert but never contain. Turn off only once you trust the thresholds.</div></div>
+                <label class="switch"><input type="checkbox" id="an-dry-run" ${settings.dryRun !== false ? 'checked' : ''}/><span class="slider"></span></label>
               </div>
               <div class="switch-row">
                 <div class="switch-label"><div class="sl-title">Lockdown allowed</div><div class="sl-desc">Permit a lockdown response (raises verification level, pauses invites).</div></div>
@@ -297,12 +313,13 @@ function wizardSectionBody(key, ctx) {
         case 'review':
             return `<div class="an-review" id="an-review"></div>`;
         default: {
-            // Module sections (channel/role/member/webhook/bot/server) — the
-            // same watched-action rows as the console, scoped to one module.
-            const mod = ANTINUKE_MODULES.find(m => m.key === key);
+            // Module sections. The catalog key `channels` (Channel Protection)
+            // maps to the `channel` protection module.
+            const modKey = key === 'channels' ? 'channel' : key;
+            const mod = ANTINUKE_MODULES.find(m => m.key === modKey);
             if (!mod) return '';
             const watched = settings.watched || {};
-            return `<div class="an-action-list">${ANTINUKE_ACTIONS.filter(a => a.module === key)
+            return `<div class="an-action-list">${ANTINUKE_ACTIONS.filter(a => a.module === modKey)
                 .map(a => actionRowHTML(a, watched[a.key] || { enabled: true, threshold: a.threshold, seconds: a.seconds })).join('')}</div>`;
         }
     }

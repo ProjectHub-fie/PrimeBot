@@ -25,6 +25,7 @@ const {
 const { validateBotPermissions } = require('./antiNukeContainment');
 const {
     stepsForMethod, normalizeSetupState, applyStep, withStatus, withUpdater, computeProgress, isComplete, diffRecommended,
+    AUTO_WALKTHROUGH_STEPS,
 } = require('./antiNukeSetup');
 
 // Channel names we look for when the guild has no alert channel configured.
@@ -184,9 +185,12 @@ async function runNextStep({ client, guild, state, options = {} }) {
 /** Execute one named step's real backend operation. Throws to fail the step. */
 async function runStep(stepKey, { client, guild, state, options }) {
     const manager = client && client.antiNukeManager;
+    const recommended = recommendedConfig();
     switch (stepKey) {
         case 'inspection': {
-            const settings = manager ? manager.getSettings(guild.id) : {};
+            // `manager.getSettings` may be async (dashboard manager shim) or
+            // sync (bot manager) — await both shapes.
+            const settings = manager ? await manager.getSettings(guild.id) : {};
             return {
                 guildId: guild.id,
                 name: guild.name,
@@ -205,7 +209,7 @@ async function runStep(stepKey, { client, guild, state, options }) {
             return { ok: report.ok, checks: report.checks, missing: report.missing };
         }
         case 'settings': {
-            const settings = manager ? manager.getSettings(guild.id) : {};
+            const settings = manager ? await manager.getSettings(guild.id) : {};
             return {
                 enabled: settings.enabled === true,
                 dryRun: settings.dryRun !== false,
@@ -230,7 +234,7 @@ async function runStep(stepKey, { client, guild, state, options }) {
             return { thresholds };
         }
         case 'alert': {
-            const settings = manager ? manager.getSettings(guild.id) : {};
+            const settings = manager ? await manager.getSettings(guild.id) : {};
             const resolved = await resolveAlertChannel(guild, settings.alertChannelId);
             if (resolved.source === 'none') {
                 // Not fatal on its own — but the step records that no channel was
@@ -241,17 +245,11 @@ async function runStep(stepKey, { client, guild, state, options }) {
             return resolved;
         }
         case 'save': {
-            if (!manager || typeof manager.updateSettingsAsync !== 'function') {
-                throw new Error('Anti-Nuke manager is unavailable.');
-            }
-            const current = manager.getSettings(guild.id);
-            const recommended = recommendedConfig();
-            const merged = mergeRecommended(current, recommended, options.applyRecommended === true);
-            // Keep the alert channel resolved in the previous step.
-            const alertStep = state.steps && state.steps.alert && state.steps.alert.result;
-            const alertChannelId = (alertStep && alertStep.channelId) || current.alertChannelId || null;
-            const saved = await manager.updateSettingsAsync(guild.id, { ...merged, alertChannelId });
-            return { enabled: saved.enabled, dryRun: saved.dryRun, alertChannelId: saved.alertChannelId };
+            // `save` stages the recommended configuration: `apply` (later in the
+            // walkthrough) is what actually persists the confirmed settings.
+            // Persisting here too would silently apply an unconfirmed config.
+            if (!manager) throw new Error('Anti-Nuke manager is unavailable.');
+            return { staged: true, dryRun: recommended.dryRun !== false };
         }
         case 'validate': {
             if (!manager) throw new Error('Anti-Nuke manager is unavailable.');
@@ -260,7 +258,7 @@ async function runStep(stepKey, { client, guild, state, options }) {
             if (typeof manager._refreshFromDatabase === 'function') {
                 await manager._refreshFromDatabase();
             }
-            const settings = manager.getSettings(guild.id);
+            const settings = await manager.getSettings(guild.id);
             const report = validateBotPermissions(guild);
             const channelOk = settings.alertChannelId
                 ? await guild.channels.fetch(settings.alertChannelId).then(ch => !!ch).catch(() => false)
@@ -275,8 +273,17 @@ async function runStep(stepKey, { client, guild, state, options }) {
                 modulesEnabled: Object.values(settings.watched || {}).filter(w => w && w.enabled !== false).length,
             };
         }
-        default:
+        default: {
+            // The walkthrough steps (restore/confirm/apply/validateModules/…)
+            // are the dashboard executor's job. Running them from here means the
+            // dashboard's `setup/step` route reached a walkthrough key — dispatch
+            // it to that executor instead of throwing "Unknown setup step", which
+            // previously failed the whole walkthrough at the `restore` step.
+            if (typeof stepKey === 'string' && AUTO_WALKTHROUGH_STEPS.some(s => s.key === stepKey)) {
+                return runWalkthroughStepOp(stepKey, { manager, guild, state, options });
+            }
             throw new Error(`Unknown setup step: ${stepKey}`);
+        }
     }
 }
 
@@ -367,11 +374,32 @@ async function runWalkthroughStepOp(stepKey, { manager, guild, state, options })
                 throw new Error('Anti-Nuke manager is unavailable.');
             }
             const merged = mergeRecommended(current, recommended, options.applyRecommended === true);
-            const saved = await manager.updateSettingsAsync(guild.id, { ...merged });
+            // Keep the alert channel resolved in the earlier `alert` step.
+            const alertStep = state.steps && state.steps.alert && state.steps.alert.result;
+            const alertChannelId = (alertStep && alertStep.channelId) || current.alertChannelId || null;
+            const saved = await manager.updateSettingsAsync(guild.id, { ...merged, alertChannelId });
             return {
                 enabled: saved.enabled === true,
                 dryRun: saved.dryRun !== false,
                 alertChannelId: saved.alertChannelId || null,
+            };
+        }
+        case 'validate': {
+            if (!manager) throw new Error('Anti-Nuke manager is unavailable.');
+            // Reload from the database to prove the config `apply` wrote actually
+            // persisted, then re-verify the pieces that matter.
+            if (typeof manager._refreshFromDatabase === 'function') {
+                await manager._refreshFromDatabase();
+            }
+            const settings = await manager.getSettings(guild.id);
+            const report = validateBotPermissions(guild);
+            const persisted = settings.enabled === true || Object.keys(settings.watched || {}).length > 0;
+            if (!persisted) throw new Error('Configuration did not persist to the database.');
+            return {
+                persisted,
+                permissionsOk: report.ok,
+                missingPermissions: report.missing,
+                modulesEnabled: Object.values(settings.watched || {}).filter(w => w && w.enabled !== false).length,
             };
         }
         case 'validateModules': {
