@@ -635,7 +635,9 @@ module.exports = {
                             await interaction.deferReply({ ephemeral: true });
                             try {
                                 const { runAll } = require('../utils/antiNukeSetupRunner');
-                                const res = await runAll({ client, guild: interaction.guild, options: { applyRecommended: false } });
+                                // The user pressed the Confirm button, so the
+                                // `confirm` step's explicit gate is satisfied.
+                                const res = await runAll({ client, guild: interaction.guild, options: { applyRecommended: false, confirmed: true } });
                                 if (typeof manager.saveSetup === 'function') {
                                     await manager.saveSetup(interaction.guild.id, {
                                         method: 'automatic',

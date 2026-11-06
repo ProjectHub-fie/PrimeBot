@@ -290,7 +290,9 @@
     function updateWizardProgress() {
       var steps = sections.map(function (sec, n) {
         var key = sec.getAttribute('data-section');
-        var required = key !== 'trust';
+        // The two trusted lists are optional (they match the catalog's
+        // `required: false`), so skipping them never lowers the percentage.
+        var required = key !== 'trustedUsers' && key !== 'trustedRoles';
         // The section the admin is on is only "running" while it is not done;
         // a completed section always shows completed (never regressed to
         // running when navigated back to).

@@ -741,20 +741,28 @@ module.exports = {
                         return message.reply({ embeds: [accessOverviewEmbed(ctx, { description })] });
                     }
 
-                    // ── grant: `an grant @user <coOwner|trustedAdmin> [preset]` ─
+                    // ── grant: `an grant @user <co-owner|trustedAdmin> [preset]` ─
                     if (anSub === 'grant') {
                         if (!await anPermissionGate()) return;
                         const target = message.mentions.users.first();
+                        // Accept "co-owner", "coowner", "co_owner", "co owner",
+                        // "trustedAdmin", "trusted-admin", "admin" — normalised by
+                        // stripping separators + lowercasing.
                         const roleArg = (args[1] || '').toLowerCase().replace(/[-_\s]/g, '');
                         const presetArg = (args[2] || 'custom').toLowerCase();
                         if (!target || !['coowner', 'trustedadmin', 'admin'].includes(roleArg)) {
-                            return message.reply('Usage: `antinuke grant @user <coOwner|trustedAdmin> [preset]`');
+                            return message.reply('Usage: `antinuke grant @user <co-owner|trustedAdmin> [preset]`');
                         }
                         const ROLES = require('../utils/antiNukeAccess').ROLES;
                         const role = roleArg.startsWith('co') ? ROLES.coOwner : ROLES.trustedAdmin;
                         const antiNukeAccess = require('../utils/antiNukeAccess');
                         const { applyPreset, ANTI_NUKE_PRESET_BY_KEY } = require('../shared/antiNukePermissions');
-                        const presetKey = ANTI_NUKE_PRESET_BY_KEY[presetArg] ? presetArg : 'custom';
+                        // Default preset by role so a plain grant is immediately
+                        // useful: a Co-Owner gets the broad Protection Manager set,
+                        // a Trusted Admin the read-mostly Security Monitor set. An
+                        // explicit preset argument always wins.
+                        const defaultPreset = role === ROLES.coOwner ? 'protectionManager' : 'securityMonitor';
+                        const presetKey = ANTI_NUKE_PRESET_BY_KEY[presetArg] ? presetArg : defaultPreset;
                         const actor = await antiNukeAccess.authorizeAntiNuke(
                             { id: message.guild.id, owner_id: message.guild.ownerId }, message.author.id, 'antinuke.access.manage',
                             { requireMember: true, member: { present: true, roles: [] } },
@@ -791,7 +799,7 @@ module.exports = {
                         if (!res.ok) return message.reply({ embeds: [anEmbed.errorEmbed(`Could not revoke: ${res.reason}`)] });
                         return message.reply({ embeds: [anEmbed.successEmbed('🗑️ Anti-Nuke access revoked', `Removed <@${target.id}> from Anti-Nuke access control.`)] });
                     }
-                    return message.reply('Usage: `antinuke <status|setup|progress|enable|disable|dryrun|thresholds|whitelist|unwhitelist|lockdown|restore|access|grant @user <role> [preset]|revoke @user>`');
+                    return message.reply('Usage: `antinuke <status|setup|progress|enable|disable|dryrun|thresholds|whitelist|unwhitelist|lockdown|restore|access|grant @user <co-owner|trustedAdmin> [preset]|revoke @user>`');
                 }
 
                 case "prefix": {
