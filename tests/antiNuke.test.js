@@ -315,7 +315,7 @@ test('an optional section does not change the manual-setup percentage', () => {
     let withoutOptional = setup.normalizeSetupState({ method: 'manual' });
     withOptional = setup.applyStep(withOptional, 'general', { status: 'completed' });
     withoutOptional = setup.applyStep(withoutOptional, 'general', { status: 'completed' });
-    withOptional = setup.applyStep(withOptional, 'trust', { status: 'skipped' }); // optional
+    withOptional = setup.applyStep(withOptional, 'trustedUsers', { status: 'skipped' }); // optional
     const a = setup.computeProgress('manual', withOptional);
     const b = setup.computeProgress('manual', withoutOptional);
     assert.equal(a.percent, b.percent, 'a skipped optional section must not move the bar');
