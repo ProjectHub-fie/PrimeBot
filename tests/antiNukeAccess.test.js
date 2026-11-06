@@ -417,3 +417,29 @@ test('the /antinuke command schema exposes the new access + progress subcommands
     assert.ok(subNames.includes('revoke'), 'revoke subcommand registered');
     assert.ok(subNames.includes('progress'), 'progress subcommand registered');
 });
+
+// ── Prefix `an grant @user <co-owner|admin>` argument parsing ───────────────
+
+test('parseGrantArgs reads the role from the non-mention token (prefix offset bug)', () => {
+    const { parseGrantArgs, ROLES, defaultPresetForRole } = require('../utils/antiNukeAccess');
+    // The regression: prefix args are ['grant','<@id>','co-owner'] — the mention
+    // is its OWN token, so a fixed-index read picked up the mention and every
+    // `$an grant @user co-owner` fell through to the usage error.
+    assert.equal(parseGrantArgs(['grant', '<@123456789012345678>', 'co-owner']).role, ROLES.coOwner);
+    assert.equal(parseGrantArgs(['grant', '<@!123456789012345678>', 'coowner']).role, ROLES.coOwner);
+    assert.equal(parseGrantArgs(['grant', '<@123456789012345678>', 'Co-Owner']).role, ROLES.coOwner);
+    assert.equal(parseGrantArgs(['grant', '<@123456789012345678>', 'co_owner']).role, ROLES.coOwner);
+    // admin aliases → Trusted Admin
+    for (const alias of ['admin', 'Admin', 'trustedAdmin', 'trusted-admin']) {
+        assert.equal(parseGrantArgs(['grant', '<@123456789012345678>', alias]).role, ROLES.trustedAdmin, alias);
+    }
+    // Role before the mention still resolves.
+    assert.equal(parseGrantArgs(['grant', 'co-owner', '<@123456789012345678>']).role, ROLES.coOwner);
+    // Missing / unknown role → null (the handler replies with usage).
+    assert.equal(parseGrantArgs(['grant', '<@123456789012345678>']).role, null);
+    assert.equal(parseGrantArgs(['grant', '<@123456789012345678>', 'bogus']).role, null);
+    assert.equal(parseGrantArgs([]).role, null);
+    // The preset is fixed per role.
+    assert.equal(defaultPresetForRole(ROLES.coOwner), 'protectionManager');
+    assert.equal(defaultPresetForRole(ROLES.trustedAdmin), 'securityMonitor');
+});
