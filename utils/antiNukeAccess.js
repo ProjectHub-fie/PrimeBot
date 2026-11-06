@@ -69,6 +69,33 @@ const {
 const ROLES = { coOwner: 'coOwner', trustedAdmin: 'trustedAdmin' };
 const ROLE_LEVELS = { coOwner: 2, trustedAdmin: 3 };
 
+/**
+ * Parse the role argument of `antinuke grant @user <co-owner|admin>`.
+ *
+ * Prefix args arrive as `['grant', '<@id>', 'co-owner']` — the mention is its
+ * own token — so read the role from the NON-mention tokens rather than a fixed
+ * index. Accepts "co-owner"/"coowner"/"co_owner" and
+ * "admin"/"trustedAdmin"/"trusted-admin".
+ *
+ * @param {string[]} args raw args AFTER the subcommand (args[0] === 'grant')
+ * @returns {{ role: string|null, roleArg: string }}
+ */
+function parseGrantArgs(args) {
+    const nonMention = (Array.isArray(args) ? args : [])
+        .filter(a => a && !/^<[@#!&]*\d+>$/.test(a));
+    // args[0] is the subcommand ('grant'); the role is the first non-mention token after it.
+    const roleArg = (nonMention[1] || '').toLowerCase().replace(/[-_\s]/g, '');
+    let role = null;
+    if (roleArg === 'coowner') role = ROLES.coOwner;
+    else if (roleArg === 'trustedadmin' || roleArg === 'admin') role = ROLES.trustedAdmin;
+    return { role, roleArg };
+}
+
+/** The fixed preset for a role — co-owner → Protection Manager, admin → Security Monitor. */
+function defaultPresetForRole(role) {
+    return role === ROLES.coOwner ? 'protectionManager' : 'securityMonitor';
+}
+
 /** The effective set the owner carries (every permission in the registry). */
 function ownerPermissions() {
     return OWNER_PERMISSION_IDS.slice();
@@ -461,6 +488,8 @@ async function buildAccessSnapshot({ guild, viewerUserId }) {
 module.exports = {
     ROLES,
     ROLE_LEVELS,
+    parseGrantArgs,
+    defaultPresetForRole,
     ownerPermissions,
     resolveOwnerId,
     computeAccess,
