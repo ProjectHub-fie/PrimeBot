@@ -1153,6 +1153,19 @@ function buildAntiNukePatch(body) {
     }
     if ('trustedUserIds' in body) patch.trustedUserIds = Array.isArray(body.trustedUserIds) ? body.trustedUserIds : [];
     if ('trustedRoleIds' in body) patch.trustedRoleIds = Array.isArray(body.trustedRoleIds) ? body.trustedRoleIds : [];
+    if ('quarantineRoleId' in body) {
+        const id = body.quarantineRoleId ? String(body.quarantineRoleId) : null;
+        patch.quarantineRoleId = (id && /^\d{15,22}$/.test(id)) ? id : null;
+    }
+    if ('actionResponses' in body && body.actionResponses && typeof body.actionResponses === 'object') {
+        const clean = {};
+        for (const [actionKey, list] of Object.entries(body.actionResponses)) {
+            if (!NUKE_ACTION_KEYS.includes(actionKey)) continue;
+            const ok = Array.isArray(list) ? Array.from(new Set(list.filter(r => NUKE_RESPONSE_KEYS.includes(r)))) : [];
+            if (ok.length) clean[actionKey] = ok;
+        }
+        patch.actionResponses = clean;
+    }
     if ('dangerousPermissions' in body) {
         // An empty list is allowed: containment is opt-in, and an admin may
         // legitimately choose to strip nothing. Unknown keys are dropped.

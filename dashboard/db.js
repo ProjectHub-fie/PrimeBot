@@ -1640,10 +1640,12 @@ function antiNukeRowToSettings(row) {
         enabled: row.enabled,
         alertChannelId: row.alert_channel_id || null,
         responses: row.responses,
+        actionResponses: row.action_responses,
+        quarantineRoleId: row.quarantine_role_id || null,
         trustedUserIds: row.trusted_user_ids,
         trustedRoleIds: row.trusted_role_ids,
         watched: row.watched,
-        dryRun: row.dry_run !== false,
+        dryRun: row.dry_run === undefined ? undefined : row.dry_run,
         dangerousPermissions: row.dangerous_permissions,
         lockdown: row.lockdown,
         responseCooldownSeconds: row.response_cooldown_seconds,
@@ -1681,8 +1683,9 @@ async function upsertAntiNukeSettings(guildId, patch = {}) {
             guild_id, enabled, alert_channel_id, responses,
             trusted_user_ids, trusted_role_ids, watched, dry_run,
             dangerous_permissions, lockdown, response_cooldown_seconds,
+            action_responses, quarantine_role_id,
             setup_method, setup_status, setup_state, updated_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,NOW())
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW())
         ON CONFLICT (guild_id) DO UPDATE SET
             enabled                   = EXCLUDED.enabled,
             alert_channel_id          = EXCLUDED.alert_channel_id,
@@ -1694,6 +1697,8 @@ async function upsertAntiNukeSettings(guildId, patch = {}) {
             dangerous_permissions     = EXCLUDED.dangerous_permissions,
             lockdown                  = EXCLUDED.lockdown,
             response_cooldown_seconds = EXCLUDED.response_cooldown_seconds,
+            action_responses          = EXCLUDED.action_responses,
+            quarantine_role_id        = EXCLUDED.quarantine_role_id,
             setup_method              = EXCLUDED.setup_method,
             setup_status              = EXCLUDED.setup_status,
             setup_state               = EXCLUDED.setup_state,
@@ -1705,6 +1710,8 @@ async function upsertAntiNukeSettings(guildId, patch = {}) {
         merged.dryRun !== false,
         JSON.stringify(merged.dangerousPermissions), JSON.stringify(merged.lockdown),
         merged.responseCooldownSeconds,
+        JSON.stringify(merged.actionResponses || {}),
+        merged.quarantineRoleId || null,
         setupMethod, setupStatus, JSON.stringify(setupState),
     ]);
     merged.setupMethod = setupMethod;
@@ -1742,7 +1749,7 @@ async function saveAntiNukeSetup(guildId, { method = null, status = 'not_started
 }
 
 /** Paginated incident ledger (parameterized; capped). */
-async function getAntiNukeIncidents(guildId, { action = null, severity = null, executorId = null, dryRun = null, limit = 25, offset = 0 } = {}) {
+async function getAntiNukeIncidents(guildId, { action = null, severity = null, executorId = null, dryRun = null, status = null, limit = 25, offset = 0 } = {}) {
     await ensureAntiNukeTable();
     const { anukePool } = require('../server/anukeDb');
     const { rowToIncident } = require('../utils/antiNukeManager');
@@ -1752,6 +1759,7 @@ async function getAntiNukeIncidents(guildId, { action = null, severity = null, e
     if (action) where.push(`action = ${push(String(action))}`);
     if (severity) where.push(`severity = ${push(String(severity))}`);
     if (executorId) where.push(`executor_id = ${push(String(executorId))}`);
+    if (status) where.push(`status = ${push(String(status))}`);
     if (dryRun === true) where.push('dry_run = true');
     if (dryRun === false) where.push('dry_run = false');
     const lim = Math.min(100, Math.max(1, parseInt(limit, 10) || 25));

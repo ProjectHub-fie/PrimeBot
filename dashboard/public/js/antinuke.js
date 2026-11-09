@@ -427,6 +427,23 @@
     });
   }
 
+  function incidentStatusLabel(status) {
+    var labels = {
+      detected: 'Detected',
+      investigating: 'Investigating',
+      confirmed: 'Confirmed',
+      action_executed: 'Action Executed',
+      action_partial: 'Partial',
+      action_attempted: 'Action Attempted',
+      action_failed: 'Action Failed',
+      unattributed: 'Unattributed',
+      dry_run: 'Dry Run',
+      ignored_trusted_user: 'Ignored — Trusted User',
+      ignored_below_threshold: 'Ignored — Below Threshold',
+    };
+    return labels[status] || (status || 'Detected');
+  }
+
   function initActivity() {
     var body = $('#an-activity-body');
     if (!body) return;
@@ -437,19 +454,21 @@
           total = data.total || 0;
           var rows = data.incidents || [];
           if (!rows.length) {
-            body.innerHTML = '<tr><td colspan="7" class="an-empty">No incidents detected yet.</td></tr>';
+            body.innerHTML = '<tr><td colspan="8" class="an-empty">No incidents detected yet.</td></tr>';
           } else {
             body.innerHTML = rows.map(function (inc) {
               var exec = inc.executorId ? ('<@' + inc.executorId + '>') : '<span class="an-muted">unknown</span>';
               var resp = (inc.responseTaken || []).join(', ') || '—';
               var result = inc.responseOk ? '<span class="an-ok">ok</span>' : '<span class="an-bad">partial/failed</span>';
               var mode = inc.dryRun ? 'dry-run' : 'live';
+              var status = incidentStatusLabel(inc.status);
               return '<tr>' +
                 '<td>' + esc(new Date(inc.createdAt).toLocaleString()) + '</td>' +
                 '<td>' + exec + '</td>' +
                 '<td><span class="an-sev an-sev-' + esc(inc.severity) + '">' + esc(inc.severity) + '</span></td>' +
                 '<td>' + esc(inc.count) + ' / ' + esc(inc.threshold) + ' in ' + esc(inc.windowSeconds) + 's</td>' +
                 '<td>' + esc(resp) + '</td>' +
+                '<td><span class="an-status an-status-' + esc(inc.status || 'detected') + '">' + status + '</span></td>' +
                 '<td>' + result + '</td>' +
                 '<td>' + esc(mode) + '</td>' +
                 '</tr>';
@@ -462,7 +481,7 @@
           var next = $('#an-activity-next'); if (next) next.disabled = offset + limit >= total;
         })
         .catch(function (err) {
-          body.innerHTML = '<tr><td colspan="7" class="an-empty">Could not load activity: ' + esc(err.message) + '</td></tr>';
+          body.innerHTML = '<tr><td colspan="8" class="an-empty">Could not load activity: ' + esc(err.message) + '</td></tr>';
         });
     }
     var prev = $('#an-activity-prev');
@@ -538,11 +557,24 @@
     // would silently wipe the admin's configured list on every save (the
     // "Keep at least one dangerous permission" rejection).
     var permBoxes = $$('.an-danger-perm');
+    // Per-rule response overrides: group `.an-action-response-cb` by data-action.
+    var actionResponses = {};
+    $$('.an-action-response-cb').forEach(function (cb) {
+      if (cb.checked) {
+        var action = cb.getAttribute('data-action');
+        if (!action) return;
+        if (!actionResponses[action]) actionResponses[action] = [];
+        if (actionResponses[action].indexOf(cb.value) === -1) actionResponses[action].push(cb.value);
+      }
+    });
+    var quarantineEl = $('#an-quarantine-role');
     return {
       enabled: $('#an-enabled') ? $('#an-enabled').checked : (SETTINGS.enabled === true),
       dryRun: $('#an-dry-run') ? $('#an-dry-run').checked : (SETTINGS.dryRun !== false),
       alertChannelId: ($('#an-alert-channel') && $('#an-alert-channel').value) || null,
       responses: $$('.an-response-cb').filter(function (cb) { return cb.checked; }).map(function (cb) { return cb.value; }),
+      actionResponses: actionResponses,
+      quarantineRoleId: quarantineEl ? (quarantineEl.value || null) : (SETTINGS.quarantineRoleId || null),
       dangerousPermissions: permBoxes.length
         ? permBoxes.filter(function (cb) { return cb.checked; }).map(function (cb) { return cb.value; })
         : (SETTINGS.dangerousPermissions || []),

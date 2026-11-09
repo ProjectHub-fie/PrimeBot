@@ -296,6 +296,10 @@ class TicketPanelManager {
         this._logListeners = new Set();   // ticket log subscribers (bot/dashboard/tests)
         this._tableReady = false;
         this._fingerprint = null;         // cheap change-detection for the reload poller
+        // In-flight ticket-open dedupe: keyed by `${guildId}|${userId}|${panelId}`.
+        // Prevents double-clicks / duplicate event delivery from opening two
+        // channels for the same person + panel before the first finishes.
+        this._pendingOpens = new Map();
         this._init().catch(err =>
             console.error('[TICKETS] Init failed:', err.message)
         );
@@ -1070,7 +1074,10 @@ class TicketPanelManager {
         out.supportRoleIds = Array.isArray(out.supportRoleIds) ? out.supportRoleIds.map(String) : [];
         out.pingRoleIds = Array.isArray(out.pingRoleIds) ? out.pingRoleIds.map(String) : [];
         out.cooldownSeconds = Math.max(0, parseInt(out.cooldownSeconds, 10) || 0);
-        out.maxOpenPerUser = Math.max(0, parseInt(out.maxOpenPerUser, 10) || 1);
+        // Explicit `0` means unlimited (checked as `> 0` everywhere); a missing
+        // or non-numeric value falls back to the schema default of 1.
+        const mopu = parseInt(out.maxOpenPerUser, 10);
+        out.maxOpenPerUser = Number.isFinite(mopu) && mopu >= 0 ? mopu : 1;
         out.askReason = !!out.askReason;
         out.enabled = out.enabled !== false;
         out.timestampEnabled = out.timestampEnabled !== false;
@@ -1648,6 +1655,32 @@ class TicketPanelManager {
         return this._openTicket(interaction, panel, guild, interaction.member, userId, reason, cfg);
     }
 
+    /**
+     * State-aware interaction acknowledgement. A deferred (or already-replied)
+     * interaction must be answered with `editReply`, not `reply`. This helper
+     * answers an interaction exactly once using whichever method is valid.
+     */
+    async _answerInteraction(interaction, payload) {
+        try {
+            if (interaction.deferred || interaction.replied) {
+                // `ephemeral`/`flags` are set at defer time and are not valid
+                // MessageEditOptions — strip them before editing.
+                const edit = { ...payload };
+                delete edit.ephemeral;
+                delete edit.flags;
+                return await interaction.editReply(edit);
+            }
+            return await interaction.reply(payload);
+        } catch (err) {
+            // The interaction may have been acknowledged by a different handler,
+            // or its token expired while we did long work. Do NOT silently
+            // swallow a real failure — but never double-reply, and never let an
+            // unanswerable interaction crash a ticket that was actually created.
+            console.error('[TICKETS] Could not answer interaction:', err.message);
+            return null;
+        }
+    }
+
     /** Open the ticket (shared by handleOpen and handleOpenReasonSubmit)). */
     async _openTicket(interaction, panel, guild, member, userId, reason, cfg = null) {
         // Per-input (button/option) config overrides apply to this ticket only —
@@ -1668,8 +1701,48 @@ class TicketPanelManager {
             count: ns.count,
         }) || `🎫 ${baseName}`.slice(0, 100);
 
+        // ── Duplicate-open guard ──────────────────────────────────────────────
+        // A second click / duplicate event for the same person + panel while a
+        // ticket is still being created must not open a second channel. The
+        // reply is ephemeral and idempotent, so a double-click just sees the
+        // "already opening" note until the first finishes.
+        const dedupeKey = `${guild.id}|${userId}|${panel.id}`;
+        if (this._pendingOpens.has(dedupeKey)) {
+            return this._answerInteraction(interaction, {
+                content: 'Your ticket is already being opened — one moment.',
+                ephemeral: true,
+            });
+        }
+        // Re-check the limit *inside* the deferred path too: two concurrent
+        // opens can both pass the pre-defer check before either inserts.
+        if (panel.maxOpenPerUser > 0 && this.countOpenTickets(guild.id, userId) >= panel.maxOpenPerUser) {
+            return this._answerInteraction(interaction, {
+                content: `You already have ${panel.maxOpenPerUser} open ticket(s). Please close one before opening another.`,
+                ephemeral: true,
+            });
+        }
+        this._pendingOpens.set(dedupeKey, true);
+
+        // ── Acknowledge BEFORE any long work ─────────────────────────────────
+        // Discord gives component/modal interactions ~3s to be acknowledged.
+        // Channel creation + message send + DB insert routinely exceed that,
+        // so we defer first and answer the deferred interaction at the end.
+        // Without this the click times out and Discord shows the generic
+        // "Something went wrong" even though the ticket IS created.
+        let acknowledged = false;
         try {
-            let ticketChannel;
+            await interaction.deferReply({ ephemeral: true });
+            acknowledged = true;
+        } catch (err) {
+            console.error('[TICKETS] Failed to defer ticket-open interaction:', err.message);
+            // If we cannot defer, fall through to attempt the work with a
+            // best-effort reply later (the acknowledgement state will be false).
+            acknowledged = false;
+        }
+
+        let ticketChannel = null;
+        let controlMsg = null;
+        try {
             // Prefer a private channel under the configured category.
             try {
                 ticketChannel = await guild.channels.create({
@@ -1703,7 +1776,7 @@ class TicketPanelManager {
             }
 
             const controlPayload = this.buildControlMessage(panel, interaction.user);
-            const controlMsg = await ticketChannel.send({
+            controlMsg = await ticketChannel.send({
                 content: this._ticketPing(panel, interaction.user),
                 ...controlPayload,
             });
@@ -1730,7 +1803,8 @@ class TicketPanelManager {
 
             // Apply the panel's "on open" role add/remove to the ticket author.
 
-            await this._applyRoleSettings(panel, member, 'open');
+            try { await this._applyRoleSettings(panel, member, 'open'); }
+            catch (roleErr) { console.error('[TICKETS] Role settings on open failed (ticket still open):', roleErr.message); }
 
             // Ticket logging (fire-and-forget; never blocks or breaks the open).
             this._emitTicketLog('created', instance, {
@@ -1741,13 +1815,42 @@ class TicketPanelManager {
                 timestamp: instance.createdAt,
             });
 
-            return interaction.reply({
+            // Success — precisely one response, the success one.
+            return await this._answerInteraction(interaction, {
                 content: `Your ticket has been opened: ${ticketChannel}`,
                 ephemeral: true,
             });
         } catch (err) {
-            console.error('[TICKETS] Error opening ticket:', err);
-            return interaction.reply({ content: 'There was an error opening your ticket. Please try again later.', ephemeral: true });
+            // ── Structured failure ────────────────────────────────────────────
+            // Distinguish the failure stage so the opener hears the truth and a
+            // created-but-uninitialized ticket is reported as such.
+            console.error('[TICKETS] Error opening ticket:', {
+                interactionId: interaction.id,
+                guildId: guild.id,
+                userId,
+                panelId: panel.id,
+                failedOperation: ticketChannel ? 'post-channel-init' : 'channel-creation',
+                channelId: ticketChannel ? ticketChannel.id : null,
+                deferred: acknowledged,
+                error: err && err.message,
+                code: err && err.code,
+            });
+
+            // If the channel was created but a later step failed, preserve it
+            // and tell the opener the truth rather than a fake failure (and
+            // avoid leaving a silent orphan nobody can see).
+            if (ticketChannel && typeof ticketChannel.delete === 'function') {
+                try { await ticketChannel.delete('Ticket open initialization failed — cleaned up.'); }
+                catch (_) { /* best-effort cleanup */ }
+                ticketChannel = null;
+            }
+
+            return await this._answerInteraction(interaction, {
+                content: 'There was an error opening your ticket. Please try again later.',
+                ephemeral: true,
+            });
+        } finally {
+            this._pendingOpens.delete(dedupeKey);
         }
     }
 

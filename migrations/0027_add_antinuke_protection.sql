@@ -16,6 +16,13 @@ ALTER TABLE antinuke_settings
 ALTER TABLE antinuke_settings
     ADD COLUMN IF NOT EXISTS response_cooldown_seconds INTEGER NOT NULL DEFAULT 30;
 
+-- Per-action response maps + quarantine role for the enforcement engine.
+ALTER TABLE antinuke_settings
+    ADD COLUMN IF NOT EXISTS action_responses JSONB NOT NULL DEFAULT '{}';
+
+ALTER TABLE antinuke_settings
+    ADD COLUMN IF NOT EXISTS quarantine_role_id VARCHAR(50);
+
 ALTER TABLE antinuke_settings
     ADD COLUMN IF NOT EXISTS setup_method VARCHAR(20);
 
@@ -42,6 +49,7 @@ CREATE TABLE IF NOT EXISTS antinuke_incidents (
     response_ok       BOOLEAN NOT NULL DEFAULT false,
     dry_run           BOOLEAN NOT NULL DEFAULT false,
     attribution       VARCHAR(30) NOT NULL DEFAULT 'unknown',
+    status            VARCHAR(40),
     details           TEXT NOT NULL DEFAULT '',
     created_at        TIMESTAMP DEFAULT NOW()
 );

@@ -282,6 +282,7 @@ function wizardSectionBody(key, ctx) {
               </tbody></table>`;
         case 'responses':
             return `
+              <p class="card-desc">What happens when a threshold trips. Punishment responses (ban/kick) stay OFF until you enable them for the specific rule they should punish — dry-run being off never auto-enables them.</p>
               <div class="an-responses">${ANTINUKE_RESPONSES.map(r => `
                 <label class="an-response">
                   <input type="checkbox" class="an-response-cb" value="${esc(r.key)}" ${(settings.responses || []).includes(r.key) ? 'checked' : ''}/>
@@ -290,6 +291,23 @@ function wizardSectionBody(key, ctx) {
                     <span class="an-response-desc">${esc(r.description)}</span>
                   </span>
                 </label>`).join('')}</div>
+              <details class="an-rule-responses">
+                <summary>${svgIcon('sliders')} Per-rule response overrides</summary>
+                <p class="field-hint">Give a single rule its own response set. Leave a rule unset to use the global responses above. Enabling <strong>ban</strong>/<strong>kick</strong> here punishes the confirmed attacker for that rule only.</p>
+                ${ANTINUKE_ACTIONS.map(a => {
+                    const overrides = ((settings.actionResponses || {})[a.key]) || [];
+                    return `<div class="an-rule-response">
+                      <span class="an-rule-response-name">${svgIcon(a.iconName)} ${esc(a.label)}</span>
+                      <span class="an-rule-response-cbs">${ANTINUKE_RESPONSES.map(r => `
+                        <label class="an-rule-response-cb"><input type="checkbox" class="an-action-response-cb" data-action="${esc(a.key)}" value="${esc(r.key)}" ${overrides.includes(r.key) ? 'checked' : ''}/> ${esc(r.label)}</label>`).join('')}</span>
+                    </div>`;
+                }).join('')}
+              </details>
+              <div class="field">
+                <label class="field-label" for="an-quarantine-role">Quarantine role</label>
+                <select id="an-quarantine-role" data-role-select data-placeholder="— None (strip dangerous roles only) —"><option value="">${esc(settings.quarantineRoleId ? settings.quarantineRoleId : '— None (strip dangerous roles only) —')}</option></select>
+                <div class="field-hint">Applied to the confirmed attacker by the Quarantine response. Unset falls back to stripping dangerous roles only.</div>
+              </div>
               <div class="field">
                 <label class="field-label">Dangerous permissions to strip</label>
                 <div class="an-perm-list">${ANTINUKE_DANGEROUS_PERMISSIONS.map(p => `
@@ -390,7 +408,7 @@ function consoleHTML({ guild, settings, lockdown, permissionReport, summary }) {
 
       <section class="card">
         <div class="card-title"><span><span class="icon">${svgIcon('megaphone')}</span> Response configuration</span></div>
-        <p class="card-desc">What happens when a threshold trips. All responses alert and contain — none of them punish a member automatically.</p>
+        <p class="card-desc">What happens when a threshold trips. Alerts (alert owner/channel/log) always run. Containment and punishment (quarantine, ban, kick, delete webhook, lock channels, lockdown) run only when enabled — a confirmed attacker is never punished by default, even with dry-run off.</p>
         <div class="an-responses">${ANTINUKE_RESPONSES.map(r => `
           <label class="an-response">
             <input type="checkbox" class="an-response-cb" value="${esc(r.key)}" ${(settings.responses || []).includes(r.key) ? 'checked' : ''}/>
@@ -443,8 +461,8 @@ function consoleHTML({ guild, settings, lockdown, permissionReport, summary }) {
         <div class="an-activity-summary" id="an-activity-summary"></div>
         <div class="an-activity-wrap">
           <table class="an-activity-table" id="an-activity-table">
-            <thead><tr><th>Detected</th><th>Executor</th><th>Severity</th><th>Threshold</th><th>Response</th><th>Result</th><th>Mode</th></tr></thead>
-            <tbody id="an-activity-body"><tr><td colspan="7" class="an-empty">Loading…</td></tr></tbody>
+            <thead><tr><th>Detected</th><th>Executor</th><th>Severity</th><th>Threshold</th><th>Response</th><th>Status</th><th>Result</th><th>Mode</th></tr></thead>
+            <tbody id="an-activity-body"><tr><td colspan="8" class="an-empty">Loading…</td></tr></tbody>
           </table>
           <div class="an-activity-pager">
             <button class="btn btn-mini" id="an-activity-prev">‹ Prev</button>
