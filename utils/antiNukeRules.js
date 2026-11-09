@@ -332,23 +332,106 @@ function actionsForModule(moduleKey) {
 
 // ── Response catalog ────────────────────────────────────────────────────────
 //
-// Every response is an alert or reversible containment — none of them punish a
-// member automatically. `dangerous: true` marks the responses that change
-// server/member state (the dashboard asks for confirmation before enabling
-// them, and the executor applies them only when the executor is confidently
-// identified).
+// Every response is an alert or (for the dangerous ones) an actual enforcement
+// action against the confirmed executor. `dangerous: true` marks the responses
+// that change server/member state (the dashboard asks for confirmation before
+// enabling them, and the executor applies them only when the executor is
+// confidently identified AND the bot's permissions + role hierarchy allow it).
+// A `punish` response executes a real Discord moderation action; a
+// `restore`/`quarantine` response mutates member state in a reversible way.
 const NUKE_RESPONSES = [
-    { key: 'alertOwner',   label: 'Alert the server owner',    iconName: 'send',      description: 'DM the owner with the offending action and the responsible user.' },
-    { key: 'alertChannel', label: 'Post to the alert channel', iconName: 'megaphone', description: 'Post a high-priority embed to the configured alert channel.' },
-    { key: 'removeRoles',  label: 'Strip dangerous roles',     iconName: 'key',       dangerous: true, description: 'Remove Administrator / Manage-* roles from the responsible user where safely possible.' },
-    { key: 'lockdown',     label: 'Server lockdown',           iconName: 'lock',      dangerous: true, description: 'Raise the verification level and pause new invites while the incident is reviewed.' },
-    { key: 'manualReview', label: 'Flag for manual review',    iconName: 'eye',       description: 'Record the incident as needing a human decision (no automatic containment).' },
-    { key: 'logOnly',      label: 'Log only (no containment)', iconName: 'scroll',    description: 'Record the incident and take no other action.' },
+    { key: 'alertOwner',       label: 'Alert the server owner',    iconName: 'send',      description: 'DM the owner with the offending action and the responsible user.' },
+    { key: 'alertChannel',     label: 'Post to the alert channel', iconName: 'megaphone', description: 'Post a high-priority embed to the configured alert channel.' },
+    { key: 'quarantine',       label: 'Quarantine attacker',       iconName: 'lock',      dangerous: true, punish: true, description: 'Apply the configured quarantine role to the confirmed attacker and strip Administrator / Manage-* roles from them where safely possible.' },
+    { key: 'removeRoles',      label: 'Strip dangerous roles',     iconName: 'key',       dangerous: true, description: 'Remove Administrator / Manage-* roles from the responsible user where safely possible.' },
+    { key: 'ban',              label: 'Ban attacker',              iconName: 'ban',       dangerous: true, punish: true, description: 'Ban the confirmed attacker (only when audit-log attribution is reliable and the bot outranks them).', requiresPermission: 'BanMembers' },
+    { key: 'kick',             label: 'Kick attacker',             iconName: 'userX',     dangerous: true, punish: true, description: 'Kick the confirmed attacker (only when attribution is reliable and the bot outranks them).', requiresPermission: 'KickMembers' },
+    { key: 'deleteWebhook',    label: 'Delete malicious webhooks', iconName: 'linkOff',   dangerous: true, punish: true, description: 'Delete the webhook(s) involved in the attack (never indiscriminately).', requiresPermission: 'ManageWebhooks' },
+    { key: 'lockdown',         label: 'Server lockdown',           iconName: 'lock',      dangerous: true, description: 'Raise the verification level and pause new invites while the incident is reviewed.' },
+    { key: 'lockChannels',     label: 'Lock affected channels',    iconName: 'lock',      dangerous: true, description: 'Deny @everyone Send Messages on the channels involved in a channel attack.' },
+    { key: 'manualReview',     label: 'Flag for manual review',    iconName: 'eye',       description: 'Record the incident as needing a human decision (no automatic containment).' },
+    { key: 'logOnly',          label: 'Log only (no containment)', iconName: 'scroll',    description: 'Record the incident and take no other action.' },
 ];
 const NUKE_RESPONSE_KEYS = NUKE_RESPONSES.map(r => r.key);
 const NUKE_RESPONSE_BY_KEY = Object.fromEntries(NUKE_RESPONSES.map(r => [r.key, r]));
 
 const DEFAULT_NUKE_RESPONSES = ['alertOwner', 'alertChannel', 'logOnly'];
+
+// Which response keys are run by the enforcement loop (everything except the
+// pure-alert keys, which are delivered by _alert).
+const ENFORCED_RESPONSE_KEYS = NUKE_RESPONSES
+    .map(r => r.key)
+    .filter(k => !['alertOwner', 'alertChannel', 'manualReview', 'logOnly'].includes(k));
+const ENFORCED_RESPONSE_BY_KEY = Object.fromEntries(ENFORCED_RESPONSE_KEYS.map(k => [k, NUKE_RESPONSE_BY_KEY[k]]));
+
+// ── Per-action response maps ────────────────────────────────────────────────
+//
+// Every detection rule has an explicit response mapping, separate from the
+// guild-wide `responses` list. A guild can override the per-action response by
+// including the same keys in its global `responses` list — otherwise the
+// per-action default is used. `actionResponses` is a JSONB map keyed by the
+// action key: { <actionKey>: [responseKeys...] }. Empty/missing entries fall
+// back to the per-action catalog default.
+//
+// The defaults are deliberately named in the task description:
+//   • Member/moderation attacks → ban/kick/removeRoles/quarantine/alert/manual
+//   • Channel attacks → quarantine/removeRoles/lockChannels/alert
+//   • Role attacks → removeRoles/alert
+//   • Webhook attacks → deleteWebhook/quarantine/alert
+//   • Bot attacks → quarantine/alert
+//   • Server config attacks → lockdown/alert
+// Punishment responses (ban/kick) are OFF by default: the owner must opt in per
+// rule by enabling them. Dry-run being OFF never auto-enables ban/kick.
+const DEFAULT_ACTION_RESPONSES = {
+    // Member / moderation
+    memberBan:            ['quarantine', 'alertOwner', 'alertChannel', 'logOnly'],
+    memberKick:           ['quarantine', 'alertOwner', 'alertChannel', 'logOnly'],
+    memberRoleUpdate:     ['removeRoles', 'alertOwner', 'alertChannel', 'logOnly'],
+    adminGrant:           ['removeRoles', 'quarantine', 'alertOwner', 'alertChannel'],
+    dangerousPermissionGrant: ['removeRoles', 'quarantine', 'alertOwner', 'alertChannel'],
+    manageGuildGrant:     ['removeRoles', 'quarantine', 'alertOwner', 'alertChannel'],
+    manageRolesGrant:     ['removeRoles', 'quarantine', 'alertOwner', 'alertChannel'],
+    manageChannelsGrant:  ['removeRoles', 'quarantine', 'alertOwner', 'alertChannel'],
+    botPermissionEscalation: ['removeRoles', 'quarantine', 'alertOwner', 'alertChannel'],
+    // Channel
+    channelDelete:        ['quarantine', 'alertOwner', 'alertChannel', 'logOnly'],
+    channelCreate:        ['alertOwner', 'alertChannel', 'logOnly'],
+    channelUpdate:        ['alertOwner', 'alertChannel', 'logOnly'],
+    categoryDelete:       ['quarantine', 'alertOwner', 'alertChannel'],
+    permissionUpdate:     ['lockChannels', 'alertOwner', 'alertChannel'],
+    // Role
+    roleDelete:           ['quarantine', 'alertOwner', 'alertChannel', 'logOnly'],
+    roleCreate:           ['alertOwner', 'alertChannel', 'logOnly'],
+    rolePermissionUpdate: ['removeRoles', 'alertOwner', 'alertChannel'],
+    // Webhook
+    webhookCreate:        ['deleteWebhook', 'quarantine', 'alertOwner', 'alertChannel'],
+    webhookDelete:        ['alertOwner', 'alertChannel', 'logOnly'],
+    webhookUpdate:        ['deleteWebhook', 'alertOwner', 'alertChannel'],
+    // Bot
+    botAdd:               ['quarantine', 'alertOwner', 'alertChannel'],
+    // Server
+    guildUpdate:          ['alertOwner', 'alertChannel', 'logOnly'],
+};
+const DEFAULT_ACTION_RESPONSE_BY_ACTION = Object.freeze(DEFAULT_ACTION_RESPONSES);
+
+/** The effective response set for one action: per-action map or global list. */
+function responsesForAction(settings, actionKey) {
+    const actionMap = settings && settings.actionResponses && settings.actionResponses[actionKey];
+    if (Array.isArray(actionMap) && actionMap.length) {
+        return actionMap.filter(k => NUKE_RESPONSE_BY_KEY[k]);
+    }
+    const global = Array.isArray(settings && settings.responses) ? settings.responses : [];
+    // A global list that is still the stock alert-only default (or empty) does
+    // not represent an admin decision — fall through to the per-action catalog
+    // default, which is where real enforcement lives (e.g. quarantine for
+    // member attacks, deleteWebhook for webhook attacks). Any admin-customised
+    // list wins.
+    const isStock = DEFAULT_NUKE_RESPONSES.length === global.length
+        && DEFAULT_NUKE_RESPONSES.every(k => global.includes(k))
+        && global.every(k => DEFAULT_NUKE_RESPONSES.includes(k));
+    if (!isStock && global.length) return global.filter(k => NUKE_RESPONSE_BY_KEY[k]);
+    return (DEFAULT_ACTION_RESPONSES[actionKey] || DEFAULT_NUKE_RESPONSES.slice());
+}
 
 // ── Dangerous permissions ───────────────────────────────────────────────────
 //
@@ -386,6 +469,14 @@ function defaultAntiNukeSettings() {
         enabled: false,
         alertChannelId: null,
         responses: DEFAULT_NUKE_RESPONSES.slice(),
+        // Per-action response overrides. When empty/missing the per-action
+        // catalog default (DEFAULT_ACTION_RESPONSE_BY_ACTION) is used, which is
+        // also what the global `responses` list supplements.
+        actionResponses: {},
+        // Quarantine role applied by the `quarantine` response. When unset the
+        // response falls back to stripping dangerous roles only (the "owner
+        // configured quarantine role" is stored by the dashboard).
+        quarantineRoleId: null,
         // Users/roles that are never treated as a threat (e.g. the rest of the
         // staff team). The server owner is ALWAYS exempt, regardless of config.
         trustedUserIds: [],
@@ -399,7 +490,10 @@ function defaultAntiNukeSettings() {
             pauseInvites: true,
         },
         responseCooldownSeconds: 30,
-        dryRun: true,
+        // Dry-run is OFF by default: the owner opting into Anti-Nuke expects real
+        // enforcement. Detection never auto-enables bans/kicks and never punishes
+        // without reliable audit-log attribution.
+        dryRun: false,
         updatedAt: null,
     };
 }
@@ -446,6 +540,25 @@ function normalizeAntiNukeSettings(raw = {}) {
         ? src.responses.filter(r => NUKE_RESPONSE_BY_KEY[r])
         : base.responses.slice();
 
+    // Per-action response overrides: only known action+response keys accepted.
+    // Empty maps fall back to the per-action catalog default at read time.
+    const actionResponses = {};
+    if (src.actionResponses && typeof src.actionResponses === 'object') {
+        for (const [actionKey, list] of Object.entries(src.actionResponses)) {
+            if (!NUKE_ACTION_BY_KEY[actionKey]) continue;
+            const clean = Array.isArray(list)
+                ? Array.from(new Set(list.filter(r => NUKE_RESPONSE_BY_KEY[r])))
+                : [];
+            if (clean.length) actionResponses[actionKey] = clean;
+        }
+    }
+
+    // Quarantine role: a Discord snowflake, or null (falls back to role-strip).
+    let quarantineRoleId = null;
+    if (src.quarantineRoleId != null && /^\d{15,22}$/.test(String(src.quarantineRoleId))) {
+        quarantineRoleId = String(src.quarantineRoleId);
+    }
+
     // Dangerous permissions: only keys from the catalog are accepted. The list
     // may be EMPTY — containment is opt-in and an admin may choose to strip
     // nothing (e.g. an alert-only setup), so this is never forced back to a
@@ -468,13 +581,18 @@ function normalizeAntiNukeSettings(raw = {}) {
         enabled: src.enabled === true,
         alertChannelId: src.alertChannelId ? String(src.alertChannelId) : null,
         responses: responses.length ? Array.from(new Set(responses)) : base.responses.slice(),
+        actionResponses,
+        quarantineRoleId,
         trustedUserIds: _idList(src.trustedUserIds),
         trustedRoleIds: _idList(src.trustedRoleIds),
         watched,
         dangerousPermissions,
         lockdown,
         responseCooldownSeconds: _int(src.responseCooldownSeconds, base.responseCooldownSeconds, { min: 0, max: 3600 }),
-        dryRun: src.dryRun !== false,
+        // Existing guilds keep their explicitly saved boolean value
+        // (rowToSettings passes the persisted `dry_run` through); a brand-new
+        // config — or any non-boolean input — falls back to the OFF default.
+        dryRun: typeof src.dryRun === 'boolean' ? src.dryRun : base.dryRun,
         updatedAt: src.updatedAt || null,
     };
 }
@@ -553,7 +671,12 @@ module.exports = {
     NUKE_RESPONSES,
     NUKE_RESPONSE_KEYS,
     NUKE_RESPONSE_BY_KEY,
+    ENFORCED_RESPONSE_KEYS,
+    ENFORCED_RESPONSE_BY_KEY,
     DEFAULT_NUKE_RESPONSES,
+    DEFAULT_ACTION_RESPONSES,
+    DEFAULT_ACTION_RESPONSE_BY_ACTION,
+    responsesForAction,
     DANGEROUS_PERMISSIONS,
     DANGEROUS_PERMISSION_KEYS,
     DANGEROUS_PERMISSION_BY_KEY,

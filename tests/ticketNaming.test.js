@@ -100,7 +100,9 @@ test('_openTicket names the new channel via role settings + includes created tic
     mgr._ensureClaimRow = async () => {};
     mgr._applyRoleSettings = async () => {};
 
-    const panel = mgr._normalizePanel({ id: 7, guildId: 'g', name: 'Support', ticketName: 'support' });
+    // maxOpenPerUser 0 (unlimited) so the second ticket is allowed — the test
+    // verifies {count} includes the pre-existing open ticket.
+    const panel = mgr._normalizePanel({ id: 7, guildId: 'g', name: 'Support', ticketName: 'support', maxOpenPerUser: 0 });
     await mgr._openTicket(interaction, panel, guild, interaction.member, 'u', null, null);
 
     assert.equal(createdChannels.length, 1);

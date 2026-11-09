@@ -38,6 +38,7 @@ const { getCacheScheduler } = require('./cacheScheduler');
 const {
     normalizeAntiNukeSettings, defaultAntiNukeSettings,
     NUKE_ACTION_BY_KEY, isTrusted, watchFor,
+    ENFORCED_RESPONSE_KEYS, responsesForAction,
 } = require('./antiNukeRules');
 const { AntiNukeDetector } = require('./antiNukeDetector');
 const { correlateAuditEntry } = require('./antiNukeAudit');
@@ -67,11 +68,31 @@ const CREATE_TABLE_SQL = `
 const SETTINGS_COLUMNS = `guild_id, enabled, alert_channel_id, responses,
     trusted_user_ids, trusted_role_ids, watched, dry_run,
     dangerous_permissions, lockdown, response_cooldown_seconds,
+    action_responses, quarantine_role_id,
     setup_method, setup_status, setup_state, updated_at`;
 
 // Bound the incident-history query so the dashboard never loads unbounded rows.
 const MAX_INCIDENT_LIMIT = 100;
 const DEFAULT_INCIDENT_LIMIT = 25;
+
+// Meaningful incident statuses the enforcement engine reports.
+const STATUSES = [
+    'detected', 'investigating', 'confirmed', 'action_executed', 'action_partial',
+    'action_failed', 'unattributed', 'dry_run', 'ignored_trusted_user',
+    'ignored_below_threshold',
+];
+const STATUS_LABELS = {
+    detected: 'Detected',
+    investigating: 'Investigating',
+    confirmed: 'Confirmed',
+    action_executed: 'Action Executed',
+    action_partial: 'Action Partially Executed',
+    action_failed: 'Action Failed',
+    unattributed: 'Unattributed',
+    dry_run: 'Dry Run',
+    ignored_trusted_user: 'Ignored — Trusted User',
+    ignored_below_threshold: 'Ignored — Below Threshold',
+};
 
 class AntiNukeManager {
     constructor(client) {
@@ -176,8 +197,9 @@ class AntiNukeManager {
                 guild_id, enabled, alert_channel_id, responses,
                 trusted_user_ids, trusted_role_ids, watched, dry_run,
                 dangerous_permissions, lockdown, response_cooldown_seconds,
+                action_responses, quarantine_role_id,
                 setup_method, setup_status, setup_state, updated_at
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,NOW())
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW())
             ON CONFLICT (guild_id) DO UPDATE SET
                 enabled                  = EXCLUDED.enabled,
                 alert_channel_id         = EXCLUDED.alert_channel_id,
@@ -189,6 +211,8 @@ class AntiNukeManager {
                 dangerous_permissions    = EXCLUDED.dangerous_permissions,
                 lockdown                 = EXCLUDED.lockdown,
                 response_cooldown_seconds= EXCLUDED.response_cooldown_seconds,
+                action_responses         = EXCLUDED.action_responses,
+                quarantine_role_id       = EXCLUDED.quarantine_role_id,
                 setup_method             = EXCLUDED.setup_method,
                 setup_status             = EXCLUDED.setup_status,
                 setup_state              = EXCLUDED.setup_state,
@@ -200,6 +224,8 @@ class AntiNukeManager {
             s.dryRun !== false,
             JSON.stringify(s.dangerousPermissions), JSON.stringify(s.lockdown),
             s.responseCooldownSeconds,
+            JSON.stringify(s.actionResponses || {}),
+            s.quarantineRoleId || null,
             s.setupMethod || null, s.setupStatus || 'not_started',
             JSON.stringify(s.setupState || {}),
         ]);
@@ -332,6 +358,20 @@ class AntiNukeManager {
 
             // Trust gate — owner/bot/trusted never count toward a threshold.
             if (await this.isExempt(guild, executorId, settings)) {
+                // Record an "Ignored — Trusted User" incident (deduped per
+                // window) so the audit trail explains why nothing fired.
+                const wk = Math.floor(Date.now() / (Math.max(1, watch.seconds) * 1000));
+                try { await claimDedupKey(`trust|${guild.id}|${action.key}|${executorId}|${wk}`, { guildId: guild.id, ttlSeconds: Math.max(60, watch.seconds * 2) }); }
+                catch (_) { /* best-effort */ }
+                await this._recordIncident({
+                    guildId: guild.id, executorId, executorName: null,
+                    action: action.key, module: action.module, severity: action.severity,
+                    count: 0, threshold: watch.threshold, windowSeconds: watch.seconds,
+                    responseTaken: [], responseResult: { reason: 'trusted' }, responseOk: true,
+                    dryRun: settings.dryRun !== false, attribution: attribution || 'audit_log',
+                    status: 'ignored_trusted_user',
+                    details: 'Executor is the owner, the bot, or a trusted user/role — excluded from detection.',
+                });
                 return { handled: false, reason: 'trusted', executorId };
             }
 
@@ -427,7 +467,7 @@ class AntiNukeManager {
             action: action.key, module: action.module, severity: action.severity,
             count: 0, threshold: watch.threshold, windowSeconds: watch.seconds,
             responseTaken: ['alertChannel'], responseResult: { reason }, responseOk: true,
-            dryRun: settings.dryRun !== false, attribution: 'unknown',
+            dryRun: settings.dryRun !== false, attribution: 'unknown', status: 'unattributed',
             details: `${reason}${details && details.summary ? ` · ${details.summary}` : ''}`,
         });
         return { handled: true, reason: 'unattributed_alert', executorId: null };
@@ -437,7 +477,9 @@ class AntiNukeManager {
 
     async _respond({ guild, settings, action, watch, executorId, executorName, attribution, verdict, details }) {
         const dryRun = settings.dryRun !== false;
-        const responses = Array.isArray(settings.responses) ? settings.responses : [];
+        // Per-action response mapping: the action's own response list wins;
+        // otherwise the guild-wide list; otherwise the catalog default.
+        const responses = responsesForAction(settings, action.key);
 
         // Cross-node + cross-process dedup: one incident per (guild, action,
         // executor, window). Claim atomically in the DB; if another node owns it,
@@ -458,13 +500,18 @@ class AntiNukeManager {
             ? `${member.user ? member.user.tag : member.id} (\`${executorId}\`)`
             : `<@${executorId}> (\`${executorId}\`)`;
 
-        const responseResult = { dryRun, taken: [], errors: [] };
+        const enforcer = require('./antiNukeEnforcer');
+        const status = dryRun ? 'dry_run' : 'action_attempted';
+        const responseResult = { dryRun, taken: [], executed: [], errors: [], status };
         const permCheck = validateBotPermissions(guild);
 
-        for (const key of responses) {
+        // Target ids the action relates to (channel/webhook involvement).
+        const targetIds = details && details.targetIds ? details.targetIds : (details && details.targetId ? [details.targetId] : []);
+
+        const enforced = ENFORCED_RESPONSE_KEYS;
+        for (const key of enforced) {
+            if (!responses.includes(key)) continue; // the per-action mapping decides
             try {
-                if (key === 'alertOwner' || key === 'alertChannel') continue; // handled by _alert below
-                if (key === 'logOnly' || key === 'manualReview') { responseResult.taken.push(key); continue; }
                 if (dryRun) { responseResult.taken.push(`${key} (dry-run — skipped)`); continue; }
 
                 if (key === 'removeRoles') {
@@ -483,9 +530,48 @@ class AntiNukeManager {
                     });
                     if (plan.reason) { responseResult.errors.push(`removeRoles: ${plan.reason}`); continue; }
                     const res = await stripDangerousRoles(member, plan, `Anti-Nuke: ${action.label}`);
-                    responseResult.taken.push('removeRoles');
+                    if (res.removed.length) { responseResult.taken.push('removeRoles'); responseResult.executed.push('removeRoles'); }
                     responseResult.removedRoles = res.removed.map(r => r.roleId);
                     if (res.failed.length) responseResult.errors.push(`removeRoles partial: ${res.failed.length} failed`);
+                } else if (key === 'quarantine') {
+                    const res = await enforcer.quarantineMember(this.client, guild, executorId, {
+                        reason: `Anti-Nuke: ${action.label} by ${executorId}`,
+                        settings,
+                    });
+                    responseResult.taken.push('quarantine');
+                    if (res.executed) responseResult.executed.push('quarantine');
+                    if (res.errors.length) responseResult.errors.push(...res.errors.map(e => `quarantine: ${e}`));
+                } else if (key === 'ban') {
+                    const res = await enforcer.banExecutor(this.client, guild, executorId, {
+                        reason: `Anti-Nuke: ${action.label} — confirmed attacker`,
+                        settings,
+                    });
+                    responseResult.taken.push('ban');
+                    if (res.executed) responseResult.executed.push('ban');
+                    if (res.errors.length) responseResult.errors.push(...res.errors.map(e => `ban: ${e}`));
+                } else if (key === 'kick') {
+                    const res = await enforcer.kickExecutor(this.client, guild, executorId, {
+                        reason: `Anti-Nuke: ${action.label} — confirmed attacker`,
+                        settings,
+                    });
+                    responseResult.taken.push('kick');
+                    if (res.executed) responseResult.executed.push('kick');
+                    if (res.errors.length) responseResult.errors.push(...res.errors.map(e => `kick: ${e}`));
+                } else if (key === 'deleteWebhook') {
+                    const res = await enforcer.deleteWebhooks(this.client, guild, targetIds, {
+                        reason: `Anti-Nuke: ${action.label} by ${executorId}`,
+                    });
+                    responseResult.taken.push('deleteWebhook');
+                    if (res.executed) responseResult.executed.push('deleteWebhook');
+                    if (res.errors.length) responseResult.errors.push(...res.errors.map(e => `deleteWebhook: ${e}`));
+                } else if (key === 'lockChannels') {
+                    const chIds = targetIds.length ? targetIds : (action.module === 'channel' && member ? [] : []);
+                    const res = await enforcer.lockChannels(this.client, guild, chIds, {
+                        reason: `Anti-Nuke: ${action.label} by ${executorId}`,
+                    });
+                    responseResult.taken.push('lockChannels');
+                    if (res.executed) responseResult.executed.push('lockChannels');
+                    if (res.errors.length) responseResult.errors.push(...res.errors.map(e => `lockChannels: ${e}`));
                 } else if (key === 'lockdown') {
                     if (!settings.lockdown || settings.lockdown.enabled === false) {
                         responseResult.errors.push('lockdown: disabled in settings');
@@ -498,6 +584,7 @@ class AntiNukeManager {
                     });
                     await this._saveLockdown(guild.id, record, executorId, action.label);
                     responseResult.taken.push('lockdown');
+                    if (record.warnings.length === 0) responseResult.executed.push('lockdown');
                     responseResult.lockdown = { pausedInvites: record.pausedInvites, warnings: record.warnings };
                 } else {
                     responseResult.taken.push(key);
@@ -507,11 +594,20 @@ class AntiNukeManager {
             }
         }
 
+        // Final incident status: distinguish an attempted action from a
+        // successfully completed action.
+        let finalStatus = 'detected';
+        if (dryRun) finalStatus = 'dry_run';
+        else if (responseResult.errors.length) finalStatus = responseResult.executed.length ? 'action_partial' : 'action_failed';
+        else if (responseResult.taken.length) finalStatus = 'action_executed';
+        responseResult.status = finalStatus;
+
         await this._alert({
             guild, settings, action, watch,
             executorId, executorName, attribution,
             responseLabel: this._responseLabel(responses, dryRun, responseResult),
             dryRun,
+            status: finalStatus,
         });
 
         const responseOk = responseResult.errors.length === 0;
@@ -520,13 +616,14 @@ class AntiNukeManager {
             action: action.key, module: action.module, severity: action.severity,
             count: verdict.count, threshold: verdict.threshold, windowSeconds: verdict.seconds,
             responseTaken: responses, responseResult, responseOk,
-            dryRun, attribution,
+            dryRun, attribution, status: finalStatus,
             details: details && details.summary ? String(details.summary).slice(0, 1000) : '',
         });
 
         this._emit({
             guildId: guild.id, action: action.key, executorId,
             severity: action.severity, count: verdict.count, dryRun,
+            status: finalStatus,
         });
 
         return {
@@ -537,7 +634,7 @@ class AntiNukeManager {
 
     _responseLabel(responses, dryRun, responseResult) {
         const alerts = responses.filter(r => r === 'alertOwner' || r === 'alertChannel' || r === 'logOnly' || r === 'manualReview');
-        const contains = responses.filter(r => r === 'removeRoles' || r === 'lockdown');
+        const contains = responses.filter(r => ENFORCED_RESPONSE_KEYS.includes(r));
         const parts = [];
         if (alerts.length) parts.push(alerts.join(', '));
         if (contains.length) parts.push(dryRun ? `dry-run (${contains.join(', ')})` : contains.join(', '));
@@ -546,13 +643,18 @@ class AntiNukeManager {
 
     // ── Alerts ──────────────────────────────────────────────────────────────
 
-    async _alert({ guild, settings, action, watch, executorId, executorName, attribution, responseLabel, reason, dryRun = null }) {
+    async _alert({ guild, settings, action, watch, executorId, executorName, attribution, responseLabel, reason, dryRun = null, status = null }) {
         const isDry = dryRun === null ? settings.dryRun !== false : dryRun;
         const executorLabel = reason === 'missing_audit_permission'
             ? '⚠️ Could not attribute — the bot needs **View Audit Log**.'
             : (executorId
                 ? `${executorName || ''} <@${executorId}> (\`${executorId}\`)`.trim()
                 : '⚠️ Unknown (audit log could not identify the executor).');
+
+        const extraFields = [];
+        if (status) {
+            extraFields.push({ name: 'Enforcement status', value: STATUS_LABELS[status] || status, inline: true });
+        }
 
         const embed = buildSecurityAlertEmbed({
             title: 'Potential Nuke Attempt Detected',
@@ -564,13 +666,18 @@ class AntiNukeManager {
             responseLabel: responseLabel || 'Log only',
             guildName: guild.name,
             dryRun: isDry,
+            extraFields,
         });
 
         // Never ping @everyone/@here — strict allowed_mentions.
         const payload = { embeds: [embed], allowedMentions: { parse: [] } };
 
+        // The effective response set for this action (per-action map may omit
+        // the alert keys even when the global list includes them).
+        const responses = responsesForAction(settings, action.key);
+
         // Alert channel.
-        if (settings.responses.includes('alertChannel') && settings.alertChannelId) {
+        if (responses.includes('alertChannel') && settings.alertChannelId) {
             try {
                 const ch = await this.client.channels.fetch(settings.alertChannelId).catch(() => null);
                 if (ch && typeof ch.send === 'function') await ch.send(payload);
@@ -581,7 +688,7 @@ class AntiNukeManager {
         }
 
         // Owner DM.
-        if (settings.responses.includes('alertOwner')) {
+        if (responses.includes('alertOwner')) {
             try {
                 const owner = await guild.fetchOwner().catch(() => null);
                 if (owner && typeof owner.send === 'function') await owner.send(payload);
@@ -597,7 +704,7 @@ class AntiNukeManager {
         guildId, executorId = null, executorName = null, action, module = null,
         severity = 'medium', count = 0, threshold = 0, windowSeconds = 0,
         responseTaken = [], responseResult = {}, responseOk = false,
-        dryRun = false, attribution = 'unknown', details = '',
+        dryRun = false, attribution = 'unknown', status = null, details = '',
     }) {
         try {
             await this._ensureTable();
@@ -605,8 +712,8 @@ class AntiNukeManager {
                 INSERT INTO antinuke_incidents
                     (guild_id, executor_id, executor_name, action, module, severity,
                      count, threshold, window_seconds, response_taken, response_result,
-                     response_ok, dry_run, attribution, details)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+                     response_ok, dry_run, attribution, status, details)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
             `, [
                 String(guildId),
                 executorId ? String(executorId) : null,
@@ -618,7 +725,9 @@ class AntiNukeManager {
                 JSON.stringify(Array.isArray(responseTaken) ? responseTaken : []),
                 JSON.stringify(responseResult || {}),
                 responseOk === true, dryRun === true,
-                String(attribution).slice(0, 30), String(details || '').slice(0, 1000),
+                String(attribution).slice(0, 30),
+                status ? String(status).slice(0, 40) : (dryRun ? 'dry_run' : null),
+                String(details || '').slice(0, 1000),
             ]);
         } catch (err) {
             // Incident recording is best-effort — it must never break detection.
@@ -782,10 +891,14 @@ function rowToSettings(row) {
         enabled: row.enabled,
         alertChannelId: row.alert_channel_id || null,
         responses: row.responses,
+        actionResponses: row.action_responses,
+        quarantineRoleId: row.quarantine_role_id || null,
         trustedUserIds: row.trusted_user_ids,
         trustedRoleIds: row.trusted_role_ids,
         watched: row.watched,
-        dryRun: row.dry_run !== false,
+        // The persisted value is authoritative: an existing guild's explicitly
+        // saved dry_run is never overwritten.
+        dryRun: row.dry_run === undefined ? undefined : row.dry_run,
         dangerousPermissions: row.dangerous_permissions,
         lockdown: row.lockdown,
         responseCooldownSeconds: row.response_cooldown_seconds,
@@ -814,6 +927,7 @@ function rowToIncident(row) {
         responseOk: row.response_ok === true,
         dryRun: row.dry_run === true,
         attribution: row.attribution,
+        status: row.status || null,
         details: row.details,
         createdAt: row.created_at,
     };
@@ -823,4 +937,6 @@ module.exports = AntiNukeManager;
 module.exports.AntiNukeManager = AntiNukeManager;
 module.exports.rowToSettings = rowToSettings;
 module.exports.rowToIncident = rowToIncident;
+module.exports.STATUSES = STATUSES;
+module.exports.STATUS_LABELS = STATUS_LABELS;
 module.exports.severityColor = severityColor;

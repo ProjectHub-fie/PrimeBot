@@ -3884,6 +3884,13 @@ select:focus {
 .an-activity-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .an-activity-table th, .an-activity-table td { text-align: left; padding: 9px 11px; border-bottom: 1px solid var(--border); white-space: nowrap; }
 .an-activity-table th { color: var(--text-dim); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+.an-status { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; border: 1px solid transparent; }
+.an-status-action_executed { color: var(--on); border-color: rgba(87,242,135,0.4); background: rgba(87,242,135,0.12); }
+.an-status-action_partial { color: #e8944a; border-color: rgba(232,148,74,0.4); background: rgba(232,148,74,0.12); }
+.an-status-action_failed { color: var(--danger); border-color: rgba(244,88,95,0.4); background: rgba(244,88,95,0.12); }
+.an-status-dry_run { color: var(--accent-strong); border-color: var(--accent-soft); background: var(--accent-soft); }
+.an-status-detected, .an-status-confirmed, .an-status-action_attempted { color: var(--text-dim); border-color: var(--border-strong); background: var(--surface-2); }
+.an-status-unattributed, .an-status-ignored_trusted_user, .an-status-ignored_below_threshold { color: var(--text-dim); }
 .an-activity-pager { display: flex; align-items: center; gap: 12px; margin-top: 12px; font-size: 13px; color: var(--text-dim); }
 .an-empty { text-align: center; color: var(--text-dim); padding: 18px; }
 .an-ok { color: var(--on); }

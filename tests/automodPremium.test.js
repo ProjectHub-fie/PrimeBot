@@ -134,7 +134,7 @@ test('anti-nuke catalog is well-formed with unique keys', () => {
 test('normalizeAntiNukeSettings is safe by default and sanitizes input', () => {
     const d = defaultAntiNukeSettings();
     assert.equal(d.enabled, false, 'anti-nuke must be off by default');
-    assert.equal(d.dryRun, true, 'anti-nuke must default to dry-run');
+    assert.equal(d.dryRun, false, 'new guilds default to dry-run OFF (real enforcement)');
     assert.deepEqual(d.responses, ['alertOwner', 'alertChannel', 'logOnly']);
 
     const n = normalizeAntiNukeSettings({
@@ -145,7 +145,7 @@ test('normalizeAntiNukeSettings is safe by default and sanitizes input', () => {
         watched: { channelDelete: { enabled: true, threshold: 999, seconds: -5 }, bogusAction: { enabled: true } },
     });
     assert.equal(n.enabled, false, 'non-boolean coerces to false');
-    assert.equal(n.dryRun, true, 'dryRun defaults true unless explicitly false');
+    assert.equal(n.dryRun, false, 'a non-explicit dryRun value falls back to the OFF default');
     assert.deepEqual(n.responses, ['alertOwner'], 'unknown responses dropped');
     // A numeric (non-string) snowflake is rejected outright: JSON parses it as
     // a double and loses precision, so accepting it would trust the wrong user.
@@ -158,9 +158,12 @@ test('normalizeAntiNukeSettings is safe by default and sanitizes input', () => {
     assert.ok(n.watched.channelDelete.seconds >= 1);
 });
 
-test('normalizeAntiNukeSettings only turns dryRun off when explicitly false', () => {
+test('normalizeAntiNukeSettings preserves an explicitly saved dryRun and defaults new configs OFF', () => {
     assert.equal(normalizeAntiNukeSettings({ dryRun: false }).dryRun, false);
-    assert.equal(normalizeAntiNukeSettings({}).dryRun, true);
+    // An explicitly-saved true (existing guild) is retained.
+    assert.equal(normalizeAntiNukeSettings({ dryRun: true }).dryRun, true);
+    // A brand-new config (no value) defaults to dry-run OFF.
+    assert.equal(normalizeAntiNukeSettings({}).dryRun, false);
     assert.equal(normalizeAntiNukeSettings({ enabled: true }).enabled, true);
 });
 

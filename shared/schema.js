@@ -462,7 +462,9 @@ const antinukeSettings = pgTable('antinuke_settings', {
   trustedUserIds: jsonb('trusted_user_ids').default([]).notNull(),
   trustedRoleIds: jsonb('trusted_role_ids').default([]).notNull(),
   watched: jsonb('watched').default({}).notNull(),
-  dryRun: boolean('dry_run').default(true).notNull(),
+  dryRun: boolean('dry_run').default(false).notNull(),
+  actionResponses: jsonb('action_responses').default({}).notNull(),
+  quarantineRoleId: varchar('quarantine_role_id', { length: 50 }),
   dangerousPermissions: jsonb('dangerous_permissions')
     .default(['Administrator', 'ManageGuild', 'ManageRoles', 'ManageChannels']).notNull(),
   lockdown: jsonb('lockdown').default({ enabled: true, verificationLevel: 'high', pauseInvites: true }).notNull(),
@@ -491,6 +493,7 @@ const antinukeIncidents = pgTable('antinuke_incidents', {
   responseOk: boolean('response_ok').default(false).notNull(),
   dryRun: boolean('dry_run').default(false).notNull(),
   attribution: varchar('attribution', { length: 30 }).default('unknown').notNull(),
+  status: varchar('status', { length: 40 }),
   details: text('details').default('').notNull(),
   createdAt: timestamp('created_at').defaultNow(),
 });
