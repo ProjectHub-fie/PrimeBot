@@ -630,7 +630,14 @@ the settings unreachable).
 - **Dry-run is OFF by default.** `recommendedConfig()` and `mergeRecommended()` both set
   `dryRun: false`; the bot enforces, it does not only alert.
 - **Responses default to every action except `logOnly`** (`DEFAULT_NUKE_RESPONSES` in
-  `utils/antiNukeRules.js`).
+  `utils/antiNukeRules.js`). A guild that saved the OLD alert-only default
+  (`['alertOwner','alertChannel','logOnly']`) is upgraded to this on read
+  (`isLegacyStockResponses` in `normalizeAntiNukeSettings`), so existing guilds see every
+  box checked too — only that exact stock list is upgraded, a custom list is untouched.
+- **Every protection module is watched by default.** `defaultAntiNukeSettings()` sets
+  `watched[action].enabled = true` for all 25 actions (not just critical/high), and
+  `watchFor()`'s no-override fallback matches — so a newly enabled server has full
+  coverage and an action added to the catalog later is on by default.
 - **Auto-create really works.** `createIsolationRole` sends `permissions: '0'` (a bitfield
   **string** — the dashboard REST shim JSON-serializes the body, and Discord rejects an
   array), and `dashboard/antiNukeActions.js` `buildDashboardGuildShim` now (a) exposes a
@@ -746,8 +753,10 @@ node cannot double-respond. All nodes share one `ANUKE_DATABASE_URL`.
   validated server-side; guild ids come from the authenticated route param.
 - `/antinuke` + prefix `antinuke`/`an` (ManageGuild): status / setup / enable / disable /
   whitelist / lockdown / restore. Setup buttons: `antinuke:setup:automatic|manual|progress`.
-- **Dry-run is the default** for a newly enabled config: detection + alerting, zero
-  containment. Never auto-ban/kick a moderator.
+- **Dry-run is OFF by default** for a newly enabled config: detection **and** enforcement
+  (alerting + reversible containment). Enforcement still never punishes the owner, the bot
+  or trusted users/roles, never acts without audit-log attribution, and never auto-bans/kicks
+  a moderator. 'Log only' stays off.
 
 ### Tests
 
