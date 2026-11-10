@@ -313,12 +313,12 @@ test('failed and skipped steps never count as completed', () => {
 
 test('setup only counts as complete when every required step succeeded', () => {
     let state = setup.normalizeSetupState({ method: 'automatic' });
-    // The full 16-step walkthrough (8 backend + 8 walkthrough) must all succeed.
+    // The full 15-step walkthrough (8 backend + 7 walkthrough) must all succeed.
     for (const step of setup.stepsForMethod('automatic')) {
         state = setup.applyStep(state, step.key, { status: 'completed' });
     }
     const p = setup.computeProgress('automatic', state);
-    assert.equal(p.total, 16, 'the automatic walkthrough is exactly 16 required steps');
+    assert.equal(p.total, 15, 'the automatic walkthrough is exactly 15 required steps');
     assert.equal(p.percent, 100);
     assert.equal(setup.isComplete('automatic', state), true);
 });

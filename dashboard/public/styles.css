@@ -4060,3 +4060,90 @@ select:focus {
   .an-bar-row { grid-template-columns: 110px 1fr 38px; }
   .an-backup-actions { width: 100%; }
 }
+
+/* ---------------------------------------------------------------------------
+   Anti-Nuke setup choice window — premium, centered.
+   A dedicated overlay (not the generic .modal) so the window is vertically and
+   horizontally centered with an accent-headed card that matches the AutoMod /
+   Anti-Nuke design language.
+--------------------------------------------------------------------------- */
+
+.an-modal-overlay {
+  position: fixed; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+  background: rgba(6, 7, 11, 0.62);
+  backdrop-filter: blur(6px);
+  z-index: 1200;
+  animation: an-modal-fade 160ms ease-out;
+}
+@keyframes an-modal-fade { from { opacity: 0; } to { opacity: 1; } }
+
+.an-modal {
+  width: min(480px, 94vw);
+  max-height: 90vh;
+  overflow: auto;
+  display: flex; flex-direction: column;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 18px;
+  box-shadow: var(--shadow-lg), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  animation: an-modal-pop 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes an-modal-pop { from { opacity: 0; transform: translateY(10px) scale(0.98); } to { opacity: 1; transform: none; } }
+
+.an-modal-head {
+  display: flex; align-items: center; gap: 12px;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.an-modal-head strong { font-size: 16.5px; font-weight: 680; letter-spacing: -0.01em; }
+.an-modal-head .an-modal-ico {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 38px; height: 38px; border-radius: 11px;
+  background: var(--accent-soft); color: var(--accent-strong);
+  border: 1px solid var(--border);
+}
+.an-modal-head .an-modal-ico .ico { width: 19px; height: 19px; }
+.an-modal-x {
+  margin-left: auto;
+  background: none; border: none; cursor: pointer;
+  color: var(--text-dim); width: 32px; height: 32px; border-radius: 9px;
+  display: flex; align-items: center; justify-content: center;
+  transition: color var(--transition), background var(--transition);
+}
+.an-modal-x .ico { width: 17px; height: 17px; }
+.an-modal-x:hover { color: var(--danger); background: var(--danger-soft); }
+
+.an-modal-body { padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; }
+.an-modal-body .card-desc { margin: 0; }
+
+.an-modal-foot {
+  display: flex; flex-wrap: wrap; gap: 9px; justify-content: flex-end;
+  padding: 14px 20px 18px;
+  border-top: 1px solid var(--border);
+}
+.an-modal-foot .btn { flex: 0 0 auto; }
+
+@media (max-width: 520px) {
+  .an-modal-foot { flex-direction: column-reverse; }
+  .an-modal-foot .btn { width: 100%; }
+}
+
+/* Manual wizard: "Make automatically" row + readiness check card. */
+.an-create-row { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; }
+.an-create-row select { flex: 1 1 220px; min-width: 0; }
+.an-create-row .btn { flex: 0 0 auto; }
+.an-wizard-check { margin-top: 14px; }
+.an-wizard-check .card-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.an-wizard-check-result { margin-top: 10px; }
+
+/* Inline error inside the setup choice window. */
+.an-modal-error {
+  font-size: 12.5px; color: var(--danger);
+  background: var(--danger-soft);
+  border: 1px solid rgba(244, 88, 95, 0.35);
+  border-radius: var(--radius-sm);
+  padding: 9px 12px;
+}
+.an-modal-error[hidden] { display: none; }

@@ -1681,6 +1681,38 @@ app.post('/api/guilds/:guildId/antinuke/setup/step', requireAuth, requireGuildAd
     }
 });
 
+// Create the alert channel / isolation role on demand ("Make automatically").
+// Shared by the automatic walkthrough AND the manual wizard, so both paths use
+// the exact same create logic (utils/antiNukeSetupRunner.createAlertChannel /
+// createIsolationRole) against the REST shim.
+app.post('/api/guilds/:guildId/antinuke/setup/create', requireAuth, requireGuildAdmin, antinukeSetupGate, async (req, res) => {
+    try {
+        const kind = String((req.body || {}).kind || '');
+        if (kind !== 'alert_channel' && kind !== 'isolation_role') {
+            return res.status(400).json({ error: 'Unknown thing to create.' });
+        }
+        const antiNukeActions = require('./antiNukeActions');
+        const guild = await antiNukeActions.buildDashboardGuildShim(req.guild.id);
+        if (kind === 'alert_channel') {
+            const { createAlertChannel, ALERT_CHANNEL_NAME } = require('../utils/antiNukeSetupRunner');
+            const created = await createAlertChannel(guild, ALERT_CHANNEL_NAME);
+            const manager = antiNukeActions.buildDashboardManagerShim(req.guild.id);
+            await manager.updateSettingsAsync(req.guild.id, { alertChannelId: created.channelId });
+            recordWebsiteLog(req, 'Created the Anti-Nuke alert channel');
+            return res.json({ kind, channelId: created.channelId, name: created.name });
+        }
+        const { createIsolationRole, ISOLATION_ROLE_NAME } = require('../utils/antiNukeSetupRunner');
+        const created = await createIsolationRole(guild, ISOLATION_ROLE_NAME);
+        const manager = antiNukeActions.buildDashboardManagerShim(req.guild.id);
+        await manager.updateSettingsAsync(req.guild.id, { quarantineRoleId: created.roleId });
+        recordWebsiteLog(req, 'Created the Anti-Nuke isolation role');
+        res.json({ kind, roleId: created.roleId, name: created.name });
+    } catch (err) {
+        console.error('[API] antinuke setup create error:', err.message);
+        res.status(500).json({ error: err.message || 'Could not create that for you. Create it manually and pick it from the list.' });
+    }
+});
+
 app.post('/api/guilds/:guildId/antinuke/setup/complete', requireAuth, requireGuildAdmin, antinukeSetupGate, async (req, res) => {
     try {
         const method = (req.body || {}).method === 'manual' ? 'manual' : 'automatic';

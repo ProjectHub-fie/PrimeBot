@@ -25,7 +25,7 @@ const {
 } = require('./antiNukeRules');
 const { validateBotPermissions } = require('./antiNukeContainment');
 const {
-    stepsForMethod, normalizeSetupState, applyStep, withStatus, withUpdater, computeProgress, isComplete, diffRecommended,
+    stepsForMethod, normalizeSetupState, applyStep, withStatus, withUpdater, computeProgress, isComplete,
     AUTO_WALKTHROUGH_STEPS, botRolePositionCheck, ALERT_CHANNEL_NAME, ISOLATION_ROLE_NAME,
 } = require('./antiNukeSetup');
 
@@ -144,7 +144,9 @@ async function createIsolationRole(guild, name = ISOLATION_ROLE_NAME) {
     const me = guild && guild.members && guild.members.me;
     const highest = me && me.roles && me.roles.highest ? Number(me.roles.highest.position) : null;
     const targetPosition = highest != null ? Math.max(1, highest - 1) : null;
-    const opts = { name, permissions: [], hoist: false, mentionable: false, position: targetPosition };
+    // `permissions` must be a bitfield STRING for the REST path (the dashboard
+    // shim JSON-serializes the body); an array would be rejected with 400.
+    const opts = { name, permissions: '0', hoist: false, mentionable: false, position: targetPosition };
     let role = null;
     if (guild && guild.roles && typeof guild.roles.create === 'function') {
         role = await guild.roles.create(opts);
@@ -484,15 +486,15 @@ async function runWalkthroughStepOp(stepKey, { manager, guild, state, options })
                 existingSteps: Object.keys(state.steps || {}).length,
             };
         }
-        case 'confirm': {
-            if (!options.confirmed) throw new Error('Confirm the proposed changes to apply them.');
-            return { diff: diffRecommended(current, recommended) };
-        }
         case 'apply': {
             if (!manager || typeof manager.updateSettingsAsync !== 'function') {
                 throw new Error('Anti-Nuke manager is unavailable.');
             }
-            const merged = mergeRecommended(current, recommended, options.applyRecommended === true);
+            // The walkthrough no longer pauses on a review step: it applies the
+            // recommended configuration in one shot (still off the safe
+            // `mergeRecommended` path, which preserves custom thresholds, trusted
+            // lists and responses).
+            const merged = mergeRecommended(current, recommended, true);
             // Keep the alert channel resolved in the earlier `alert` step.
             const alertStep = state.steps && state.steps.alert && state.steps.alert.result;
             const alertChannelId = (alertStep && alertStep.channelId) || current.alertChannelId || null;
@@ -501,6 +503,7 @@ async function runWalkthroughStepOp(stepKey, { manager, guild, state, options })
                 enabled: saved.enabled === true,
                 dryRun: saved.dryRun !== false,
                 alertChannelId: saved.alertChannelId || null,
+                appliedRecommended: true,
             };
         }
         case 'validate': {

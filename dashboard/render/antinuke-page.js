@@ -248,13 +248,21 @@ function wizardSectionBody(key, ctx) {
               <div class="switch-row">
                 <div class="switch-label"><div class="sl-title">Enable Anti-Nuke</div><div class="sl-desc">The server owner is never treated as a threat.</div></div>
                 <label class="switch"><input type="checkbox" id="an-enabled" ${settings.enabled ? 'checked' : ''}/><span class="slider"></span></label>
+              </div>
+              <div class="card an-wizard-check">
+                <div class="card-title"><span><span class="icon">${svgIcon('shieldCheck')}</span> Bot readiness check</span>
+                  <button class="btn btn-mini" id="an-wizard-check-run">${svgIcon('refresh')} Re-check</button></div>
+                <div id="an-wizard-check-result" class="an-wizard-check-result"><div class="an-empty">Running check…</div></div>
               </div>`;
         case 'channel':
             return `
               <div class="field">
                 <label class="field-label" for="an-alert-channel">Alert channel</label>
-                <select id="an-alert-channel" data-channel-select>${channelOptions(channels, settings.alertChannelId)}</select>
-                <div class="field-hint">Where security alerts are posted. PrimeBot needs View Channel + Send Messages there.</div>
+                <div class="an-create-row">
+                  <select id="an-alert-channel" data-channel-select>${channelOptions(channels, settings.alertChannelId)}</select>
+                  <button class="btn btn-mini an-create-auto" data-create="alert_channel">${svgIcon('sparkles')} Make automatically</button>
+                </div>
+                <div class="field-hint">Where security alerts are posted. PrimeBot needs View Channel + Send Messages there. “Make automatically” creates <strong>#primebot-antinuke-log</strong>.</div>
               </div>`;
         case 'trustedUsers':
             return `
@@ -305,8 +313,11 @@ function wizardSectionBody(key, ctx) {
               </details>
               <div class="field">
                 <label class="field-label" for="an-quarantine-role">Quarantine role</label>
-                <select id="an-quarantine-role" data-role-select data-placeholder="— None (strip dangerous roles only) —"><option value="">${esc(settings.quarantineRoleId ? settings.quarantineRoleId : '— None (strip dangerous roles only) —')}</option></select>
-                <div class="field-hint">Applied to the confirmed attacker by the Quarantine response. Unset falls back to stripping dangerous roles only.</div>
+                <div class="an-create-row">
+                  <select id="an-quarantine-role" data-role-select data-placeholder="— None (strip dangerous roles only) —"><option value="">${esc(settings.quarantineRoleId ? settings.quarantineRoleId : '— None (strip dangerous roles only) —')}</option></select>
+                  <button class="btn btn-mini an-create-auto" data-create="isolation_role">${svgIcon('sparkles')} Make automatically</button>
+                </div>
+                <div class="field-hint">Applied to the confirmed attacker by the Quarantine response. Unset falls back to stripping dangerous roles only. “Make automatically” creates <strong>isolated</strong> just below the bot's role.</div>
               </div>
               <div class="field">
                 <label class="field-label">Dangerous permissions to strip</label>

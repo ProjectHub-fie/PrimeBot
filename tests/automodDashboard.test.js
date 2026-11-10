@@ -136,8 +136,9 @@ test('every element id the antinuke client reads is rendered by the page', () =>
         'an-access-add', 'an-access-edit', 'an-access-remove',
         // Activity pager label.
         'an-activity-page',
-        // Setup floating-window choice select (built by the client on demand).
-        'an-setup-choice',
+        // Setup floating-window choice select + its inline error (built by the
+        // client on demand, only when a setup step needs a choice).
+        'an-setup-choice', 'an-modal-error',
         // Lockdown profile op list ids are built per-profile at runtime, and the
         // legacy single-engage button was replaced by per-profile buttons.
         'an-profile-ops-', 'an-lockdown-engage',

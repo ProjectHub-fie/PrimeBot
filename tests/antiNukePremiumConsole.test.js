@@ -225,3 +225,145 @@ test('all six requested new permissions exist in the registry', () => {
         assert.ok(ids.has(id), `missing permission ${id}`);
     }
 });
+
+// ── Setup auto-create + one-shot apply + centered window ────────────────────
+
+test('the automatic walkthrough has no review/confirm step and applies in one shot', async () => {
+    const { AUTO_WALKTHROUGH_STEPS, stepsForMethod } = require('../utils/antiNukeSetup');
+    assert.ok(!stepsForMethod('automatic').some(s => s.key === 'confirm'), 'no confirm step');
+    assert.ok(!AUTO_WALKTHROUGH_STEPS.some(s => s.key === 'confirm'));
+    const { runWalkthroughStepOp } = require('../utils/antiNukeSetupRunner');
+    const stored = { g1: { enabled: false, dryRun: true, watched: {}, responses: [] } };
+    const manager = {
+        getSettings: async (id) => stored[id],
+        updateSettingsAsync: async (id, patch) => { stored[id] = Object.assign({}, stored[id], patch); return stored[id]; },
+    };
+    // No `confirmed` flag is required any more — apply must succeed without it.
+    const res = await runWalkthroughStepOp('apply', {
+        manager, guild: { id: 'g1' },
+        state: { method: 'automatic', steps: { alert: { result: { channelId: 'c1' } } } },
+        options: {},
+    });
+    assert.equal(res.appliedRecommended, true);
+    assert.equal(stored.g1.enabled, true, 'apply enables protection');
+    assert.equal(stored.g1.dryRun, false, 'apply turns dry-run OFF');
+    assert.equal(stored.g1.alertChannelId, 'c1', 'the alert channel resolved earlier is kept');
+});
+
+test('createIsolationRole sends a bitfield-string permissions (REST rejects an array)', async () => {
+    const { createIsolationRole } = require('../utils/antiNukeSetupRunner');
+    const seen = [];
+    const guild = {
+        members: { me: { roles: { highest: { position: 6 } } } },
+        roles: {
+            cache: new Map(),
+            create: async (opts) => { seen.push(opts); return { id: 'iso', name: opts.name, position: opts.position, setPosition: async () => {} }; },
+        },
+    };
+    await createIsolationRole(guild, 'isolated');
+    assert.equal(typeof seen[0].permissions, 'string', 'permissions must be a string bitfield');
+    assert.equal(seen[0].position, 5, 'created just below the bot role');
+});
+
+test('the dashboard REST shim creates a role WITHOUT position then PATCHes it', async () => {
+    const discordPath = require.resolve('../dashboard/discord');
+    const actionsPath = require.resolve('../dashboard/antiNukeActions');
+    const origDiscord = require.cache[discordPath];
+    const origActions = require.cache[actionsPath];
+    const createBodies = [];
+    const patchBodies = [];
+    require.cache[discordPath] = {
+        id: discordPath, filename: discordPath, loaded: true,
+        exports: {
+            getBotGuild: async () => ({ id: 'g1', name: 'G', owner_id: 'o1' }),
+            getGuildRaw: async () => ({ name: 'G', owner_id: 'o1' }),
+            computeBotPermissions: async () => 8,
+            getGuildRoles: async () => ([
+                { id: 'botrole', name: 'PrimeBot', position: 5, managed: true, permissions: '8' },
+            ]),
+            getGuildChannelsRaw: async () => ([{ id: 'c1', name: 'general', type: 0, position: 3, permission_overwrites: [] }]),
+            getBotMember: async () => ({ roles: ['botrole'] }),
+            createGuildRole: async (gid, body) => { createBodies.push(body); return { id: 'newrole', name: body.name }; },
+            modifyGuildRole: async (gid, rid, body) => { patchBodies.push({ rid, body }); return { id: rid }; },
+            API_BASE: 'https://discord.com/api/v10',
+        },
+    };
+    delete require.cache[actionsPath];
+    try {
+        const actions = require('../dashboard/antiNukeActions');
+        const guild = await actions.buildDashboardGuildShim('g1');
+        const role = await guild.roles.create({ name: 'isolated', permissions: '0', position: 4 });
+        assert.equal(role.id, 'newrole');
+        assert.equal(createBodies.length, 1);
+        assert.equal('position' in createBodies[0], false, 'position must not be sent on CREATE');
+        assert.equal(patchBodies.length, 1, 'position is applied with a PATCH afterwards');
+        assert.equal(patchBodies[0].body.position, 4);
+    } finally {
+        if (origDiscord) require.cache[discordPath] = origDiscord; else delete require.cache[discordPath];
+        if (origActions) require.cache[actionsPath] = origActions; else delete require.cache[actionsPath];
+    }
+});
+
+test('the REST shim channel descriptors carry a numeric position', async () => {
+    const discordPath = require.resolve('../dashboard/discord');
+    const actionsPath = require.resolve('../dashboard/antiNukeActions');
+    const origDiscord = require.cache[discordPath];
+    const origActions = require.cache[actionsPath];
+    require.cache[discordPath] = {
+        id: discordPath, filename: discordPath, loaded: true,
+        exports: {
+            getBotGuild: async () => ({ id: 'g1', name: 'G', owner_id: 'o1' }),
+            getGuildRaw: async () => ({ name: 'G', owner_id: 'o1' }),
+            computeBotPermissions: async () => 8,
+            getGuildRoles: async () => ([]),
+            getGuildChannelsRaw: async () => ([{ id: 'c1', name: 'general', type: 0, position: 7, permission_overwrites: [] }]),
+            getBotMember: async () => ({ roles: [] }),
+            API_BASE: 'https://discord.com/api/v10',
+        },
+    };
+    delete require.cache[actionsPath];
+    try {
+        const actions = require('../dashboard/antiNukeActions');
+        const guild = await actions.buildDashboardGuildShim('g1');
+        const ch = guild.channels.cache.get('c1');
+        assert.equal(ch.position, 7, 'channel position is exposed for hierarchy checks');
+    } finally {
+        if (origDiscord) require.cache[discordPath] = origDiscord; else delete require.cache[discordPath];
+        if (origActions) require.cache[actionsPath] = origActions; else delete require.cache[actionsPath];
+    }
+});
+
+test('the warning tells the admin to set the bot in the top 3 and press Resume', () => {
+    const { botRolePositionCheck } = require('../utils/antiNukeSetup');
+    const roles = [{ id: 'r1', position: 9 }, { id: 'r2', position: 8 }, { id: 'r3', position: 7 }, { id: 'r4', position: 6 }];
+    const guild = {
+        roles: { cache: { values: () => roles.values() } },
+        members: { me: { roles: { highest: { position: 6 } } } },
+    };
+    const r = botRolePositionCheck(guild);
+    assert.equal(r.ok, false);
+    assert.match(r.message, /top 3 role position/i);
+    assert.match(r.message, /press Resume/i);
+});
+
+test('the setup choice window is a premium centered overlay (CSS)', () => {
+    const css = fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'public', 'styles.css'), 'utf8');
+    assert.match(css, /\.an-modal-overlay\s*\{[^}]*align-items:\s*center/);
+    assert.match(css, /\.an-modal-overlay\s*\{[^}]*justify-content:\s*center/);
+    assert.match(css, /\.an-modal\s*\{/);
+    assert.match(css, /\.an-modal-foot\s*\{/);
+    assert.match(css, /\.an-modal-error\s*\{/);
+    // The window markup uses the premium head/icon/foot structure, not the
+    // legacy plain modal.
+    const js = fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'public', 'js', 'antinuke.js'), 'utf8');
+    assert.match(js, /an-modal-ico/);
+    assert.match(js, /Make automatically/);
+    assert.match(js, /an-modal-error/);
+});
+
+test('the manual wizard renders "Make automatically" for the channel and role', () => {
+    const html = body(guildPages.antiNukePage({ guild: fixture(), user: { username: 'u' }, view: 'wizard' }));
+    assert.match(html, /data-create="alert_channel"/);
+    assert.match(html, /data-create="isolation_role"/);
+    assert.match(html, /id="an-wizard-check-result"/);
+});

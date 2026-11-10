@@ -231,6 +231,9 @@ async function buildDashboardGuildShim(guildId) {
     ]);
     const textChannels = (channels || []).map(c => ({
         id: String(c.id), name: c.name, type: c.type,
+        // `position` lets the setup runner's hierarchy checks and the isolation
+        // role placement read a real value from the REST descriptors.
+        position: Number(c.position != null ? c.position : 0),
         permissionsFor: () => null,
     }));
     const channelCache = makeChannelCache(textChannels);
@@ -269,19 +272,34 @@ async function buildDashboardGuildShim(guildId) {
         }),
         roles: {
             cache: roleCache,
-            create: async (opts = {}) => discord.createGuildRole(guildId, {
+            create: async (opts = {}) => {
+                // Discord does not accept `position` on role CREATE — it is set
+                // afterwards via PATCH. Sending it would be silently ignored at
+                // best, so it is stripped here and applied below.
+                const role = await discord.createGuildRole(guildId, {
+                    name: String(opts.name || 'isolated'),
+                    permissions: opts.permissions != null ? opts.permissions : '0',
+                    hoist: opts.hoist === true,
+                    mentionable: opts.mentionable === true,
+                });
+                if (role && opts.position != null) {
+                    try { await discord.modifyGuildRole(guildId, role.id, { position: opts.position }); } catch (_) { /* best-effort */ }
+                }
+                return role;
+            },
+        },
+        createRole: async (opts = {}) => {
+            const role = await discord.createGuildRole(guildId, {
                 name: String(opts.name || 'isolated'),
                 permissions: opts.permissions != null ? opts.permissions : '0',
                 hoist: opts.hoist === true,
                 mentionable: opts.mentionable === true,
-            }),
+            });
+            if (role && opts.position != null) {
+                try { await discord.modifyGuildRole(guildId, role.id, { position: opts.position }); } catch (_) { /* best-effort */ }
+            }
+            return role;
         },
-        createRole: async (opts = {}) => discord.createGuildRole(guildId, {
-            name: String(opts.name || 'isolated'),
-            permissions: opts.permissions != null ? opts.permissions : '0',
-            hoist: opts.hoist === true,
-            mentionable: opts.mentionable === true,
-        }),
         setRolePosition: async (roleId, position) => {
             // Discord requires the full role list to reorder; only the target
             // role's position is moved to keep the call minimal.

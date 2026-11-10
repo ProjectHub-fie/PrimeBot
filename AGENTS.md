@@ -620,6 +620,39 @@ the settings unreachable).
 - **Icons:** six icons added to `dashboard/public/js/icons.js`
   (`shieldCheck`, `heart`, `layers`, `bot`, `archive`, `wrench`).
 
+### Setup wizard rework (auto + manual)
+
+- **No review/confirm step.** The automatic walkthrough is now **15 required steps**
+  (8 backend + 7 walkthrough): `confirm`/"Reviewing proposed changes" was removed and
+  `apply` writes the recommended configuration in **one shot** (still through the safe
+  `mergeRecommended` path that preserves custom thresholds/trusted lists/responses).
+  Any code that assumed a `confirm` step or a 16-step total is stale.
+- **Dry-run is OFF by default.** `recommendedConfig()` and `mergeRecommended()` both set
+  `dryRun: false`; the bot enforces, it does not only alert.
+- **Responses default to every action except `logOnly`** (`DEFAULT_NUKE_RESPONSES` in
+  `utils/antiNukeRules.js`).
+- **Auto-create really works.** `createIsolationRole` sends `permissions: '0'` (a bitfield
+  **string** — the dashboard REST shim JSON-serializes the body, and Discord rejects an
+  array), and `dashboard/antiNukeActions.js` `buildDashboardGuildShim` now (a) exposes a
+  numeric `position` on channel descriptors and (b) creates a role **without** `position`
+  then PATCHes it (`modifyGuildRole`), because Discord ignores `position` on role CREATE.
+  The isolation role is placed **just below the bot's highest role**.
+- **Step-2 hierarchy warning** reads: "Set the bot in the top 3 role position and press
+  Resume, then." (`botRolePositionCheck` in `utils/antiNukeSetup.js`).
+- **Premium centered choice window.** The alert-channel / isolation-role window is a
+  dedicated `.an-modal-overlay` (flex-centered, `z-index: 1200`, accent icon head,
+  `Make automatically` / `Use selected` / `Cancel` foot) — not the legacy plain modal.
+  `askSetupChoice()` in `dashboard/public/js/antinuke.js` **closes on success** and
+  **stays open showing the real error inline** (`.an-modal-error`) when a create fails,
+  so a missing Manage Channels/Roles permission is visible instead of a silent no-op.
+- **The new automatic steps are mirrored in the manual wizard.** `manualWizardHTML`
+  gained a **Bot readiness check** card on the first step (permissions + hierarchy via
+  `GET .../antinuke/health`) and **"Make automatically"** buttons for the alert channel
+  and quarantine role. Both use the shared endpoint `POST
+  /api/guilds/:guildId/antinuke/setup/create` `{ kind: 'alert_channel'|'isolation_role' }`
+  (guarded by `requireAuth + requireGuildAdmin`), which runs the same
+  `createAlertChannel` / `createIsolationRole` helpers as the automatic walkthrough.
+
 Per-guild protection against destructive admin actions, built on the pre-existing
 `utils/antiNukeManager.js` + `utils/antiNukeRules.js` foundation. **Not released yet**:
 the `upcoming: true` flag is set on the Anti-Nuke tab in `render/guild.js` TABS, so

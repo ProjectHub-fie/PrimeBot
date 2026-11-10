@@ -225,8 +225,10 @@
   var GUILD_CHANNELS = (window.guildData && window.guildData.channels) || [];
   var GUILD_ROLES = (window.guildData && window.guildData.roles) || [];
 
-  /* A floating window that asks the admin to pick an existing channel/role or
-   * let PrimeBot create one. `kind` is 'alert_channel' or 'isolation_role'. */
+  /* A premium, centered floating window that asks the admin to pick an existing
+   * channel/role or let PrimeBot create one. `kind` is 'alert_channel' or
+   * 'isolation_role'. `onChoose(choice)` resumes the setup with the choice;
+   * `onError(msg)` surfaces a failed create so the window can stay open. */
   function askSetupChoice(kind, onChoose) {
     var isChannel = kind === 'alert_channel';
     var overlay = document.createElement('div');
@@ -234,24 +236,45 @@
     var options = isChannel
       ? GUILD_CHANNELS.map(function (c) { return '<option value="' + esc(c.id) + '">#' + esc(c.name) + '</option>'; }).join('')
       : GUILD_ROLES.map(function (r) { return '<option value="' + esc(r.id) + '">' + esc(r.name) + '</option>'; }).join('');
+    if (!options) options = '<option value="">— nothing available —</option>';
     overlay.innerHTML =
-      '<div class="an-modal" role="dialog" aria-modal="true" aria-label="Setup choice">' +
-      '<div class="an-modal-head"><strong>' + (isChannel ? 'Choose a log channel' : 'Choose an isolation role') + '</strong>' +
+      '<div class="an-modal" role="dialog" aria-modal="true" aria-labelledby="an-modal-title">' +
+      '<div class="an-modal-head">' +
+      '<span class="an-modal-ico">' + svg(isChannel ? 'megaphone' : 'userCheck') + '</span>' +
+      '<strong id="an-modal-title">' + (isChannel ? 'Choose an alert channel' : 'Choose an isolation role') + '</strong>' +
       '<button class="an-modal-x" aria-label="Close">' + svg('x') + '</button></div>' +
       '<div class="an-modal-body">' +
       '<p class="card-desc">' + (isChannel
-        ? 'Where should PrimeBot post security alerts? Select an existing channel, or let PrimeBot create <strong>#primebot-antinuke-log</strong>.'
-        : 'Which role should isolate a confirmed attacker? Select an existing role, or let PrimeBot create a role named <strong>isolated</strong> just below its own role.') + '</p>' +
-      '<div class="field"><label class="field-label">' + (isChannel ? 'Channel' : 'Role') + '</label>' +
+        ? 'Where should PrimeBot post security alerts? Pick an existing channel, or let PrimeBot create <strong>#primebot-antinuke-log</strong> for you.'
+        : 'Which role should isolate a confirmed attacker? Pick an existing role, or let PrimeBot create <strong>isolated</strong> just below its own role.') + '</p>' +
+      '<div class="field"><label class="field-label">' + (isChannel ? 'Existing channel' : 'Existing role') + '</label>' +
       '<select id="an-setup-choice">' + options + '</select></div>' +
+      '<div class="an-modal-error" id="an-modal-error" hidden></div>' +
       '</div>' +
       '<div class="an-modal-foot">' +
       '<button class="btn btn-mini an-choice-cancel">Cancel</button>' +
-      '<button class="btn btn-primary btn-mini an-choice-select">Select</button>' +
-      '<button class="btn btn-mini an-choice-auto">' + (isChannel ? 'Make automatically' : 'Make automatically') + '</button>' +
+      '<button class="btn btn-mini an-choice-auto">' + svg('sparkles') + ' Make automatically</button>' +
+      '<button class="btn btn-primary btn-mini an-choice-select">Use selected</button>' +
       '</div></div>';
     document.body.appendChild(overlay);
     function close() { if (overlay.parentNode) overlay.parentNode.removeChild(overlay); }
+    function showError(msg) {
+      var el = overlay.querySelector('#an-modal-error');
+      if (el) { el.hidden = false; el.textContent = msg; }
+    }
+    function attempt(choice) {
+      var btns = $$('.an-choice-select, .an-choice-auto', overlay);
+      btns.forEach(function (b) { b.disabled = true; });
+      Promise.resolve(onChoose(choice)).then(function () {
+        // Success: the setup resumed — close the window.
+        close();
+      }).catch(function (err) {
+        // Failure: keep the window open and show the real reason so the admin
+        // can pick again instead of seeing nothing happen.
+        btns.forEach(function (b) { b.disabled = false; });
+        showError(err && err.message ? err.message : String(err));
+      });
+    }
     overlay.querySelector('.an-modal-x').addEventListener('click', close);
     overlay.querySelector('.an-choice-cancel').addEventListener('click', function () {
       close();
@@ -263,56 +286,81 @@
     overlay.querySelector('.an-choice-select').addEventListener('click', function () {
       var sel = overlay.querySelector('#an-setup-choice');
       var id = sel ? sel.value : '';
-      close();
-      if (!id) { toast('Nothing selected.', 'error'); return; }
-      onChoose(isChannel ? { alertChannelId: id } : { isolationRoleId: id });
+      if (!id) { showError('Nothing is selected. Pick a ' + (isChannel ? 'channel' : 'role') + ' or use Make automatically.'); return; }
+      attempt(isChannel ? { alertChannelId: id } : { isolationRoleId: id });
     });
     overlay.querySelector('.an-choice-auto').addEventListener('click', function () {
-      close();
-      onChoose(isChannel ? { automaticChannel: true } : { automaticRole: true });
+      attempt(isChannel ? { automaticChannel: true } : { automaticRole: true });
+    });
+    return { close: close, showError: showError };
+  }
+
+  /* One setup step request. Returns the parsed response (throws on HTTP error). */
+  function runSetupStep(body) {
+    return api('/api/guilds/' + GUILD_ID + '/antinuke/setup/step', {
+      method: 'POST', body: JSON.stringify(Object.assign({ method: 'automatic' }, body || {})),
     });
   }
 
+  /* Human-readable reason for a failed step, from the persisted state. */
+  function stepFailureReason(data) {
+    var failed = (data && data.progress && data.progress.steps || []).filter(function (s) { return s.status === 'failed'; });
+    if (!failed.length) return 'A setup step failed.';
+    return 'Step failed: ' + failed[0].label + (failed[0].error ? (' — ' + failed[0].error) : '');
+  }
+
+  /* Mark the setup as stopped with a retry affordance. */
+  function stopSetupWithError(message) {
+    setSetupButtonsBusy(false);
+    var resume = $('#an-resume-setup'); if (resume) resume.hidden = false;
+    var reset = $('#an-reset-setup'); if (reset) reset.hidden = false;
+    toast(message + ' Press Resume setup to retry.', 'error');
+  }
+
   /* Drive the automatic setup one step at a time, rendering real progress after
-   * each step. Pauses for a floating window when a step needs a choice, and
-   * stops on a failed step so the admin can see it and retry. */
+   * each step. A step that needs a choice opens the premium centered window; the
+   * window STAYS OPEN and shows the real error if the chosen action fails (e.g.
+   * "Make automatically" without Manage Roles/Channels), so the admin can pick
+   * again instead of seeing nothing happen. */
   function runAutomaticSteps(extraBody) {
+    return driveSetup(extraBody || {}, 0);
+  }
+
+  function driveSetup(extraBody, depth) {
+    if (depth > 40) { stopSetupWithError('Setup did not converge.'); return Promise.resolve(); }
     setSetupButtonsBusy(true);
-    api('/api/guilds/' + GUILD_ID + '/antinuke/setup/step', { method: 'POST', body: JSON.stringify(Object.assign({ method: 'automatic' }, extraBody || {})) })
-      .then(function (data) {
-        renderProgress(data.progress);
-        if (data.done) {
-          toast('Anti-Nuke setup completed', 'success');
-          window.location.href = window.location.pathname;
-          return;
-        }
-        if (data.prompt) {
-          // The step needs a choice (alert channel / isolation role).
-          setSetupButtonsBusy(false);
+    return runSetupStep(extraBody).then(function (data) {
+      renderProgress(data.progress);
+      if (data.done) { toast('Anti-Nuke setup completed', 'success'); window.location.href = window.location.pathname; return; }
+      if (data.prompt) {
+        setSetupButtonsBusy(false);
+        return new Promise(function (resolve) {
           askSetupChoice(data.prompt, function (choice) {
             setSetupButtonsBusy(true);
-            runAutomaticSteps(choice);
+            var merged = Object.assign({}, extraBody, choice);
+            return runSetupStep(merged).then(function (d2) {
+              renderProgress(d2.progress);
+              if (d2.done) { toast('Anti-Nuke setup completed', 'success'); window.location.href = window.location.pathname; resolve(); return; }
+              if (d2.progress && d2.progress.failed > 0) {
+                // Reject: the window stays open and shows the real reason.
+                throw new Error(stepFailureReason(d2));
+              }
+              // Success: resolve so the window closes, then keep driving (a later
+              // step may prompt again — that opens a fresh window).
+              resolve();
+              driveSetup(merged, depth + 1);
+            });
           });
-          return;
-        }
-        if (data.progress && data.progress.failed > 0) {
-          // Retain the last accurate progress and surface a retry action.
-          var failed = (data.progress.steps || []).filter(function (s) { return s.status === 'failed'; });
-          setSetupButtonsBusy(false);
-          var resume = $('#an-resume-setup'); if (resume) resume.hidden = false;
-          var reset = $('#an-reset-setup'); if (reset) reset.hidden = false;
-          toast((failed.length ? ('Step failed: ' + failed[0].label) : 'A setup step failed.') +
-            (failed.length && failed[0].error ? (' — ' + failed[0].error) : '') +
-            ' Press Resume setup to retry.', 'error');
-          return;
-        }
-        runAutomaticSteps();
-      })
-      .catch(function (err) {
-        setSetupButtonsBusy(false);
-        var resume = $('#an-resume-setup'); if (resume) resume.hidden = false;
-        toast('Setup step failed: ' + err.message, 'error');
-      });
+        });
+      }
+      if (data.progress && data.progress.failed > 0) { stopSetupWithError(stepFailureReason(data)); return; }
+      return driveSetup(extraBody, depth + 1);
+    }).catch(function (err) {
+      // A rejection reaching here is either an HTTP failure or a failure we
+      // re-threw from the window path (the window already showed it inline).
+      if (!err || err.__handled) return;
+      stopSetupWithError('Setup step failed: ' + err.message);
+    });
   }
 
   // ── Manual wizard ─────────────────────────────────────────────────────────
@@ -418,6 +466,8 @@
 
     renderTrustedUsers();
     renderTrustedRoles();
+    initWizardCreateButtons();
+    initWizardReadinessCheck();
     // Resume at the first section that is not yet completed (so a return to the
     // wizard picks up where the admin left off rather than restarting at 1).
     var firstIncomplete = 0;
@@ -426,6 +476,75 @@
       if (i === sections.length - 1) firstIncomplete = i;
     }
     show(firstIncomplete);
+  }
+
+  /* "Make automatically" in the manual wizard — creates the alert channel or the
+   * isolation role via the shared setup/create endpoint, then selects it in the
+   * matching control. On failure the real reason is shown (no silent no-op). */
+  function initWizardCreateButtons() {
+    $$('.an-create-auto').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var kind = btn.dataset.create;
+        btn.disabled = true;
+        var old = btn.innerHTML;
+        btn.innerHTML = 'Creating…';
+        api('/api/guilds/' + GUILD_ID + '/antinuke/setup/create', { method: 'POST', body: JSON.stringify({ kind: kind }) })
+          .then(function (res) {
+            toast((kind === 'alert_channel' ? 'Created #' : 'Created the “') + (res.name || '') + (kind === 'alert_channel' ? '' : '” role'), 'success');
+            if (kind === 'alert_channel') {
+              var sel = $('#an-alert-channel');
+              if (sel) {
+                var opt = document.createElement('option');
+                opt.value = res.channelId; opt.textContent = '#' + (res.name || '');
+                sel.appendChild(opt); sel.value = res.channelId;
+              }
+            } else {
+              var rsel = $('#an-quarantine-role');
+              if (rsel) {
+                var ropt = document.createElement('option');
+                ropt.value = res.roleId; ropt.textContent = res.name || 'isolated';
+                rsel.appendChild(ropt); rsel.value = res.roleId;
+              }
+            }
+            if (window.saveBar && window.saveBar.markDirty) window.saveBar.markDirty();
+          })
+          .catch(function (err) { toast(err.message, 'error'); })
+          .then(function () { btn.disabled = false; btn.innerHTML = old; });
+      });
+    });
+  }
+
+  /* The manual wizard's bot-readiness check (permissions + hierarchy), the same
+   * scan the automatic setup gates on — surfaced as a card on the first step. */
+  function initWizardReadinessCheck() {
+    var run = $('#an-wizard-check-run');
+    if (run) run.addEventListener('click', wizardReadinessCheck);
+    wizardReadinessCheck();
+  }
+
+  function wizardReadinessCheck() {
+    var out = $('#an-wizard-check-result');
+    if (!out) return;
+    out.innerHTML = '<div class="an-empty">Running check…</div>';
+    api('/api/guilds/' + GUILD_ID + '/antinuke/health')
+      .then(function (scan) {
+        var checks = (scan && scan.checks) || [];
+        var relevant = checks.filter(function (c) {
+          return /bot_permissions|hierarchy|enabled|intent|audit_stream|alert_channel|quarantine_role/i.test(c.key || '');
+        });
+        if (!relevant.length) relevant = checks.slice(0, 6);
+        out.innerHTML = '<div class="an-health-list">' + relevant.map(function (c) {
+          var result = c.result || (c.ok ? 'PASS' : 'FAILED');
+          var cls = result === 'PASS' ? 'pass' : (result === 'WARNING' ? 'warn' : 'fail');
+          return '<div class="an-health-row an-health-' + cls + '">' +
+            '<span class="an-health-badge">' + esc(cls.toUpperCase()) + '</span>' +
+            '<span class="an-health-label">' + esc(c.label || c.key) + '</span>' +
+            '<span class="an-health-detail">' + esc(c.note || '') + '</span>' +
+            (c.recommendation ? '<span class="an-health-fix">' + svg('wrench') + ' ' + esc(c.recommendation) + '</span>' : '') +
+            '</div>';
+        }).join('') + '</div>';
+      })
+      .catch(function (err) { out.innerHTML = '<div class="an-empty">Could not run the check: ' + esc(err.message) + '</div>'; });
   }
 
   // ── Console ───────────────────────────────────────────────────────────────
