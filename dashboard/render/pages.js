@@ -78,6 +78,7 @@ function loginPage({ errorKey, turnstileSiteKey } = {}) {
             <div class="donut-item"><div class="donut" id="donut-broadcasts"><span class="donut-pct">0%</span></div><div class="donut-label">${svgIcon('megaphone')} Broadcasts</div></div>
             <div class="donut-item"><div class="donut" id="donut-automod"><span class="donut-pct">0%</span></div><div class="donut-label">${svgIcon('shield')} Automod</div></div>
             <div class="donut-item"><div class="donut" id="donut-tickets"><span class="donut-pct">0%</span></div><div class="donut-label">${svgIcon('ticket')} Tickets</div></div>
+            <div class="donut-item"><div class="donut" id="donut-antinuke"><span class="donut-pct">0%</span></div><div class="donut-label">${svgIcon('shieldAlert')} Anti-Nuke</div></div>
           </div>
         </div>
       </div>
@@ -88,6 +89,7 @@ function loginPage({ errorKey, turnstileSiteKey } = {}) {
         <div class="feature"><div class="fi">${svgIcon('zap')}</div><div class="ft">Command prefix</div><div class="fd">Set a per-server prefix instead of the default.</div></div>
         <div class="feature"><div class="fi">${svgIcon('repeat')}</div><div class="ft">Auto-reactions</div><div class="fd">Trigger emojis on matching messages automatically.</div></div>
         <div class="feature"><div class="fi">${svgIcon('shield')}</div><div class="ft">Premium Automod</div><div class="fd">Auto-mod with warnings, escalation, spam &amp; word filters — free.</div></div>
+        <div class="feature"><div class="fi">${svgIcon('shieldAlert')}</div><div class="ft">Anti-Nuke protection</div><div class="fd">Audit-log detection, burst protection and reversible containment against rogue admins.</div></div>
       </div>
     </div>`;
     return render({ title: 'PrimeBot Dashboard — Login', body, login: true, scripts: ['/js/login.js'] });

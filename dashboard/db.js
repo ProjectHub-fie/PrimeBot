@@ -2205,6 +2205,17 @@ async function _ticketCount(query, fallback = 0) {
     }
 }
 
+async function _antiNukeCount(query, fallback = 0) {
+    try {
+        const { anukePool } = require('../server/anukeDb');
+        const res = await anukePool.query(query);
+        return Number(res.rows[0]?.count ?? fallback);
+    } catch (err) {
+        console.error('[DASHBOARD DB] antinuke stats count failed:', err.message);
+        return fallback;
+    }
+}
+
 // Live guild/member counts reported by the ACTIVE bot node on its failover
 // heartbeat (bot_node_status.guild_count / member_count). This is the only
 // source of the ACTUAL Discord member count: the dashboard runs as a separate
@@ -2272,6 +2283,7 @@ async function _platformCounts() {
         welcomeEnabled,
         automodEnabled,
         ticketPanels,
+        antiNukeEnabled,
     ] = await Promise.all([
         // All four server_settings adoption counts in ONE pass over the table
         // (was four separate COUNT(*) scans). The 'global' sentinel row (global
@@ -2285,6 +2297,7 @@ async function _platformCounts() {
         _welcomeCount(`SELECT COUNT(*) FROM welcome_settings WHERE enabled = true`),
         _automodCount(`SELECT COUNT(*) FROM automod_settings WHERE enabled = true`),
         _ticketCount(`SELECT COUNT(*) FROM ticket_panels WHERE enabled = true`),
+        _antiNukeCount(`SELECT COUNT(*) FROM antinuke_settings WHERE enabled = true`),
     ]);
 
     const serverRows = serverCounts || {};
@@ -2296,6 +2309,7 @@ async function _platformCounts() {
         welcomeEnabled: Number(welcomeEnabled) || 0,
         automodEnabled: Number(automodEnabled) || 0,
         ticketPanels: Number(ticketPanels) || 0,
+        antiNukeEnabled: Number(antiNukeEnabled) || 0,
     };
     _platformCountsCache = { at: now, value };
     return value;
@@ -2314,6 +2328,7 @@ async function getPlatformStats(serverCountOverride, memberCountOverride) {
         broadcastEnabled,
         automodEnabled,
         ticketPanels,
+        antiNukeEnabled,
     } = counts;
     const liveCounts = await _liveBotCounts();
 
@@ -2362,6 +2377,7 @@ async function getPlatformStats(serverCountOverride, memberCountOverride) {
             broadcasts: { count: broadcastEnabled, percent: pct(broadcastEnabled, servers) },
             automod: { count: automodEnabled, percent: pct(automodEnabled, servers) },
             tickets: { count: ticketPanels, percent: pct(ticketPanels, servers) },
+            antiNuke: { count: antiNukeEnabled, percent: pct(antiNukeEnabled, servers) },
         },
         totalUsers,
         // 'bot' = live member count from the active bot node's heartbeat;

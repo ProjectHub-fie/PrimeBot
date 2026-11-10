@@ -1469,11 +1469,6 @@ function antiNukePage({ guild, user, view }) {
     return render({ title, body, active: 'servers', scripts, user });
 }
 
-/** Wrap the Anti-Nuke panel in the shared "Coming Soon" overlay unless bypassed. */
-function wrapAntiNukeUpcoming(innerPanelHTML, guild) {
-    if (guild && guild._bypassUpcoming) return innerPanelHTML;
-    return upcomingOverlayWrap(innerPanelHTML, { icon: 'shieldAlert', title: 'Anti-Nuke' });
-}
 
 // ── Events ──────────────────────────────────────────────────────────────────
 //

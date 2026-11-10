@@ -150,3 +150,22 @@ test('the dropdown logout button still renders SVG-only', () => {
     assert.match(link[1], /<svg/, 'icon is an SVG');
     assert.ok(!/Log out<\/span>/.test(link[1]), 'no text label inside the dropdown button');
 });
+
+// ── Anti-Nuke on the login page ─────────────────────────────────────────────
+
+test('login page renders the Anti-Nuke adoption donut + feature card', () => {
+    const page = require('../dashboard/render/pages');
+    const html = page.loginPage({});
+    assert.ok(html.includes('id="donut-antinuke"'), 'Anti-Nuke adoption donut is rendered');
+    assert.ok(/id="donut-antinuke"[\s\S]{0,600}Anti-Nuke<\/div>/.test(html), 'the donut is labelled Anti-Nuke');
+    assert.ok(html.includes('Anti-Nuke protection'), 'the Anti-Nuke feature card is rendered');
+    // Still no emoji — the redesign uses SVG icons only.
+    const donut = html.slice(html.indexOf('id="donut-antinuke"'), html.indexOf('id="donut-antinuke"') + 400);
+    assert.ok(donut.includes('<svg class="ico"'), 'the donut label uses an SVG icon, not emoji');
+});
+
+test('login.js paints the Anti-Nuke donut from the antiNuke feature stat', () => {
+    const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'dashboard', 'public', 'js', 'login.js'), 'utf8');
+    assert.ok(/donut-antinuke[\s\S]{0,120}f\.antiNuke\?\.percent/.test(src),
+        'the client reads features.antiNuke.percent into #donut-antinuke');
+});
