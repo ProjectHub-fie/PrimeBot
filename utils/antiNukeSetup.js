@@ -26,16 +26,15 @@ const AUTOMATIC_STEPS = [
 // step REQUIRES `antinuke.setup`; the dashboard hides the whole wizard behind
 // that permission, so the walkthrough itself carries no extra gate.
 //
-// The complete automatic walkthrough is 16 required steps: the 8 backend steps
-// (AUTOMATIC_STEPS) plus these 8 walkthrough steps. `stepsForMethod('automatic')`
-// concatenates the two, so `total` is always 16 and the bar can hold 100%.
+// The complete automatic walkthrough is 15 required steps: the 8 backend steps
+// (AUTOMATIC_STEPS) plus these 7 walkthrough steps. `stepsForMethod('automatic')`
+// concatenates the two, so `total` is always 15 and the bar can hold 100%.
 //
-// ORDER MATTERS: `apply` persists the confirmed configuration, and `validate`
+// ORDER MATTERS: `apply` persists the recommended configuration, and `validate`
 // reloads and re-verifies it. `validate` therefore runs AFTER `apply` — when it
 // ran before (as a naive concatenation of the two lists did) it always found
 // nothing persisted and failed the whole walkthrough at step 8.
 const AUTO_WALKTHROUGH_STEPS = [
-    { key: 'confirm',          label: 'Reviewing proposed changes',   required: true, description: 'Show exactly what applying the recommended configuration would change.' },
     { key: 'apply',            label: 'Applying recommended settings', required: true, description: 'Apply the confirmed recommended configuration.' },
     { key: 'validate',         label: 'Final validation',             required: true, description: 'Reload and re-verify the saved configuration.' },
     { key: 'validateModules',  label: 'Validating protection modules', required: true, description: 'Verify each protection module can initialize and watch its actions.' },
@@ -80,7 +79,7 @@ function botRolePositionCheck(guild, topN = REQUIRED_TOP_ROLE_RANK) {
     const rank = idx >= 0 ? idx + 1 : total;
     const ok = rank >= 1 && rank <= topN;
     const message = ok ? ''
-        : `PrimeBot's role is in position ${rank} of ${total}. Set the bot in the top ${topN} role position first, then resume operation.`;
+        : `PrimeBot's role is in position ${rank} of ${total}. Set the bot in the top ${topN} role position and press Resume, then.`;
     return { ok, rank, total, botPosition: highest, indeterminate: false, message };
 }
 

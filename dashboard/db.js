@@ -1572,6 +1572,14 @@ async function getAutomodIncidents(guildId, {
     if (channelId) where.push(`channel_id = ${push(String(channelId))}`);
     if (dryRun === true) where.push('dry_run = true');
     if (dryRun === false) where.push('dry_run = false');
+    const sinceDaysNum = parseInt(sinceDays, 10);
+    if (Number.isFinite(sinceDaysNum) && sinceDaysNum > 0) {
+        where.push(`created_at > NOW() - (${push(String(Math.min(3650, sinceDaysNum)))} || ' days')::interval`);
+    }
+    if (search) {
+        const q = `%${String(search).slice(0, 80)}%`;
+        where.push(`(COALESCE(executor_name,'') ILIKE ${push(q)} OR action ILIKE ${push(q)} OR COALESCE(details,'') ILIKE ${push(q)})`);
+    }
     if (typeof action === 'string' && action) where.push(`actions ? ${push(action)}`);
     if (search) {
         const like = `%${String(search).slice(0, 100).replace(/[%_]/g, '')}%`;
@@ -1775,7 +1783,7 @@ async function saveAntiNukeSetup(guildId, { method = null, status = 'not_started
 }
 
 /** Paginated incident ledger (parameterized; capped). */
-async function getAntiNukeIncidents(guildId, { action = null, severity = null, executorId = null, dryRun = null, status = null, limit = 25, offset = 0 } = {}) {
+async function getAntiNukeIncidents(guildId, { action = null, module = null, severity = null, executorId = null, dryRun = null, status = null, sinceDays = null, search = null, limit = 25, offset = 0 } = {}) {
     await ensureAntiNukeTable();
     const { anukePool } = require('../server/anukeDb');
     const { rowToIncident } = require('../utils/antiNukeManager');
@@ -1783,6 +1791,7 @@ async function getAntiNukeIncidents(guildId, { action = null, severity = null, e
     const params = [String(guildId)];
     const push = (v) => { params.push(v); return `$${params.length}`; };
     if (action) where.push(`action = ${push(String(action))}`);
+    if (module) where.push(`module = ${push(String(module))}`);
     if (severity) where.push(`severity = ${push(String(severity))}`);
     if (executorId) where.push(`executor_id = ${push(String(executorId))}`);
     if (status) where.push(`status = ${push(String(status))}`);
@@ -1813,6 +1822,60 @@ async function getAntiNukeIncidentSummary(guildId, { days = 30 } = {}) {
     `, [String(guildId), String(d)]);
     const total = res.rows.reduce((sum, r) => sum + (r.count || 0), 0);
     return { total, days: d, byAction: res.rows };
+}
+
+/**
+ * Real Overview aggregates for a guild over a date window. Every number is
+ * computed from `antinuke_incidents` rows — nothing is hardcoded. `days = 0`
+ * means "all time".
+ */
+async function getAntiNukeOverview(guildId, { days = 30 } = {}) {
+    await ensureAntiNukeTable();
+    const { anukePool } = require('../server/anukeDb');
+    const d = Math.min(3650, Math.max(0, parseInt(days, 10) || 0));
+    const params = [String(guildId)];
+    let windowSql = '';
+    if (d > 0) { params.push(String(d)); windowSql = ` AND created_at > NOW() - ($2 || ' days')::interval`; }
+    const [agg, byAction, recent, lastOk, lastFail] = await Promise.all([
+        anukePool.query(`
+            SELECT COUNT(*)::int AS total,
+                   SUM(CASE WHEN severity = 'critical' THEN 1 ELSE 0 END)::int AS critical,
+                   SUM(CASE WHEN attribution = 'verified' THEN 1 ELSE 0 END)::int AS confirmed,
+                   SUM(CASE WHEN response_ok THEN 1 ELSE 0 END)::int AS contained,
+                   SUM(CASE WHEN response_ok = false AND jsonb_array_length(response_taken) > 0 THEN 1 ELSE 0 END)::int AS failed,
+                   SUM(CASE WHEN dry_run THEN 1 ELSE 0 END)::int AS dry_runs
+            FROM antinuke_incidents WHERE guild_id = $1${windowSql}
+        `, params),
+        anukePool.query(`
+            SELECT action, COUNT(*)::int AS count FROM antinuke_incidents
+            WHERE guild_id = $1${windowSql} GROUP BY action ORDER BY count DESC LIMIT 6
+        `, params),
+        anukePool.query(`
+            SELECT id, action, severity, executor_id, executor_name, response_ok, created_at
+            FROM antinuke_incidents WHERE guild_id = $1${windowSql}
+            ORDER BY created_at DESC LIMIT 8
+        `, params),
+        anukePool.query(`SELECT MAX(created_at) AS at FROM antinuke_incidents WHERE guild_id = $1 AND response_ok = true`, [String(guildId)]),
+        anukePool.query(`SELECT MAX(created_at) AS at FROM antinuke_incidents WHERE guild_id = $1 AND response_ok = false AND jsonb_array_length(response_taken) > 0`, [String(guildId)]),
+    ]);
+    const a = agg.rows[0] || {};
+    return {
+        days: d,
+        total: a.total || 0,
+        critical: a.critical || 0,
+        confirmed: a.confirmed || 0,
+        contained: a.contained || 0,
+        failed: a.failed || 0,
+        dryRuns: a.dry_runs || 0,
+        lastSuccessAt: lastOk.rows[0] ? lastOk.rows[0].at : null,
+        lastFailureAt: lastFail.rows[0] ? lastFail.rows[0].at : null,
+        topCategories: byAction.rows.map(r => ({ action: r.action, count: r.count })),
+        recent: recent.rows.map(r => ({
+            id: r.id, action: r.action, severity: r.severity,
+            executorId: r.executor_id, executorName: r.executor_name,
+            responseOk: r.response_ok, createdAt: r.created_at,
+        })),
+    };
 }
 
 async function getAntiNukeLockdown(guildId) {
@@ -3859,6 +3922,7 @@ module.exports = {
     saveAntiNukeSetup,
     getAntiNukeIncidents,
     getAntiNukeIncidentSummary,
+    getAntiNukeOverview,
     getAntiNukeLockdown,
     getAntiNukeBackups,
     getAntiNukeBackup,

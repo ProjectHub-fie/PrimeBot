@@ -32,11 +32,13 @@ const {
 } = require('../utils/antiNukeSetupRunner');
 
 test('the progress card math uses required steps only (0% visible, 100% only after validation)', () => {
-    // Automatic walkthrough = 8 backend + 8 walkthrough = 16 required steps.
+    // Automatic walkthrough = 8 backend + 7 walkthrough = 15 required steps.
+    // (The `confirm` review step was removed — setup applies in one shot.)
     const catalog = stepsForMethod('automatic');
     const requiredCount = catalog.filter(s => s.required).length;
-    assert.equal(requiredCount, 16, 'the automatic walkthrough has 16 required steps');
-    assert.equal(AUTO_WALKTHROUGH_STEPS.length, 8);
+    assert.equal(requiredCount, 15, 'the automatic walkthrough has 15 required steps');
+    assert.equal(AUTO_WALKTHROUGH_STEPS.length, 7);
+    assert.ok(!catalog.some(s => s.key === 'confirm'), 'no review/confirm step');
     // `validate` must run AFTER `apply`, otherwise it re-verifies a config that
     // was never persisted and fails the whole walkthrough (the step-8 bug).
     const keys = catalog.map(s => s.key);
@@ -47,14 +49,14 @@ test('the progress card math uses required steps only (0% visible, 100% only aft
     const p0 = computeProgress('automatic', s0);
     assert.equal(p0.percent, 0);
     assert.equal(p0.completed, 0);
-    assert.equal(p0.total, 16);
+    assert.equal(p0.total, 15);
     assert.equal(p0.status, 'in_progress');
 
     // 6 completed steps → the REQUIRED denominator only.
     let s = s0;
     for (const step of catalog.slice(0, 6)) s = applyStep(s, step.key, { status: 'completed' });
     const p6 = computeProgress('automatic', s);
-    assert.equal(p6.percent, Math.round((6 / 16) * 100));
+    assert.equal(p6.percent, Math.round((6 / 15) * 100));
     assert.equal(p6.completed, 6);
     assert.match(s.sessionId, /^ss_/);
 });
@@ -104,7 +106,7 @@ test('100% is only reported once final validation succeeds (the completed status
     const catalog = stepsForMethod('automatic');
     for (const step of catalog) s = applyStep(s, step.key, { status: 'completed' });
     const p = computeProgress('automatic', s);
-    assert.equal(p.completed, 16);
+    assert.equal(p.completed, 15);
     assert.equal(p.percent, 100);
     assert.ok(isComplete('automatic', s), 'isComplete requires every required step done and none failed');
     // Even at 100% the status itself flips only via withStatus('completed').
@@ -143,11 +145,11 @@ test('resuming after a "bot restart" restores completion from the persisted stat
     const persisted = withUpdater(applyStep(applyStep(
         newSetupSession('automatic', '1'),
         'inspection', { status: 'completed' }),
-        'confirm', { status: 'completed' }), '1');
+        'apply', { status: 'completed' }), '1');
     const resumed = JSON.parse(JSON.stringify(persisted));
     const p = computeProgress('automatic', resumed);
     assert.equal(p.completed, 2, 'resume restores the two completed walkthrough steps');
-    assert.equal(p.percent, Math.round((2 / 16) * 100));
+    assert.equal(p.percent, Math.round((2 / 15) * 100));
 });
 
 // ── Recommended configuration safety + dry-run OFF ─────────────────────────
@@ -230,14 +232,14 @@ test('the automatic walkthrough completes against an async dashboard manager shi
         members: { me: { permissions: { has: () => true }, roles: { highest: { position: 5 } } } },
     };
 
-    // The wizard's confirmation gate (`confirm`) is exercised elsewhere; this
-    // regression is about the async manager read, so confirm up front and drive
-    // the full walkthrough until the persisted state reports completion.
+    // The review/confirm step was removed; setup applies in one shot. This
+    // regression is about the async manager read, so drive the full walkthrough
+    // until the persisted state reports completion.
     let state = newSetupSession('automatic', 'owner1');
     for (let i = 0; i < 30 && computeProgress('automatic', state).steps.some(s => s.status !== 'completed'); i++) {
         const res = await runWalkthroughStep({
             manager: asyncManager, guild, state,
-            options: { applyRecommended: true, confirmed: true },
+            options: { applyRecommended: true },
             actorId: 'owner1',
         });
         state = res.state;
@@ -294,8 +296,7 @@ test('runAll drives the whole automatic walkthrough to completion (Discord path)
         },
         members: { me: { permissions: { has: () => true }, roles: { highest: { position: 5 } } } },
     };
-    // `confirmed: true` is what the Discord Confirm button passes.
-    const res = await runAll({ client: { antiNukeManager: manager }, guild, options: { applyRecommended: false, confirmed: true } });
+    const res = await runAll({ client: { antiNukeManager: manager }, guild, options: { applyRecommended: false } });
     assert.equal(res.state.status, 'completed', 'runAll finishes the walkthrough');
     assert.equal(res.progress.percent, 100);
     const failed = res.progress.steps.filter(s => s.status === 'failed');

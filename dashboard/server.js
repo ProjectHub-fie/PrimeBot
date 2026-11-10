@@ -1311,6 +1311,146 @@ app.get('/api/guilds/:guildId/antinuke/health', requireAuth, requireGuildAdmin, 
     }
 });
 
+// ── API: Anti-Nuke overview + raid + backups + lockdown profiles ────────────
+//
+// Overview aggregates come straight from the incident ledger. Raid incidents
+// are the `raid`-module slice of the same ledger. Backups capture real guild
+// structure via REST and restore performs real REST operations.
+
+app.get('/api/guilds/:guildId/antinuke/overview', requireAuth, requireGuildAdmin, antinukeReadGate, async (req, res) => {
+    try {
+        const days = req.query.days != null ? req.query.days : 30;
+        const overview = await dashboardDb.getAntiNukeOverview(req.guild.id, { days });
+        res.json(overview);
+    } catch (err) {
+        console.error('[API] antinuke overview error:', err.message);
+        res.status(500).json({ error: 'Failed to load the security overview.' });
+    }
+});
+
+app.get('/api/guilds/:guildId/antinuke/raid', requireAuth, requireGuildAdmin, antinukeReadGate, async (req, res) => {
+    try {
+        const data = await dashboardDb.getAntiNukeIncidents(req.guild.id, { module: 'raid', limit: req.query.limit, offset: req.query.offset });
+        res.json(data);
+    } catch (err) {
+        console.error('[API] antinuke raid error:', err.message);
+        res.status(500).json({ error: 'Failed to load raid incidents.' });
+    }
+});
+
+app.get('/api/guilds/:guildId/antinuke/backups', requireAuth, requireGuildAdmin, requireAntiNukePermission('antinuke.backup.view'), async (req, res) => {
+    try {
+        const data = await dashboardDb.getAntiNukeBackups(req.guild.id, { limit: req.query.limit, offset: req.query.offset });
+        res.json(data);
+    } catch (err) {
+        console.error('[API] antinuke backups list error:', err.message);
+        res.status(500).json({ error: 'Failed to load backups.' });
+    }
+});
+
+app.get('/api/guilds/:guildId/antinuke/backups/:id', requireAuth, requireGuildAdmin, requireAntiNukePermission('antinuke.backup.view'), async (req, res) => {
+    try {
+        const backup = await dashboardDb.getAntiNukeBackup(req.guild.id, req.params.id);
+        if (!backup) return res.status(404).json({ error: 'Backup not found.' });
+        res.json({ backup });
+    } catch (err) {
+        console.error('[API] antinuke backup detail error:', err.message);
+        res.status(500).json({ error: 'Failed to load the backup.' });
+    }
+});
+
+app.post('/api/guilds/:guildId/antinuke/backups', requireAuth, requireGuildAdmin, requireAntiNukePermission('antinuke.backup.create'), async (req, res) => {
+    try {
+        const body = req.body || {};
+        const antiNukeActions = require('./antiNukeActions');
+        const settings = await dashboardDb.getAntiNukeSettings(req.guild.id);
+        const result = await antiNukeActions.captureBackup({
+            guildId: req.guild.id,
+            name: String(body.name || '').slice(0, 120) || `Snapshot ${new Date().toISOString().slice(0, 19).replace('T', ' ')}`,
+            createdBy: req.user && req.user.id,
+            settings,
+            notes: String(body.notes || '').slice(0, 500),
+        });
+        await antiNukeActions.recordLockdownIncident({
+            guildId: req.guild.id, action: 'backupCreated', startedBy: req.user && req.user.id,
+            severity: 'info', details: `Backup #${result.backup && result.backup.id}`,
+        });
+        recordWebsiteLog(req, 'Created Anti-Nuke backup');
+        res.json(result);
+    } catch (err) {
+        console.error('[API] antinuke backup create error:', err.message);
+        res.status(500).json({ error: 'Failed to create the backup.' });
+    }
+});
+
+app.delete('/api/guilds/:guildId/antinuke/backups/:id', requireAuth, requireGuildAdmin, requireAntiNukePermission('antinuke.backup.create'), async (req, res) => {
+    try {
+        const removed = await dashboardDb.deleteAntiNukeBackup(req.guild.id, req.params.id);
+        if (!removed) return res.status(404).json({ error: 'Backup not found.' });
+        recordWebsiteLog(req, 'Deleted Anti-Nuke backup');
+        res.json({ ok: true });
+    } catch (err) {
+        console.error('[API] antinuke backup delete error:', err.message);
+        res.status(500).json({ error: 'Failed to delete the backup.' });
+    }
+});
+
+app.get('/api/guilds/:guildId/antinuke/backups/:id/compare', requireAuth, requireGuildAdmin, requireAntiNukePermission('antinuke.backup.view'), async (req, res) => {
+    try {
+        const antiNukeActions = require('./antiNukeActions');
+        const result = await antiNukeActions.compareBackup(req.guild.id, req.params.id);
+        if (!result) return res.status(404).json({ error: 'Backup not found.' });
+        res.json(result);
+    } catch (err) {
+        console.error('[API] antinuke backup compare error:', err.message);
+        res.status(500).json({ error: 'Failed to compare the backup.' });
+    }
+});
+
+app.get('/api/guilds/:guildId/antinuke/backups/:id/restore-preview', requireAuth, requireGuildAdmin, requireAntiNukePermission('antinuke.backup.restore'), async (req, res) => {
+    try {
+        const antiNukeActions = require('./antiNukeActions');
+        const result = await antiNukeActions.previewBackupRestore(req.guild.id, req.params.id);
+        if (!result) return res.status(404).json({ error: 'Backup not found.' });
+        res.json(result);
+    } catch (err) {
+        console.error('[API] antinuke backup preview error:', err.message);
+        res.status(500).json({ error: 'Failed to build the restore preview.' });
+    }
+});
+
+app.post('/api/guilds/:guildId/antinuke/backups/:id/restore', requireAuth, requireGuildAdmin, requireAntiNukePermission('antinuke.backup.restore'), async (req, res) => {
+    try {
+        if ((req.body || {}).confirm !== true) {
+            return res.status(400).json({ error: 'Bulk restoration requires explicit confirmation.' });
+        }
+        const antiNukeActions = require('./antiNukeActions');
+        const report = await antiNukeActions.restoreBackup(req.guild.id, req.params.id, { actorId: req.user && req.user.id });
+        if (!report) return res.status(404).json({ error: 'Backup not found.' });
+        await antiNukeActions.recordLockdownIncident({
+            guildId: req.guild.id, action: 'backupRestored', startedBy: req.user && req.user.id,
+            severity: 'medium', responseOk: report.summary.failed === 0,
+            details: `roles +${report.summary.rolesCreated}, channels +${report.summary.channelsCreated}, failed ${report.summary.failed}`,
+        });
+        recordWebsiteLog(req, 'Restored Anti-Nuke backup');
+        res.json({ report });
+    } catch (err) {
+        console.error('[API] antinuke backup restore error:', err.message);
+        res.status(500).json({ error: 'Failed to restore the backup.' });
+    }
+});
+
+app.get('/api/guilds/:guildId/antinuke/lockdown/profile/:profile', requireAuth, requireGuildAdmin, antinukeLockdownGate, async (req, res) => {
+    try {
+        const antiNukeActions = require('./antiNukeActions');
+        const plan = await antiNukeActions.planLockdownProfile(req.guild.id, req.params.profile);
+        res.json(plan);
+    } catch (err) {
+        console.error('[API] antinuke lockdown preview error:', err.message);
+        res.status(500).json({ error: 'Failed to preview the lockdown profile.' });
+    }
+});
+
 // Lockdown controls (manual engage / restore) — emergency permissions.
 app.post('/api/guilds/:guildId/antinuke/lockdown', requireAuth, requireGuildAdmin, antinukeLockdownGate, async (req, res) => {
     try {
@@ -1331,11 +1471,18 @@ app.post('/api/guilds/:guildId/antinuke/lockdown', requireAuth, requireGuildAdmi
             if (!settings.lockdown || settings.lockdown.enabled === false) {
                 return res.status(400).json({ error: 'Lockdown is disabled in the Anti-Nuke configuration.' });
             }
-            const record = await antiNukeActions.engageLockdown({
-                guildId: req.guild.id, settings,
-                startedBy: req.user && req.user.id,
-                reason: `Manual lockdown by ${(req.user && req.user.username) || 'an administrator'}`,
-            });
+            const profile = String((req.body || {}).profile || 'full');
+            const record = (profile && profile !== 'legacy')
+                ? await antiNukeActions.engageLockdownProfile({
+                    guildId: req.guild.id, profile, settings,
+                    startedBy: req.user && req.user.id,
+                    reason: `Manual ${profile} lockdown by ${(req.user && req.user.username) || 'an administrator'}`,
+                })
+                : await antiNukeActions.engageLockdown({
+                    guildId: req.guild.id, settings,
+                    startedBy: req.user && req.user.id,
+                    reason: `Manual lockdown by ${(req.user && req.user.username) || 'an administrator'}`,
+                });
             await antiNukeActions.recordLockdownIncident({
                 guildId: req.guild.id, action: 'manualLockdown', startedBy: req.user && req.user.id,
                 severity: 'high', responseOk: record.warnings.length === 0,
@@ -1353,9 +1500,9 @@ app.post('/api/guilds/:guildId/antinuke/lockdown', requireAuth, requireGuildAdmi
             if (!current.active || !current.state) {
                 return res.status(400).json({ error: 'No active lockdown to restore.' });
             }
-            const { restored, warnings } = await antiNukeActions.restoreLockdown({
-                guildId: req.guild.id, record: current.state,
-            });
+            const { restored, warnings } = current.state && current.state.changes
+                ? await antiNukeActions.restoreLockdownProfile({ guildId: req.guild.id, record: current.state })
+                : await antiNukeActions.restoreLockdown({ guildId: req.guild.id, record: current.state });
             await antiNukeActions.recordLockdownIncident({
                 guildId: req.guild.id, action: 'lockdownLifted', startedBy: req.user && req.user.id,
                 severity: 'info', responseOk: warnings.length === 0, details: warnings.join('; '),
@@ -1531,6 +1678,38 @@ app.post('/api/guilds/:guildId/antinuke/setup/step', requireAuth, requireGuildAd
     } catch (err) {
         console.error('[API] antinuke setup step error:', err.message);
         res.status(500).json({ error: 'Setup step failed.' });
+    }
+});
+
+// Create the alert channel / isolation role on demand ("Make automatically").
+// Shared by the automatic walkthrough AND the manual wizard, so both paths use
+// the exact same create logic (utils/antiNukeSetupRunner.createAlertChannel /
+// createIsolationRole) against the REST shim.
+app.post('/api/guilds/:guildId/antinuke/setup/create', requireAuth, requireGuildAdmin, antinukeSetupGate, async (req, res) => {
+    try {
+        const kind = String((req.body || {}).kind || '');
+        if (kind !== 'alert_channel' && kind !== 'isolation_role') {
+            return res.status(400).json({ error: 'Unknown thing to create.' });
+        }
+        const antiNukeActions = require('./antiNukeActions');
+        const guild = await antiNukeActions.buildDashboardGuildShim(req.guild.id);
+        if (kind === 'alert_channel') {
+            const { createAlertChannel, ALERT_CHANNEL_NAME } = require('../utils/antiNukeSetupRunner');
+            const created = await createAlertChannel(guild, ALERT_CHANNEL_NAME);
+            const manager = antiNukeActions.buildDashboardManagerShim(req.guild.id);
+            await manager.updateSettingsAsync(req.guild.id, { alertChannelId: created.channelId });
+            recordWebsiteLog(req, 'Created the Anti-Nuke alert channel');
+            return res.json({ kind, channelId: created.channelId, name: created.name });
+        }
+        const { createIsolationRole, ISOLATION_ROLE_NAME } = require('../utils/antiNukeSetupRunner');
+        const created = await createIsolationRole(guild, ISOLATION_ROLE_NAME);
+        const manager = antiNukeActions.buildDashboardManagerShim(req.guild.id);
+        await manager.updateSettingsAsync(req.guild.id, { quarantineRoleId: created.roleId });
+        recordWebsiteLog(req, 'Created the Anti-Nuke isolation role');
+        res.json({ kind, roleId: created.roleId, name: created.name });
+    } catch (err) {
+        console.error('[API] antinuke setup create error:', err.message);
+        res.status(500).json({ error: err.message || 'Could not create that for you. Create it manually and pick it from the list.' });
     }
 });
 

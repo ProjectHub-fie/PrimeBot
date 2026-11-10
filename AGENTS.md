@@ -558,6 +558,101 @@ The page uses the floating `saveBar` (see "Dashboard save pattern"): every field
 
 ## Anti-Nuke protection system (UPCOMING — not yet released)
 
+### Premium section console (AutoMod-matched) — 15 sections
+
+The Anti-Nuke console was rebuilt to match the **AutoMod design language** (same
+`am-*` tokens/hero/stat cards, same dark theme, same breakpoints) with **one
+horizontal, sticky section rail** (`#an-sections` → `.an-section[data-section]`)
+instead of a long vertical page. `SECTION_ORDER` in `dashboard/render/antinuke-page.js`
+is the single source for the rail; the 15 sections are
+`overview / protection / antiraid / permission / channel / role / webhook / bot /
+responses / backups / lockdown / access / incidents / health / settings`.
+Each section renders **exactly once** and every rail button targets a rendered
+section (`tests/antiNukePremiumConsole.test.js` pins this — a duplicate makes half
+the settings unreachable).
+
+- **Client switching:** `dashboard/public/js/antinuke.js` `initSections()` switches
+  sections with **no page reload**, writes the active section to `?section=` via
+  `history.replaceState`, restores it on load + `popstate`, scrolls the active tab
+  into view (`scrollIntoView`, mobile), and supports Left/Right arrow navigation
+  with `aria-current` + focus states. The rail CSS (`.an-sections`) is
+  `position: sticky; flex-wrap: nowrap; overflow-x: auto` so it stays one row and
+  scrolls horizontally on phones without overlapping the header.
+- **Per-guard sections:** `channel / role / webhook / bot` each render their module's
+  watch rows (`guardSectionHTML`) plus a collapsed per-action response-override
+  editor. `protection` keeps the module cards that don't have a dedicated section.
+- **Overview (real data):** `getAntiNukeOverview(guildId, { days })` (`dashboard/db.js`)
+  aggregates the `antinuke_incidents` ledger — total, critical, confirmed, contained,
+  failed, dry-runs, last success/failure timestamps, top categories and recent rows.
+  The client renders these plus a module-status grid and a `24h / 7d / 30d / all time`
+  date filter (`days=0` = all time). **No hardcoded statistics.** API:
+  `GET /api/guilds/:guildId/antinuke/overview?days=`.
+- **Anti-Raid section:** dedicated UI for join velocity / window / min-account-age /
+  verification escalation / risk levels, plus the raid-module watch rows
+  (`joinBurst`/`newAccountWave`/`coordinatedJoin`) and a raid-incident table backed by
+  `GET .../antinuke/raid` (the `module='raid'` slice of the ledger). The bot side is
+  `AntiNukeManager.processRaidJoin`/`scanMemberJoin` fed from `events/guildMemberAdd.js`
+  (already live). Risk is multi-signal (velocity + new-account ratio + coordination) —
+  never "new account ⇒ ban".
+- **Backups section:** `dashboard/antiNukeActions.js` `captureBackup` /
+  `compareBackup` / `previewBackupRestore` / `restoreBackup` over the
+  `antinuke_backups` table + `utils/antiNukeBackup.js` pure planners. Restore is real
+  (recreates roles/channels + re-applies role permission bits via REST) and the report
+  **labels every recreated resource with its NEW id** — Discord never reuses ids and
+  deleted messages cannot be restored. Bulk restore requires `confirm: true`. Endpoints:
+  `GET/POST .../antinuke/backups`, `GET/DELETE .../backups/:id`,
+  `GET .../backups/:id/compare`, `GET .../backups/:id/restore-preview`,
+  `POST .../backups/:id/restore`.
+- **Lockdown profiles:** five profiles (`join/message/channel/permission/full`) in
+  `engageLockdownProfile` / `restoreLockdownProfile` / `planLockdownProfile`. Each saves
+  exactly what it changed (`record.changes`) and recovery restores **only** those
+  settings, skipping anything an admin changed afterwards. `GET .../lockdown/profile/:profile`
+  returns the exact ops for the "Preview" button; `POST .../lockdown` with
+  `{ action:'engage', profile }` engages. A record carrying `changes` routes to the
+  profile restore; a legacy record routes to the old `restoreLockdown`.
+- **Incidents center:** search + severity + category + executor + date filters and CSV
+  export. `getAntiNukeIncidents` gained `module`, `sinceDays` and `search` (ILIKE over
+  executor name / action / details).
+- **Health:** the section renders the real `healthScan` checks (`result` =
+  `PASS|WARNING|FAILED` + `note`). `utils/antiNukeHealth.js` now attaches a
+  **repair `recommendation`** to every non-PASS check (per-key map + a `perm:*` catch-all),
+  so a warning/failure always carries an actionable next step.
+- **Icons:** six icons added to `dashboard/public/js/icons.js`
+  (`shieldCheck`, `heart`, `layers`, `bot`, `archive`, `wrench`).
+
+### Setup wizard rework (auto + manual)
+
+- **No review/confirm step.** The automatic walkthrough is now **15 required steps**
+  (8 backend + 7 walkthrough): `confirm`/"Reviewing proposed changes" was removed and
+  `apply` writes the recommended configuration in **one shot** (still through the safe
+  `mergeRecommended` path that preserves custom thresholds/trusted lists/responses).
+  Any code that assumed a `confirm` step or a 16-step total is stale.
+- **Dry-run is OFF by default.** `recommendedConfig()` and `mergeRecommended()` both set
+  `dryRun: false`; the bot enforces, it does not only alert.
+- **Responses default to every action except `logOnly`** (`DEFAULT_NUKE_RESPONSES` in
+  `utils/antiNukeRules.js`).
+- **Auto-create really works.** `createIsolationRole` sends `permissions: '0'` (a bitfield
+  **string** — the dashboard REST shim JSON-serializes the body, and Discord rejects an
+  array), and `dashboard/antiNukeActions.js` `buildDashboardGuildShim` now (a) exposes a
+  numeric `position` on channel descriptors and (b) creates a role **without** `position`
+  then PATCHes it (`modifyGuildRole`), because Discord ignores `position` on role CREATE.
+  The isolation role is placed **just below the bot's highest role**.
+- **Step-2 hierarchy warning** reads: "Set the bot in the top 3 role position and press
+  Resume, then." (`botRolePositionCheck` in `utils/antiNukeSetup.js`).
+- **Premium centered choice window.** The alert-channel / isolation-role window is a
+  dedicated `.an-modal-overlay` (flex-centered, `z-index: 1200`, accent icon head,
+  `Make automatically` / `Use selected` / `Cancel` foot) — not the legacy plain modal.
+  `askSetupChoice()` in `dashboard/public/js/antinuke.js` **closes on success** and
+  **stays open showing the real error inline** (`.an-modal-error`) when a create fails,
+  so a missing Manage Channels/Roles permission is visible instead of a silent no-op.
+- **The new automatic steps are mirrored in the manual wizard.** `manualWizardHTML`
+  gained a **Bot readiness check** card on the first step (permissions + hierarchy via
+  `GET .../antinuke/health`) and **"Make automatically"** buttons for the alert channel
+  and quarantine role. Both use the shared endpoint `POST
+  /api/guilds/:guildId/antinuke/setup/create` `{ kind: 'alert_channel'|'isolation_role' }`
+  (guarded by `requireAuth + requireGuildAdmin`), which runs the same
+  `createAlertChannel` / `createIsolationRole` helpers as the automatic walkthrough.
+
 Per-guild protection against destructive admin actions, built on the pre-existing
 `utils/antiNukeManager.js` + `utils/antiNukeRules.js` foundation. **Not released yet**:
 the `upcoming: true` flag is set on the Anti-Nuke tab in `render/guild.js` TABS, so

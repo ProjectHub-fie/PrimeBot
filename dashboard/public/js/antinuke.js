@@ -225,8 +225,10 @@
   var GUILD_CHANNELS = (window.guildData && window.guildData.channels) || [];
   var GUILD_ROLES = (window.guildData && window.guildData.roles) || [];
 
-  /* A floating window that asks the admin to pick an existing channel/role or
-   * let PrimeBot create one. `kind` is 'alert_channel' or 'isolation_role'. */
+  /* A premium, centered floating window that asks the admin to pick an existing
+   * channel/role or let PrimeBot create one. `kind` is 'alert_channel' or
+   * 'isolation_role'. `onChoose(choice)` resumes the setup with the choice;
+   * `onError(msg)` surfaces a failed create so the window can stay open. */
   function askSetupChoice(kind, onChoose) {
     var isChannel = kind === 'alert_channel';
     var overlay = document.createElement('div');
@@ -234,24 +236,45 @@
     var options = isChannel
       ? GUILD_CHANNELS.map(function (c) { return '<option value="' + esc(c.id) + '">#' + esc(c.name) + '</option>'; }).join('')
       : GUILD_ROLES.map(function (r) { return '<option value="' + esc(r.id) + '">' + esc(r.name) + '</option>'; }).join('');
+    if (!options) options = '<option value="">— nothing available —</option>';
     overlay.innerHTML =
-      '<div class="an-modal" role="dialog" aria-modal="true" aria-label="Setup choice">' +
-      '<div class="an-modal-head"><strong>' + (isChannel ? 'Choose a log channel' : 'Choose an isolation role') + '</strong>' +
+      '<div class="an-modal" role="dialog" aria-modal="true" aria-labelledby="an-modal-title">' +
+      '<div class="an-modal-head">' +
+      '<span class="an-modal-ico">' + svg(isChannel ? 'megaphone' : 'userCheck') + '</span>' +
+      '<strong id="an-modal-title">' + (isChannel ? 'Choose an alert channel' : 'Choose an isolation role') + '</strong>' +
       '<button class="an-modal-x" aria-label="Close">' + svg('x') + '</button></div>' +
       '<div class="an-modal-body">' +
       '<p class="card-desc">' + (isChannel
-        ? 'Where should PrimeBot post security alerts? Select an existing channel, or let PrimeBot create <strong>#primebot-antinuke-log</strong>.'
-        : 'Which role should isolate a confirmed attacker? Select an existing role, or let PrimeBot create a role named <strong>isolated</strong> just below its own role.') + '</p>' +
-      '<div class="field"><label class="field-label">' + (isChannel ? 'Channel' : 'Role') + '</label>' +
+        ? 'Where should PrimeBot post security alerts? Pick an existing channel, or let PrimeBot create <strong>#primebot-antinuke-log</strong> for you.'
+        : 'Which role should isolate a confirmed attacker? Pick an existing role, or let PrimeBot create <strong>isolated</strong> just below its own role.') + '</p>' +
+      '<div class="field"><label class="field-label">' + (isChannel ? 'Existing channel' : 'Existing role') + '</label>' +
       '<select id="an-setup-choice">' + options + '</select></div>' +
+      '<div class="an-modal-error" id="an-modal-error" hidden></div>' +
       '</div>' +
       '<div class="an-modal-foot">' +
       '<button class="btn btn-mini an-choice-cancel">Cancel</button>' +
-      '<button class="btn btn-primary btn-mini an-choice-select">Select</button>' +
-      '<button class="btn btn-mini an-choice-auto">' + (isChannel ? 'Make automatically' : 'Make automatically') + '</button>' +
+      '<button class="btn btn-mini an-choice-auto">' + svg('sparkles') + ' Make automatically</button>' +
+      '<button class="btn btn-primary btn-mini an-choice-select">Use selected</button>' +
       '</div></div>';
     document.body.appendChild(overlay);
     function close() { if (overlay.parentNode) overlay.parentNode.removeChild(overlay); }
+    function showError(msg) {
+      var el = overlay.querySelector('#an-modal-error');
+      if (el) { el.hidden = false; el.textContent = msg; }
+    }
+    function attempt(choice) {
+      var btns = $$('.an-choice-select, .an-choice-auto', overlay);
+      btns.forEach(function (b) { b.disabled = true; });
+      Promise.resolve(onChoose(choice)).then(function () {
+        // Success: the setup resumed — close the window.
+        close();
+      }).catch(function (err) {
+        // Failure: keep the window open and show the real reason so the admin
+        // can pick again instead of seeing nothing happen.
+        btns.forEach(function (b) { b.disabled = false; });
+        showError(err && err.message ? err.message : String(err));
+      });
+    }
     overlay.querySelector('.an-modal-x').addEventListener('click', close);
     overlay.querySelector('.an-choice-cancel').addEventListener('click', function () {
       close();
@@ -263,56 +286,81 @@
     overlay.querySelector('.an-choice-select').addEventListener('click', function () {
       var sel = overlay.querySelector('#an-setup-choice');
       var id = sel ? sel.value : '';
-      close();
-      if (!id) { toast('Nothing selected.', 'error'); return; }
-      onChoose(isChannel ? { alertChannelId: id } : { isolationRoleId: id });
+      if (!id) { showError('Nothing is selected. Pick a ' + (isChannel ? 'channel' : 'role') + ' or use Make automatically.'); return; }
+      attempt(isChannel ? { alertChannelId: id } : { isolationRoleId: id });
     });
     overlay.querySelector('.an-choice-auto').addEventListener('click', function () {
-      close();
-      onChoose(isChannel ? { automaticChannel: true } : { automaticRole: true });
+      attempt(isChannel ? { automaticChannel: true } : { automaticRole: true });
+    });
+    return { close: close, showError: showError };
+  }
+
+  /* One setup step request. Returns the parsed response (throws on HTTP error). */
+  function runSetupStep(body) {
+    return api('/api/guilds/' + GUILD_ID + '/antinuke/setup/step', {
+      method: 'POST', body: JSON.stringify(Object.assign({ method: 'automatic' }, body || {})),
     });
   }
 
+  /* Human-readable reason for a failed step, from the persisted state. */
+  function stepFailureReason(data) {
+    var failed = (data && data.progress && data.progress.steps || []).filter(function (s) { return s.status === 'failed'; });
+    if (!failed.length) return 'A setup step failed.';
+    return 'Step failed: ' + failed[0].label + (failed[0].error ? (' — ' + failed[0].error) : '');
+  }
+
+  /* Mark the setup as stopped with a retry affordance. */
+  function stopSetupWithError(message) {
+    setSetupButtonsBusy(false);
+    var resume = $('#an-resume-setup'); if (resume) resume.hidden = false;
+    var reset = $('#an-reset-setup'); if (reset) reset.hidden = false;
+    toast(message + ' Press Resume setup to retry.', 'error');
+  }
+
   /* Drive the automatic setup one step at a time, rendering real progress after
-   * each step. Pauses for a floating window when a step needs a choice, and
-   * stops on a failed step so the admin can see it and retry. */
+   * each step. A step that needs a choice opens the premium centered window; the
+   * window STAYS OPEN and shows the real error if the chosen action fails (e.g.
+   * "Make automatically" without Manage Roles/Channels), so the admin can pick
+   * again instead of seeing nothing happen. */
   function runAutomaticSteps(extraBody) {
+    return driveSetup(extraBody || {}, 0);
+  }
+
+  function driveSetup(extraBody, depth) {
+    if (depth > 40) { stopSetupWithError('Setup did not converge.'); return Promise.resolve(); }
     setSetupButtonsBusy(true);
-    api('/api/guilds/' + GUILD_ID + '/antinuke/setup/step', { method: 'POST', body: JSON.stringify(Object.assign({ method: 'automatic' }, extraBody || {})) })
-      .then(function (data) {
-        renderProgress(data.progress);
-        if (data.done) {
-          toast('Anti-Nuke setup completed', 'success');
-          window.location.href = window.location.pathname;
-          return;
-        }
-        if (data.prompt) {
-          // The step needs a choice (alert channel / isolation role).
-          setSetupButtonsBusy(false);
+    return runSetupStep(extraBody).then(function (data) {
+      renderProgress(data.progress);
+      if (data.done) { toast('Anti-Nuke setup completed', 'success'); window.location.href = window.location.pathname; return; }
+      if (data.prompt) {
+        setSetupButtonsBusy(false);
+        return new Promise(function (resolve) {
           askSetupChoice(data.prompt, function (choice) {
             setSetupButtonsBusy(true);
-            runAutomaticSteps(choice);
+            var merged = Object.assign({}, extraBody, choice);
+            return runSetupStep(merged).then(function (d2) {
+              renderProgress(d2.progress);
+              if (d2.done) { toast('Anti-Nuke setup completed', 'success'); window.location.href = window.location.pathname; resolve(); return; }
+              if (d2.progress && d2.progress.failed > 0) {
+                // Reject: the window stays open and shows the real reason.
+                throw new Error(stepFailureReason(d2));
+              }
+              // Success: resolve so the window closes, then keep driving (a later
+              // step may prompt again — that opens a fresh window).
+              resolve();
+              driveSetup(merged, depth + 1);
+            });
           });
-          return;
-        }
-        if (data.progress && data.progress.failed > 0) {
-          // Retain the last accurate progress and surface a retry action.
-          var failed = (data.progress.steps || []).filter(function (s) { return s.status === 'failed'; });
-          setSetupButtonsBusy(false);
-          var resume = $('#an-resume-setup'); if (resume) resume.hidden = false;
-          var reset = $('#an-reset-setup'); if (reset) reset.hidden = false;
-          toast((failed.length ? ('Step failed: ' + failed[0].label) : 'A setup step failed.') +
-            (failed.length && failed[0].error ? (' — ' + failed[0].error) : '') +
-            ' Press Resume setup to retry.', 'error');
-          return;
-        }
-        runAutomaticSteps();
-      })
-      .catch(function (err) {
-        setSetupButtonsBusy(false);
-        var resume = $('#an-resume-setup'); if (resume) resume.hidden = false;
-        toast('Setup step failed: ' + err.message, 'error');
-      });
+        });
+      }
+      if (data.progress && data.progress.failed > 0) { stopSetupWithError(stepFailureReason(data)); return; }
+      return driveSetup(extraBody, depth + 1);
+    }).catch(function (err) {
+      // A rejection reaching here is either an HTTP failure or a failure we
+      // re-threw from the window path (the window already showed it inline).
+      if (!err || err.__handled) return;
+      stopSetupWithError('Setup step failed: ' + err.message);
+    });
   }
 
   // ── Manual wizard ─────────────────────────────────────────────────────────
@@ -418,6 +466,8 @@
 
     renderTrustedUsers();
     renderTrustedRoles();
+    initWizardCreateButtons();
+    initWizardReadinessCheck();
     // Resume at the first section that is not yet completed (so a return to the
     // wizard picks up where the admin left off rather than restarting at 1).
     var firstIncomplete = 0;
@@ -426,6 +476,75 @@
       if (i === sections.length - 1) firstIncomplete = i;
     }
     show(firstIncomplete);
+  }
+
+  /* "Make automatically" in the manual wizard — creates the alert channel or the
+   * isolation role via the shared setup/create endpoint, then selects it in the
+   * matching control. On failure the real reason is shown (no silent no-op). */
+  function initWizardCreateButtons() {
+    $$('.an-create-auto').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var kind = btn.dataset.create;
+        btn.disabled = true;
+        var old = btn.innerHTML;
+        btn.innerHTML = 'Creating…';
+        api('/api/guilds/' + GUILD_ID + '/antinuke/setup/create', { method: 'POST', body: JSON.stringify({ kind: kind }) })
+          .then(function (res) {
+            toast((kind === 'alert_channel' ? 'Created #' : 'Created the “') + (res.name || '') + (kind === 'alert_channel' ? '' : '” role'), 'success');
+            if (kind === 'alert_channel') {
+              var sel = $('#an-alert-channel');
+              if (sel) {
+                var opt = document.createElement('option');
+                opt.value = res.channelId; opt.textContent = '#' + (res.name || '');
+                sel.appendChild(opt); sel.value = res.channelId;
+              }
+            } else {
+              var rsel = $('#an-quarantine-role');
+              if (rsel) {
+                var ropt = document.createElement('option');
+                ropt.value = res.roleId; ropt.textContent = res.name || 'isolated';
+                rsel.appendChild(ropt); rsel.value = res.roleId;
+              }
+            }
+            if (window.saveBar && window.saveBar.markDirty) window.saveBar.markDirty();
+          })
+          .catch(function (err) { toast(err.message, 'error'); })
+          .then(function () { btn.disabled = false; btn.innerHTML = old; });
+      });
+    });
+  }
+
+  /* The manual wizard's bot-readiness check (permissions + hierarchy), the same
+   * scan the automatic setup gates on — surfaced as a card on the first step. */
+  function initWizardReadinessCheck() {
+    var run = $('#an-wizard-check-run');
+    if (run) run.addEventListener('click', wizardReadinessCheck);
+    wizardReadinessCheck();
+  }
+
+  function wizardReadinessCheck() {
+    var out = $('#an-wizard-check-result');
+    if (!out) return;
+    out.innerHTML = '<div class="an-empty">Running check…</div>';
+    api('/api/guilds/' + GUILD_ID + '/antinuke/health')
+      .then(function (scan) {
+        var checks = (scan && scan.checks) || [];
+        var relevant = checks.filter(function (c) {
+          return /bot_permissions|hierarchy|enabled|intent|audit_stream|alert_channel|quarantine_role/i.test(c.key || '');
+        });
+        if (!relevant.length) relevant = checks.slice(0, 6);
+        out.innerHTML = '<div class="an-health-list">' + relevant.map(function (c) {
+          var result = c.result || (c.ok ? 'PASS' : 'FAILED');
+          var cls = result === 'PASS' ? 'pass' : (result === 'WARNING' ? 'warn' : 'fail');
+          return '<div class="an-health-row an-health-' + cls + '">' +
+            '<span class="an-health-badge">' + esc(cls.toUpperCase()) + '</span>' +
+            '<span class="an-health-label">' + esc(c.label || c.key) + '</span>' +
+            '<span class="an-health-detail">' + esc(c.note || '') + '</span>' +
+            (c.recommendation ? '<span class="an-health-fix">' + svg('wrench') + ' ' + esc(c.recommendation) + '</span>' : '') +
+            '</div>';
+        }).join('') + '</div>';
+      })
+      .catch(function (err) { out.innerHTML = '<div class="an-empty">Could not run the check: ' + esc(err.message) + '</div>'; });
   }
 
   // ── Console ───────────────────────────────────────────────────────────────
@@ -505,12 +624,18 @@
     return labels[status] || (status || 'Detected');
   }
 
+  var _activityLoad = null;
+  function refreshIncidents() { if (_activityLoad) _activityLoad(); }
+
   function initActivity() {
     var body = $('#an-activity-body');
     if (!body) return;
     var offset = 0, limit = 25, total = 0;
     function load() {
-      api('/api/guilds/' + GUILD_ID + '/antinuke/incidents?limit=' + limit + '&offset=' + offset)
+      var qs = (typeof incidentQuery === 'function')
+        ? incidentQuery(limit)
+        : ('limit=' + limit + '&offset=' + offset);
+      api('/api/guilds/' + GUILD_ID + '/antinuke/incidents?' + qs)
         .then(function (data) {
           total = data.total || 0;
           var rows = data.incidents || [];
@@ -546,10 +671,33 @@
         });
     }
     var prev = $('#an-activity-prev');
-    if (prev) prev.addEventListener('click', function () { offset = Math.max(0, offset - limit); load(); });
+    if (prev) prev.addEventListener('click', function () { INCIDENT_FILTERS.page = Math.max(0, INCIDENT_FILTERS.page - 1); load(); });
     var next = $('#an-activity-next');
-    if (next) next.addEventListener('click', function () { offset += limit; load(); });
+    if (next) next.addEventListener('click', function () { INCIDENT_FILTERS.page += 1; load(); });
+    _activityLoad = load;
     load();
+  }
+
+  // ── Overview wiring ───────────────────────────────────────────────────────
+
+  function initOverview() {
+    var rangeEl = $('#an-overview-range');
+    if (rangeEl) rangeEl.addEventListener('change', refreshOverview);
+    var qa = $('#an-qa-lockdown');
+    if (qa) qa.addEventListener('click', function () {
+      var sec = $('.am-section-btn[data-section="lockdown"]');
+      if (sec) sec.click();
+    });
+    var qb = $('#an-qa-backup');
+    if (qb) qb.addEventListener('click', function () {
+      var sec = $('.am-section-btn[data-section="backups"]');
+      if (sec) sec.click();
+    });
+    var qh = $('#an-qa-health');
+    if (qh) qh.addEventListener('click', function () {
+      var sec = $('.am-section-btn[data-section="health"]');
+      if (sec) sec.click();
+    });
   }
 
   // ── Trusted users / roles ─────────────────────────────────────────────────
@@ -950,7 +1098,383 @@
 
   function initConsoleViewExtra() {
     renderAccessControl();
+    initSections();
+    initOverview();
+    initRaid();
+    initBackups();
+    initHealth();
+    initLockdownProfiles();
+    initIncidentFilters();
   }
+
+  // ── Premium section navigation ────────────────────────────────────────────
+  //
+  // One horizontal rail; sections switch without a page reload, the active
+  // section is kept in the URL (?section=) so a refresh restores it, the rail
+  // scrolls the active tab into view on mobile, and Left/Right arrow keys move
+  // between tabs when the rail has focus.
+
+  function initSections() {
+    var rail = $('#an-sections');
+    if (!rail) return;
+    var buttons = $$('.am-section-btn', rail);
+
+    function sectionKeys() { return buttons.map(function (b) { return b.dataset.section; }); }
+
+    function showSection(key, opts) {
+      opts = opts || {};
+      if (!$('.an-section[data-section="' + key + '"]')) key = 'overview';
+      $$('.an-section').forEach(function (sec) { sec.hidden = sec.dataset.section !== key; });
+      buttons.forEach(function (btn) {
+        var on = btn.dataset.section === key;
+        btn.classList.toggle('active', on);
+        btn.setAttribute('aria-current', on ? 'true' : 'false');
+      });
+      var active = buttons.filter(function (b) { return b.dataset.section === key; })[0];
+      if (active && active.scrollIntoView) {
+        try { active.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' }); } catch (_) { active.scrollIntoView(); }
+      }
+      if (opts.push !== false && window.history && window.history.replaceState) {
+        var url = new URL(window.location.href);
+        url.searchParams.set('section', key);
+        window.history.replaceState({ section: key }, '', url);
+      }
+      onSectionShown(key);
+    }
+
+    rail.addEventListener('click', function (e) {
+      var btn = e.target.closest('.am-section-btn');
+      if (btn) showSection(btn.dataset.section);
+    });
+
+    rail.addEventListener('keydown', function (e) {
+      if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+      var keys = sectionKeys();
+      var cur = keys.indexOf($('.am-section-btn.active', rail) ? $('.am-section-btn.active', rail).dataset.section : 'overview');
+      var next = e.key === 'ArrowRight' ? Math.min(keys.length - 1, cur + 1) : Math.max(0, cur - 1);
+      var target = buttons[next];
+      if (target) { target.focus(); showSection(target.dataset.section); }
+      e.preventDefault();
+    });
+
+    window.addEventListener('popstate', function (ev) {
+      var key = (ev.state && ev.state.section) || new URL(window.location.href).searchParams.get('section') || 'overview';
+      showSection(key, { push: false });
+    });
+
+    var initial = new URL(window.location.href).searchParams.get('section') || 'overview';
+    showSection(initial, { push: false });
+    // Keep the rail under the sticky header on scroll without overlapping it.
+    rail.scrollTop = 0;
+  }
+
+  function onSectionShown(key) {
+    if (key === 'overview') refreshOverview();
+    if (key === 'antiraid') refreshRaid();
+    if (key === 'backups') refreshBackups();
+    if (key === 'health') refreshHealth();
+    if (key === 'incidents') refreshIncidents();
+  }
+
+  // ── Overview (real aggregates from the incident ledger) ───────────────────
+
+  function fmtTs(ts) {
+    if (!ts) return '—';
+    try { return new Date(ts).toLocaleString(); } catch (_) { return String(ts); }
+  }
+
+  function refreshOverview() {
+    var live = $('#an-overview-live');
+    var rangeEl = $('#an-overview-range');
+    if (!live) return;
+    var days = rangeEl ? rangeEl.value : '30';
+    live.innerHTML = '<div class="am-stat"><div class="am-stat-body"><div class="am-stat-label">Loading…</div></div></div>';
+    api('/api/guilds/' + GUILD_ID + '/antinuke/overview?days=' + encodeURIComponent(days))
+      .then(function (o) {
+        live.innerHTML = [
+          statHTML('Total incidents', o.total, 'inbox'),
+          statHTML('Critical', o.critical, 'alertTriangle'),
+          statHTML('Confirmed attacks', o.confirmed, 'shieldAlert'),
+          statHTML('Contained', o.contained, 'shieldCheck'),
+          statHTML('Failed enforcement', o.failed, 'x'),
+          statHTML('Last success', o.lastSuccessAt ? new Date(o.lastSuccessAt).toLocaleDateString() : '—', 'check'),
+        ].join('');
+        var top = $('#an-overview-top');
+        if (top) {
+          top.innerHTML = (o.topCategories && o.topCategories.length)
+            ? '<div class="card-title"><span>Top categories</span></div><div class="an-bars">' + o.topCategories.map(function (c) {
+                var max = o.topCategories[0].count || 1;
+                var pct = Math.round((c.count / max) * 100);
+                return '<div class="an-bar-row"><span class="an-bar-label">' + esc(actionLabel(c.action)) + '</span><span class="an-bar"><span class="an-bar-fill" style="width:' + pct + '%"></span></span><span class="an-bar-val">' + esc(c.count) + '</span></div>';
+              }).join('') + '</div>'
+            : '<div class="an-empty">No incidents in this window.</div>';
+        }
+        var mods = $('#an-overview-modules');
+        if (mods) {
+          var byAction = {};
+          (o.topCategories || []).forEach(function (c) { byAction[c.action] = c.count; });
+          mods.innerHTML = '<div class="card-title"><span>Detection modules</span></div><div class="an-module-status">' +
+            MODULES.map(function (m) {
+              var acts = ACTIONS.filter(function (a) { return a.module === m.key; });
+              var enabled = acts.some(function (a) { return (SETTINGS.watched && SETTINGS.watched[a.key] || {}).enabled !== false; });
+              return '<span class="an-mod-pill ' + (enabled ? 'on' : 'off') + '">' + svg(enabled ? 'check' : 'x') + ' ' + esc(m.label) + '</span>';
+            }).join('') + '</div>';
+        }
+      })
+      .catch(function (err) {
+        live.innerHTML = '<div class="an-empty">Could not load overview: ' + esc(err.message) + '</div>';
+      });
+  }
+
+  function statHTML(label, value, icon) {
+    return '<div class="am-stat"><div class="am-stat-icon">' + svg(icon) + '</div><div class="am-stat-body"><div class="am-stat-label">' + esc(label) + '</div><div class="am-stat-value">' + esc(value) + '</div></div></div>';
+  }
+
+  function actionLabel(key) {
+    var a = ACTIONS.filter(function (x) { return x.key === key; })[0];
+    return a ? a.label : key;
+  }
+
+  // ── Anti-Raid ─────────────────────────────────────────────────────────────
+
+  function initRaid() {
+    var refresh = $('#an-raid-refresh');
+    if (refresh) refresh.addEventListener('click', refreshRaid);
+  }
+
+  function refreshRaid() {
+    var body = $('#an-raid-incidents-body');
+    if (!body) return;
+    body.innerHTML = '<tr><td colspan="5" class="an-empty">Loading…</td></tr>';
+    api('/api/guilds/' + GUILD_ID + '/antinuke/raid?limit=25')
+      .then(function (data) {
+        var rows = data.incidents || [];
+        if (!rows.length) { body.innerHTML = '<tr><td colspan="5" class="an-empty">No raid incidents detected.</td></tr>'; return; }
+        body.innerHTML = rows.map(function (inc) {
+          var details = inc.details || '';
+          var joins = (details.match(/joins?[=: ](\d+)/i) || [])[1] || inc.count || '—';
+          var newAcc = (details.match(/new[_-]?accounts?[=: ](\d+)/i) || [])[1] || '—';
+          return '<tr><td>' + esc(fmtTs(inc.createdAt)) + '</td>' +
+            '<td><span class="an-sev an-sev-' + esc(inc.severity) + '">' + esc(inc.severity) + '</span></td>' +
+            '<td>' + esc(joins) + '</td><td>' + esc(newAcc) + '</td>' +
+            '<td>' + esc((inc.responseTaken || []).join(', ') || '—') + '</td></tr>';
+        }).join('');
+      })
+      .catch(function (err) { body.innerHTML = '<tr><td colspan="5" class="an-empty">Could not load: ' + esc(err.message) + '</td></tr>'; });
+  }
+
+  // ── Backups ───────────────────────────────────────────────────────────────
+
+  function initBackups() {
+    var create = $('#an-backup-create');
+    if (create) create.addEventListener('click', function () {
+      create.disabled = true;
+      var nameEl = $('#an-backup-name');
+      api('/api/guilds/' + GUILD_ID + '/antinuke/backups', { method: 'POST', body: JSON.stringify({ name: nameEl ? nameEl.value : '' }) })
+        .then(function () { toast('Snapshot created', 'success'); if (nameEl) nameEl.value = ''; refreshBackups(); })
+        .catch(function (err) { toast('Backup failed: ' + err.message, 'error'); })
+        .then(function () { create.disabled = false; });
+    });
+    var refresh = $('#an-backup-refresh');
+    if (refresh) refresh.addEventListener('click', refreshBackups);
+  }
+
+  function refreshBackups() {
+    var list = $('#an-backup-list');
+    if (!list) return;
+    list.innerHTML = '<div class="an-empty">Loading…</div>';
+    api('/api/guilds/' + GUILD_ID + '/antinuke/backups')
+      .then(function (data) {
+        var rows = data.backups || [];
+        if (!rows.length) { list.innerHTML = '<div class="an-empty">No snapshots yet.</div>'; return; }
+        list.innerHTML = rows.map(function (b) {
+          return '<div class="an-backup-row" data-id="' + esc(b.id) + '">' +
+            '<div class="an-backup-main"><div class="an-backup-name">' + esc(b.name || ('Backup #' + b.id)) + '</div>' +
+            '<div class="an-backup-meta">' + esc(fmtTs(b.createdAt)) + ' · ' + esc((b.counts && b.counts.roles) || 0) + ' roles · ' + esc((b.counts && b.counts.channels) || 0) + ' channels</div></div>' +
+            '<div class="an-backup-actions">' +
+            '<button class="btn btn-mini an-backup-compare" data-id="' + esc(b.id) + '">Compare</button>' +
+            '<button class="btn btn-mini an-backup-preview" data-id="' + esc(b.id) + '">Restore preview</button>' +
+            '<button class="btn btn-danger btn-mini an-backup-restore" data-id="' + esc(b.id) + '">Restore</button>' +
+            '<button class="btn btn-mini an-backup-delete" data-id="' + esc(b.id) + '">Delete</button>' +
+            '</div></div>';
+        }).join('');
+        $$('.an-backup-compare', list).forEach(function (btn) { btn.addEventListener('click', function () { backupCompare(btn.dataset.id); }); });
+        $$('.an-backup-preview', list).forEach(function (btn) { btn.addEventListener('click', function () { backupPreview(btn.dataset.id); }); });
+        $$('.an-backup-restore', list).forEach(function (btn) { btn.addEventListener('click', function () { backupRestore(btn.dataset.id); }); });
+        $$('.an-backup-delete', list).forEach(function (btn) { btn.addEventListener('click', function () { backupDelete(btn.dataset.id); }); });
+      })
+      .catch(function (err) { list.innerHTML = '<div class="an-empty">Could not load backups: ' + esc(err.message) + '</div>'; });
+  }
+
+  function backupReport(html) {
+    var list = $('#an-backup-list');
+    if (list) list.insertAdjacentHTML('afterbegin', '<div class="an-backup-report card">' + html + '</div>');
+  }
+
+  function backupCompare(id) {
+    api('/api/guilds/' + GUILD_ID + '/antinuke/backups/' + id + '/compare')
+      .then(function (data) {
+        var d = data.diff || {};
+        backupReport('<div class="card-title"><span>Comparison for #' + esc(id) + '</span></div>' +
+          '<ul class="an-diff-list">' +
+          '<li>' + esc((d.missingRoles || []).length) + ' role(s) missing</li>' +
+          '<li>' + esc((d.modifiedRoles || []).length) + ' role(s) modified</li>' +
+          '<li>' + esc((d.missingChannels || []).length) + ' channel(s) missing</li>' +
+          '</ul>');
+      })
+      .catch(function (err) { toast('Compare failed: ' + err.message, 'error'); });
+  }
+
+  function backupPreview(id) {
+    api('/api/guilds/' + GUILD_ID + '/antinuke/backups/' + id + '/restore-preview')
+      .then(function (data) {
+        var ops = (data.plan && data.plan.ops) || [];
+        backupReport('<div class="card-title"><span>Restore preview for #' + esc(id) + '</span></div>' +
+          (ops.length ? '<ul class="an-diff-list">' + ops.slice(0, 50).map(function (op) {
+            return '<li>' + esc(op.kind) + ' → ' + esc(op.payload && (op.payload.name || op.target) || op.target) + '</li>';
+          }).join('') + '</ul>' : '<div class="an-empty">Nothing to restore — structure matches the snapshot.</div>') +
+          '<div class="field-hint">Recreated roles/channels receive NEW ids.</div>');
+      })
+      .catch(function (err) { toast('Preview failed: ' + err.message, 'error'); });
+  }
+
+  function backupRestore(id) {
+    if (!window.confirm('Restore snapshot #' + id + '? Missing roles/channels will be recreated with NEW ids. This is a bulk operation.')) return;
+    api('/api/guilds/' + GUILD_ID + '/antinuke/backups/' + id + '/restore', { method: 'POST', body: JSON.stringify({ confirm: true }) })
+      .then(function (data) {
+        var r = data.report || {};
+        toast('Restore complete', 'success');
+        backupReport('<div class="card-title"><span>Restore report for #' + esc(id) + '</span></div>' +
+          '<ul class="an-diff-list"><li>' + esc(r.summary.rolesCreated) + ' roles created</li><li>' + esc(r.summary.rolesUpdated) + ' roles updated</li>' +
+          '<li>' + esc(r.summary.channelsCreated) + ' channels created</li><li>' + esc(r.summary.failed) + ' failed</li></ul>' +
+          '<div class="field-hint">' + esc(r.note || '') + '</div>');
+      })
+      .catch(function (err) { toast('Restore failed: ' + err.message, 'error'); });
+  }
+
+  function backupDelete(id) {
+    if (!window.confirm('Delete snapshot #' + id + '?')) return;
+    api('/api/guilds/' + GUILD_ID + '/antinuke/backups/' + id, { method: 'DELETE' })
+      .then(function () { toast('Snapshot deleted', 'success'); refreshBackups(); })
+      .catch(function (err) { toast('Delete failed: ' + err.message, 'error'); });
+  }
+
+  // ── Health ────────────────────────────────────────────────────────────────
+
+  function initHealth() {
+    var run = $('#an-health-run');
+    if (run) run.addEventListener('click', refreshHealth);
+  }
+
+  function refreshHealth() {
+    var out = $('#an-health-result');
+    if (!out) return;
+    out.innerHTML = '<div class="an-empty">Running scan…</div>';
+    api('/api/guilds/' + GUILD_ID + '/antinuke/health')
+      .then(function (scan) {
+        var checks = (scan && scan.checks) || [];
+        if (!checks.length) { out.innerHTML = '<div class="an-empty">No checks returned.</div>'; return; }
+        out.innerHTML = '<div class="an-health-list">' + checks.map(function (c) {
+          var result = c.result || (c.ok ? 'PASS' : 'FAILED');
+          var cls = result === 'PASS' ? 'pass' : (result === 'WARNING' ? 'warn' : 'fail');
+          return '<div class="an-health-row an-health-' + cls + '">' +
+            '<span class="an-health-badge">' + esc(cls.toUpperCase()) + '</span>' +
+            '<span class="an-health-label">' + esc(c.label || c.key) + '</span>' +
+            '<span class="an-health-detail">' + esc(c.note || c.detail || c.message || '') + '</span>' +
+            (c.recommendation ? '<span class="an-health-fix">' + svg('wrench') + ' ' + esc(c.recommendation) + '</span>' : '') +
+            '</div>';
+        }).join('') + '</div>';
+      })
+      .catch(function (err) { out.innerHTML = '<div class="an-empty">Health scan failed: ' + esc(err.message) + '</div>'; });
+  }
+
+  // ── Lockdown profiles ─────────────────────────────────────────────────────
+
+  function initLockdownProfiles() {
+    $$('.an-lockdown-preview').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var profile = btn.dataset.profile;
+        api('/api/guilds/' + GUILD_ID + '/antinuke/lockdown/profile/' + profile)
+          .then(function (plan) {
+            var ul = $('#an-profile-ops-' + profile);
+            if (ul) ul.innerHTML = (plan.ops || []).slice(0, 40).map(function (op) {
+              return '<li>' + esc(op.kind) + (op.name ? ' → ' + esc(op.name) : '') + '</li>';
+            }).join('') || '<li>No changes needed.</li>';
+          })
+          .catch(function (err) { toast('Preview failed: ' + err.message, 'error'); });
+      });
+    });
+    $$('.an-lockdown-engage-profile').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var profile = btn.dataset.profile;
+        if (!window.confirm('Engage the ' + profile + ' lockdown profile? It saves what it changes so it can be restored.')) return;
+        btn.disabled = true;
+        api('/api/guilds/' + GUILD_ID + '/antinuke/lockdown', { method: 'POST', body: JSON.stringify({ action: 'engage', profile: profile }) })
+          .then(function (data) {
+            toast('Lockdown engaged', 'success');
+            if (data && data.warnings && data.warnings.length) toast(data.warnings.join('; '), 'error');
+            window.location.reload();
+          })
+          .catch(function (err) { btn.disabled = false; toast('Lockdown failed: ' + err.message, 'error'); });
+      });
+    });
+  }
+
+  // ── Incident filters ──────────────────────────────────────────────────────
+
+  function initIncidentFilters() {
+    var sev = $('#an-inc-severity');
+    var act = $('#an-inc-action');
+    var exec = $('#an-inc-executor');
+    var range = $('#an-inc-range');
+    var search = $('#an-inc-search');
+    [sev, act, range].forEach(function (el) { if (el) el.addEventListener('change', function () { INCIDENT_FILTERS.page = 0; refreshIncidents(); }); });
+    if (exec) exec.addEventListener('change', function () { INCIDENT_FILTERS.page = 0; refreshIncidents(); });
+    if (search) {
+      var t = null;
+      search.addEventListener('input', function () {
+        clearTimeout(t);
+        t = setTimeout(function () { INCIDENT_FILTERS.search = search.value; INCIDENT_FILTERS.page = 0; refreshIncidents(); }, 300);
+      });
+    }
+    var exp = $('#an-inc-export');
+    if (exp) exp.addEventListener('click', exportIncidents);
+  }
+
+  function exportIncidents() {
+    var qs = incidentQuery(100);
+    api('/api/guilds/' + GUILD_ID + '/antinuke/incidents?' + qs)
+      .then(function (data) {
+        var rows = data.incidents || [];
+        var head = ['id', 'createdAt', 'action', 'severity', 'executorId', 'executorName', 'count', 'threshold', 'windowSeconds', 'responseTaken', 'responseOk', 'attribution'];
+        var csv = [head.join(',')].concat(rows.map(function (r) {
+          return head.map(function (h) {
+            var v = r[h];
+            if (Array.isArray(v)) v = v.join('|');
+            return '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+          }).join(',');
+        })).join('\n');
+        var blob = new Blob([csv], { type: 'text/csv' });
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'antinuke-incidents.csv';
+        document.body.appendChild(a); a.click(); a.remove();
+        toast('Exported ' + rows.length + ' incidents', 'success');
+      })
+      .catch(function (err) { toast('Export failed: ' + err.message, 'error'); });
+  }
+
+  function incidentQuery(limit) {
+    var params = ['limit=' + (limit || 25), 'offset=' + (INCIDENT_FILTERS.page * 25)];
+    var sev = $('#an-inc-severity'); if (sev && sev.value) params.push('severity=' + encodeURIComponent(sev.value));
+    var act = $('#an-inc-action'); if (act && act.value) params.push('action=' + encodeURIComponent(act.value));
+    var exec = $('#an-inc-executor'); if (exec && exec.value) params.push('executorId=' + encodeURIComponent(exec.value));
+    var range = $('#an-inc-range'); if (range && range.value) params.push('sinceDays=' + encodeURIComponent(range.value));
+    if (INCIDENT_FILTERS.search) params.push('search=' + encodeURIComponent(INCIDENT_FILTERS.search));
+    return params.join('&');
+  }
+
+  var INCIDENT_FILTERS = { page: 0, search: '' };
 
   // Patch the existing init functions to also start polling / render access.
   var _origInitSetup = initSetupView;
