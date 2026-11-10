@@ -265,12 +265,37 @@ async function runStep(stepKey, { client, guild, state, options }) {
                 : false;
             const persisted = settings.enabled === true || Object.keys(settings.watched || {}).length > 0;
             if (!persisted) throw new Error('Configuration did not persist to the database.');
+
+            // Quarantine + hierarchy readiness — report the exact reason when the
+            // configured quarantine role cannot operate, and whether the bot is
+            // high enough to manage detected attackers at all.
+            const qRoleId = settings.quarantineRoleId || null;
+            let quarantine = { configured: false, reason: 'no quarantine role configured — quarantine falls back to stripping dangerous roles only' };
+            if (qRoleId) {
+                const role = guild.roles && guild.roles.cache ? guild.roles.cache.get(qRoleId) : null;
+                const botHighest = guild.members && guild.members.me && guild.members.me.roles && guild.members.me.roles.highest
+                    ? Number(guild.members.me.roles.highest.position) : null;
+                if (!role) {
+                    quarantine = { configured: true, exists: false, reason: `quarantine role ${qRoleId} does not exist — create it (below the bot's highest role) or re-run setup with a role selected` };
+                } else if (botHighest != null && Number(role.position) >= botHighest) {
+                    quarantine = { configured: true, exists: true, reason: `quarantine role position ${Number(role.position)} is at/above the bot's highest role ${botHighest} — move the bot's role above it (setup repair)` };
+                } else if (!report.checks.find(c => c.key === 'ManageRoles')?.available) {
+                    quarantine = { configured: true, exists: true, reason: 'bot lacks Manage Roles — grant it to use the quarantine role' };
+                } else {
+                    quarantine = { configured: true, exists: true, ok: true };
+                }
+            }
+            const hierarchy = guild.members && guild.members.me && guild.members.me.roles && guild.members.me.roles.highest
+                ? { botHighestRole: Number(guild.members.me.roles.highest.position) }
+                : { botHighestRole: null, reason: 'bot member roles are not resolvable on this process' };
             return {
                 persisted,
                 permissionsOk: report.ok,
                 missingPermissions: report.missing,
                 alertChannelOk: channelOk,
                 modulesEnabled: Object.values(settings.watched || {}).filter(w => w && w.enabled !== false).length,
+                quarantine,
+                hierarchy,
             };
         }
         default: {

@@ -456,6 +456,28 @@ for (const src of ANTI_NUKE_FALLBACK_SOURCES) {
         } catch (_) { /* detection must never break the event pipeline */ }
     });
 }
+// Startup diagnostic — whether the primary Anti-Nuke detection path is live.
+// This is NOT a "bot is online" check: it reports the actual wiring (intent set
+// in this process, event handler loaded, manager initialized). A warning here
+// means protection cannot observe destructive events even though the bot is up.
+try {
+    const anManager = client.antiNukeManager;
+    const hasGuildMod = (() => {
+        try {
+            const intents = client.options && client.options.intents;
+            return Boolean(intents && typeof intents.has === 'function' && intents.has(GatewayIntentBits.GuildModeration));
+        } catch (_) { return false; }
+    })();
+    const handlerLoaded = Boolean(anManager && typeof anManager.processEvent === 'function');
+    if (handlerLoaded && hasGuildMod) {
+        console.log('[ANTINUKE] Primary detection path OPERATIONAL: GuildModeration intent on, guildAuditLogEntryCreate handler loaded, manager ready.');
+    } else {
+        const missing = [];
+        if (!hasGuildMod) missing.push('GuildModeration intent');
+        if (!handlerLoaded) missing.push('AntiNukeManager.processEvent');
+        console.warn(`[ANTINUKE] Primary detection path NOT fully operational — missing: ${missing.join(', ') || 'unknown'}. Enable the GuildModeration intent in the Discord Developer Portal for reliable audit-log attribution; the per-event fallback remains active.`);
+    }
+} catch (_) { /* diagnostic must never prevent boot */ }
 
 // Add event handlers for guild join/leave to update status
 client.on('guildCreate', (guild) => {

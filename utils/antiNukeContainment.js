@@ -46,6 +46,7 @@ const REQUIRED_PERMISSIONS = [
     { key: 'ManageRoles',     label: 'Manage Roles',     flag: PermissionFlagsBits.ManageRoles,     neededFor: 'Role + permission containment' },
     { key: 'ManageChannels',  label: 'Manage Channels',  flag: PermissionFlagsBits.ManageChannels,  neededFor: 'Lockdown' },
     { key: 'BanMembers',      label: 'Ban Members',      flag: PermissionFlagsBits.BanMembers,      neededFor: 'Mass-ban response' },
+    { key: 'KickMembers',     label: 'Kick Members',     flag: PermissionFlagsBits.KickMembers,     neededFor: 'Mass-kick response' },
     { key: 'ManageGuild',     label: 'Manage Server',    flag: PermissionFlagsBits.ManageGuild,     neededFor: 'Lockdown (verification level)' },
     { key: 'ManageWebhooks',  label: 'Manage Webhooks',  flag: PermissionFlagsBits.ManageWebhooks,  neededFor: 'Webhook protection' },
 ];

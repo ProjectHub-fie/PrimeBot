@@ -34,6 +34,7 @@ const { runAll } = require('../utils/antiNukeSetupRunner');
 // is only shown to someone with at least `antinuke.view`.
 const AUTH_REQUIREMENTS = {
     status: 'antinuke.view',
+    health: 'antinuke.view',
     setup: 'antinuke.setup',
     progress: 'antinuke.view',
     enable: 'antinuke.config',
@@ -67,6 +68,7 @@ module.exports = {
         .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
         .setDMPermission(false)
         .addSubcommand(sub => sub.setName('status').setDescription('Show the Anti-Nuke configuration and protection status'))
+        .addSubcommand(sub => sub.setName('health').setDescription('Run a readiness scan of the Anti-Nuke protection pipeline'))
         .addSubcommand(sub => sub.setName('setup').setDescription('Start the guided Anti-Nuke setup wizard'))
         .addSubcommand(sub => sub.setName('enable').setDescription('Enable Anti-Nuke for this server'))
         .addSubcommand(sub => sub.setName('disable').setDescription('Disable Anti-Nuke for this server'))
@@ -145,6 +147,16 @@ module.exports = {
             }
             const permissionReport = typeof manager.getPermissionReport === 'function' ? manager.getPermissionReport(guild) : null;
             return interaction.reply({ embeds: [statusEmbed(settings, { lockdown, permissionReport })], flags: MessageFlags.Ephemeral });
+        }
+// ── health ───────────────────────────────────────────────────────────
+        if (sub === 'health') {
+            try {
+                const { healthScan, healthEmbed } = require('../utils/antiNukeHealth');
+                const scan = await healthScan({ manager, client: interaction.client, guild });
+                return interaction.reply({ embeds: [healthEmbed(guild.name, scan)], flags: MessageFlags.Ephemeral });
+            } catch (err) {
+                return interaction.reply({ embeds: [errorEmbed(`Health scan failed: ${err.message}`)], flags: MessageFlags.Ephemeral });
+            }
         }
 
         // ── setup ────────────────────────────────────────────────────────────

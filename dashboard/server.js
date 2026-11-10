@@ -1294,6 +1294,22 @@ app.get('/api/guilds/:guildId/antinuke/incidents', requireAuth, requireGuildAdmi
         res.status(500).json({ error: 'Failed to load security activity.' });
     }
 });
+// Anti-Nuke health scan (read-only diagnostics) — view permission. Surfaces the
+// exact readiness state so an admin can see missing intents, permissions,
+// hierarchy, quarantine-role or DB issues at a glance.
+app.get('/api/guilds/:guildId/antinuke/health', requireAuth, requireGuildAdmin, antinukeReadGate, async (req, res) => {
+    try {
+        const antiNukeActions = require('./antiNukeActions');
+        const guild = await antiNukeActions.buildDashboardGuildShim(req.guild.id);
+        const manager = antiNukeActions.buildDashboardManagerShim(req.guild.id);
+        const { healthScan } = require('../utils/antiNukeHealth');
+        const scan = await healthScan({ manager, client: null, guild });
+        res.json(scan);
+    } catch (err) {
+        console.error('[API] antinuke health error:', err.message);
+        res.status(500).json({ error: 'Anti-Nuke health scan failed.' });
+    }
+});
 
 // Lockdown controls (manual engage / restore) — emergency permissions.
 app.post('/api/guilds/:guildId/antinuke/lockdown', requireAuth, requireGuildAdmin, antinukeLockdownGate, async (req, res) => {
