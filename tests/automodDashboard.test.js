@@ -138,6 +138,9 @@ test('every element id the antinuke client reads is rendered by the page', () =>
         'an-activity-page',
         // Setup floating-window choice select (built by the client on demand).
         'an-setup-choice',
+        // Lockdown profile op list ids are built per-profile at runtime, and the
+        // legacy single-engage button was replaced by per-profile buttons.
+        'an-profile-ops-', 'an-lockdown-engage',
         // Collected settings that are only read when present (the console renders
         // the dry-run switch and alert channel, not the cooldown/lockdown inputs).
         'an-response-cooldown', 'an-lockdown-enabled',

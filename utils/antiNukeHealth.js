@@ -21,8 +21,38 @@ const PASS = 'PASS';
 const WARN = 'WARNING';
 const FAIL = 'FAILED';
 
+/**
+ * Repair recommendation for a WARNING/FAILED check. Kept next to the checks so
+ * every non-PASS result carries an actionable next step.
+ */
+const RECOMMENDATIONS = {
+    gateway: 'Ensure the bot process is running and connected to the gateway.',
+    intent: 'Enable the GuildModeration (Server Members / Moderation) intent in the Discord Developer Portal.',
+    audit_stream: 'Grant the bot View Audit Log so live audit-log attribution works; the event fallback still covers detection.',
+    context: 'Reopen the Anti-Nuke page for this server.',
+    database: 'Check DATABASE_URL / ANUKE_DATABASE_URL connectivity and that the antinuke tables exist.',
+    config_cache: 'Reload the Anti-Nuke configuration (re-run setup or wait for the cache refresh).',
+    enabled: 'Enable Anti-Nuke from the Overview hero switch.',
+    dry_run: 'Turn Dry run OFF in Settings so containment actually enforces.',
+    watched: 'Enable at least one watched action in Protection.',
+    responses: 'Select at least one response in the Responses section.',
+    own_responses: 'Add a punishment response (ban/kick) to a specific action if you want automatic punishment.',
+    bot_permissions: 'Grant the missing permissions to PrimeBot in Server Settings → Roles.',
+    hierarchy_bot: 'Move the PrimeBot role above the roles it must manage.',
+    hierarchy_owner: 'The server owner cannot be contained — this is expected.',
+    quarantine_role: 'Create or select a quarantine role in Responses.',
+    alert_channel: 'Select an alert channel in Settings so incidents are reported.',
+    last_event: 'No detections yet — expected on a quiet server.',
+    last_enforcement: 'No enforcement yet — expected until a threshold trips.',
+};
+
 function check(key, label, result, note = '') {
-    return { key, label, result, note };
+    const out = { key, label, result, note };
+    if (result !== PASS && RECOMMENDATIONS[key]) out.recommendation = RECOMMENDATIONS[key];
+    else if (result !== PASS && String(key).startsWith('perm:')) {
+        out.recommendation = 'Grant this permission to PrimeBot in Server Settings → Roles.';
+    }
+    return out;
 }
 
 /**
