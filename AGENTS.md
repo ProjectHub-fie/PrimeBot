@@ -38,6 +38,7 @@ The dashboard session is destroyed and the user logged out automatically after *
 
 The top nav (`render/layout.js` `navHTML`) renders: **Servers** (`/`), **Overview** (`/dashboard`), **Stats** (`/stats`), **Docs** (`/docs`). **Live Polls** and **Live Giveaways** were moved OUT of the top nav and now live only in the per-server **Server features** sidebar (`/guild/:guildId/live/polls` + `/guild/:guildId/live/giveaways`). The global cross-server `/live/polls` + `/live/giveaways` pages still exist (reachable via the per-server "see all … across PrimeBot" links); `/live` 302-redirects to `/live/polls` for back-compat. `public/js/live.js` serves both live pages and reads `window.liveKind` (`'poll'`/`'giveaway'`, injected by an inline `<script>` on each page) to pick `/api/live/polls` vs `/api/live/giveaways`.
 
+- **Login/Stats feature-adoption donuts** are produced by `getPlatformStats` (`dashboard/db.js`) from the cached `_platformCounts()` (TTL `PLATFORM_COUNTS_TTL_MS`). Each feature count is one `COUNT(*) WHERE enabled = true` on its own pool: `leveling`/`autoReactions`/`broadcasts` on the main `server_settings`, `welcome` on the welcome pool, `automod` on the automod pool, `tickets` on the ticket pool, and **`antiNuke` on the anti-nuke pool** (`_antiNukeCount` → `server/anukeDb.js` `anukePool`, `antinuke_settings WHERE enabled = true`). The login page (`render/pages.js` `loginPage` + `public/js/login.js`) renders a donut per feature (`#donut-leveling` … `#donut-antinuke`); a missing/unreachable pool degrades to a 0% donut, never an error.
 - **Stats page** (`render/pages.js` `statsPage` → `/stats`): shows bot stats (server count via Discord REST `getBotGuildCount`, **live total member count from the active bot node's heartbeat** (see below), falling back to COUNT(DISTINCT user_id) on `user_levels` when the bot isn't reporting), bot identity, version, feature-adoption donuts) and shardnode node health. The dashboard process can't read the bot's in-memory runtime (ping/uptime/guilds.cache) because it runs separately from the bot; it reads the `bot_node_status` + `bot_failover_lock` tables the bot's `utils/nodeFailover.js` writes every ~15s to the dedicated `SEASON_DATABASE_URL` pool (`server/seasonDb.js`, falls back to `FALLBACK_DATABASE_URL`/`DATABASE_URL`). The dashboard's `getNodeStats` reads them from the same `seasonPool` (via `getSeasonPool()` in `dashboard/db.js`) so it sees the same rows. Endpoints: `/api/stats/bot` (`db.getPlatformStats`) and `/api/stats/nodes` (`db.getNodeStats`). Node roles are `sn1`/`sn2`/`sn3` (priority sn1>sn2>sn3); a node is offline once heartbeat age > 45s (`FAILOVER_THRESHOLD_MS`).
 - **Live member count bridge (bot → dashboard via heartbeat).** The bot's `utils/nodeFailover.js` `writeHeartbeat()` now also writes `guild_count` + `member_count` columns onto `bot_node_status` (self-migrated via `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` in both the bot's `ensureTable()` and the dashboard's `ensureNodeStatusTables()`). The counts come from a `setStatsProvider()` hook registered in `index.js` (`client.guilds.cache.size` + `reduce(g.memberCount)`) — only the ACTIVE node has a logged-in client, so only its row carries counts. The dashboard's `getPlatformStats` (`_liveBotCounts()`) prefers a fresh (<90s) active node's `member_count` for `totalUsers` (sets `totalUsersSource: 'bot'`, else `'leveling'` fallback) and its `guild_count` for the server count when the Discord REST count fails. Stats page labels the card "Total members (live)" when sourced from the bot, and each node row shows its reported member/server counts. **Same-DB requirement:** this bridge only works when the bot and dashboard share `SEASON_DATABASE_URL` (or the `FALLBACK_DATABASE_URL`/`DATABASE_URL` fallback) AND the bot's failover heartbeat loop is running (`BOT_FAILOVER_ENABLED` defaults to true); with failover disabled the dashboard silently falls back to the leveling user count. Tests: `tests/liveMemberCount.test.js`.
 
@@ -302,11 +303,11 @@ A second gating layer alongside beta. Any tab in `render/guild.js` `TABS` can ca
 - **Tab nav:** a tab with `upcoming: true` shows a **SOON** badge (`render/guild.js` `tabNavHTML` → `.soon-badge`).
 - **Page render:** `dashboard/render/guild-pages.js` `upcomingOverlayWrap(innerPanelHTML, { icon, title })` wraps the real panel markup in a `.upcoming-locked-wrap.locked` (blurred + `pointer-events:none` + `user-select:none`) with a `.upcoming-locked-overlay` containing a `.upcoming-graphic` (orb + animated dots) + `.upcoming-title` (`<title>……`) + a "still in the workshop, check back soon" message. The underlying editor markup is kept (just blurred) so flipping `upcoming: false` later re-enables the feature with no markup rewrite.
 - **Client guard:** `dashboard/public/js/events.js` (and any upcoming-gated page's JS) early-exits when it detects `.upcoming-locked-wrap.locked` (in addition to `.beta-locked-wrap.locked`) so no API calls/bindings run behind the overlay.
-- **API guard:** `dashboard/auth.js` `requireUpcoming` middleware — returns `403 { reason: 'upcoming' }` for ordinary users (the feature isn't usable from the API either). Applied to the Event Management write endpoints (POST/PATCH/DELETE/POST start/cancel) in `dashboard/server.js`. Read endpoints (GET) stay open. **Developer/owner bot roles bypass it** (`canBypassFeatureGates`), so privileged users can exercise the feature from the API too. **Anti-Nuke carries this gate too** (upcoming) — see "Anti-Nuke protection system (UPCOMING — not yet released)".
-- **Developer/owner bypass applies to every upcoming page.** `requireGuildAdminPage` sets `req.guild._bypassUpcoming` (from `canBypassFeatureGates`), and each upcoming page must skip the overlay when it is set. Both `eventsPage` and the Anti-Nuke page (`antinuke-page.js` `wrapUpcoming`) skip the overlay when it is set. `tests/upcomingBypass.test.js` covers both.
+- **API guard:** `dashboard/auth.js` `requireUpcoming` middleware — returns `403 { reason: 'upcoming' }` for ordinary users (the feature isn't usable from the API either). Applied to the Event Management write endpoints (POST/PATCH/DELETE/POST start/cancel) in `dashboard/server.js`. Read endpoints (GET) stay open. **Developer/owner bot roles bypass it** (`canBypassFeatureGates`), so privileged users can exercise the feature from the API too. **Anti-Nuke is RELEASED** — its tab no longer carries `upcoming` and its endpoints are gated by the owner-controlled `requireAntiNukePermission` hierarchy instead.
+- **Developer/owner bypass applies to every upcoming page.** `requireGuildAdminPage` sets `req.guild._bypassUpcoming` (from `canBypassFeatureGates`), and each upcoming page must skip the overlay when it is set. `eventsPage` skips the overlay when it is set. `tests/upcomingBypass.test.js` covers it (plus the released Anti-Nuke/Tickets tab flags).
 - **Tickets is RELEASED (not upcoming):** the 🎫 Tickets tab has no `upcoming`/`beta` flag, `ticketsPage` renders the panel list directly (no overlay), and the ticket write endpoints use only `requireAuth + requireGuildAdmin` (no `requireUpcoming`). `public/js/tickets.js` binds unconditionally. Tests: `tests/upcomingBypass.test.js` still covers `eventsPage` (which remains upcoming).
 - **Event Management:** the 📅 Events tab is `upcoming: true` (it was previously beta-gated). It stays visible in the sidebar (discoverable) but shows the "Coming Soon……" overlay for ordinary users; developer/owner bot roles get the real editor.
-- **Anti-Nuke is UPCOMING (not released):** the 🛡️ Anti-Nuke tab carries `upcoming: true`, so ordinary admins get the Coming Soon overlay and the 9 write endpoints are guarded by `requireUpcoming`; developer/owner bot roles (`guild._bypassUpcoming`) get the real setup chooser / wizard / console. To release: drop the flag + the guard. See "Anti-Nuke protection system (UPCOMING — not yet released)".
+- **Anti-Nuke is RELEASED:** the 🛡️ Anti-Nuke tab carries no `upcoming`/`beta` flag and shows no SOON badge; the page renders its real setup chooser / wizard / console (the shared upcoming overlay is not used — the page has its own owner-controlled `requireAntiNukePermission` gate, so an ordinary admin gets the explanatory no-access panel). The write endpoints are gated by `requireAntiNukePermission`, never `requireUpcoming`. See "Anti-Nuke protection system (RELEASED)".
 - **CSS:** `.soon-badge`, `.upcoming-locked-wrap`, `.upcoming-locked-overlay`, `.upcoming-graphic`, `.upcoming-title` in `dashboard/public/styles.css`.
 - **Tickets tab panel list refreshes on page load:** `ticketsPage` renders an empty `.rr-list` placeholder server-side — panel cards are rendered client-side by `dashboard/public/js/tickets.js` `refreshTicketList()`. The script calls `refreshTicketList()` once on load (right after `bindTicketCardActions()`), so existing panels appear in the tab without any interaction. **Tickets is RELEASED** (the `upcoming: true` flag was removed from `render/guild.js` `TABS`, and the `requireUpcoming` guard was dropped from the ticket write endpoints) — there is no lock overlay anymore. If someone reports "created panels don't show in Tickets tab", check that `refreshTicketList()` runs — previously it was only called by the Create/Resend flows, so a page-load never populated the list.
 
@@ -517,12 +518,12 @@ The Embed Builder saves embeds, but posting one from Discord needed two new comm
 
 ## AutoMod premium redesign + Anti-Nuke tab (upcoming)
 
-The Automod dashboard tab was rebuilt as a premium moderation console, and **Anti-Nuke was split into its own sidebar tab**. Anti-Nuke is a separate sidebar tab but is NOT released yet — it is gated behind the `upcoming` overlay (developer/owner roles bypass); see "Anti-Nuke protection system (UPCOMING — not yet released)" below.
+The Automod dashboard tab was rebuilt as a premium moderation console, and **Anti-Nuke was split into its own sidebar tab**. Anti-Nuke is RELEASED — it has its own owner-controlled access hierarchy (never the shared `upcoming` overlay); see "Anti-Nuke protection system (RELEASED)" below.
 
 ### Dashboard structure
 
 - **Automod page** (`dashboard/render/automod-page.js`, `dashboard/public/js/automod.js`, `/guild/:guildId/automod`) is a single server-rendered page with an in-page section rail (`#am-sections` → `.am-section[data-section]`). Eleven sections, each rendered **exactly once**: `overview / rules / spam / content / raid / warnings / punishments / exemptions / incidents / analytics / settings`. `SECTION_ORDER` in `automod-page.js` is the single source for the rail; `RULE_CATEGORY_TO_SECTION` maps a rule's category to its section. There is **no** `anti-nuke` section on the Automod page — Anti-Nuke lives on its own tab.
-- **Anti-Nuke page** (`dashboard/render/antinuke-page.js`, `dashboard/public/js/antinuke.js`, `/guild/:guildId/antinuke`) renders its real editor markup. For ordinary users it is wrapped in `upcomingOverlayWrap()` (blurred + inert behind `.upcoming-locked-wrap.locked`, `antinuke.js` early-exits); **developer/owner bot roles bypass the gate** (`guild._bypassUpcoming`, set by `requireGuildAdminPage`) and get the unwrapped editor, exactly like `eventsPage`. Removing the `upcoming: true` flag in `render/guild.js` TABS is all that is needed to release it — the markup already exists.
+- **Anti-Nuke page** (`dashboard/render/antinuke-page.js`, `dashboard/public/js/antinuke.js`, `/guild/:guildId/antinuke`) renders its real editor markup unconditionally — no shared `upcoming` overlay. Access is controlled by the owner-controlled hierarchy: the actual guild owner sees the setup chooser / wizard / console, an ordinary admin sees an explanatory no-access panel, and bot-defined Co-Owner/Trusted-Admin assignments get the console per their permissions.
 - **Param catalog is shared.** `utils/automodRules.js` exports `RULE_PARAMS` + `ruleParamDefs(type)` + `ruleParamValue(rule, key)`. The server renderer (`automod-page.js` `paramInputs`) and the client (`automod.js` `paramInputs`/`collectRules`) both drive off it, so a rule card can never render a different set of inputs than the client reads back. **Add a param in one place only.**
 
 ### XSS: inline JSON must go through `jsonForScript`
@@ -556,7 +557,7 @@ The page uses the floating `saveBar` (see "Dashboard save pattern"): every field
 
 **Gotcha when adding an out-of-band save:** any control the page persists on its own (rather than through the floating bar) must call `window.saveBar.syncControl(el)` on success. Without it the bar shows a permanent, unsaveable "unsaved changes" state for that field. Do NOT call `syncControl` on failure — the control must stay dirty so the user can retry. `saveBar.syncControl` only re-baselines the one element (a full `resnapshot()` would swallow unrelated pending edits).
 
-## Anti-Nuke protection system (UPCOMING — not yet released)
+## Anti-Nuke protection system (RELEASED)
 
 ### Premium section console (AutoMod-matched) — 15 sections
 
@@ -630,7 +631,14 @@ the settings unreachable).
 - **Dry-run is OFF by default.** `recommendedConfig()` and `mergeRecommended()` both set
   `dryRun: false`; the bot enforces, it does not only alert.
 - **Responses default to every action except `logOnly`** (`DEFAULT_NUKE_RESPONSES` in
-  `utils/antiNukeRules.js`).
+  `utils/antiNukeRules.js`). A guild that saved the OLD alert-only default
+  (`['alertOwner','alertChannel','logOnly']`) is upgraded to this on read
+  (`isLegacyStockResponses` in `normalizeAntiNukeSettings`), so existing guilds see every
+  box checked too — only that exact stock list is upgraded, a custom list is untouched.
+- **Every protection module is watched by default.** `defaultAntiNukeSettings()` sets
+  `watched[action].enabled = true` for all 25 actions (not just critical/high), and
+  `watchFor()`'s no-override fallback matches — so a newly enabled server has full
+  coverage and an action added to the catalog later is on by default.
 - **Auto-create really works.** `createIsolationRole` sends `permissions: '0'` (a bitfield
   **string** — the dashboard REST shim JSON-serializes the body, and Discord rejects an
   array), and `dashboard/antiNukeActions.js` `buildDashboardGuildShim` now (a) exposes a
@@ -654,14 +662,14 @@ the settings unreachable).
   `createAlertChannel` / `createIsolationRole` helpers as the automatic walkthrough.
 
 Per-guild protection against destructive admin actions, built on the pre-existing
-`utils/antiNukeManager.js` + `utils/antiNukeRules.js` foundation. **Not released yet**:
-the `upcoming: true` flag is set on the Anti-Nuke tab in `render/guild.js` TABS, so
-ordinary admins see the shared "Coming Soon……" overlay and every write endpoint is
-guarded by `requireUpcoming` (403 `{ reason: 'upcoming' }`). Developer/owner bot roles
-(`guild._bypassUpcoming`) bypass both, so the feature can be exercised before it ships.
-**To release: remove `upcoming: true` from the TABS entry and drop `requireUpcoming`
-from the 9 write endpoints — nothing else.** The setup wizard + console markup already
-exists and is rendered underneath the overlay.
+`utils/antiNukeManager.js` + `utils/antiNukeRules.js` foundation. **RELEASED**: the
+Anti-Nuke tab in `render/guild.js` TABS carries no `upcoming`/`beta` flag (no SOON
+badge) and the page renders its real setup chooser / wizard / console. It does NOT use
+the shared `upcoming` overlay — access is controlled by the owner-controlled hierarchy
+(`utils/antiNukeAccess` + `shared/antiNukePermissions`): the actual guild owner always
+passes; every other user needs the bot-defined permission for the specific action
+(`requireAntiNukePermission`, never `requireUpcoming`). The setup wizard + console
+markup is rendered directly (an ordinary admin gets the explanatory no-access panel).
 
 ### Pipeline (real audit-log detection, never an event guess)
 
@@ -746,8 +754,10 @@ node cannot double-respond. All nodes share one `ANUKE_DATABASE_URL`.
   validated server-side; guild ids come from the authenticated route param.
 - `/antinuke` + prefix `antinuke`/`an` (ManageGuild): status / setup / enable / disable /
   whitelist / lockdown / restore. Setup buttons: `antinuke:setup:automatic|manual|progress`.
-- **Dry-run is the default** for a newly enabled config: detection + alerting, zero
-  containment. Never auto-ban/kick a moderator.
+- **Dry-run is OFF by default** for a newly enabled config: detection **and** enforcement
+  (alerting + reversible containment). Enforcement still never punishes the owner, the bot
+  or trusted users/roles, never acts without audit-log attribution, and never auto-bans/kicks
+  a moderator. 'Log only' stays off.
 
 ### Tests
 
@@ -763,11 +773,13 @@ progress bar (the card used to exist only in the `in_progress` state).
 `tests/automodHttp.test.js` — the real dashboard boot with a signed session: all 12
 Anti-Nuke routes 401 unauthenticated, validation rejects, guild isolation, and the
 authenticated admin happy path (the boot mocks `../utils/botRoles` to report the admin as
-a bypass user, since the write endpoints are `requireUpcoming`-gated).
-`tests/upcomingBypass.test.js` + `tests/automodDashboard.test.js` assert the UPCOMING
-state (overlay for ordinary users, real controls for bypass users, no pre-activated
-master switch). `tests/sashMenu.test.js` pins Anti-Nuke in both the prefix Sash menu and
-`/help`; `tests/commandDocs.test.js` covers the `/docs` entry.
+a bypass user, since the write endpoints are owner-access-gated).
+`tests/upcomingBypass.test.js` asserts the RELEASED state (Anti-Nuke/Tickets tabs carry
+no `upcoming` flag → no SOON badge; Anti-Nuke uses its own access gate, not the shared
+overlay) and that Event Management is still upcoming. `tests/automodDashboard.test.js`
+asserts the Anti-Nuke page renders its real controls (no pre-activated master switch).
+`tests/sashMenu.test.js` pins Anti-Nuke in both the prefix Sash menu and `/help`;
+`tests/commandDocs.test.js` covers the `/docs` entry.
 
 ## Event Management feature (📅 Event Management tab) — SOON (developer-exercisable)
 

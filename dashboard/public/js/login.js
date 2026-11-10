@@ -72,6 +72,7 @@ async function loadLoginStats() {
   renderDonut(document.getElementById('donut-broadcasts'), f.broadcasts?.percent ?? 0, '--gold');
   renderDonut(document.getElementById('donut-automod'), f.automod?.percent ?? 0, '--red');
   renderDonut(document.getElementById('donut-tickets'), f.tickets?.percent ?? 0, '--blurple');
+  renderDonut(document.getElementById('donut-antinuke'), f.antiNuke?.percent ?? 0, '--red');
 }
 
 loadLoginStats();

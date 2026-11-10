@@ -483,6 +483,19 @@ function isStockResponses(list) {
     return same(list, DEFAULT_NUKE_RESPONSES) || same(list, LEGACY_DEFAULT_NUKE_RESPONSES);
 }
 
+/**
+ * True when a list is exactly the pre-refactor alert-only default. Such a list
+ * was never an admin decision — it is what the old default wrote — so it is
+ * upgraded to the current default (every response except "Log only") on read.
+ */
+function isLegacyStockResponses(list) {
+    if (!Array.isArray(list) || list.length === 0) return false;
+    const same = (a, b) => a.length === b.length
+        && a.every(k => b.includes(k))
+        && b.every(k => a.includes(k));
+    return same(list, LEGACY_DEFAULT_NUKE_RESPONSES);
+}
+
 /** The effective response set for one action: per-action map or global list. */
 function responsesForAction(settings, actionKey) {
     const actionMap = settings && settings.actionResponses && settings.actionResponses[actionKey];
@@ -525,8 +538,10 @@ const DANGEROUS_PERMISSION_BY_KEY = Object.fromEntries(DANGEROUS_PERMISSIONS.map
 function defaultAntiNukeSettings() {
     const watched = {};
     for (const a of NUKE_ACTIONS) {
+        // Every protection module is watched by default — a newly enabled guild
+        // gets full coverage (all 25 actions), not just the critical/high ones.
         watched[a.key] = {
-            enabled: a.severity === 'critical' || a.severity === 'high',
+            enabled: true,
             threshold: a.threshold,
             seconds: a.seconds,
         };
@@ -612,9 +627,15 @@ function normalizeAntiNukeSettings(raw = {}) {
             seconds: _int(incoming && incoming.seconds, prev.seconds, { min: 1, max: 3600 }),
         };
     }
-    const responses = Array.isArray(src.responses)
+    let responses = Array.isArray(src.responses)
         ? src.responses.filter(r => NUKE_RESPONSE_BY_KEY[r])
         : base.responses.slice();
+    // Upgrade a legacy alert-only stock list to the current default. A guild that
+    // saved the OLD default never made a response decision, so it picks up the
+    // new "every response except Log only" default — the response configuration
+    // UI then checks every box except log-only for existing guilds too, not just
+    // brand-new ones. A genuinely customised list is left untouched.
+    if (isLegacyStockResponses(responses)) responses = DEFAULT_NUKE_RESPONSES.slice();
 
     // Per-action response overrides: only known action+response keys accepted.
     // Empty maps fall back to the per-action catalog default at read time.
@@ -742,7 +763,10 @@ function watchFor(settings, actionKey) {
     if (!action) return null;
     const w = settings && settings.watched && settings.watched[actionKey];
     return {
-        enabled: w ? w.enabled !== false : (action.severity === 'critical' || action.severity === 'high'),
+        // No saved override: an action (e.g. one added to the catalog after this
+        // guild saved its config) is watched by default, matching the full-coverage
+        // default set by defaultAntiNukeSettings().
+        enabled: w ? w.enabled !== false : true,
         threshold: w && w.threshold ? w.threshold : action.threshold,
         seconds: w && w.seconds ? w.seconds : action.seconds,
     };
@@ -764,6 +788,7 @@ module.exports = {
     DEFAULT_NUKE_RESPONSES,
     LEGACY_DEFAULT_NUKE_RESPONSES,
     isStockResponses,
+    isLegacyStockResponses,
     DEFAULT_ACTION_RESPONSES,
     DEFAULT_ACTION_RESPONSE_BY_ACTION,
     responsesForAction,

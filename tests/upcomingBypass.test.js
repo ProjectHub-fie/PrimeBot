@@ -3,9 +3,10 @@
 // role bypass the gate: the dashboard sets guild._bypassUpcoming
 // (dashboard/auth.js) and the page then renders the real editor.
 //
-// Anti-Nuke is NOT yet released (also `upcoming: true`) and follows the same
-// rule: ordinary admins see the overlay, developer/owner roles get the editor.
-// Tickets is RELEASED and renders its real content for every administrator.
+// Anti-Nuke is RELEASED (`upcoming` removed from render/guild.js TABS). It does
+// NOT use the shared upcoming overlay — it has its own owner-controlled access
+// gate, so an ordinary admin sees the no-access panel and the owner sees the
+// editor. Tickets is RELEASED too and renders its real content for every admin.
 
 const { test } = require('node:test');
 const assert = require('node:assert');
@@ -89,4 +90,22 @@ test('ticketsPage renders the real panel list for bypass users too', () => {
     const html = guildPages.ticketsPage({ guild: fakeGuild(true), user: null });
     assert.ok(!html.includes('upcoming-locked-wrap locked'), 'overlay should not be present for bypass users');
     assert.ok(html.includes('id="tk-create-open"'), 'create button renders');
+});
+
+test('Anti-Nuke and Tickets are released (no `upcoming` flag); Events is still upcoming', () => {
+    const { TABS } = require('../dashboard/render/guild');
+    const flag = (key) => {
+        const tab = TABS.find(t => t.key === key);
+        assert.ok(tab, `tab ${key} exists`);
+        return tab.upcoming === true;
+    };
+    assert.equal(flag('antinuke'), false, 'Anti-Nuke is released — no SOON badge, no upcoming gate');
+    assert.equal(flag('tickets'), false, 'Tickets is released');
+    assert.equal(flag('events'), true, 'Event Management is still upcoming');
+    // The nav renders the SOON badge for upcoming tabs only.
+    const { tabNavHTML } = require('../dashboard/render/guild');
+    const nav = tabNavHTML({ active: 'antinuke', guildId: '1' });
+    const after = (label) => nav.slice(nav.indexOf(label), nav.indexOf(label) + 160);
+    assert.ok(!after('Anti-Nuke').includes('soon-badge'), 'Anti-Nuke shows no SOON badge');
+    assert.ok(after('Event Management').includes('soon-badge'), 'Events keeps its SOON badge');
 });

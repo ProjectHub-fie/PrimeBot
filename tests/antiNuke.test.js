@@ -49,6 +49,26 @@ test('default settings enable every action with live protection (dry-run off, ev
         'every response except log-only is on by default');
     assert.ok(!s.responses.includes('logOnly'), 'log-only stays off by default');
     assert.equal(Object.keys(s.watched).length, rules.NUKE_ACTIONS.length, 'every action has a watch entry');
+    // Every protection module is WATCHED by default — a newly enabled guild has
+    // full coverage, not just the critical/high-severity actions.
+    const disabled = rules.NUKE_ACTIONS.filter(a => !s.watched[a.key].enabled).map(a => a.key);
+    assert.deepEqual(disabled, [], 'no protection module is left off by default');
+});
+
+test('a legacy alert-only row is upgraded to the new response default on read', () => {
+    // A guild that saved the OLD default (alert-only) never made a response
+    // decision, so reading it back yields the new default: every response
+    // except log-only. This is what makes the response UI check every box for
+    // existing guilds too, not only brand-new ones.
+    const upgraded = rules.normalizeAntiNukeSettings({ responses: ['alertOwner', 'alertChannel', 'logOnly'] });
+    const allButLogOnly = rules.NUKE_RESPONSES.map(r => r.key).filter(k => k !== 'logOnly');
+    assert.deepEqual(upgraded.responses.slice().sort(), allButLogOnly.slice().sort(),
+        'the legacy stock list becomes the current default');
+    // A genuinely customised list is never touched.
+    const custom = rules.normalizeAntiNukeSettings({ responses: ['alertChannel', 'ban'] });
+    assert.deepEqual(custom.responses, ['alertChannel', 'ban'], 'a custom list is preserved');
+    assert.equal(rules.isLegacyStockResponses(['alertOwner', 'alertChannel', 'logOnly']), true);
+    assert.equal(rules.isLegacyStockResponses(['alertOwner', 'ban']), false);
 });
 
 test('the recommended setup config turns dry-run OFF (owner opted into protection)', () => {
