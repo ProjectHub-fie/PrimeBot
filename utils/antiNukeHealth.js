@@ -98,7 +98,7 @@ async function healthScan({ manager, client, guild, botPerms }) {
     }
 
     // 3. Enabled state / dry-run / watched modules / effective responses.
-    const s = settings || { enabled: false, dryRun: true, watched: {}, actionResponses: {}, responses: [] };
+    const s = settings || { enabled: false, dryRun: false, watched: {}, actionResponses: {}, responses: [] };
     checks.push(check('enabled', 'Anti-Nuke enabled',
         s.enabled === true ? PASS : FAIL,
         s.enabled === true ? '' : 'enabled is false — detection is off.'));

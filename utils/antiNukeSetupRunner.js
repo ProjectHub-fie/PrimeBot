@@ -21,6 +21,7 @@
 
 const {
     normalizeAntiNukeSettings, defaultAntiNukeSettings, NUKE_ACTIONS,
+    DEFAULT_NUKE_RESPONSES,
 } = require('./antiNukeRules');
 const { validateBotPermissions } = require('./antiNukeContainment');
 const {
@@ -34,7 +35,9 @@ const ALERT_CHANNEL_CANDIDATES = ['security-logs', 'security', 'mod-logs', 'anti
 /**
  * The recommended security configuration for a server that is setting up for
  * the first time. Safe defaults: every module enabled, catalog-default
- * thresholds, alert-only responses and no automatic permanent punishment.
+ * thresholds, the full active response set (every response except log-only —
+ * which the per-action catalog default still tailors per rule) and no
+ * automatic permanent punishment.
  *
  * Dry-run is OFF by default: the owner explicitly ran the setup wizard, so they
  * are telling PrimeBot to protect the server now. Detection still never
@@ -52,7 +55,7 @@ function recommendedConfig() {
         enabled: true,
         dryRun: false,
         watched,
-        responses: ['alertOwner', 'alertChannel', 'logOnly'],
+        responses: DEFAULT_NUKE_RESPONSES.slice(),
     });
 }
 

@@ -58,7 +58,7 @@ const CREATE_TABLE_SQL = `
         trusted_user_ids   JSONB NOT NULL DEFAULT '[]',
         trusted_role_ids   JSONB NOT NULL DEFAULT '[]',
         watched            JSONB NOT NULL DEFAULT '{}',
-        dry_run            BOOLEAN NOT NULL DEFAULT true,
+        dry_run            BOOLEAN NOT NULL DEFAULT false,
         updated_at         TIMESTAMP DEFAULT NOW()
     )
 `;

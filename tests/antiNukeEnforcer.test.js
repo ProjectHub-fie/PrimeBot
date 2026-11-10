@@ -15,6 +15,7 @@ const {
     responsesForAction,
     defaultAntiNukeSettings,
     normalizeAntiNukeSettings,
+    DEFAULT_NUKE_RESPONSES,
     DEFAULT_ACTION_RESPONSES,
     NUKE_RESPONSES,
     ENFORCED_RESPONSE_KEYS,
@@ -120,20 +121,31 @@ test('responsesForAction: per-action override wins; admin global list next; cata
 
     const defaults = normalizeAntiNukeSettings({ responses: [] });
     assert.deepEqual(responsesForAction(defaults, 'channelDelete'), DEFAULT_ACTION_RESPONSES.channelDelete);
-    // The stock alert-only default list also falls through to the catalog:
-    // otherwise every existing guild would silently stay alert-only.
-    const stock = normalizeAntiNukeSettings({ responses: ['alertOwner', 'alertChannel', 'logOnly'] });
-    assert.deepEqual(responsesForAction(stock, 'memberBan'), DEFAULT_ACTION_RESPONSES.memberBan);
-    // Unknown action keys fall back to the default alert set.
-    assert.deepEqual(responsesForAction(defaults, 'doesNotExist'), ['alertOwner', 'alertChannel', 'logOnly']);
+    // Both stock default lists fall through to the catalog: the new default
+    // (every response except log-only) so a fresh config gets the curated
+    // per-action plan, and the legacy alert-only list so an existing guild that
+    // never customised responses keeps its per-action enforcement.
+    const newStock = normalizeAntiNukeSettings({ responses: DEFAULT_NUKE_RESPONSES });
+    assert.deepEqual(responsesForAction(newStock, 'memberBan'), DEFAULT_ACTION_RESPONSES.memberBan);
+    const legacyStock = normalizeAntiNukeSettings({ responses: ['alertOwner', 'alertChannel', 'logOnly'] });
+    assert.deepEqual(responsesForAction(legacyStock, 'memberBan'), DEFAULT_ACTION_RESPONSES.memberBan);
+    // Unknown action keys fall back to the default response list.
+    assert.deepEqual(responsesForAction(defaults, 'doesNotExist'), DEFAULT_NUKE_RESPONSES);
 });
 
-test('new guilds default dry-run OFF; punishments stay opt-in', () => {
+test('new guilds default dry-run OFF with every response (except log-only) pre-checked; punishments stay opt-in per rule', () => {
     const d = defaultAntiNukeSettings();
     assert.equal(d.dryRun, false, 'new configs enforce for real');
-    assert.ok(!d.responses.includes('ban') && !d.responses.includes('kick'),
-        'default response list has no punishment');
-    // Even with dry-run off and punishes in the *effective* set, a rule can
+    assert.deepEqual(d.responses, DEFAULT_NUKE_RESPONSES,
+        'response configuration checks every response except log-only by default');
+    assert.ok(!d.responses.includes('logOnly'), 'log-only is never on by default');
+    // The *effective* plan for a default config comes from the per-action
+    // catalog, which still excludes permanent punishment for the rules where a
+    // mass-punish would self-inflict (e.g. memberBan never bans by default).
+    assert.ok(!DEFAULT_ACTION_RESPONSES.memberBan.includes('ban'),
+        'a mass-ban attack does not self-punish with another ban by default');
+    assert.deepEqual(responsesForAction(d, 'memberBan'), DEFAULT_ACTION_RESPONSES.memberBan);
+    // Even with dry-run off and punishments in the *effective* set, a rule can
     // only punish when the admin opted into it for that rule.
     const n = normalizeAntiNukeSettings({ responses: ['ban', 'kick', 'alertOwner'] });
     assert.equal(n.dryRun, false);

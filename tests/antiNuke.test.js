@@ -39,11 +39,15 @@ test('every protection module named in the task has at least one action', () => 
 
 // ── Settings normalization ──────────────────────────────────────────────────
 
-test('default settings enable every action but stay in dry-run with alert-only responses', () => {
+test('default settings enable every action with live protection (dry-run off, every response except log-only)', () => {
     const s = rules.defaultAntiNukeSettings();
     assert.equal(s.enabled, false, 'Anti-Nuke is opt-in');
-    assert.ok(s.responses.includes('alertOwner'), 'the owner is alerted by default');
-    assert.ok(!s.responses.includes('lockdown'), 'destructive responses are not on by default');
+    assert.equal(s.dryRun, false, 'dry-run is OFF by default (live protection)');
+    // The response configuration checks every box except "Log only".
+    const allButLogOnly = rules.NUKE_RESPONSES.map(r => r.key).filter(k => k !== 'logOnly');
+    assert.deepEqual(s.responses.slice().sort(), allButLogOnly.slice().sort(),
+        'every response except log-only is on by default');
+    assert.ok(!s.responses.includes('logOnly'), 'log-only stays off by default');
     assert.equal(Object.keys(s.watched).length, rules.NUKE_ACTIONS.length, 'every action has a watch entry');
 });
 
@@ -52,9 +56,18 @@ test('the recommended setup config turns dry-run OFF (owner opted into protectio
     const rec = recommendedConfig();
     assert.equal(rec.dryRun, false, 'running the setup wizard activates live protection');
     assert.equal(rec.enabled, true, 'setup enables protection');
-    // Safe defaults still hold: no automatic permanent punishment.
-    assert.ok(!rec.responses.includes('ban') && !rec.responses.includes('kick'),
-        'no permanent bans/kicks in the recommended responses');
+    // The recommended global response set pre-checks every response except
+    // log-only (matching the response configuration default).
+    assert.ok(rec.responses.includes('alertOwner'), 'owner is alerted');
+    assert.ok(!rec.responses.includes('logOnly'), 'log-only stays off by default');
+    // But the *effective* per-action plan still carries no automatic permanent
+    // punishment: the per-action catalog default is what runs for a stock
+    // config, and memberBan never bans by default.
+    const { responsesForAction, DEFAULT_ACTION_RESPONSES } = require('../utils/antiNukeRules');
+    const effectiveMemberBan = responsesForAction(rec, 'memberBan');
+    assert.deepEqual(effectiveMemberBan, DEFAULT_ACTION_RESPONSES.memberBan,
+        'a recommended config resolves its per-action plan from the safe catalog');
+    assert.ok(!effectiveMemberBan.includes('ban'), 'no automatic ban in the effective member-ban plan');
 });
 
 test('normalization clamps bad input and never drops an action from the catalog', () => {

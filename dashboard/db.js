@@ -1449,13 +1449,17 @@ const ANTINUKE_DDL = `
         trusted_user_ids   JSONB NOT NULL DEFAULT '[]',
         trusted_role_ids   JSONB NOT NULL DEFAULT '[]',
         watched            JSONB NOT NULL DEFAULT '{}',
-        dry_run            BOOLEAN NOT NULL DEFAULT true,
+        dry_run            BOOLEAN NOT NULL DEFAULT false,
         updated_at         TIMESTAMP DEFAULT NOW()
     );
 `;
 
 // Extended columns (safe migration via ADD COLUMN IF NOT EXISTS).
 const ANTINUKE_ALTER_SQL = [
+    // dry_run must default OFF so a row inserted without it (e.g. the
+    // setup-state insert) never silently turns dry-run back ON. An existing
+    // row's deliberately saved dry_run value is preserved.
+    `ALTER TABLE antinuke_settings ALTER COLUMN dry_run SET DEFAULT false`,
     `ALTER TABLE antinuke_settings ADD COLUMN IF NOT EXISTS dangerous_permissions JSONB NOT NULL DEFAULT '["Administrator","ManageGuild","ManageRoles","ManageChannels"]'`,
     `ALTER TABLE antinuke_settings ADD COLUMN IF NOT EXISTS lockdown JSONB NOT NULL DEFAULT '{"enabled":true,"verificationLevel":"high","pauseInvites":true}'`,
     `ALTER TABLE antinuke_settings ADD COLUMN IF NOT EXISTS response_cooldown_seconds INTEGER NOT NULL DEFAULT 30`,
