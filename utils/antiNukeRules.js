@@ -32,6 +32,7 @@ const NUKE_MODULES = [
     { key: 'bot',        label: 'Bot Protection',      iconName: 'robot',     description: 'Bots added by untrusted users and bot permission escalation.' },
     { key: 'server',     label: 'Server Protection',   iconName: 'settings',  description: 'Sensitive server settings (name, icon, verification level).' },
     { key: 'permission', label: 'Permission Protection', iconName: 'key',     description: 'Administrator and Manage-* permission grants.' },
+    { key: 'raid',       label: 'Anti-Raid',           iconName: 'users',     description: 'Join-velocity bursts and suspicious account-age waves.' },
 ];
 const NUKE_MODULE_KEYS = NUKE_MODULES.map(m => m.key);
 const NUKE_MODULE_BY_KEY = Object.fromEntries(NUKE_MODULES.map(m => [m.key, m]));
@@ -321,6 +322,48 @@ const NUKE_ACTIONS = [
         seconds: 30,
         severity: 'high',
     },
+    // ── Anti-Raid (join velocity, fed by the guildMemberAdd gateway event) ───
+    // These actions are NOT correlated to an audit-log entry — the detector
+    // (`utils/antiNukeRaid.js`) tracks member joins in an in-memory sliding
+    // window and calls `processRaidIncident` when a threshold trips. `auditEvent`
+    // is intentionally left undefined so the audit-entry index never routes a
+    // GuildMemberAdd audit entry to them (Discord does not audit member joins).
+    {
+        key: 'joinBurst',
+        module: 'raid',
+        label: 'Join velocity burst',
+        icon: '👥',
+        iconName: 'users',
+        description: 'A burst of members joining faster than the configured window allows.',
+        threshold: 8,
+        seconds: 10,
+        severity: 'high',
+        raidSignal: 'velocity',
+    },
+    {
+        key: 'newAccountWave',
+        module: 'raid',
+        label: 'New-account join wave',
+        icon: '🌱',
+        iconName: 'userPlus',
+        description: 'Several joins from accounts younger than the account-age cutoff within a window.',
+        threshold: 5,
+        seconds: 60,
+        severity: 'medium',
+        raidSignal: 'newAccount',
+    },
+    {
+        key: 'coordinatedJoin',
+        module: 'raid',
+        label: 'Coordinated join pattern',
+        icon: '🎯',
+        iconName: 'target',
+        description: 'Repeated suspicious join activity (velocity + new-account signals together) suggesting a coordinated raid.',
+        threshold: 3,
+        seconds: 60,
+        severity: 'high',
+        raidSignal: 'coordinated',
+    },
 ];
 const NUKE_ACTION_KEYS = NUKE_ACTIONS.map(a => a.key);
 const NUKE_ACTION_BY_KEY = Object.fromEntries(NUKE_ACTIONS.map(a => [a.key, a]));
@@ -355,7 +398,18 @@ const NUKE_RESPONSES = [
 const NUKE_RESPONSE_KEYS = NUKE_RESPONSES.map(r => r.key);
 const NUKE_RESPONSE_BY_KEY = Object.fromEntries(NUKE_RESPONSES.map(r => [r.key, r]));
 
-const DEFAULT_NUKE_RESPONSES = ['alertOwner', 'alertChannel', 'logOnly'];
+// The default global response set: every response except "Log only". A fresh
+// config therefore protects by default — the response configuration UI checks
+// every box except log-only — while the per-action catalog default
+// (DEFAULT_ACTION_RESPONSES) still decides what each rule actually enforces
+// (punishments such as ban/kick remain opt-in per rule).
+const DEFAULT_NUKE_RESPONSES = NUKE_RESPONSES.map(r => r.key).filter(k => k !== 'logOnly');
+
+// The pre-refactor default ("alert only") is still recognised as "stock" so an
+// existing guild that never customised its responses keeps the per-action
+// catalog default (which is where real, targeted enforcement lives) instead of
+// silently degrading to alert-only.
+const LEGACY_DEFAULT_NUKE_RESPONSES = ['alertOwner', 'alertChannel', 'logOnly'];
 
 // Which response keys are run by the enforcement loop (everything except the
 // pure-alert keys, which are delivered by _alert).
@@ -396,6 +450,12 @@ const DEFAULT_ACTION_RESPONSES = {
     // Channel
     channelDelete:        ['quarantine', 'alertOwner', 'alertChannel', 'logOnly'],
     channelCreate:        ['alertOwner', 'alertChannel', 'logOnly'],
+    // Anti-Raid: alert + (if guard allows) automatic lockdown — never auto-ban/
+    // kick a wave of joins on a weak signal. The configured `raid.lockdown`
+    // flag turns the lockdown response on; everything else stays alert-only.
+    joinBurst:            ['alertOwner', 'alertChannel', 'logOnly'],
+    newAccountWave:       ['alertOwner', 'alertChannel', 'logOnly'],
+    coordinatedJoin:      ['alertOwner', 'alertChannel', 'logOnly'],
     channelUpdate:        ['alertOwner', 'alertChannel', 'logOnly'],
     categoryDelete:       ['quarantine', 'alertOwner', 'alertChannel'],
     permissionUpdate:     ['lockChannels', 'alertOwner', 'alertChannel'],
@@ -414,6 +474,15 @@ const DEFAULT_ACTION_RESPONSES = {
 };
 const DEFAULT_ACTION_RESPONSE_BY_ACTION = Object.freeze(DEFAULT_ACTION_RESPONSES);
 
+/** True when a response list is still a stock default (not an admin decision). */
+function isStockResponses(list) {
+    if (!Array.isArray(list) || list.length === 0) return true;
+    const same = (a, b) => a.length === b.length
+        && a.every(k => b.includes(k))
+        && b.every(k => a.includes(k));
+    return same(list, DEFAULT_NUKE_RESPONSES) || same(list, LEGACY_DEFAULT_NUKE_RESPONSES);
+}
+
 /** The effective response set for one action: per-action map or global list. */
 function responsesForAction(settings, actionKey) {
     const actionMap = settings && settings.actionResponses && settings.actionResponses[actionKey];
@@ -421,15 +490,11 @@ function responsesForAction(settings, actionKey) {
         return actionMap.filter(k => NUKE_RESPONSE_BY_KEY[k]);
     }
     const global = Array.isArray(settings && settings.responses) ? settings.responses : [];
-    // A global list that is still the stock alert-only default (or empty) does
-    // not represent an admin decision — fall through to the per-action catalog
-    // default, which is where real enforcement lives (e.g. quarantine for
-    // member attacks, deleteWebhook for webhook attacks). Any admin-customised
-    // list wins.
-    const isStock = DEFAULT_NUKE_RESPONSES.length === global.length
-        && DEFAULT_NUKE_RESPONSES.every(k => global.includes(k))
-        && global.every(k => DEFAULT_NUKE_RESPONSES.includes(k));
-    if (!isStock && global.length) return global.filter(k => NUKE_RESPONSE_BY_KEY[k]);
+    // A global list that is still a stock default (or empty) does not represent
+    // an admin decision — fall through to the per-action catalog default, which
+    // is where real enforcement lives (e.g. quarantine for member attacks,
+    // deleteWebhook for webhook attacks). Any admin-customised list wins.
+    if (!isStockResponses(global) && global.length) return global.filter(k => NUKE_RESPONSE_BY_KEY[k]);
     return (DEFAULT_ACTION_RESPONSES[actionKey] || DEFAULT_NUKE_RESPONSES.slice());
 }
 
@@ -453,8 +518,9 @@ const DANGEROUS_PERMISSION_BY_KEY = Object.fromEntries(DANGEROUS_PERMISSIONS.map
 // ── Default configuration ───────────────────────────────────────────────────
 
 /**
- * Default Anti-Nuke configuration. Safe by default: disabled until an admin
- * opts in, and dry-run until they explicitly turn it off.
+ * Default Anti-Nuke configuration. Safe but live by default: disabled until an
+ * admin opts in, but once enabled it enforces for real (dry-run OFF — the
+ * response configuration already checks every box except log-only).
  */
 function defaultAntiNukeSettings() {
     const watched = {};
@@ -490,9 +556,19 @@ function defaultAntiNukeSettings() {
             pauseInvites: true,
         },
         responseCooldownSeconds: 30,
-        // Dry-run is OFF by default: the owner opting into Anti-Nuke expects real
-        // enforcement. Detection never auto-enables bans/kicks and never punishes
-        // without reliable audit-log attribution.
+        // Anti-Raid guard: thresholds are per-`watched` action; this object
+        // holds the signal-level settings (account-age cutoff and whether a
+        // confirmed raid may raise the verification level automatically).
+        raid: {
+            enabled: true,
+            accountAgeMinDays: 7,
+            alertChannelId: null,
+            automaticLockdown: false,
+            verificationLevel: 'high',
+        },
+        // Dry-run is OFF by default: Anti-Nuke enforces for real out of the box.
+        // Detection never auto-enables bans/kicks and never punishes without
+        // reliable audit-log attribution.
         dryRun: false,
         updatedAt: null,
     };
@@ -577,6 +653,17 @@ function normalizeAntiNukeSettings(raw = {}) {
         pauseInvites: lockSrc.pauseInvites !== undefined ? lockSrc.pauseInvites !== false : base.lockdown.pauseInvites,
     };
 
+    const raidSrc = (src.raid && typeof src.raid === 'object') ? src.raid : {};
+    const raid = {
+        enabled: raidSrc.enabled !== undefined ? raidSrc.enabled !== false : base.raid.enabled,
+        accountAgeMinDays: _int(raidSrc.accountAgeMinDays, base.raid.accountAgeMinDays, { min: 1, max: 365 }),
+        alertChannelId: raidSrc.alertChannelId ? String(raidSrc.alertChannelId) : null,
+        automaticLockdown: raidSrc.automaticLockdown === true,
+        verificationLevel: ['none', 'low', 'medium', 'high', 'veryHigh'].includes(raidSrc.verificationLevel)
+            ? raidSrc.verificationLevel
+            : base.raid.verificationLevel,
+    };
+
     return {
         enabled: src.enabled === true,
         alertChannelId: src.alertChannelId ? String(src.alertChannelId) : null,
@@ -588,6 +675,7 @@ function normalizeAntiNukeSettings(raw = {}) {
         watched,
         dangerousPermissions,
         lockdown,
+        raid,
         responseCooldownSeconds: _int(src.responseCooldownSeconds, base.responseCooldownSeconds, { min: 0, max: 3600 }),
         // Existing guilds keep their explicitly saved boolean value
         // (rowToSettings passes the persisted `dry_run` through); a brand-new
@@ -674,6 +762,8 @@ module.exports = {
     ENFORCED_RESPONSE_KEYS,
     ENFORCED_RESPONSE_BY_KEY,
     DEFAULT_NUKE_RESPONSES,
+    LEGACY_DEFAULT_NUKE_RESPONSES,
+    isStockResponses,
     DEFAULT_ACTION_RESPONSES,
     DEFAULT_ACTION_RESPONSE_BY_ACTION,
     responsesForAction,

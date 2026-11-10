@@ -42,6 +42,7 @@ const {
 } = require('./antiNukeRules');
 const { AntiNukeDetector } = require('./antiNukeDetector');
 const { correlateAuditEntry } = require('./antiNukeAudit');
+const { createRaidState, feedJoin, pruneRaidState, raidIncidentShape } = require('./antiNukeRaid');
 const {
     validateBotPermissions, buildSecurityAlertEmbed,
     computeDangerousRoleRemovals, stripDangerousRoles,
@@ -58,7 +59,8 @@ const CREATE_TABLE_SQL = `
         trusted_user_ids   JSONB NOT NULL DEFAULT '[]',
         trusted_role_ids   JSONB NOT NULL DEFAULT '[]',
         watched            JSONB NOT NULL DEFAULT '{}',
-        dry_run            BOOLEAN NOT NULL DEFAULT true,
+        dry_run            BOOLEAN NOT NULL DEFAULT false,
+        raid_settings      JSONB NOT NULL DEFAULT '{"enabled":true,"accountAgeMinDays":7,"alertChannelId":null,"automaticLockdown":false,"verificationLevel":"high"}',
         updated_at         TIMESTAMP DEFAULT NOW()
     )
 `;
@@ -68,7 +70,7 @@ const CREATE_TABLE_SQL = `
 const SETTINGS_COLUMNS = `guild_id, enabled, alert_channel_id, responses,
     trusted_user_ids, trusted_role_ids, watched, dry_run,
     dangerous_permissions, lockdown, response_cooldown_seconds,
-    action_responses, quarantine_role_id,
+    action_responses, quarantine_role_id, raid_settings,
     setup_method, setup_status, setup_state, updated_at`;
 
 // Bound the incident-history query so the dashboard never loads unbounded rows.
@@ -112,6 +114,9 @@ class AntiNukeManager {
         this._auditStreamAvailable = false;
         // Optional listener hook (dashboard/live views can subscribe).
         this._listeners = new Set();
+        // Anti-Raid: in-memory join windows (guildId → join events). Fed by the
+        // guildMemberAdd gateway event via processRaidJoin / scanMemberJoin.
+        this._raidState = createRaidState();
         this._init().catch(err =>
             console.error('[ANTINUKE] Init failed:', err.message)
         );
@@ -197,9 +202,9 @@ class AntiNukeManager {
                 guild_id, enabled, alert_channel_id, responses,
                 trusted_user_ids, trusted_role_ids, watched, dry_run,
                 dangerous_permissions, lockdown, response_cooldown_seconds,
-                action_responses, quarantine_role_id,
+                action_responses, quarantine_role_id, raid_settings,
                 setup_method, setup_status, setup_state, updated_at
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW())
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW())
             ON CONFLICT (guild_id) DO UPDATE SET
                 enabled                  = EXCLUDED.enabled,
                 alert_channel_id         = EXCLUDED.alert_channel_id,
@@ -213,6 +218,7 @@ class AntiNukeManager {
                 response_cooldown_seconds= EXCLUDED.response_cooldown_seconds,
                 action_responses         = EXCLUDED.action_responses,
                 quarantine_role_id       = EXCLUDED.quarantine_role_id,
+                raid_settings            = EXCLUDED.raid_settings,
                 setup_method             = EXCLUDED.setup_method,
                 setup_status             = EXCLUDED.setup_status,
                 setup_state              = EXCLUDED.setup_state,
@@ -226,6 +232,7 @@ class AntiNukeManager {
             s.responseCooldownSeconds,
             JSON.stringify(s.actionResponses || {}),
             s.quarantineRoleId || null,
+            JSON.stringify(s.raid || {}),
             s.setupMethod || null, s.setupStatus || 'not_started',
             JSON.stringify(s.setupState || {}),
         ]);
@@ -455,6 +462,158 @@ class AntiNukeManager {
     /** Mark the live audit-log stream as observed (called by the event handler). */
     noteAuditStream() {
         this._auditStreamAvailable = true;
+    }
+
+    /**
+     * Anti-Raid entry point — called from the `guildMemberAdd` gateway event
+     * (via `scanMemberJoin`) AND exposed for tests.
+     *
+     * Feeds the in-memory join window; when a raid action trips it records an
+     * incident, posts the alert embed and — only when the guild configured
+     * `raid.automaticLockdown` — engages the configured lockdown. Never bans or
+     * kicks (a join wave is a weak attribution signal), never throws.
+     *
+     * @param {object} member  a discord.js GuildMember (or a { guild, user, joinedTimestamp }-shaped shim)
+     * @returns {Promise<{ handled: boolean, reason?: string, actions?: Array }>}
+     */
+    async processRaidJoin(member) {
+        try {
+            if (!member || !member.guild) return { handled: false, reason: 'no_guild' };
+            const guildId = member.guild.id;
+            const settings = this.getSettings(guildId);
+            if (!settings.enabled || (settings.raid && settings.raid.enabled === false)) {
+                return { handled: false, reason: 'raid_disabled' };
+            }
+            const userId = member.user && member.user.id;
+            const createdTs = member.user && member.user.createdTimestamp;
+            const accountAgeMs = createdTs ? Date.now() - createdTs : null;
+            const trips = feedJoin(this._raidState, guildId, userId, {
+                accountAgeMs,
+                settings,
+            });
+            if (!trips.length) return { handled: false, reason: 'below_threshold' };
+
+            const results = [];
+            for (const trip of trips) {
+                const action = trip.action;
+                const watch = (settings.watched || {})[action];
+                const windowBucket = Math.floor(Date.now() / (Math.max(1, (watch && watch.seconds) || 60) * 1000));
+                const dedupKey = `${guildId}|${action}|raid|${windowBucket}`;
+                let claimed = true;
+                try { claimed = await claimDedupKey(dedupKey, { guildId, ttlSeconds: Math.max(30, ((watch && watch.seconds) || 60) * 2) }); }
+                catch (_) { /* best-effort */ }
+                if (!claimed) { results.push({ handled: false, reason: 'deduped', action }); continue; }
+
+                const shape = raidIncidentShape(trip, guildId);
+                let responseTaken = [];
+                let responseResult = {};
+                let responseOk = false;
+                const dryRun = settings.dryRun !== false;
+
+                if (!dryRun) {
+                    // Alert embed (channel + any configured raid alert channel).
+                    await this._sendRaidAlert(member.guild, settings, trip, shape).catch(err =>
+                        console.error('[ANTINUKE] raid alert failed:', err.message));
+                    responseTaken.push('alertChannel');
+                    // Optional automatic lockdown.
+                    if (settings.raid && settings.raid.automaticLockdown === true
+                        && settings.lockdown && settings.lockdown.enabled !== false) {
+                        const lockdownRes = await this._tryRaidLockdown(member.guild, settings, trip).catch(() => null);
+                        if (lockdownRes && lockdownRes.ok) {
+                            responseTaken.push('lockdown');
+                            responseResult.lockdown = lockdownRes;
+                            responseOk = true;
+                        } else if (lockdownRes) {
+                            responseResult.lockdownError = lockdownRes.error || 'lockdown failed';
+                        }
+                    }
+                }
+
+                await this._recordIncident({
+                    guildId,
+                    executorId: userId || null,
+                    executorName: (member.user && member.user.tag) || null,
+                    action: shape.action,
+                    module: 'raid',
+                    severity: shape.severity,
+                    count: shape.count,
+                    threshold: shape.threshold,
+                    windowSeconds: shape.windowSeconds,
+                    responseTaken,
+                    responseResult,
+                    responseOk,
+                    dryRun,
+                    attribution: 'raid_detector',
+                    status: dryRun ? 'dry_run' : (responseOk ? 'action_attempted' : 'alerted'),
+                    details: shape.details || '',
+                });
+                results.push({ handled: true, action, responseTaken, dryRun });
+            }
+            return { handled: results.some(r => r.handled), results };
+        } catch (err) {
+            console.error('[ANTINUKE] processRaidJoin failed:', err.message);
+            return { handled: false, reason: 'error', error: err.message };
+        }
+    }
+
+    /** Alias used by the guildMemberAdd hook (mirrors automod's scanMemberJoin). */
+    scanMemberJoin(member) {
+        return this.processRaidJoin(member);
+    }
+
+    async _sendRaidAlert(guild, settings, trip, shape) {
+        const channels = [];
+        if (settings.alertChannelId) channels.push(String(settings.alertChannelId));
+        if (settings.raid && settings.raid.alertChannelId) channels.push(String(settings.raid.alertChannelId));
+        const unique = Array.from(new Set(channels));
+        if (!unique.length || !guild.channels) return { ok: false, reason: 'no_channel' };
+        const { EmbedBuilder } = require('discord.js');
+        for (const channelId of unique) {
+            try {
+                const channel = guild.channels.cache && guild.channels.cache.get(channelId)
+                    ? guild.channels.cache.get(channelId)
+                    : await guild.channels.fetch(channelId).catch(() => null);
+                if (!channel || !channel.send) continue;
+                const embed = new EmbedBuilder()
+                    .setColor(severityColor(shape.severity))
+                    .setTitle('🚨 Anti-Raid: join velocity detected')
+                    .setDescription([
+                        `**Signal:** ${trip.label}`,
+                        `**Count:** ${shape.count} joins in ${shape.windowSeconds}s`,
+                        `**Action:** \`${shape.action}\``,
+                        shape.details ? `**Detail:** ${shape.details}` : null,
+                    ].filter(Boolean).join('\n'))
+                    .setFooter({ text: 'PrimeBot • Anti-Raid' })
+                    .setTimestamp();
+                await channel.send({ embeds: [embed], allowedMentions: { parse: [] } });
+            } catch (err) {
+                console.error(`[ANTINUKE] raid alert channel ${channelId} failed:`, err.message);
+            }
+        }
+        return { ok: true };
+    }
+
+    async _tryRaidLockdown(guild, settings, trip) {
+        // Automatic lockdown from a join signal is conservative: it only raises
+        // the verification level (and pauses invites when configured), never bans.
+        const target = (settings.raid && settings.raid.verificationLevel) || 'high';
+        const lockdown = settings.lockdown || {};
+        try {
+            const res = await applyLockdown({
+                guild,
+                settings: {
+                    ...settings,
+                    lockdown: { ...settings.lockdown, verificationLevel: target, pauseInvites: lockdown.pauseInvites !== false },
+                },
+                startedBy: null,
+                reason: `Automated Anti-Raid lockdown — ${trip.label} (${trip.action})`,
+                dryRun: settings.dryRun !== false,
+            });
+            const ok = res && (res.ok === true || res.executed === true);
+            return { ok, error: res && res.error ? res.error : null, ...(res || {}) };
+        } catch (err) {
+            return { ok: false, error: err.message };
+        }
     }
 
     /**
@@ -992,6 +1151,7 @@ function rowToSettings(row) {
         dryRun: row.dry_run === undefined ? undefined : row.dry_run,
         dangerousPermissions: row.dangerous_permissions,
         lockdown: row.lockdown,
+        raid: row.raid_settings,
         responseCooldownSeconds: row.response_cooldown_seconds,
         updatedAt: row.updated_at || null,
     });

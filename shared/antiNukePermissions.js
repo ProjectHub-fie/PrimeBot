@@ -57,6 +57,19 @@ const ANTI_NUKE_PERMISSIONS = [
         delegatable: true,
     },
     {
+        id: 'antinuke.raid.manage',
+        label: 'Anti-Raid',
+        description: 'Configure the Anti-Raid guard (join thresholds, account-age cutoff, automatic lockdown).',
+        group: 'setup',
+        delegatable: true,
+    },
+    {
+        id: 'antinuke.health.view',
+        label: 'Health & readiness',
+        description: 'View the Anti-Nuke health scan and readiness diagnostics.',
+        group: 'logs',
+    },
+    {
         id: 'antinuke.trusted.view',
         label: 'View trusted list',
         description: 'View the trusted users and roles.',
@@ -92,6 +105,35 @@ const ANTI_NUKE_PERMISSIONS = [
         description: 'Review, resolve and manage security incidents.',
         group: 'incidents',
         delegatable: true,
+    },
+    {
+        id: 'antinuke.incidents.export',
+        label: 'Export incidents',
+        description: 'Export the detected security incidents (JSON).',
+        group: 'incidents',
+    },
+
+    // ── Backups ─────────────────────────────────────────────────────────────
+    {
+        id: 'antinuke.backup.view',
+        label: 'View backups',
+        description: 'View the Anti-Nuke configuration snapshots (roles, channels, settings).',
+        group: 'backups',
+    },
+    {
+        id: 'antinuke.backup.create',
+        label: 'Create backups',
+        description: 'Capture a new configuration snapshot.',
+        group: 'backups',
+        delegatable: true,
+    },
+    {
+        id: 'antinuke.backup.restore',
+        label: 'Restore backups',
+        description: 'Restore roles, channels or settings from a snapshot (inside the bot\'s authority).',
+        group: 'backups',
+        delegatable: true,
+        sensitive: true,
     },
 
     // ── Emergency Controls ──────────────────────────────────────────────────
@@ -153,13 +195,14 @@ const ANTI_NUKE_PERMISSIONS = [
 
 /** Stable index maps */
 const ANTI_NUKE_PERMISSION_BY_ID = Object.fromEntries(ANTI_NUKE_PERMISSIONS.map(p => [p.id, p]));
-const ANTI_NUKE_PERMISSION_GROUPS = ['dashboard', 'setup', 'responses', 'incidents', 'emergency', 'logs', 'access'];
+const ANTI_NUKE_PERMISSION_GROUPS = ['dashboard', 'setup', 'responses', 'incidents', 'backups', 'emergency', 'logs', 'access'];
 
 const ANTI_NUKE_GROUP_LABELS = {
     dashboard: 'Dashboard Access',
     setup: 'Setup Management',
     responses: 'Response Management',
     incidents: 'Incident Management',
+    backups: 'Backups',
     emergency: 'Emergency Controls',
     logs: 'Logs and Monitoring',
     access: 'Access Control',

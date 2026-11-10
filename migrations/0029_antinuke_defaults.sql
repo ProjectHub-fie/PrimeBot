@@ -1,0 +1,17 @@
+-- Anti-Nuke: live by default (dry-run OFF) + full active response set.
+--
+-- Two product defaults changed:
+--   1. dry_run now defaults to OFF — a freshly configured Anti-Nuke setup
+--      enforces for real instead of only detecting + alerting.
+--   2. the global response set defaults to every response except "Log only",
+--      so the dashboard's Response configuration checks all boxes bar log-only.
+--
+-- This migration makes the dry_run default change durable for existing
+-- deployments. Only the COLUMN DEFAULT is changed — a brand-new row (e.g. the
+-- setup-state insert) now gets dry_run=false. Rows that were deliberately
+-- saved with dry_run=true are preserved: an admin who opted into dry-run keeps
+-- it until they turn it off. The application also self-applies the same
+-- default reset at boot (server/anukeDb.js + dashboard/db.js).
+--
+-- Idempotent: safe to run again.
+ALTER TABLE antinuke_settings ALTER COLUMN dry_run SET DEFAULT false;

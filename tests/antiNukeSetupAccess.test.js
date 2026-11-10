@@ -32,11 +32,11 @@ const {
 } = require('../utils/antiNukeSetupRunner');
 
 test('the progress card math uses required steps only (0% visible, 100% only after validation)', () => {
-    // Automatic walkthrough = 7 backend + 9 walkthrough = 16 required steps.
+    // Automatic walkthrough = 8 backend + 8 walkthrough = 16 required steps.
     const catalog = stepsForMethod('automatic');
     const requiredCount = catalog.filter(s => s.required).length;
     assert.equal(requiredCount, 16, 'the automatic walkthrough has 16 required steps');
-    assert.equal(AUTO_WALKTHROUGH_STEPS.length, 9);
+    assert.equal(AUTO_WALKTHROUGH_STEPS.length, 8);
     // `validate` must run AFTER `apply`, otherwise it re-verifies a config that
     // was never persisted and fails the whole walkthrough (the step-8 bug).
     const keys = catalog.map(s => s.key);
@@ -142,7 +142,7 @@ test('resuming after a "bot restart" restores completion from the persisted stat
     // restarts at 0%.
     const persisted = withUpdater(applyStep(applyStep(
         newSetupSession('automatic', '1'),
-        'restore', { status: 'completed' }),
+        'inspection', { status: 'completed' }),
         'confirm', { status: 'completed' }), '1');
     const resumed = JSON.parse(JSON.stringify(persisted));
     const p = computeProgress('automatic', resumed);
@@ -223,8 +223,11 @@ test('the automatic walkthrough completes against an async dashboard manager shi
             },
             fetch: async (id) => channels.find(c => c.id === String(id)) || null,
         },
-        roles: { cache: new Map() },
-        members: { me: { permissions: { has: () => true } } },
+        roles: {
+            cache: new Map(),
+            create: async (opts = {}) => ({ id: 'iso1', name: opts.name || 'isolated', position: 0, setPosition: async () => {} }),
+        },
+        members: { me: { permissions: { has: () => true }, roles: { highest: { position: 5 } } } },
     };
 
     // The wizard's confirmation gate (`confirm`) is exercised elsewhere; this
@@ -285,8 +288,11 @@ test('runAll drives the whole automatic walkthrough to completion (Discord path)
             cache: { size: 1, get: (i) => channels.find(c => c.id === i) || null, has: (i) => channels.some(c => c.id === i), values: () => channels.values(), find: (f) => channels.find(f) },
             fetch: async (i) => channels.find(c => c.id === i) || null,
         },
-        roles: { cache: new Map() },
-        members: { me: { permissions: { has: () => true } } },
+        roles: {
+            cache: new Map(),
+            create: async (opts = {}) => ({ id: 'iso1', name: opts.name || 'isolated', position: 0, setPosition: async () => {} }),
+        },
+        members: { me: { permissions: { has: () => true }, roles: { highest: { position: 5 } } } },
     };
     // `confirmed: true` is what the Discord Confirm button passes.
     const res = await runAll({ client: { antiNukeManager: manager }, guild, options: { applyRecommended: false, confirmed: true } });

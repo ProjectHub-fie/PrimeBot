@@ -13,11 +13,12 @@
 
 const AUTOMATIC_STEPS = [
     { key: 'inspection',  label: 'Inspecting server',          required: true, description: 'Read guild info, roles, channels and existing configuration.' },
-    { key: 'permissions', label: 'Checking bot permissions',   required: true, description: 'Verify the permissions each protection module needs.' },
+    { key: 'permissions', label: 'Checking bot permissions',   required: true, description: 'Verify the permissions each protection module needs, and that the bot\'s role is in the top 3.' },
+    { key: 'alert',       label: 'Choosing alert channel',     required: true, description: 'Select a security alert channel or create one automatically.' },
     { key: 'settings',    label: 'Loading existing settings',  required: true, description: 'Load the guild\'s current Anti-Nuke configuration.' },
     { key: 'rules',       label: 'Preparing security rules',   required: true, description: 'Select the recommended watched actions and responses.' },
     { key: 'thresholds',  label: 'Configuring detection thresholds', required: true, description: 'Apply safe initial thresholds per action.' },
-    { key: 'alert',       label: 'Preparing alert channel',    required: true, description: 'Validate (or create) the security alert channel.' },
+    { key: 'isolation',   label: 'Preparing isolation role',   required: true, description: 'Select an isolation role or create one automatically below the bot\'s role.' },
     { key: 'save',        label: 'Saving configuration',       required: true, description: 'Persist the recommended configuration to the database.' },
 ];
 
@@ -25,8 +26,8 @@ const AUTOMATIC_STEPS = [
 // step REQUIRES `antinuke.setup`; the dashboard hides the whole wizard behind
 // that permission, so the walkthrough itself carries no extra gate.
 //
-// The complete automatic walkthrough is 16 required steps: the 7 backend steps
-// (AUTOMATIC_STEPS) plus these 9 walkthrough steps. `stepsForMethod('automatic')`
+// The complete automatic walkthrough is 16 required steps: the 8 backend steps
+// (AUTOMATIC_STEPS) plus these 8 walkthrough steps. `stepsForMethod('automatic')`
 // concatenates the two, so `total` is always 16 and the bar can hold 100%.
 //
 // ORDER MATTERS: `apply` persists the confirmed configuration, and `validate`
@@ -34,7 +35,6 @@ const AUTOMATIC_STEPS = [
 // ran before (as a naive concatenation of the two lists did) it always found
 // nothing persisted and failed the whole walkthrough at step 8.
 const AUTO_WALKTHROUGH_STEPS = [
-    { key: 'restore',          label: 'Restoring prior progress',     required: true, description: 'Re-read the persisted setup state and resume where you left off.' },
     { key: 'confirm',          label: 'Reviewing proposed changes',   required: true, description: 'Show exactly what applying the recommended configuration would change.' },
     { key: 'apply',            label: 'Applying recommended settings', required: true, description: 'Apply the confirmed recommended configuration.' },
     { key: 'validate',         label: 'Final validation',             required: true, description: 'Reload and re-verify the saved configuration.' },
@@ -44,6 +44,45 @@ const AUTO_WALKTHROUGH_STEPS = [
     { key: 'report',           label: 'Building completion report',    required: true, description: 'Assemble the setup summary for the owner.' },
     { key: 'finished',         label: 'Finished',                      required: true, description: 'Setup complete — protection is active.' },
 ];
+
+/** Names used when the setup wizard creates things automatically. */
+const ALERT_CHANNEL_NAME = 'primebot-antinuke-log';
+const ISOLATION_ROLE_NAME = 'isolated';
+/** How many top role positions the bot must occupy to manage the hierarchy. */
+const REQUIRED_TOP_ROLE_RANK = 3;
+
+/**
+ * Check whether the bot's highest role sits within the top `topN` positions of
+ * the guild's role hierarchy. Works with a live discord.js guild AND the
+ * dashboard REST shim (which exposes `roles.cache` + `members.me.roles.highest`).
+ *
+ * Returns `{ ok, rank, total, botPosition, indeterminate, message }` where
+ * `rank` is 1-based (1 = the highest role). When the position cannot be
+ * determined the check passes (`indeterminate: true`) — setup is never blocked
+ * on missing data, only on a confirmed too-low position.
+ */
+function botRolePositionCheck(guild, topN = REQUIRED_TOP_ROLE_RANK) {
+    const roles = [];
+    if (guild && guild.roles && guild.roles.cache && typeof guild.roles.cache.values === 'function') {
+        for (const r of guild.roles.cache.values()) {
+            if (!r || r.name === '@everyone') continue;
+            roles.push({ id: String(r.id), position: Number(r.position || 0) });
+        }
+    }
+    roles.sort((a, b) => b.position - a.position);
+    const total = roles.length;
+    const me = guild && guild.members && guild.members.me;
+    const highest = me && me.roles && me.roles.highest ? Number(me.roles.highest.position) : NaN;
+    if (!total || !Number.isFinite(highest)) {
+        return { ok: true, rank: null, total, botPosition: null, indeterminate: true, message: '' };
+    }
+    const idx = roles.findIndex(r => r.position <= highest);
+    const rank = idx >= 0 ? idx + 1 : total;
+    const ok = rank >= 1 && rank <= topN;
+    const message = ok ? ''
+        : `PrimeBot's role is in position ${rank} of ${total}. Set the bot in the top ${topN} role position first, then resume operation.`;
+    return { ok, rank, total, botPosition: highest, indeterminate: false, message };
+}
 
 const MANUAL_SECTIONS = [
     { key: 'general',  label: 'General Settings',             required: true, description: 'Enable Anti-Nuke and the master moderation settings.' },
@@ -266,6 +305,10 @@ function diffRecommended(current = {}, recommended = {}) {
 }
 
 module.exports = {
+    ALERT_CHANNEL_NAME,
+    ISOLATION_ROLE_NAME,
+    REQUIRED_TOP_ROLE_RANK,
+    botRolePositionCheck,
     AUTOMATIC_STEPS,
     AUTO_WALKTHROUGH_STEPS,
     MANUAL_SECTIONS,

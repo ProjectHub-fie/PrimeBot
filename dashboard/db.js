@@ -1449,16 +1449,21 @@ const ANTINUKE_DDL = `
         trusted_user_ids   JSONB NOT NULL DEFAULT '[]',
         trusted_role_ids   JSONB NOT NULL DEFAULT '[]',
         watched            JSONB NOT NULL DEFAULT '{}',
-        dry_run            BOOLEAN NOT NULL DEFAULT true,
+        dry_run            BOOLEAN NOT NULL DEFAULT false,
         updated_at         TIMESTAMP DEFAULT NOW()
     );
 `;
 
 // Extended columns (safe migration via ADD COLUMN IF NOT EXISTS).
 const ANTINUKE_ALTER_SQL = [
+    // dry_run must default OFF so a row inserted without it (e.g. the
+    // setup-state insert) never silently turns dry-run back ON. An existing
+    // row's deliberately saved dry_run value is preserved.
+    `ALTER TABLE antinuke_settings ALTER COLUMN dry_run SET DEFAULT false`,
     `ALTER TABLE antinuke_settings ADD COLUMN IF NOT EXISTS dangerous_permissions JSONB NOT NULL DEFAULT '["Administrator","ManageGuild","ManageRoles","ManageChannels"]'`,
     `ALTER TABLE antinuke_settings ADD COLUMN IF NOT EXISTS lockdown JSONB NOT NULL DEFAULT '{"enabled":true,"verificationLevel":"high","pauseInvites":true}'`,
     `ALTER TABLE antinuke_settings ADD COLUMN IF NOT EXISTS response_cooldown_seconds INTEGER NOT NULL DEFAULT 30`,
+    `ALTER TABLE antinuke_settings ADD COLUMN IF NOT EXISTS raid_settings JSONB NOT NULL DEFAULT '{"enabled":true,"accountAgeMinDays":7,"alertChannelId":null,"automaticLockdown":false,"verificationLevel":"high"}'`,
     `ALTER TABLE antinuke_settings ADD COLUMN IF NOT EXISTS setup_method VARCHAR(20)`,
     `ALTER TABLE antinuke_settings ADD COLUMN IF NOT EXISTS setup_status VARCHAR(20) NOT NULL DEFAULT 'not_started'`,
     `ALTER TABLE antinuke_settings ADD COLUMN IF NOT EXISTS setup_state JSONB NOT NULL DEFAULT '{}'`,
@@ -1503,9 +1508,26 @@ const ANTINUKE_LOCKDOWN_DDL = `
     );
 `;
 
+const ANTINUKE_BACKUPS_DDL = `
+    CREATE TABLE IF NOT EXISTS antinuke_backups (
+        id            SERIAL PRIMARY KEY,
+        guild_id      VARCHAR(50) NOT NULL,
+        name          VARCHAR(120) NOT NULL DEFAULT '',
+        created_by    VARCHAR(50),
+        created_at    TIMESTAMP DEFAULT NOW(),
+        roles         JSONB NOT NULL DEFAULT '[]',
+        channels      JSONB NOT NULL DEFAULT '[]',
+        settings      JSONB,
+        counts        JSONB NOT NULL DEFAULT '{}',
+        notes         TEXT NOT NULL DEFAULT ''
+    );
+    CREATE INDEX IF NOT EXISTS antinuke_backups_guild_created_idx
+        ON antinuke_backups (guild_id, created_at DESC);
+`;
+
 const ANTINUKE_SETTINGS_COLUMNS = `guild_id, enabled, alert_channel_id, responses,
     trusted_user_ids, trusted_role_ids, watched, dry_run,
-    dangerous_permissions, lockdown, response_cooldown_seconds,
+    dangerous_permissions, lockdown, response_cooldown_seconds, raid_settings,
     setup_method, setup_status, setup_state, updated_at`;
 
 async function ensureAutomodIncidentsTable() {
@@ -1627,6 +1649,7 @@ async function ensureAntiNukeTable() {
         await anukePool.query(ANTINUKE_INCIDENT_DDL);
         for (const sql of ANTINUKE_INCIDENT_INDEX_SQL) await anukePool.query(sql);
         await anukePool.query(ANTINUKE_LOCKDOWN_DDL);
+        await anukePool.query(ANTINUKE_BACKUPS_DDL);
         // Access-control + setup audit tables (shared with the manager).
         await require('../server/anukeDb').ensureAnukeTables();
     });
@@ -1648,6 +1671,7 @@ function antiNukeRowToSettings(row) {
         dryRun: row.dry_run === undefined ? undefined : row.dry_run,
         dangerousPermissions: row.dangerous_permissions,
         lockdown: row.lockdown,
+        raid: row.raid_settings,
         responseCooldownSeconds: row.response_cooldown_seconds,
         updatedAt: row.updated_at || null,
     });
@@ -1683,9 +1707,9 @@ async function upsertAntiNukeSettings(guildId, patch = {}) {
             guild_id, enabled, alert_channel_id, responses,
             trusted_user_ids, trusted_role_ids, watched, dry_run,
             dangerous_permissions, lockdown, response_cooldown_seconds,
-            action_responses, quarantine_role_id,
+            raid_settings, action_responses, quarantine_role_id,
             setup_method, setup_status, setup_state, updated_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW())
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW())
         ON CONFLICT (guild_id) DO UPDATE SET
             enabled                   = EXCLUDED.enabled,
             alert_channel_id          = EXCLUDED.alert_channel_id,
@@ -1697,6 +1721,7 @@ async function upsertAntiNukeSettings(guildId, patch = {}) {
             dangerous_permissions     = EXCLUDED.dangerous_permissions,
             lockdown                  = EXCLUDED.lockdown,
             response_cooldown_seconds = EXCLUDED.response_cooldown_seconds,
+            raid_settings             = EXCLUDED.raid_settings,
             action_responses          = EXCLUDED.action_responses,
             quarantine_role_id        = EXCLUDED.quarantine_role_id,
             setup_method              = EXCLUDED.setup_method,
@@ -1710,6 +1735,7 @@ async function upsertAntiNukeSettings(guildId, patch = {}) {
         merged.dryRun !== false,
         JSON.stringify(merged.dangerousPermissions), JSON.stringify(merged.lockdown),
         merged.responseCooldownSeconds,
+        JSON.stringify(merged.raid || {}),
         JSON.stringify(merged.actionResponses || {}),
         merged.quarantineRoleId || null,
         setupMethod, setupStatus, JSON.stringify(setupState),
@@ -1802,6 +1828,87 @@ async function getAntiNukeLockdown(guildId) {
         startedBy: row.started_by || null,
         reason: row.reason || '',
     };
+}
+
+// ── Anti-Nuke backups ───────────────────────────────────────────────────────
+//
+// Configuration snapshots (roles/channels/settings) captured via REST so a
+// nuked server can be rebuilt. Stored as JSONB rows; restore runs real REST
+// operations (see utils/antiNukeBackup.js + dashboard/antiNukeActions.js).
+
+function backupRowToApi(row) {
+    return {
+        id: row.id,
+        guildId: row.guild_id,
+        name: row.name || '',
+        createdBy: row.created_by || null,
+        createdAt: row.created_at || null,
+        counts: row.counts || { roles: 0, channels: 0 },
+        notes: row.notes || '',
+        // Payload is intentionally omitted from list queries (kept for detail).
+    };
+}
+
+/** List a guild's snapshots (newest first, payload omitted). */
+async function getAntiNukeBackups(guildId, { limit = 25, offset = 0 } = {}) {
+    await ensureAntiNukeTable();
+    const { anukePool } = require('../server/anukeDb');
+    const lim = Math.min(100, Math.max(1, parseInt(limit, 10) || 25));
+    const off = Math.max(0, parseInt(offset, 10) || 0);
+    const [rows, count] = await Promise.all([
+        anukePool.query(
+            'SELECT id, guild_id, name, created_by, created_at, counts, notes FROM antinuke_backups WHERE guild_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3',
+            [String(guildId), lim, off]),
+        anukePool.query('SELECT COUNT(*)::int AS count FROM antinuke_backups WHERE guild_id = $1', [String(guildId)]),
+    ]);
+    return { total: count.rows[0]?.count || 0, limit: lim, offset: off, backups: rows.rows.map(backupRowToApi) };
+}
+
+/** Fetch one snapshot (with full payload) by guild + id. Returns null if absent. */
+async function getAntiNukeBackup(guildId, id) {
+    await ensureAntiNukeTable();
+    const { anukePool } = require('../server/anukeDb');
+    const res = await anukePool.query(
+        'SELECT * FROM antinuke_backups WHERE guild_id = $1 AND id = $2',
+        [String(guildId), Number(id)],
+    );
+    if (!res.rows.length) return null;
+    return {
+        ...backupRowToApi(res.rows[0]),
+        roles: res.rows[0].roles || [],
+        channels: res.rows[0].channels || [],
+        settings: res.rows[0].settings || null,
+    };
+}
+
+/** Persist a new snapshot. Returns the created row. */
+async function createAntiNukeBackup({ guildId, name, createdBy, roles = [], channels = [], settings = null, notes = '' }) {
+    await ensureAntiNukeTable();
+    const { anukePool } = require('../server/anukeDb');
+    const counts = { roles: Array.isArray(roles) ? roles.length : 0, channels: Array.isArray(channels) ? channels.length : 0 };
+    const res = await anukePool.query(`
+        INSERT INTO antinuke_backups (guild_id, name, created_by, roles, channels, settings, counts, notes)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+        RETURNING id, guild_id, name, created_by, created_at, counts, notes
+    `, [
+        String(guildId), String(name || '').slice(0, 120), createdBy ? String(createdBy) : null,
+        JSON.stringify(roles), JSON.stringify(channels),
+        settings ? JSON.stringify(settings) : null,
+        JSON.stringify(counts), String(notes || '').slice(0, 1000),
+    ]);
+    if (!res.rows.length) throw new Error('backup insert returned no row');
+    return backupRowToApi(res.rows[0]);
+}
+
+/** Delete a snapshot (guild-scoped). Returns true when a row was removed. */
+async function deleteAntiNukeBackup(guildId, id) {
+    await ensureAntiNukeTable();
+    const { anukePool } = require('../server/anukeDb');
+    const res = await anukePool.query(
+        'DELETE FROM antinuke_backups WHERE guild_id = $1 AND id = $2',
+        [String(guildId), Number(id)],
+    );
+    return (res.rowCount || 0) > 0;
 }
 
 // ── Anti-Nuke access control (shared ANUKE pool) ───────────────────────────
@@ -3753,6 +3860,10 @@ module.exports = {
     getAntiNukeIncidents,
     getAntiNukeIncidentSummary,
     getAntiNukeLockdown,
+    getAntiNukeBackups,
+    getAntiNukeBackup,
+    createAntiNukeBackup,
+    deleteAntiNukeBackup,
     listAntiNukeAccess,
     getAntiNukeAccessRow,
     upsertAntiNukeAccess,

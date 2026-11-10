@@ -21,11 +21,12 @@
 
 const {
     normalizeAntiNukeSettings, defaultAntiNukeSettings, NUKE_ACTIONS,
+    DEFAULT_NUKE_RESPONSES,
 } = require('./antiNukeRules');
 const { validateBotPermissions } = require('./antiNukeContainment');
 const {
     stepsForMethod, normalizeSetupState, applyStep, withStatus, withUpdater, computeProgress, isComplete, diffRecommended,
-    AUTO_WALKTHROUGH_STEPS,
+    AUTO_WALKTHROUGH_STEPS, botRolePositionCheck, ALERT_CHANNEL_NAME, ISOLATION_ROLE_NAME,
 } = require('./antiNukeSetup');
 
 // Channel names we look for when the guild has no alert channel configured.
@@ -34,7 +35,9 @@ const ALERT_CHANNEL_CANDIDATES = ['security-logs', 'security', 'mod-logs', 'anti
 /**
  * The recommended security configuration for a server that is setting up for
  * the first time. Safe defaults: every module enabled, catalog-default
- * thresholds, alert-only responses and no automatic permanent punishment.
+ * thresholds, the full active response set (every response except log-only —
+ * which the per-action catalog default still tailors per rule) and no
+ * automatic permanent punishment.
  *
  * Dry-run is OFF by default: the owner explicitly ran the setup wizard, so they
  * are telling PrimeBot to protect the server now. Detection still never
@@ -52,7 +55,7 @@ function recommendedConfig() {
         enabled: true,
         dryRun: false,
         watched,
-        responses: ['alertOwner', 'alertChannel', 'logOnly'],
+        responses: DEFAULT_NUKE_RESPONSES.slice(),
     });
 }
 
@@ -105,6 +108,58 @@ function mergeRecommended(current, recommended, applyRecommended) {
         watched,
         responses: (cur.responses && cur.responses.length) ? cur.responses : recommended.responses,
     });
+}
+
+/** Raised when a setup step needs the admin to choose something first. */
+class SetupPrompt extends Error {
+    constructor(kind, message = '') {
+        super(message || `Setup needs your input: ${kind}`);
+        this.name = 'SetupPrompt';
+        this.kind = kind;
+    }
+}
+
+/**
+ * Create the security alert channel (used when the admin picks "Make
+ * automatically"). Works with a live discord.js guild AND the dashboard REST
+ * shim — both expose a `channels.create`-style method.
+ */
+async function createAlertChannel(guild, name = ALERT_CHANNEL_NAME) {
+    const opts = { name, type: 0 };
+    let ch = null;
+    if (guild && guild.channels && typeof guild.channels.create === 'function') {
+        ch = await guild.channels.create(opts);
+    } else if (guild && typeof guild.createChannel === 'function') {
+        ch = await guild.createChannel(opts);
+    }
+    if (!ch) throw new Error(`Could not create #${name}. Create it manually and retry.`);
+    return { channelId: String(ch.id), name: ch.name || name, source: 'created' };
+}
+
+/**
+ * Create the isolation (quarantine) role just below the bot's highest role.
+ * Works with a live guild AND the REST shim.
+ */
+async function createIsolationRole(guild, name = ISOLATION_ROLE_NAME) {
+    const me = guild && guild.members && guild.members.me;
+    const highest = me && me.roles && me.roles.highest ? Number(me.roles.highest.position) : null;
+    const targetPosition = highest != null ? Math.max(1, highest - 1) : null;
+    const opts = { name, permissions: [], hoist: false, mentionable: false, position: targetPosition };
+    let role = null;
+    if (guild && guild.roles && typeof guild.roles.create === 'function') {
+        role = await guild.roles.create(opts);
+    } else if (guild && typeof guild.createRole === 'function') {
+        role = await guild.createRole(opts);
+    }
+    if (!role) throw new Error(`Could not create the "${name}" role. Create it manually below the bot's role and retry.`);
+    // Best-effort position enforcement (Discord clamps to what the bot may set).
+    if (targetPosition != null) {
+        try {
+            if (typeof role.setPosition === 'function') await role.setPosition(targetPosition);
+            else if (guild.setRolePosition) await guild.setRolePosition(String(role.id), targetPosition);
+        } catch (_) { /* position is best-effort; the role still exists */ }
+    }
+    return { roleId: String(role.id), name: role.name || name, position: targetPosition, source: 'created' };
 }
 
 /** Resolve the alert channel: existing config first, then a name match. */
@@ -206,7 +261,14 @@ async function runStep(stepKey, { client, guild, state, options }) {
         }
         case 'permissions': {
             const report = validateBotPermissions(guild);
-            return { ok: report.ok, checks: report.checks, missing: report.missing };
+            // Hard gate: the bot must be in the top 3 role positions, otherwise
+            // it cannot manage the hierarchy it is meant to protect.
+            const roleCheck = botRolePositionCheck(guild);
+            if (!roleCheck.ok) throw new Error(roleCheck.message);
+            return {
+                ok: report.ok, checks: report.checks, missing: report.missing,
+                roleRank: roleCheck.rank, roleTotal: roleCheck.total,
+            };
         }
         case 'settings': {
             const settings = manager ? await manager.getSettings(guild.id) : {};
@@ -235,14 +297,39 @@ async function runStep(stepKey, { client, guild, state, options }) {
         }
         case 'alert': {
             const settings = manager ? await manager.getSettings(guild.id) : {};
-            const resolved = await resolveAlertChannel(guild, settings.alertChannelId);
-            if (resolved.source === 'none') {
-                // Not fatal on its own — but the step records that no channel was
-                // found so the dashboard can ask the admin to pick one. We treat
-                // "no channel" as a soft failure so the wizard surfaces it.
-                throw new Error('No usable alert channel found. Create #security-logs or pick a channel, then retry.');
+            // Admin picked a channel explicitly.
+            if (options.alertChannelId) {
+                const picked = await resolveAlertChannel(guild, options.alertChannelId);
+                if (!picked.channelId) throw new Error('That alert channel is not usable. Pick another or let PrimeBot create one.');
+                return picked;
             }
-            return resolved;
+            // Reuse an already-configured / discoverable channel.
+            const resolved = await resolveAlertChannel(guild, settings.alertChannelId);
+            if (resolved.channelId) return resolved;
+            // "Make automatically" (or the non-interactive Discord path).
+            if (options.automaticChannel || !options.interactive) {
+                return await createAlertChannel(guild, ALERT_CHANNEL_NAME);
+            }
+            // Dashboard: ask the admin with a floating window.
+            throw new SetupPrompt('alert_channel');
+        }
+        case 'isolation': {
+            const settings = manager ? await manager.getSettings(guild.id) : {};
+            if (options.isolationRoleId) {
+                if (manager && typeof manager.updateSettingsAsync === 'function') {
+                    await manager.updateSettingsAsync(guild.id, { quarantineRoleId: options.isolationRoleId });
+                }
+                return { roleId: String(options.isolationRoleId), source: 'selected' };
+            }
+            if (settings.quarantineRoleId) return { roleId: String(settings.quarantineRoleId), source: 'existing' };
+            if (options.automaticRole || !options.interactive) {
+                const created = await createIsolationRole(guild, ISOLATION_ROLE_NAME);
+                if (manager && typeof manager.updateSettingsAsync === 'function') {
+                    await manager.updateSettingsAsync(guild.id, { quarantineRoleId: created.roleId });
+                }
+                return created;
+            }
+            throw new SetupPrompt('isolation_role');
         }
         case 'save': {
             // `save` stages the recommended configuration: `apply` (later in the
@@ -299,11 +386,10 @@ async function runStep(stepKey, { client, guild, state, options }) {
             };
         }
         default: {
-            // The walkthrough steps (restore/confirm/apply/validateModules/…)
-            // are the dashboard executor's job. Running them from here means the
+            // The walkthrough steps (confirm/apply/validateModules/…) are the
+            // dashboard executor's job. Running them from here means the
             // dashboard's `setup/step` route reached a walkthrough key — dispatch
-            // it to that executor instead of throwing "Unknown setup step", which
-            // previously failed the whole walkthrough at the `restore` step.
+            // it to that executor instead of throwing "Unknown setup step".
             if (typeof stepKey === 'string' && AUTO_WALKTHROUGH_STEPS.some(s => s.key === stepKey)) {
                 return runWalkthroughStepOp(stepKey, { manager, guild, state, options });
             }
@@ -328,7 +414,7 @@ async function runAll({ client, guild, state = null, options = {} }) {
 
 /**
  * Run one step of the dashboard's full automatic walkthrough (16 steps: the 8
- * backend steps + restore/confirm/apply/validateModules + review/save/finished).
+ * backend steps + confirm/apply/validate/validateModules + botperms/persist/report/finished).
  * Each step performs a REAL backend operation and persists its outcome, so the
  * progress reflects actual work and resumes from the persisted state.
  *
@@ -353,12 +439,20 @@ async function runWalkthroughStep({ manager, guild, state = null, options = {}, 
     s = withUpdater(applyStep(s, next.key, { status: 'running' }), actorId);
     let result = null;
     let error = null;
+    let prompt = null;
     try {
         result = await runWalkthroughStepOp(next.key, { manager, guild, state: s, options });
         s = applyStep(s, next.key, { status: 'completed', result });
     } catch (err) {
-        error = err && err.message ? err.message : String(err);
-        s = applyStep(s, next.key, { status: 'failed', error });
+        if (err instanceof SetupPrompt) {
+            // The step needs the admin to choose something (channel / role). Leave
+            // it pending (never failed) and hand the prompt to the client.
+            prompt = err.kind;
+            s = applyStep(s, next.key, { status: 'pending' });
+        } else {
+            error = err && err.message ? err.message : String(err);
+            s = applyStep(s, next.key, { status: 'failed', error });
+        }
     }
     s = withUpdater(s, actorId);
 
@@ -372,7 +466,7 @@ async function runWalkthroughStep({ manager, guild, state = null, options = {}, 
     if (typeof saveListener === 'function') {
         await saveListener(s, next.key, allDone).catch(() => {});
     }
-    return { state: s, progress, done: allDone, lastStep: next.key };
+    return { state: s, progress, done: allDone, lastStep: next.key, prompt };
 }
 
 /** One backend operation for the walkthrough steps. Throws to fail the step. */
@@ -473,13 +567,17 @@ async function runWalkthroughStepOp(stepKey, { manager, guild, state, options })
         case 'finished': {
             return { finished: true };
         }
-        // ── The 8 backend steps ──────────────────────────────────────────────
+        // ── The 8 backend steps (inspection/permissions/alert/settings/rules/
+        //    thresholds/isolation/save) ───────────────────────────────────────
         default:
             return runStep(stepKey, { client: { antiNukeManager: manager, guilds: { cache: new Map([[guild.id, guild]]) } }, guild, state, options });
     }
 }
 
 module.exports = {
+    SetupPrompt,
+    createAlertChannel,
+    createIsolationRole,
     recommendedConfig,
     mergeRecommended,
     resolveAlertChannel,

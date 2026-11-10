@@ -45,6 +45,7 @@ const CREATE_TABLE_SQL = `
         trusted_role_ids   JSONB NOT NULL DEFAULT '[]',
         watched            JSONB NOT NULL DEFAULT '{}',
         dry_run            BOOLEAN NOT NULL DEFAULT false,
+        raid_settings      JSONB NOT NULL DEFAULT '{"enabled":true,"accountAgeMinDays":7,"alertChannelId":null,"automaticLockdown":false,"verificationLevel":"high"}',
         updated_at         TIMESTAMP DEFAULT NOW()
     );
 `;
@@ -52,12 +53,15 @@ const CREATE_TABLE_SQL = `
 // Columns added after the first release of the table. `ADD COLUMN IF NOT
 // EXISTS` keeps an existing deployment's rows intact — the new fields simply
 // take their defaults until an admin edits them (safe migration). The dry_run
-// DEFAULT is never rewritten here: an existing row keeps its explicitly saved
-// value; only a brand-new row (no anti-nuke row yet) gets the OFF default.
+// DEFAULT is explicitly reset to OFF so a row inserted without it (e.g. the
+// setup-state insert) never silently turns dry-run back ON. An existing row's
+// deliberately saved dry_run value is preserved.
 const ADD_COLUMNS_SQL = [
+    `ALTER TABLE antinuke_settings ALTER COLUMN dry_run SET DEFAULT false`,
     `ALTER TABLE antinuke_settings ADD COLUMN IF NOT EXISTS dangerous_permissions JSONB NOT NULL DEFAULT '["Administrator","ManageGuild","ManageRoles","ManageChannels"]'`,
     `ALTER TABLE antinuke_settings ADD COLUMN IF NOT EXISTS lockdown JSONB NOT NULL DEFAULT '{"enabled":true,"verificationLevel":"high","pauseInvites":true}'`,
     `ALTER TABLE antinuke_settings ADD COLUMN IF NOT EXISTS response_cooldown_seconds INTEGER NOT NULL DEFAULT 30`,
+    `ALTER TABLE antinuke_settings ADD COLUMN IF NOT EXISTS raid_settings JSONB NOT NULL DEFAULT '{"enabled":true,"accountAgeMinDays":7,"alertChannelId":null,"automaticLockdown":false,"verificationLevel":"high"}'`,
     `ALTER TABLE antinuke_settings ADD COLUMN IF NOT EXISTS action_responses JSONB NOT NULL DEFAULT '{}'`,
     `ALTER TABLE antinuke_settings ADD COLUMN IF NOT EXISTS quarantine_role_id VARCHAR(50)`,
     `ALTER TABLE antinuke_settings ADD COLUMN IF NOT EXISTS setup_method VARCHAR(20)`,

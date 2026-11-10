@@ -30,6 +30,15 @@ module.exports = {
                     console.error('[AUTOMOD] join scan failed:', err.message));
             }
 
+            // Anti-Nuke Anti-Raid: join-velocity / new-account-wave detection.
+            // Fire-and-forget and independent of welcome so a failure never
+            // blocks the join path. Uses the same manager stub guard as the
+            // other optional managers (no-op until the DB is reachable).
+            if (client.antiNukeManager?.scanMemberJoin) {
+                client.antiNukeManager.scanMemberJoin(member).catch(err =>
+                    console.error('[ANTINUKE] raid join scan failed:', err.message));
+            }
+
             // Check if welcome settings manager is available
             if (!client.welcomeSettingsManager) {
                 console.warn('[WELCOME] Welcome settings manager not available, using defaults for all servers');

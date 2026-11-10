@@ -434,6 +434,33 @@ function computeBotPermissions(guildId, botUserId) {
 // Every permission bit Discord defines (administrator implies all of them).
 const ADMINISTRATOR_PERMISSION_FULL = 0xFFFFFFFFFFFFFn;
 
+/** Create a role via REST. Returns the created role. */
+async function createGuildRole(guildId, body = {}) {
+    return fetchJson(`${API_BASE}/guilds/${guildId}/roles`, {
+        method: 'POST',
+        headers: { ...botHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+}
+
+/** Modify a role via REST (name, permissions, color, hoist, mentionable, position). */
+async function modifyGuildRole(guildId, roleId, body = {}) {
+    return fetchJson(`${API_BASE}/guilds/${guildId}/roles/${roleId}`, {
+        method: 'PATCH',
+        headers: { ...botHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+}
+
+/** Create a channel via REST. Returns the created channel. */
+async function createGuildChannel(guildId, body = {}) {
+    return fetchJson(`${API_BASE}/guilds/${guildId}/channels`, {
+        method: 'POST',
+        headers: { ...botHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+}
+
 module.exports = {
     API_BASE,
     exchangeCode,

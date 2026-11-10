@@ -13,6 +13,7 @@ const {
 } = require('../utils/automodPresets');
 const {
     NUKE_ACTIONS, NUKE_ACTION_KEYS, NUKE_RESPONSES, NUKE_RESPONSE_KEYS,
+    DEFAULT_NUKE_RESPONSES,
     defaultAntiNukeSettings, normalizeAntiNukeSettings, isTrusted, evaluateBurst,
 } = require('../utils/antiNukeRules');
 const {
@@ -135,7 +136,8 @@ test('normalizeAntiNukeSettings is safe by default and sanitizes input', () => {
     const d = defaultAntiNukeSettings();
     assert.equal(d.enabled, false, 'anti-nuke must be off by default');
     assert.equal(d.dryRun, false, 'new guilds default to dry-run OFF (real enforcement)');
-    assert.deepEqual(d.responses, ['alertOwner', 'alertChannel', 'logOnly']);
+    assert.deepEqual(d.responses, DEFAULT_NUKE_RESPONSES,
+        'response configuration checks every response except log-only by default');
 
     const n = normalizeAntiNukeSettings({
         enabled: 'yes',

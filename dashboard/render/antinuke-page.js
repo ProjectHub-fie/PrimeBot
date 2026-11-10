@@ -151,7 +151,7 @@ function setupChooserHTML(setup) {
             <p class="am-hero-sub">Protect your server against destructive actions, unauthorized changes and attacks.</p>
             <div class="am-hero-pills">
               <span class="am-pill ${setup.enabled ? 'am-pill-on' : 'am-pill-off'}">${svgIcon(setup.enabled ? 'check' : 'x')} ${setup.enabled ? 'Protection active' : 'Not configured'}</span>
-              <span class="am-pill am-pill-warn">${svgIcon('flask')} Dry run by default</span>
+              <span class="am-pill am-pill-on">${svgIcon('zap')} Live by default</span>
             </div>
           </div>
         </div>
@@ -282,7 +282,7 @@ function wizardSectionBody(key, ctx) {
               </tbody></table>`;
         case 'responses':
             return `
-              <p class="card-desc">What happens when a threshold trips. Punishment responses (ban/kick) stay OFF until you enable them for the specific rule they should punish — dry-run being off never auto-enables them.</p>
+              <p class="card-desc">What happens when a threshold trips. Every active response is checked by default (except "Log only"). Punishment responses (ban/kick) stay OFF until you enable them for the specific rule they should punish.</p>
               <div class="an-responses">${ANTINUKE_RESPONSES.map(r => `
                 <label class="an-response">
                   <input type="checkbox" class="an-response-cb" value="${esc(r.key)}" ${(settings.responses || []).includes(r.key) ? 'checked' : ''}/>
@@ -316,7 +316,7 @@ function wizardSectionBody(key, ctx) {
         case 'safety':
             return `
               <div class="switch-row">
-                <div class="switch-label"><div class="sl-title">Dry run</div><div class="sl-desc">Detect and alert but never contain. Turn off only once you trust the thresholds.</div></div>
+                <div class="switch-label"><div class="sl-title">Dry run</div><div class="sl-desc">Detect and alert but never contain. Off by default — leave off to let protection enforce.</div></div>
                 <label class="switch"><input type="checkbox" id="an-dry-run" ${settings.dryRun !== false ? 'checked' : ''}/><span class="slider"></span></label>
               </div>
               <div class="switch-row">
@@ -408,7 +408,7 @@ function consoleHTML({ guild, settings, lockdown, permissionReport, summary }) {
 
       <section class="card">
         <div class="card-title"><span><span class="icon">${svgIcon('megaphone')}</span> Response configuration</span></div>
-        <p class="card-desc">What happens when a threshold trips. Alerts (alert owner/channel/log) always run. Containment and punishment (quarantine, ban, kick, delete webhook, lock channels, lockdown) run only when enabled — a confirmed attacker is never punished by default, even with dry-run off.</p>
+        <p class="card-desc">What happens when a threshold trips. Every active response is checked by default (except "Log only"). Punishment responses (ban/kick) always require explicit opt-in per rule — a confirmed attacker is never permanently punished automatically.</p>
         <div class="an-responses">${ANTINUKE_RESPONSES.map(r => `
           <label class="an-response">
             <input type="checkbox" class="an-response-cb" value="${esc(r.key)}" ${(settings.responses || []).includes(r.key) ? 'checked' : ''}/>
@@ -422,7 +422,7 @@ function consoleHTML({ guild, settings, lockdown, permissionReport, summary }) {
           <select id="an-alert-channel" data-channel-select>${channelOptions(channels, settings.alertChannelId)}</select>
         </div>
         <div class="switch-row">
-          <div class="switch-label"><div class="sl-title">Dry run</div><div class="sl-desc">Detect and alert but never contain.</div></div>
+          <div class="switch-label"><div class="sl-title">Dry run</div><div class="sl-desc">Detect and alert but never contain. Off by default — leave off to let protection enforce.</div></div>
           <label class="switch"><input type="checkbox" id="an-dry-run" ${settings.dryRun !== false ? 'checked' : ''}/><span class="slider"></span></label>
         </div>
       </section>

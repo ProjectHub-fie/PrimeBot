@@ -1496,7 +1496,18 @@ app.post('/api/guilds/:guildId/antinuke/setup/step', requireAuth, requireGuildAd
             const result = await runWalkthroughStep({
                 manager, guild,
                 state: setup.state || { method: 'automatic' },
-                options: { applyRecommended: body.applyRecommended === true, confirmed: body.confirmed === true },
+                options: {
+                    // `interactive` tells the runner it may pause for a floating
+                    // window (alert channel / isolation role) instead of creating
+                    // things silently.
+                    interactive: true,
+                    applyRecommended: body.applyRecommended === true,
+                    confirmed: body.confirmed === true,
+                    alertChannelId: body.alertChannelId ? String(body.alertChannelId) : null,
+                    automaticChannel: body.automaticChannel === true,
+                    isolationRoleId: body.isolationRoleId ? String(body.isolationRoleId) : null,
+                    automaticRole: body.automaticRole === true,
+                },
                 actorId: req.user && req.user.id,
                 saveListener: async (state, stepKey, done) => {
                     const status = done ? 'completed' : 'in_progress';
@@ -1509,7 +1520,11 @@ app.post('/api/guilds/:guildId/antinuke/setup/step', requireAuth, requireGuildAd
                 },
             });
             const progress = computeProgress('automatic', result.state);
-            res.json({ setup: { method: 'automatic', status: result.state.status, state: result.state }, progress, done: result.done, lastStep: result.lastStep });
+            res.json({
+                setup: { method: 'automatic', status: result.state.status, state: result.state },
+                progress, done: result.done, lastStep: result.lastStep,
+                prompt: result.prompt || null,
+            });
         } finally {
             antinukeStepLeases.delete(req.guild.id);
         }
