@@ -443,3 +443,115 @@ test('manager _respond dry-run ON detects + logs, never enforces', async () => {
     assert.equal(recorded.status, 'dry_run');
     assert.equal(recorded.dryRun, true);
 });
+
+// ── Audit-entry dedup: composite key (auditEntryId + actionKey) ────────────
+
+test('processEvent does NOT suppress distinct rules that share one audit entry', async () => {
+    const anukeDb = require('../server/anukeDb');
+    const originalClaim = anukeDb.claimDedupKey;
+    anukeDb.claimDedupKey = async () => true;
+    anukeDb.anukePool.query = async () => ({ rows: [] });
+    delete require.cache[require.resolve('../utils/antiNukeManager')];
+    const { AntiNukeManager } = require('../utils/antiNukeManager');
+    anukeDb.claimDedupKey = originalClaim;
+    anukeDb.anukePool.query = async () => ({ rows: [] });
+
+    const mgr = new AntiNukeManager({ client: null, user: { id: 'bot' } });
+    mgr.detector = { tryConsumeCooldown: () => true, record: () => ({ count: 1, tripped: true, threshold: 1, seconds: 10 }) };
+    const guild = {
+        id: 'g', ownerId: 'owner',
+        members: { me: { id: 'bot', permissions: { has: () => true }, roles: { highest: { position: 10 } } }, fetch: async () => null, cache: new Map() },
+        roles: { cache: new Map() }, channels: { cache: new Map() },
+    };
+    mgr._fetchMember = async () => ({ id: 'attacker', user: { tag: 'attacker#0' }, roles: { cache: new Map(), highest: { position: 1 } } });
+    mgr._alert = async () => {};
+    mgr._recordIncident = async () => {};
+    mgr._emit = async () => {};
+    mgr._saveLockdown = async () => {};
+
+    const settings = normalizeAntiNukeSettings({
+        enabled: true, dryRun: false,
+        actionResponses: {
+            rolePermissionUpdate: ['alertOwner'],
+            dangerousPermissionGrant: ['alertOwner'],
+            adminGrant: ['alertOwner'],
+            memberRoleUpdate: ['alertOwner'],
+        },
+    });
+    mgr._cache.set('g', settings);
+    const before = mgr._seenEventIds.size;
+
+    // One RoleUpdate+Administrator entry watching TWO distinct actions (both
+    // threshold-tripped). Both MUST be evaluated, not deduped against each other.
+    const r1 = await mgr.processEvent({
+        guild, actionKey: 'rolePermissionUpdate',
+        knownExecutorId: 'attacker',
+        details: { auditEntryId: 'A900', targetId: 'role1', summary: 'x' },
+    });
+    const r2 = await mgr.processEvent({
+        guild, actionKey: 'dangerousPermissionGrant',
+        knownExecutorId: 'attacker',
+        details: { auditEntryId: 'A900', targetId: 'role1', summary: 'x' },
+    });
+    assert.notEqual(r1.reason, 'duplicate_event', 'first rule evaluated, not suppressed');
+    assert.notEqual(r2.reason, 'duplicate_event', 'second rule evaluated, not suppressed');
+
+    // Same entry + same action → still deduped (blocks a duplicate delivery).
+    const r3 = await mgr.processEvent({
+        guild, actionKey: 'rolePermissionUpdate',
+        knownExecutorId: 'attacker',
+        details: { auditEntryId: 'A900', targetId: 'role1', summary: 'x' },
+    });
+    assert.equal(r3.reason, 'duplicate_event', 'same entry + same action is a duplicate');
+    assert.ok(before <= mgr._seenEventIds.size);
+    mgr._seenEventIds.clear();
+});
+
+test('processEvent records staged diagnostics through enforcement for a confirmed attack', async () => {
+    const anukeDb = require('../server/anukeDb');
+    const originalClaim = anukeDb.claimDedupKey;
+    anukeDb.claimDedupKey = async () => true;
+    anukeDb.anukePool.query = async () => ({ rows: [] });
+    delete require.cache[require.resolve('../utils/antiNukeManager')];
+    const { AntiNukeManager } = require('../utils/antiNukeManager');
+    anukeDb.claimDedupKey = originalClaim;
+    anukeDb.anukePool.query = async () => ({ rows: [] });
+
+    const mgr = new AntiNukeManager({ client: null, user: { id: 'bot' } });
+    mgr.detector = { tryConsumeCooldown: () => true, record: () => ({ count: 1, tripped: true, threshold: 1, seconds: 10 }) };
+    const guild = {
+        id: 'g2', ownerId: 'owner',
+        members: { me: { id: 'bot', permissions: { has: () => true }, roles: { highest: { position: 10 } } }, fetch: async () => null, cache: new Map() },
+        roles: { cache: new Map() }, channels: { cache: new Map() },
+    };
+    mgr._fetchMember = async () => ({ id: 'attacker', user: { tag: 'attacker#0' }, roles: { cache: new Map(), highest: { position: 1 } } });
+    let recorded = null;
+    mgr._alert = async () => {};
+    mgr._recordIncident = async (inc) => { recorded = inc; };
+    mgr._emit = async () => {};
+    mgr._saveLockdown = async () => {};
+
+    const settings = normalizeAntiNukeSettings({ enabled: true, dryRun: false, actionResponses: { memberBan: ['alertOwner'] } });
+    mgr._cache.set('g2', settings);
+
+    const res = await mgr.processEvent({
+        guild, actionKey: 'memberBan', knownExecutorId: 'attacker',
+        details: { auditEntryId: 'A901', summary: '1 ban' },
+    });
+    assert.equal(res.handled, true);
+    assert.ok(recorded, 'incident recorded');
+    const stages = recorded.responseResult.stages || [];
+    const keys = stages.map(s => s.key);
+    assert.ok(keys.includes('event_received'), 'stage event_received recorded');
+    assert.ok(keys.includes('action_mapped'), 'stage action_mapped recorded');
+    assert.ok(keys.includes('enabled_check'), 'stage enabled_check recorded');
+    assert.ok(keys.includes('rule_check'), 'stage rule_check recorded');
+    assert.ok(keys.includes('attribution'), 'stage attribution recorded');
+    assert.ok(keys.includes('trust_check'), 'stage trust_check recorded');
+    assert.ok(keys.includes('threshold'), 'stage threshold recorded');
+    assert.ok(keys.includes('response_plan'), 'stage response_plan recorded');
+    assert.ok(keys.includes('hierarchy'), 'stage hierarchy recorded');
+    assert.ok(keys.includes('final'), 'stage final recorded');
+    assert.equal(recorded.status, 'detected');
+    mgr._seenEventIds.clear();
+});

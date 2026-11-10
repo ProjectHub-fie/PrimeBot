@@ -623,7 +623,8 @@ module.exports = {
                     // the ACTUAL guild owner always passes; everyone else needs the
                     // bot-defined permission for the subcommand.
                     const anAuthRequirements = {
-                        status: 'antinuke.view', list: 'antinuke.view', setup: 'antinuke.setup',
+                        status: 'antinuke.view', list: 'antinuke.view', health: 'antinuke.view',
+                        setup: 'antinuke.setup',
                         progress: 'antinuke.view', enable: 'antinuke.config', disable: 'antinuke.config',
                         dryrun: 'antinuke.responses', thresholds: 'antinuke.rules',
                         whitelist: 'antinuke.trusted.manage', unwhitelist: 'antinuke.trusted.manage',
@@ -652,6 +653,16 @@ module.exports = {
                         const lockdown = typeof anMgr.getLockdown === 'function' ? await anMgr.getLockdown(message.guild.id).catch(() => null) : null;
                         const report = typeof anMgr.getPermissionReport === 'function' ? anMgr.getPermissionReport(message.guild) : null;
                         return message.reply({ embeds: [anEmbed.statusEmbed(anSettings, { lockdown, permissionReport: report })] });
+                    }
+                    if (anSub === 'health') {
+                        if (!await anPermissionGate()) return;
+                        try {
+                            const { healthScan, healthEmbed } = require('../utils/antiNukeHealth');
+                            const scan = await healthScan({ manager: anMgr, client, guild: message.guild });
+                            return message.reply({ embeds: [healthEmbed(message.guild.name, scan)] });
+                        } catch (err) {
+                            return message.reply(`Health scan failed: ${err.message}`);
+                        }
                     }
                     if (anSub === 'setup') {
                         if (!await anPermissionGate()) return;
