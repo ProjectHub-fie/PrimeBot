@@ -222,16 +222,77 @@
       .catch(function (err) { toast('Could not reset: ' + err.message, 'error'); });
   }
 
+  var GUILD_CHANNELS = (window.guildData && window.guildData.channels) || [];
+  var GUILD_ROLES = (window.guildData && window.guildData.roles) || [];
+
+  /* A floating window that asks the admin to pick an existing channel/role or
+   * let PrimeBot create one. `kind` is 'alert_channel' or 'isolation_role'. */
+  function askSetupChoice(kind, onChoose) {
+    var isChannel = kind === 'alert_channel';
+    var overlay = document.createElement('div');
+    overlay.className = 'an-modal-overlay';
+    var options = isChannel
+      ? GUILD_CHANNELS.map(function (c) { return '<option value="' + esc(c.id) + '">#' + esc(c.name) + '</option>'; }).join('')
+      : GUILD_ROLES.map(function (r) { return '<option value="' + esc(r.id) + '">' + esc(r.name) + '</option>'; }).join('');
+    overlay.innerHTML =
+      '<div class="an-modal" role="dialog" aria-modal="true" aria-label="Setup choice">' +
+      '<div class="an-modal-head"><strong>' + (isChannel ? 'Choose a log channel' : 'Choose an isolation role') + '</strong>' +
+      '<button class="an-modal-x" aria-label="Close">' + svg('x') + '</button></div>' +
+      '<div class="an-modal-body">' +
+      '<p class="card-desc">' + (isChannel
+        ? 'Where should PrimeBot post security alerts? Select an existing channel, or let PrimeBot create <strong>#primebot-antinuke-log</strong>.'
+        : 'Which role should isolate a confirmed attacker? Select an existing role, or let PrimeBot create a role named <strong>isolated</strong> just below its own role.') + '</p>' +
+      '<div class="field"><label class="field-label">' + (isChannel ? 'Channel' : 'Role') + '</label>' +
+      '<select id="an-setup-choice">' + options + '</select></div>' +
+      '</div>' +
+      '<div class="an-modal-foot">' +
+      '<button class="btn btn-mini an-choice-cancel">Cancel</button>' +
+      '<button class="btn btn-primary btn-mini an-choice-select">Select</button>' +
+      '<button class="btn btn-mini an-choice-auto">' + (isChannel ? 'Make automatically' : 'Make automatically') + '</button>' +
+      '</div></div>';
+    document.body.appendChild(overlay);
+    function close() { if (overlay.parentNode) overlay.parentNode.removeChild(overlay); }
+    overlay.querySelector('.an-modal-x').addEventListener('click', close);
+    overlay.querySelector('.an-choice-cancel').addEventListener('click', function () {
+      close();
+      toast('Setup paused — press Resume setup when you are ready.', 'error');
+      setSetupButtonsBusy(false);
+      var r = $('#an-resume-setup'); if (r) r.hidden = false;
+    });
+    overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
+    overlay.querySelector('.an-choice-select').addEventListener('click', function () {
+      var sel = overlay.querySelector('#an-setup-choice');
+      var id = sel ? sel.value : '';
+      close();
+      if (!id) { toast('Nothing selected.', 'error'); return; }
+      onChoose(isChannel ? { alertChannelId: id } : { isolationRoleId: id });
+    });
+    overlay.querySelector('.an-choice-auto').addEventListener('click', function () {
+      close();
+      onChoose(isChannel ? { automaticChannel: true } : { automaticRole: true });
+    });
+  }
+
   /* Drive the automatic setup one step at a time, rendering real progress after
-   * each step. Stops on a failed step so the admin can see it and retry. */
-  function runAutomaticSteps() {
+   * each step. Pauses for a floating window when a step needs a choice, and
+   * stops on a failed step so the admin can see it and retry. */
+  function runAutomaticSteps(extraBody) {
     setSetupButtonsBusy(true);
-    api('/api/guilds/' + GUILD_ID + '/antinuke/setup/step', { method: 'POST', body: JSON.stringify({ method: 'automatic' }) })
+    api('/api/guilds/' + GUILD_ID + '/antinuke/setup/step', { method: 'POST', body: JSON.stringify(Object.assign({ method: 'automatic' }, extraBody || {})) })
       .then(function (data) {
         renderProgress(data.progress);
         if (data.done) {
           toast('Anti-Nuke setup completed', 'success');
           window.location.href = window.location.pathname;
+          return;
+        }
+        if (data.prompt) {
+          // The step needs a choice (alert channel / isolation role).
+          setSetupButtonsBusy(false);
+          askSetupChoice(data.prompt, function (choice) {
+            setSetupButtonsBusy(true);
+            runAutomaticSteps(choice);
+          });
           return;
         }
         if (data.progress && data.progress.failed > 0) {

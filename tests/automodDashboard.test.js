@@ -136,6 +136,8 @@ test('every element id the antinuke client reads is rendered by the page', () =>
         'an-access-add', 'an-access-edit', 'an-access-remove',
         // Activity pager label.
         'an-activity-page',
+        // Setup floating-window choice select (built by the client on demand).
+        'an-setup-choice',
         // Collected settings that are only read when present (the console renders
         // the dry-run switch and alert channel, not the cooldown/lockdown inputs).
         'an-response-cooldown', 'an-lockdown-enabled',

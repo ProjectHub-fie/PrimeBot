@@ -236,6 +236,20 @@ async function buildDashboardGuildShim(guildId) {
     const channelCache = makeChannelCache(textChannels);
     const roleCache = makeRoleCache(roles);
     const bits = botPerms == null ? 0n : BigInt(botPerms);
+    // The bot's highest role position, so the setup runner can gate on it and
+    // place an auto-created isolation role just below it.
+    let botHighestPosition = null;
+    try {
+        const member = await discord.getBotMember(guildId).catch(() => null);
+        const botRoleIds = Array.isArray(member && member.roles) ? member.roles : [];
+        const byId = new Map((roles || []).map(r => [String(r.id), r]));
+        for (const id of botRoleIds) {
+            const r = byId.get(String(id));
+            if (r && (botHighestPosition == null || Number(r.position) > botHighestPosition)) {
+                botHighestPosition = Number(r.position);
+            }
+        }
+    } catch (_) { /* leave indeterminate */ }
     return {
         id: String(guildId),
         name: (raw && raw.name) || 'this server',
@@ -244,10 +258,38 @@ async function buildDashboardGuildShim(guildId) {
         channels: {
             cache: channelCache,
             fetch: async (id) => channelCache.get(id) || null,
+            create: async (opts = {}) => discord.createGuildChannel(guildId, {
+                name: String(opts.name || 'primebot-antinuke-log'),
+                type: opts.type != null ? opts.type : 0,
+            }),
         },
-        roles: { cache: roleCache },
+        createChannel: async (opts = {}) => discord.createGuildChannel(guildId, {
+            name: String(opts.name || 'primebot-antinuke-log'),
+            type: opts.type != null ? opts.type : 0,
+        }),
+        roles: {
+            cache: roleCache,
+            create: async (opts = {}) => discord.createGuildRole(guildId, {
+                name: String(opts.name || 'isolated'),
+                permissions: opts.permissions != null ? opts.permissions : '0',
+                hoist: opts.hoist === true,
+                mentionable: opts.mentionable === true,
+            }),
+        },
+        createRole: async (opts = {}) => discord.createGuildRole(guildId, {
+            name: String(opts.name || 'isolated'),
+            permissions: opts.permissions != null ? opts.permissions : '0',
+            hoist: opts.hoist === true,
+            mentionable: opts.mentionable === true,
+        }),
+        setRolePosition: async (roleId, position) => {
+            // Discord requires the full role list to reorder; only the target
+            // role's position is moved to keep the call minimal.
+            return discord.modifyGuildRole(guildId, roleId, { position });
+        },
         members: {
             me: {
+                roles: { highest: { position: botHighestPosition == null ? 0 : botHighestPosition } },
                 permissions: {
                     has: (flag) => {
                         try { return (bits & BigInt(flag)) === BigInt(flag); } catch (_) { return false; }

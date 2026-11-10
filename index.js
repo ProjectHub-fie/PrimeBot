@@ -276,6 +276,8 @@ async function initializeManagers() {
             isEnabled: () => false,
             processEvent: async () => ({ handled: false, reason: 'manager_unavailable' }),
             processFromEvent: async () => ({ handled: false, reason: 'manager_unavailable' }),
+            processRaidJoin: async () => ({ handled: false, reason: 'manager_unavailable' }),
+            scanMemberJoin: async () => ({ handled: false, reason: 'manager_unavailable' }),
             noteAuditStream: () => {},
             getPermissionReport: () => ({ ok: false, checks: [], missing: [] }),
         };

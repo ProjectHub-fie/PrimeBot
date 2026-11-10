@@ -32,6 +32,7 @@ const NUKE_MODULES = [
     { key: 'bot',        label: 'Bot Protection',      iconName: 'robot',     description: 'Bots added by untrusted users and bot permission escalation.' },
     { key: 'server',     label: 'Server Protection',   iconName: 'settings',  description: 'Sensitive server settings (name, icon, verification level).' },
     { key: 'permission', label: 'Permission Protection', iconName: 'key',     description: 'Administrator and Manage-* permission grants.' },
+    { key: 'raid',       label: 'Anti-Raid',           iconName: 'users',     description: 'Join-velocity bursts and suspicious account-age waves.' },
 ];
 const NUKE_MODULE_KEYS = NUKE_MODULES.map(m => m.key);
 const NUKE_MODULE_BY_KEY = Object.fromEntries(NUKE_MODULES.map(m => [m.key, m]));
@@ -321,6 +322,48 @@ const NUKE_ACTIONS = [
         seconds: 30,
         severity: 'high',
     },
+    // ── Anti-Raid (join velocity, fed by the guildMemberAdd gateway event) ───
+    // These actions are NOT correlated to an audit-log entry — the detector
+    // (`utils/antiNukeRaid.js`) tracks member joins in an in-memory sliding
+    // window and calls `processRaidIncident` when a threshold trips. `auditEvent`
+    // is intentionally left undefined so the audit-entry index never routes a
+    // GuildMemberAdd audit entry to them (Discord does not audit member joins).
+    {
+        key: 'joinBurst',
+        module: 'raid',
+        label: 'Join velocity burst',
+        icon: '👥',
+        iconName: 'users',
+        description: 'A burst of members joining faster than the configured window allows.',
+        threshold: 8,
+        seconds: 10,
+        severity: 'high',
+        raidSignal: 'velocity',
+    },
+    {
+        key: 'newAccountWave',
+        module: 'raid',
+        label: 'New-account join wave',
+        icon: '🌱',
+        iconName: 'userPlus',
+        description: 'Several joins from accounts younger than the account-age cutoff within a window.',
+        threshold: 5,
+        seconds: 60,
+        severity: 'medium',
+        raidSignal: 'newAccount',
+    },
+    {
+        key: 'coordinatedJoin',
+        module: 'raid',
+        label: 'Coordinated join pattern',
+        icon: '🎯',
+        iconName: 'target',
+        description: 'Repeated suspicious join activity (velocity + new-account signals together) suggesting a coordinated raid.',
+        threshold: 3,
+        seconds: 60,
+        severity: 'high',
+        raidSignal: 'coordinated',
+    },
 ];
 const NUKE_ACTION_KEYS = NUKE_ACTIONS.map(a => a.key);
 const NUKE_ACTION_BY_KEY = Object.fromEntries(NUKE_ACTIONS.map(a => [a.key, a]));
@@ -407,6 +450,12 @@ const DEFAULT_ACTION_RESPONSES = {
     // Channel
     channelDelete:        ['quarantine', 'alertOwner', 'alertChannel', 'logOnly'],
     channelCreate:        ['alertOwner', 'alertChannel', 'logOnly'],
+    // Anti-Raid: alert + (if guard allows) automatic lockdown — never auto-ban/
+    // kick a wave of joins on a weak signal. The configured `raid.lockdown`
+    // flag turns the lockdown response on; everything else stays alert-only.
+    joinBurst:            ['alertOwner', 'alertChannel', 'logOnly'],
+    newAccountWave:       ['alertOwner', 'alertChannel', 'logOnly'],
+    coordinatedJoin:      ['alertOwner', 'alertChannel', 'logOnly'],
     channelUpdate:        ['alertOwner', 'alertChannel', 'logOnly'],
     categoryDelete:       ['quarantine', 'alertOwner', 'alertChannel'],
     permissionUpdate:     ['lockChannels', 'alertOwner', 'alertChannel'],
@@ -507,6 +556,16 @@ function defaultAntiNukeSettings() {
             pauseInvites: true,
         },
         responseCooldownSeconds: 30,
+        // Anti-Raid guard: thresholds are per-`watched` action; this object
+        // holds the signal-level settings (account-age cutoff and whether a
+        // confirmed raid may raise the verification level automatically).
+        raid: {
+            enabled: true,
+            accountAgeMinDays: 7,
+            alertChannelId: null,
+            automaticLockdown: false,
+            verificationLevel: 'high',
+        },
         // Dry-run is OFF by default: Anti-Nuke enforces for real out of the box.
         // Detection never auto-enables bans/kicks and never punishes without
         // reliable audit-log attribution.
@@ -594,6 +653,17 @@ function normalizeAntiNukeSettings(raw = {}) {
         pauseInvites: lockSrc.pauseInvites !== undefined ? lockSrc.pauseInvites !== false : base.lockdown.pauseInvites,
     };
 
+    const raidSrc = (src.raid && typeof src.raid === 'object') ? src.raid : {};
+    const raid = {
+        enabled: raidSrc.enabled !== undefined ? raidSrc.enabled !== false : base.raid.enabled,
+        accountAgeMinDays: _int(raidSrc.accountAgeMinDays, base.raid.accountAgeMinDays, { min: 1, max: 365 }),
+        alertChannelId: raidSrc.alertChannelId ? String(raidSrc.alertChannelId) : null,
+        automaticLockdown: raidSrc.automaticLockdown === true,
+        verificationLevel: ['none', 'low', 'medium', 'high', 'veryHigh'].includes(raidSrc.verificationLevel)
+            ? raidSrc.verificationLevel
+            : base.raid.verificationLevel,
+    };
+
     return {
         enabled: src.enabled === true,
         alertChannelId: src.alertChannelId ? String(src.alertChannelId) : null,
@@ -605,6 +675,7 @@ function normalizeAntiNukeSettings(raw = {}) {
         watched,
         dangerousPermissions,
         lockdown,
+        raid,
         responseCooldownSeconds: _int(src.responseCooldownSeconds, base.responseCooldownSeconds, { min: 0, max: 3600 }),
         // Existing guilds keep their explicitly saved boolean value
         // (rowToSettings passes the persisted `dry_run` through); a brand-new

@@ -45,6 +45,7 @@ const CREATE_TABLE_SQL = `
         trusted_role_ids   JSONB NOT NULL DEFAULT '[]',
         watched            JSONB NOT NULL DEFAULT '{}',
         dry_run            BOOLEAN NOT NULL DEFAULT false,
+        raid_settings      JSONB NOT NULL DEFAULT '{"enabled":true,"accountAgeMinDays":7,"alertChannelId":null,"automaticLockdown":false,"verificationLevel":"high"}',
         updated_at         TIMESTAMP DEFAULT NOW()
     );
 `;
@@ -60,6 +61,7 @@ const ADD_COLUMNS_SQL = [
     `ALTER TABLE antinuke_settings ADD COLUMN IF NOT EXISTS dangerous_permissions JSONB NOT NULL DEFAULT '["Administrator","ManageGuild","ManageRoles","ManageChannels"]'`,
     `ALTER TABLE antinuke_settings ADD COLUMN IF NOT EXISTS lockdown JSONB NOT NULL DEFAULT '{"enabled":true,"verificationLevel":"high","pauseInvites":true}'`,
     `ALTER TABLE antinuke_settings ADD COLUMN IF NOT EXISTS response_cooldown_seconds INTEGER NOT NULL DEFAULT 30`,
+    `ALTER TABLE antinuke_settings ADD COLUMN IF NOT EXISTS raid_settings JSONB NOT NULL DEFAULT '{"enabled":true,"accountAgeMinDays":7,"alertChannelId":null,"automaticLockdown":false,"verificationLevel":"high"}'`,
     `ALTER TABLE antinuke_settings ADD COLUMN IF NOT EXISTS action_responses JSONB NOT NULL DEFAULT '{}'`,
     `ALTER TABLE antinuke_settings ADD COLUMN IF NOT EXISTS quarantine_role_id VARCHAR(50)`,
     `ALTER TABLE antinuke_settings ADD COLUMN IF NOT EXISTS setup_method VARCHAR(20)`,
