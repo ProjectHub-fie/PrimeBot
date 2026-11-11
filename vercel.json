@@ -1,6 +1,7 @@
 {
   "version": 2,
   "framework": null,
+  "buildCommand": "node scripts/write-version.js",
   "builds": [
     {
       "src": "dashboard/server.js",
@@ -14,3 +15,4 @@
     { "src": "/(.*)", "dest": "/dashboard/server.js" }
   ]
 }
+

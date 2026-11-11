@@ -35,6 +35,7 @@ const L = require('./render/layout');
 const { resolveDiscordToken } = require('../utils/tokenResolver');
 const { buildPresetPatch } = require('../utils/automodPresets');
 const { AUTOMOD_ACTIONS } = require('../utils/automodRules');
+const { getVersionPayload } = require('./deployVersion');
 
 // The dashboard's REST calls authenticate as `Bot ${process.env.DISCORD_TOKEN}`
 // (see dashboard/discord.js botHeaders). Resolve that through the same helper
@@ -165,7 +166,75 @@ app.use(express.urlencoded({ extended: true }));
 // Static files never need the session, so short-circuit them first so a
 // backend/session outage can only ever affect authenticated pages/APIs, not
 // the stylesheets/javascript every page depends on.
-app.use(express.static(path.join(__dirname, 'public')));
+//
+// Caching: these are NOT content-hashed filenames, so they must not be cached
+// immutably — a new deployment could ship a different `/styles.css` under the
+// same URL and an immutable cache would serve the stale one forever. They are
+// instead served with a short-lived `max-age` + `must-revalidate` and a strong
+// `ETag` (express computes it from the file's size + mtime), so a browser
+// revalidates cheaply (304) and always ends up with the newest bytes. Pages
+// additionally append a `?v=<deploy>` query string (see render/layout.js) so
+// the common path is a fresh fetch, not even a revalidation.
+const STATIC_CACHE_MAX_AGE = parseInt(process.env.STATIC_CACHE_MAX_AGE_MS, 10) || 5 * 60 * 1000; // 5 min
+app.use(express.static(path.join(__dirname, 'public'), {
+    etag: true,
+    lastModified: true,
+    setHeaders(res, filePath) {
+        // The version manifest must never be cached — it is how an open tab
+        // discovers a new deployment (auto-update.js fetches it every 60s).
+        if (path.basename(filePath) === 'version.json') {
+            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+            res.setHeader('Pragma', 'no-cache');
+            res.setHeader('Expires', '0');
+            return;
+        }
+        res.setHeader('Cache-Control', `public, max-age=${Math.floor(STATIC_CACHE_MAX_AGE / 1000)}, must-revalidate`);
+    },
+}));
+
+// ── HTML entry documents must revalidate ────────────────────────────────────
+//
+// Every dashboard route is a server-rendered HTML page. The HTML is the entry
+// document that references the (versioned) CSS/JS, so a stale cached HTML would
+// keep an open tab pinned to old assets even after a new deployment ships.
+// HTML therefore gets `no-cache` (store a copy, but always revalidate with the
+// server before using it) rather than `no-store` — revalidation is a cheap 304
+// when nothing changed, and always-fresh when it did. API/JSON responses are
+// covered separately below (personalized data must never be shared-cached).
+//
+// This runs after express.static (which short-circuits /js, /styles.css,
+// version.json, …) and only touches GET requests, so it never interferes with
+// static caching or non-GET API calls.
+app.use((req, res, next) => {
+    if (req.method === 'GET' || req.method === 'HEAD') {
+        res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+        // Tell shared caches (CDNs/proxies) not to serve one user's HTML to
+        // another — the nav renders the logged-in user's identity.
+        res.setHeader('Vary', 'Cookie');
+    }
+    next();
+});
+
+// Deployment version manifest — how an already-open tab detects a new deploy.
+// Always resolved dynamically (never a cached file), always uncached, and safe
+// to expose publicly (it is a commit SHA / build id, never a secret).
+app.get('/version.json', (req, res) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.json(getVersionPayload());
+});
+
+// API responses are personalized (they reflect the signed-in session) and must
+// never be stored by the browser or a shared proxy. A blanket no-store on
+// /api/* guarantees one user's data can never be served to another, and keeps
+// polling endpoints (stats, live) honest.
+app.use('/api', (req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    next();
+});
 
 // Secure cookies whenever we're not on plain localhost. Vercel, the work host,
 // and production all serve HTTPS, so the session cookie must be marked Secure
@@ -741,6 +810,153 @@ app.delete('/api/guilds/:guildId/badges/:rowId', requireAuth, requireGuildAdmin,
     } catch (err) {
         console.error('[API] revoke badge error:', err.message);
         res.status(500).json({ error: 'Failed to revoke badge.' });
+    }
+});
+
+// ── API: YouTube Notifications (Creator Hub) ────────────────────────────────
+//
+// Dashboard-only configuration. The bot's YouTubeManager polls the public RSS
+// feeds and posts announcements; everything here reads/writes the
+// youtube_subscriptions + youtube_announcements tables (YOUTUBE_DATABASE_URL
+// pool) so the dashboard and the bot share state. Channel references are
+// resolved server-side (utils/youtubeFeed.js) — the client never sends a raw
+// channel id it fabricated, and only YouTube hosts are ever fetched (SSRF-safe).
+
+const { resolveChannelReference, YouTubeFetchError } = require('../utils/youtubeFeed');
+const { normalizeTemplate, isValidChannelId } = require('../shared/youtubeConstants');
+const { buildAnnouncementPayload } = require('../shared/youtubeAnnouncement');
+
+// Resolve a Discord channel id and confirm it belongs to this guild (never let
+// a client point a subscription at another server's channel).
+async function assertGuildChannel(guildId, channelId) {
+    if (!channelId) return null;
+    const channels = await discord.getGuildChannels(guildId).catch(() => []);
+    const found = channels.find(c => String(c.id) === String(channelId));
+    if (!found) {
+        const err = new Error('That channel does not belong to this server.');
+        err.status = 400;
+        throw err;
+    }
+    return String(channelId);
+}
+
+app.get('/api/guilds/:guildId/youtube', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const [subscriptions, announcements, stats, groups] = await Promise.all([
+            dashboardDb.getYoutubeSubscriptions(req.guild.id),
+            dashboardDb.getYoutubeAnnouncements(req.guild.id, { limit: 50 }),
+            dashboardDb.getYoutubeStats(req.guild.id),
+            dashboardDb.getYoutubeGroups(req.guild.id),
+        ]);
+        res.json({ subscriptions, announcements, stats, groups });
+    } catch (err) {
+        console.error('[API] get youtube error:', err.message);
+        res.status(500).json({ error: 'Failed to load YouTube subscriptions.' });
+    }
+});
+
+app.post('/api/guilds/:guildId/youtube', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const { reference, channelId, groupName } = req.body || {};
+        if (!reference || typeof reference !== 'string') {
+            return res.status(400).json({ error: 'A YouTube channel URL, ID or @handle is required.' });
+        }
+        const destChannelId = await assertGuildChannel(req.guild.id, channelId);
+        let resolved;
+        try {
+            resolved = await resolveChannelReference(reference.trim());
+        } catch (err) {
+            if (err instanceof YouTubeFetchError) {
+                return res.status(400).json({ error: err.message, reason: err.code });
+            }
+            throw err;
+        }
+        if (!isValidChannelId(resolved.channelId)) {
+            return res.status(400).json({ error: 'Could not resolve that channel to a valid YouTube channel ID.' });
+        }
+        const sub = await dashboardDb.upsertYoutubeSubscription(req.guild.id, {
+            youtubeChannelId: resolved.channelId,
+            channelName: resolved.name,
+            channelUrl: resolved.url,
+            channelHandle: resolved.handle,
+            avatarUrl: resolved.avatarUrl,
+            discordChannelId: destChannelId,
+            enabled: true,
+            groupName: groupName ? String(groupName).slice(0, 80) : null,
+        });
+        recordWebsiteLog(req, `Subscribed to YouTube channel ${resolved.name || resolved.channelId}`);
+        res.json({ subscription: sub });
+    } catch (err) {
+        if (err.status === 400) return res.status(400).json({ error: err.message });
+        console.error('[API] add youtube subscription error:', err.message);
+        res.status(500).json({ error: 'Failed to add the YouTube subscription.' });
+    }
+});
+
+app.patch('/api/guilds/:guildId/youtube/:id', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const patch = {};
+        if ('discordChannelId' in req.body) {
+            patch.discordChannelId = await assertGuildChannel(req.guild.id, req.body.discordChannelId);
+        }
+        if ('enabled' in req.body) patch.enabled = req.body.enabled === true;
+        if ('paused' in req.body) patch.paused = req.body.paused === true;
+        if ('groupName' in req.body) patch.groupName = req.body.groupName ? String(req.body.groupName).slice(0, 80) : null;
+        if ('template' in req.body) patch.template = normalizeTemplate(req.body.template);
+        const sub = await dashboardDb.updateYoutubeSubscription(req.guild.id, req.params.id, patch);
+        if (!sub) return res.status(404).json({ error: 'Subscription not found.' });
+        recordWebsiteLog(req, `Updated YouTube subscription for ${sub.channelName || sub.youtubeChannelId}`);
+        res.json({ subscription: sub });
+    } catch (err) {
+        if (err.status === 400) return res.status(400).json({ error: err.message });
+        console.error('[API] update youtube subscription error:', err.message);
+        res.status(500).json({ error: 'Failed to update the YouTube subscription.' });
+    }
+});
+
+app.delete('/api/guilds/:guildId/youtube/:id', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const ok = await dashboardDb.deleteYoutubeSubscription(req.guild.id, req.params.id);
+        if (!ok) return res.status(404).json({ error: 'Subscription not found.' });
+        recordWebsiteLog(req, `Removed a YouTube subscription (#${req.params.id})`);
+        res.json({ ok: true });
+    } catch (err) {
+        console.error('[API] delete youtube subscription error:', err.message);
+        res.status(500).json({ error: 'Failed to remove the YouTube subscription.' });
+    }
+});
+
+// Send a test announcement through the BOT token (so it looks exactly like a
+// real one). Falls back to a clear error when the destination is missing.
+app.post('/api/guilds/:guildId/youtube/:id/test', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const sub = await dashboardDb.getYoutubeSubscription(req.guild.id, req.params.id);
+        if (!sub) return res.status(404).json({ error: 'Subscription not found.' });
+        const destChannelId = await assertGuildChannel(req.guild.id, req.body && req.body.channelId) || sub.discordChannelId;
+        if (!destChannelId) return res.status(400).json({ error: 'Set a destination channel before sending a test.' });
+        const payload = buildAnnouncementPayload({
+            subscription: {
+                channelName: sub.channelName || 'Test Creator', channelUrl: sub.channelUrl,
+                channelHandle: sub.channelHandle, avatarUrl: sub.avatarUrl,
+            },
+            video: {
+                videoId: 'dQw4w9WgXcQ',
+                title: 'PrimeBot YouTube notifications are working!',
+                url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+                thumbnail: 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg',
+            },
+            template: normalizeTemplate(sub.template),
+            test: true,
+        });
+        const message = await discord.sendChannelMessage(destChannelId, {
+            content: payload.content || undefined,
+            embeds: payload.embeds,
+            allowed_mentions: payload.allowed_mentions,
+        });
+        res.json({ ok: true, messageId: message && message.id, channelId: destChannelId });
+    } catch (err) {
+        console.error('[API] youtube test announcement error:', err.message);
+        res.status(502).json({ error: 'Failed to send the test announcement. Check the bot has permission to post in that channel.' });
     }
 });
 
@@ -3001,6 +3217,9 @@ app.get('/guild/:guildId/broadcast', requireAuth, requireGuildAdminPage, (req, r
     res.type('html').send(guildPages.broadcastPage({ guild: req.guild, user: req.user })));
 app.get('/guild/:guildId/birthdays', requireAuth, requireGuildAdminPage, (req, res) =>
     res.type('html').send(guildPages.birthdaysPage({ guild: req.guild, user: req.user })));
+// YouTube Notifications (Creator Hub) — dashboard-only feature.
+app.get('/guild/:guildId/youtube', requireAuth, requireGuildAdminPage, (req, res) =>
+    res.type('html').send(guildPages.youtubePage({ guild: req.guild, user: req.user })));
 app.get('/guild/:guildId/embed', requireAuth, requireGuildAdminPage, (req, res) =>
     res.type('html').send(guildPages.embedPage({ guild: req.guild, user: req.user })));
 app.get('/guild/:guildId/logging', requireAuth, requireGuildAdminPage, (req, res) =>

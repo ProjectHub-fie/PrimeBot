@@ -174,6 +174,18 @@ const CATALOG = {
         ],
     },
 
+    youtube: {
+        icon: '🎬',
+        label: 'YouTube',
+        title: '🎬 YouTube Notifications',
+        color: config.colors.error,
+        description: 'YouTube upload notifications — subscribed creators and the announcement embed are configured from the dashboard; this command points you there:',
+        selectDesc: 'YouTube upload notifications',
+        commands: [
+            { names: ['youtube', 'yt'], desc: 'YouTube notifications (dashboard-only)' },
+        ],
+    },
+
     welcome: {
         icon: '👋',
         label: 'Welcome',
@@ -189,7 +201,7 @@ const CATALOG = {
     },
 };
 
-const CATEGORY_ORDER = ['general', 'leveling', 'games', 'community', 'tickets', 'welcome', 'moderation', 'admin'];
+const CATEGORY_ORDER = ['general', 'leveling', 'games', 'community', 'tickets', 'youtube', 'welcome', 'moderation', 'admin'];
 
 const BETA_TAG = '🧪';
 
