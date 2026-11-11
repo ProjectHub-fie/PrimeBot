@@ -911,6 +911,71 @@ const emRemindersRelations = relations(emReminders, ({ one }) => ({
   event: one(emEvents, { fields: [emReminders.eventId], references: [emEvents.id] }),
 }));
 
+// ── YouTube Notifications (Creator Hub) ─────────────────────────────────────
+// Stored in the dedicated YOUTUBE_DATABASE_URL pool (falling back to
+// FALLBACK_DATABASE_URL/DATABASE_URL). The stable YouTube channel id is the
+// primary identity; names/handles may change.
+const youtubeSubscriptions = pgTable('youtube_subscriptions', {
+  id: serial('id').primaryKey(),
+  guildId: varchar('guild_id', { length: 50 }).notNull(),
+  youtubeChannelId: varchar('youtube_channel_id', { length: 64 }).notNull(),
+  channelName: varchar('channel_name', { length: 255 }),
+  channelUrl: text('channel_url'),
+  channelHandle: varchar('channel_handle', { length: 120 }),
+  avatarUrl: text('avatar_url'),
+  channelDescription: text('channel_description'),
+  discordChannelId: varchar('discord_channel_id', { length: 50 }),
+  enabled: boolean('enabled').default(true).notNull(),
+  paused: boolean('paused').default(false).notNull(),
+  groupName: varchar('group_name', { length: 80 }),
+  template: jsonb('template').default({}).notNull(),
+  lastVideoId: varchar('last_video_id', { length: 32 }),
+  baselineDone: boolean('baseline_done').default(false).notNull(),
+  lastCheckedAt: timestamp('last_checked_at'),
+  lastSuccessAt: timestamp('last_success_at'),
+  lastError: text('last_error'),
+  errorCount: integer('error_count').default(0).notNull(),
+  nextCheckAt: timestamp('next_check_at'),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+const youtubeAnnouncements = pgTable('youtube_announcements', {
+  id: serial('id').primaryKey(),
+  guildId: varchar('guild_id', { length: 50 }).notNull(),
+  youtubeChannelId: varchar('youtube_channel_id', { length: 64 }).notNull(),
+  subscriptionId: integer('subscription_id'),
+  videoId: varchar('video_id', { length: 32 }).notNull(),
+  videoTitle: text('video_title'),
+  videoUrl: text('video_url'),
+  videoPublishedAt: timestamp('video_published_at'),
+  thumbnailUrl: text('thumbnail_url'),
+  discordChannelId: varchar('discord_channel_id', { length: 50 }),
+  discordMessageId: varchar('discord_message_id', { length: 50 }),
+  status: varchar('status', { length: 20 }).default('sent').notNull(),
+  error: text('error'),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// Single-row distributed polling lease (only one node polls at a time).
+const youtubePollLease = pgTable('youtube_poll_lease', {
+  id: integer('id').primaryKey(),
+  holder: varchar('holder', { length: 120 }).notNull(),
+  expiresAt: timestamp('expires_at').notNull(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+const youtubeSubscriptionsRelations = relations(youtubeSubscriptions, ({ many }) => ({
+  announcements: many(youtubeAnnouncements),
+}));
+
+const youtubeAnnouncementsRelations = relations(youtubeAnnouncements, ({ one }) => ({
+  subscription: one(youtubeSubscriptions, {
+    fields: [youtubeAnnouncements.subscriptionId],
+    references: [youtubeSubscriptions.id],
+  }),
+}));
+
 // Exports
 module.exports = {
   livePolls,
@@ -986,4 +1051,9 @@ module.exports = {
   emEventsRelations,
   emParticipantsRelations,
   emRemindersRelations,
+  youtubeSubscriptions,
+  youtubeAnnouncements,
+  youtubePollLease,
+  youtubeSubscriptionsRelations,
+  youtubeAnnouncementsRelations,
 };

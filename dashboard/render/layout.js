@@ -14,6 +14,21 @@
 
 const constants = require('../constants');
 const { svgIcon } = require('../public/js/icons');
+const { getDeployVersion, getAssetVersion } = require('../deployVersion');
+
+// Append a `?v=<deploy>` query string to a local static asset path so a new
+// deployment always fetches fresh CSS/JS instead of reusing a browser-cached
+// copy. The token changes per deployment (commit SHA / build id) and is safe to
+// expose (it is never a secret). External URLs (http/https/absolute/protocol-
+// relative) are returned untouched — never rewrite a third-party resource.
+function versionedAsset(src) {
+    if (!src || typeof src !== 'string') return src;
+    if (/^(?:https?:)?\/\//i.test(src) || src.startsWith('data:')) return src;
+    if (!src.startsWith('/')) return src;
+    const token = getAssetVersion();
+    if (!token) return src;
+    return src.includes('?') ? `${src}&v=${token}` : `${src}?v=${token}`;
+}
 
 function esc(str) {
     if (str == null) return '';
@@ -193,7 +208,7 @@ function render(opts) {
 
     const version = locals.botVersion || constants.BOT_VERSION;
     const scriptTags = scripts
-        .map((s) => `<script src="${esc(s)}"></script>`)
+        .map((s) => `<script src="${esc(versionedAsset(s))}"></script>`)
         .join('\n  ');
     const logoutScript = login ? '' : `<script>document.getElementById('logout-btn')?.addEventListener('click',()=>{window.location.href='/logout'});</script>`;
     // Mobile profile dropdown. The avatar toggle is inert on desktop (the CSS
@@ -231,7 +246,14 @@ function render(opts) {
       refreshIntervalMs: parseInt(locals.idleRefreshIntervalMs, 10) || constants.SESSION_ACTIVITY_REFRESH_INTERVAL_MS,
     };
     const idleConfigJSON = JSON.stringify(idleConfig).replace(/</g, '\\u003c');
-    const idleScript = login ? '' : `<script>window.__PRIMEBOT_SESSION_CONFIG__=${idleConfigJSON};</script>\n  <script>window.__PRIMEBOT_IDLE_TIMEOUT_MS__=${idleConfig.idleTimeoutMs};</script>\n  <script src="/js/session-timeout.js"></script>`;
+    const idleScript = login ? '' : `<script>window.__PRIMEBOT_SESSION_CONFIG__=${idleConfigJSON};</script>\n  <script>window.__PRIMEBOT_IDLE_TIMEOUT_MS__=${idleConfig.idleTimeoutMs};</script>\n  <script src="${esc(versionedAsset('/js/session-timeout.js'))}"></script>`;
+
+    // Automatic deployment update: embed the deploy version this HTML was
+    // rendered from (the client compares it against /version.json every 60s)
+    // and load the detector. Runs on every page, including the login page, so a
+    // stale login screen also refreshes once a new build is live.
+    const deployConfigJSON = JSON.stringify({ version: getDeployVersion() }).replace(/</g, '\\u003c');
+    const autoUpdateScript = `<script>window.__PRIMEBOT_DEPLOY__=${deployConfigJSON};</script>\n  <script src="${esc(versionedAsset('/js/auto-update.js'))}"></script>`;
 
     return `<!DOCTYPE html>
 <html lang="en">
@@ -245,7 +267,7 @@ function render(opts) {
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="${esc(versionedAsset('/styles.css'))}" />
 </head>
 <body>
   ${navHTML({ active, user, login, hideBack })}
@@ -258,8 +280,8 @@ function render(opts) {
   </footer>
   <div id="toast" class="toast toast-hidden"></div>
   <button id="back-to-top" class="back-to-top" type="button" aria-label="Back to top" title="Back to top">${svgIcon('arrowUp')}</button>
-  <script src="/js/icons.js"></script>
-  <script src="/js/common.js"></script>
+  <script src="${esc(versionedAsset('/js/icons.js'))}"></script>
+  <script src="${esc(versionedAsset('/js/common.js'))}"></script>
   <script>
     // Floating "back to top" control — appears after scrolling down and
     // smooth-scrolls back to the top when clicked. Runs on every page.
@@ -274,6 +296,7 @@ function render(opts) {
   </script>
   ${scriptTags}
   ${idleScript}
+  ${autoUpdateScript}
   ${profileScript}
   ${logoutScript}
 </body>
@@ -283,6 +306,7 @@ function render(opts) {
 module.exports = {
     esc,
     jsonForScript,
+    versionedAsset,
     guildIconUrl,
     guildInitial,
     guildIconHTML,

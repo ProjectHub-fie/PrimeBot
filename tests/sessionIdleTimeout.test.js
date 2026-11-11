@@ -95,7 +95,9 @@ test('touchIdleDeadline is a no-op when there is no session', () => {
 
 test('layout injects the idle timeout script + full session config on authenticated pages', () => {
   const html = layout.render({ title: 'T', body: '', user: { username: 'u' } });
-  assert.match(html, /<script src="\/js\/session-timeout\.js"><\/script>/);
+  // Assets are versioned with a ?v=<deploy> token, so match the path with an
+  // optional query string.
+  assert.match(html, /<script src="\/js\/session-timeout\.js(?:\?v=[^"]*)?"><\/script>/);
   assert.match(html, /window\.__PRIMEBOT_IDLE_TIMEOUT_MS__=\d+;/);
   // The client needs the full policy (idle + warning + refresh throttle).
   assert.match(html, /__PRIMEBOT_SESSION_CONFIG__/);

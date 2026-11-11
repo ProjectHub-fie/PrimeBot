@@ -4630,6 +4630,19 @@ module.exports = {
                 case "createticket":
                 case "ticket":
                     return message.reply('🎫 Ticket feature can only be used by dashboard. Configure ticket panels from the PrimeBot dashboard (🎫 Tickets tab).');
+
+                // YouTube Notifications — configurable only from the dashboard.
+                case "youtube":
+                case "yt": {
+                    const ytBase = (config.website || process.env.DASHBOARD_BASE_URL || 'https://primebot-online.vercel.app').replace(/\/$/, '');
+                    const ytEmbed = new EmbedBuilder()
+                        .setColor(0xFF0000)
+                        .setTitle('🎬 YouTube Notifications')
+                        .setDescription('🎬 YouTube Notifications are configured from the PrimeBot dashboard (Server settings → 🎬 YouTube). Subscribe to creators, choose the announcement channel and customize the embed there.')
+                        .addFields({ name: 'Configure it', value: `[Open the PrimeBot dashboard](${ytBase})`, inline: false })
+                        .setFooter({ text: `PrimeBot v${config.version}` });
+                    return message.reply({ embeds: [ytEmbed] });
+                }
                 // About Command
                 case "about":
                 case "ab":

@@ -6,6 +6,28 @@
  * HTML page with a focused script, and this file holds the common glue.
  */
 
+// ── Unsaved-changes registry ───────────────────────────────────────────────
+// A single place that says "the user has work in progress on this page, do not
+// yank it out from under them". The auto-update detector
+// (dashboard/public/js/auto-update.js) checks `document.body.dataset.unsaved`
+// and defers its reload while it is '1'. The floating Save bar registers here
+// automatically; any page with its own editor (embed builder, ticket editor,
+// event wizard) can call `window.setUnsaved('key', true/false)`.
+const unsavedKeys = new Set();
+function applyUnsavedFlag() {
+  try {
+    if (unsavedKeys.size > 0) document.body.dataset.unsaved = '1';
+    else delete document.body.dataset.unsaved;
+  } catch (_) { /* ignore */ }
+}
+function setUnsaved(key, isUnsaved) {
+  if (!key) return;
+  if (isUnsaved) unsavedKeys.add(key);
+  else unsavedKeys.delete(key);
+  applyUnsavedFlag();
+}
+function hasUnsaved() { return unsavedKeys.size > 0; }
+
 // Global flag so every protected-API 401 triggers exactly ONE logout flow (no
 // retry loops / redirect loops) even when several in-flight requests fail at
 // once. The ACTIVITY sync path (session-timeout.js) never goes through api(), so
@@ -221,10 +243,14 @@ const SaveBar = (() => {
     ensureBar();
     if (saving) return;
     barEl.classList.remove('save-bar-hidden');
+    // Tell the auto-update detector (and anything else) that there is
+    // in-progress work so a deploy reload won't discard it.
+    if (typeof setUnsaved === 'function') setUnsaved('savebar', true);
   }
   function hide() {
     if (!barEl) return;
     barEl.classList.add('save-bar-hidden');
+    if (typeof setUnsaved === 'function') setUnsaved('savebar', false);
   }
 
   // Re-evaluate dirty against the snapshot. Cheap, so we run it on every
@@ -374,4 +400,6 @@ window.esc = esc;
 window.bindReactionRemovals = bindReactionRemovals;
 window.bindColorSync = bindColorSync;
 window.bindSaveButtons = bindSaveButtons;
+window.setUnsaved = setUnsaved;
+window.hasUnsaved = hasUnsaved;
 window.saveBar = SaveBar;

@@ -117,6 +117,22 @@ function getBirthdayPool() {
     return birthdayPool;
 }
 
+// youtube_subscriptions + youtube_announcements live in the dedicated
+// YOUTUBE_DATABASE_URL pool (falling back to FALLBACK_DATABASE_URL/DATABASE_URL).
+// The bot's YouTubeManager and the dashboard share this pool so dashboard
+// changes reach the bot and the announcement history is consistent.
+let youtubePool = null;
+function getYoutubePool() {
+    if (youtubePool) return youtubePool;
+    try {
+        youtubePool = require('../server/youtubeDb').youtubePool;
+    } catch (err) {
+        console.error('[DASHBOARD DB] youtubeDb unavailable:', err.message);
+        youtubePool = { query: async () => { throw new Error('YouTube database not configured'); } };
+    }
+    return youtubePool;
+}
+
 // ── Schema bootstrap: run each DDL statement at most once per process ────────
 //
 // Every reader used to `await ensureXxxTable()` on every call, which re-ran
@@ -284,6 +300,214 @@ async function removeGuildBirthday(guildId, userId) {
         [guildId, String(userId)]
     );
     return getGuildBirthdays(guildId);
+}
+
+// ── YouTube Notifications (Creator Hub, YOUTUBE_DATABASE_URL pool) ──────────
+//
+// The bot's YouTubeManager polls the public RSS feeds and writes announcements.
+// The dashboard reads/writes the subscription rows so admins can add/remove
+// creators, pick a destination channel, customize the embed, pause/resume
+// monitoring and view history + health. Both share the same pool, so dashboard
+// edits take effect on the bot's next poll without a restart.
+
+async function ensureYoutubeTables() {
+    return once('youtubeTables', async () => {
+        const { ensureYoutubeTables: ensure } = require('../server/youtubeDb');
+        await ensure();
+    });
+}
+
+function mapYoutubeRow(r) {
+    return {
+        id: Number(r.id),
+        guildId: String(r.guild_id),
+        youtubeChannelId: String(r.youtube_channel_id),
+        channelName: r.channel_name || null,
+        channelUrl: r.channel_url || null,
+        channelHandle: r.channel_handle || null,
+        avatarUrl: r.avatar_url || null,
+        channelDescription: r.channel_description || null,
+        discordChannelId: r.discord_channel_id || null,
+        enabled: r.enabled === true,
+        paused: r.paused === true,
+        groupName: r.group_name || null,
+        template: r.template || {},
+        lastVideoId: r.last_video_id || null,
+        baselineDone: r.baseline_done === true,
+        lastCheckedAt: r.last_checked_at || null,
+        lastSuccessAt: r.last_success_at || null,
+        lastError: r.last_error || null,
+        errorCount: Number(r.error_count || 0),
+        nextCheckAt: r.next_check_at || null,
+        createdAt: r.created_at || null,
+        updatedAt: r.updated_at || null,
+    };
+}
+
+async function getYoutubeSubscriptions(guildId) {
+    await ensureYoutubeTables();
+    const res = await getYoutubePool().query(
+        `SELECT * FROM youtube_subscriptions WHERE guild_id = $1 ORDER BY created_at ASC`,
+        [String(guildId)]
+    );
+    return res.rows.map(mapYoutubeRow);
+}
+
+async function getYoutubeSubscription(guildId, id) {
+    await ensureYoutubeTables();
+    const res = await getYoutubePool().query(
+        `SELECT * FROM youtube_subscriptions WHERE guild_id = $1 AND id = $2`,
+        [String(guildId), Number(id)]
+    );
+    return res.rows[0] ? mapYoutubeRow(res.rows[0]) : null;
+}
+
+/**
+ * Insert or update a subscription (keyed on guild + youtube channel id). The
+ * dashboard resolves the channel first (utils/youtubeFeed.js) and passes the
+ * resolved descriptor in; only the fields the caller supplies are changed.
+ */
+async function upsertYoutubeSubscription(guildId, data) {
+    await ensureYoutubeTables();
+    const {
+        youtubeChannelId, channelName = null, channelUrl = null, channelHandle = null,
+        avatarUrl = null, channelDescription = null, discordChannelId = null,
+        enabled = true, paused = false, groupName = null, template = {},
+    } = data;
+    const res = await getYoutubePool().query(
+        `INSERT INTO youtube_subscriptions
+            (guild_id, youtube_channel_id, channel_name, channel_url, channel_handle, avatar_url,
+             channel_description, discord_channel_id, enabled, paused, group_name, template, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, NOW())
+         ON CONFLICT (guild_id, youtube_channel_id) DO UPDATE SET
+            channel_name = COALESCE(EXCLUDED.channel_name, youtube_subscriptions.channel_name),
+            channel_url = COALESCE(EXCLUDED.channel_url, youtube_subscriptions.channel_url),
+            channel_handle = COALESCE(EXCLUDED.channel_handle, youtube_subscriptions.channel_handle),
+            avatar_url = COALESCE(EXCLUDED.avatar_url, youtube_subscriptions.avatar_url),
+            channel_description = COALESCE(EXCLUDED.channel_description, youtube_subscriptions.channel_description),
+            discord_channel_id = COALESCE(EXCLUDED.discord_channel_id, youtube_subscriptions.discord_channel_id),
+            enabled = EXCLUDED.enabled,
+            paused = EXCLUDED.paused,
+            group_name = EXCLUDED.group_name,
+            template = EXCLUDED.template,
+            updated_at = NOW()
+         RETURNING *`,
+        [
+            String(guildId), String(youtubeChannelId), channelName, channelUrl, channelHandle, avatarUrl,
+            channelDescription, discordChannelId, enabled === true, paused === true, groupName,
+            JSON.stringify(template || {}),
+        ]
+    );
+    return mapYoutubeRow(res.rows[0]);
+}
+
+/** Patch a subscription (only the keys present in `patch` are changed). */
+async function updateYoutubeSubscription(guildId, id, patch) {
+    await ensureYoutubeTables();
+    const current = await getYoutubeSubscription(guildId, id);
+    if (!current) return null;
+    const next = {
+        channelName: 'channelName' in patch ? patch.channelName : current.channelName,
+        discordChannelId: 'discordChannelId' in patch ? patch.discordChannelId : current.discordChannelId,
+        enabled: 'enabled' in patch ? patch.enabled === true : current.enabled,
+        paused: 'paused' in patch ? patch.paused === true : current.paused,
+        groupName: 'groupName' in patch ? patch.groupName : current.groupName,
+        template: 'template' in patch ? (patch.template || {}) : current.template,
+    };
+    const res = await getYoutubePool().query(
+        `UPDATE youtube_subscriptions SET
+            channel_name = $3, discord_channel_id = $4, enabled = $5, paused = $6,
+            group_name = $7, template = $8, updated_at = NOW()
+         WHERE guild_id = $1 AND id = $2 RETURNING *`,
+        [String(guildId), Number(id), next.channelName, next.discordChannelId,
+         next.enabled, next.paused, next.groupName, JSON.stringify(next.template || {})]
+    );
+    return res.rows[0] ? mapYoutubeRow(res.rows[0]) : null;
+}
+
+async function deleteYoutubeSubscription(guildId, id) {
+    await ensureYoutubeTables();
+    const res = await getYoutubePool().query(
+        `DELETE FROM youtube_subscriptions WHERE guild_id = $1 AND id = $2 RETURNING id`,
+        [String(guildId), Number(id)]
+    );
+    return res.rowCount === 1;
+}
+
+/** Distinct group names configured in a guild (for the group filter). */
+async function getYoutubeGroups(guildId) {
+    await ensureYoutubeTables();
+    const res = await getYoutubePool().query(
+        `SELECT DISTINCT group_name FROM youtube_subscriptions
+         WHERE guild_id = $1 AND group_name IS NOT NULL AND group_name <> '' ORDER BY group_name`,
+        [String(guildId)]
+    );
+    return res.rows.map((r) => r.group_name);
+}
+
+/** Recent announcement history for a guild. */
+async function getYoutubeAnnouncements(guildId, { limit = 50 } = {}) {
+    await ensureYoutubeTables();
+    const lim = Math.min(200, Math.max(1, parseInt(limit, 10) || 50));
+    const res = await getYoutubePool().query(
+        `SELECT id, guild_id, youtube_channel_id, subscription_id, video_id, video_title, video_url,
+                video_published_at, thumbnail_url, discord_channel_id, discord_message_id, status,
+                error, created_at
+         FROM youtube_announcements WHERE guild_id = $1
+         ORDER BY created_at DESC LIMIT $2`,
+        [String(guildId), lim]
+    );
+    return res.rows.map((r) => ({
+        id: Number(r.id),
+        youtubeChannelId: String(r.youtube_channel_id),
+        subscriptionId: r.subscription_id != null ? Number(r.subscription_id) : null,
+        videoId: String(r.video_id),
+        videoTitle: r.video_title || null,
+        videoUrl: r.video_url || null,
+        videoPublishedAt: r.video_published_at || null,
+        thumbnailUrl: r.thumbnail_url || null,
+        discordChannelId: r.discord_channel_id || null,
+        discordMessageId: r.discord_message_id || null,
+        status: r.status || 'sent',
+        error: r.error || null,
+        createdAt: r.created_at || null,
+    }));
+}
+
+/** Aggregate monitoring health for the guild's YouTube overview cards. */
+async function getYoutubeStats(guildId) {
+    await ensureYoutubeTables();
+    const pool = getYoutubePool();
+    const [subsRes, sentRes, failedRes] = await Promise.all([
+        pool.query(
+            `SELECT
+                COUNT(*)::int AS total,
+                COUNT(*) FILTER (WHERE enabled = true AND paused = false)::int AS active,
+                COUNT(*) FILTER (WHERE paused = true)::int AS paused,
+                COUNT(*) FILTER (WHERE last_error IS NOT NULL)::int AS errored,
+                MAX(last_success_at) AS last_success_at
+             FROM youtube_subscriptions WHERE guild_id = $1`,
+            [String(guildId)]
+        ),
+        pool.query(
+            `SELECT COUNT(*)::int AS n FROM youtube_announcements WHERE guild_id = $1 AND status = 'sent'`,
+            [String(guildId)]
+        ),
+        pool.query(
+            `SELECT COUNT(*)::int AS n FROM youtube_announcements WHERE guild_id = $1 AND status = 'failed'`,
+            [String(guildId)]
+        ),
+    ]);
+    const s = subsRes.rows[0] || {};
+    return {
+        totalSubscriptions: s.total || 0,
+        activeSubscriptions: s.active || 0,
+        pausedSubscriptions: s.paused || 0,
+        erroredSubscriptions: s.errored || 0,
+        announcementsSent: sentRes.rows[0] ? sentRes.rows[0].n : 0,
+        announcementsFailed: failedRes.rows[0] ? failedRes.rows[0].n : 0,
+        lastSuccessAt: s.last_success_at || null,
+    };
 }
 
 // ── Badges (leveling achievement badges, in the LEVELING_DATABASE_URL pool) ─
@@ -2020,7 +2244,7 @@ async function listAntiNukeAccessHistory(guildId, opts) {
 
 async function getGuildConfig(guildId) {
     let ticketPanelComponents = [];
-    const [server, welcome, logging, reactionRoles, automod, antiNuke, ticketPanels, levelingRoleRewards, birthdaySettings, birthdays, comps] = await Promise.all([
+    const [server, welcome, logging, reactionRoles, automod, antiNuke, ticketPanels, levelingRoleRewards, birthdaySettings, birthdays, comps, youtubeSubscriptions, youtubeAnnouncements, youtubeStats] = await Promise.all([
         getServerSettings(guildId).catch(err => {
             console.error('[DASHBOARD DB] server_settings read failed:', err.message);
             return defaultServerSettings();
@@ -2068,6 +2292,18 @@ async function getGuildConfig(guildId) {
             console.error('[DASHBOARD DB] ticket_panel_components read failed:', err.message);
             return [];
         }),
+        getYoutubeSubscriptions(guildId).catch(err => {
+            console.error('[DASHBOARD DB] youtube_subscriptions read failed:', err.message);
+            return [];
+        }),
+        getYoutubeAnnouncements(guildId, { limit: 25 }).catch(err => {
+            console.error('[DASHBOARD DB] youtube_announcements read failed:', err.message);
+            return [];
+        }),
+        getYoutubeStats(guildId).catch(err => {
+            console.error('[DASHBOARD DB] youtube stats read failed:', err.message);
+            return { totalSubscriptions: 0, activeSubscriptions: 0, pausedSubscriptions: 0, erroredSubscriptions: 0, announcementsSent: 0, announcementsFailed: 0, lastSuccessAt: null };
+        }),
     ]);
     // Attach durable role rewards onto the leveling settings (kept in a separate
     // pool so they survive restarts and reach the bot via its cache reload).
@@ -2082,7 +2318,7 @@ async function getGuildConfig(guildId) {
             panel.components.push(c);
         }
     }
-    return { server, welcome, logging, reactionRoles, automod, antiNuke, ticketPanels, birthdaySettings, birthdays };
+    return { server, welcome, logging, reactionRoles, automod, antiNuke, ticketPanels, birthdaySettings, birthdays, youtubeSubscriptions, youtubeAnnouncements, youtubeStats };
 }
 
 // ── Event Management (server/eventMgmtRepo.js — EVENTMGMT_DATABASE_URL) ──────
@@ -4024,4 +4260,15 @@ module.exports = {
     isTicketNameConflict,
     uniqueCloneName,
     normalizeTicketPanel,
+    // YouTube Notifications (Creator Hub)
+    getYoutubePool,
+    ensureYoutubeTables,
+    getYoutubeSubscriptions,
+    getYoutubeSubscription,
+    upsertYoutubeSubscription,
+    updateYoutubeSubscription,
+    deleteYoutubeSubscription,
+    getYoutubeGroups,
+    getYoutubeAnnouncements,
+    getYoutubeStats,
 };

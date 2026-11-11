@@ -197,6 +197,14 @@ client.betaManager = betaManager;
         checkIn: async () => ({ ok: false, message: 'Events are unavailable right now.' }),
         setResult: noopAsync, cacheSize: 0,
     };
+    // YouTube notifications — dashboard-configured, bot-posts. The stub keeps
+    // boot resilient; the real manager starts its (lease-gated) poll loop below.
+    client.youtubeManager = {
+        status: { active: false },
+        waitForReady: noopAsync,
+        sendTestAnnouncement: async () => { throw new Error('YouTube notifications are not available right now.'); },
+        stop: noop,
+    };
 }
 
 // ── Real manager boot — runs exactly once when this node connects ─────────
@@ -329,6 +337,25 @@ async function initializeManagers() {
             leaveEvent: async () => ({ ok: false, message: 'Events are unavailable right now.' }),
             checkIn: async () => ({ ok: false, message: 'Events are unavailable right now.' }),
             setResult: async () => {}, cacheSize: 0,
+        };
+    }
+
+    // YouTube Notifications (Creator Hub) — public RSS feed monitoring with
+    // dashboard-only configuration. Only ONE node polls at a time (DB lease),
+    // and announcements are de-duplicated by a UNIQUE constraint, so it is safe
+    // across all three shard nodes. Started here so it only runs on a connected
+    // node (a standby does not poll).
+    try {
+        const { YouTubeManager } = require('./utils/youtubeManager');
+        client.youtubeManager = new YouTubeManager(client);
+        client.youtubeManager.start().catch(err => console.error('[YOUTUBE] start failed:', err.message));
+        console.log('[MANAGERS] YouTubeManager loaded.');
+    } catch (err) {
+        console.error('[MANAGERS] Failed to load YouTubeManager:', err.message);
+        client.youtubeManager = {
+            status: { active: false }, waitForReady: async () => {},
+            sendTestAnnouncement: async () => { throw new Error('YouTube notifications are unavailable.'); },
+            stop: () => {},
         };
     }
 

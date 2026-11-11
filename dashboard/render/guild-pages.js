@@ -542,6 +542,16 @@ function birthdaysPage({ guild, user }) {
     return guildTab({ guild, user, active: 'birthdays', panelHTML, scripts: ['/js/guild-common.js', '/js/birthdays.js'] });
 }
 
+// ── YouTube Notifications (Creator Hub) ─────────────────────────────────────
+// Dashboard-only feature: the bot monitors public RSS feeds and posts new-upload
+// announcements; everything is configured here. The heavy markup lives in
+// render/youtube-page.js.
+
+function youtubePage({ guild, user }) {
+    const { body, scripts, title } = require('./youtube-page').youtubePageHTML({ guild, user });
+    return render({ title, body, active: 'servers', scripts, user });
+}
+
 // ── Logging ─────────────────────────────────────────────────────────────────
 
 function loggingPanelHTML(logging, channels) {
@@ -1822,6 +1832,7 @@ function liveGiveawaysPage({ guild, user }) {
 module.exports = {
     welcomePage, levelingPage, badgesPage, prefixPage, roleRewardsPage, autoResponderPage, reactionsPage, broadcastPage,
     birthdaysPage, embedPage, loggingPage, reactionRolesPage, ticketsPage, ticketEditPage, automodPage, antiNukePage, eventsPage,
+    youtubePage,
     eventWizardPage, eventManagePage,
     livePollsPage, liveGiveawaysPage,
     ticketEmbedBuilderHTML,
