@@ -2317,7 +2317,7 @@ const GUILD_CONFIG_SLICES = {
         console.error('[DASHBOARD DB] youtube_subscriptions read failed:', err.message);
         return [];
     }),
-    youtubeAnnouncements: (guildId) => getYoutubeAnnouncements(guildId, { limit: 25 }).catch(err => {
+    youtubeAnnouncements: (guildId) => getYoutubeAnnouncements(guildId, { limit: 12 }).catch(err => {
         console.error('[DASHBOARD DB] youtube_announcements read failed:', err.message);
         return [];
     }),
@@ -4076,6 +4076,132 @@ async function getNodeStats() {
     return { nodes, lease, thresholdMs: FAILOVER_THRESHOLD_MS };
 }
 
+// ── Website latency (season pool, latency_samples table) ───────────────────
+//
+// The dashboard times its own request handling and batches samples into the
+// season pool (same DB as sessions + shardnode heartbeats) so the Stats page
+// can render a githubstatus-style latency graph over a 7/30/90-day window.
+// The recorder (dashboard/latency.js) does the memory-side batching; these
+// functions own the table DDL and the aggregation reads.
+
+async function ensureLatencySamplesTable() {
+    return once('latencySamples', async () => {
+        const p = getSeasonPool();
+        await p.query(`
+            CREATE TABLE IF NOT EXISTS latency_samples (
+                id BIGSERIAL PRIMARY KEY,
+                ts TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                ms INTEGER NOT NULL,
+                route TEXT NOT NULL DEFAULT ''
+            )
+        `);
+        await p.query(`CREATE INDEX IF NOT EXISTS latency_samples_ts_idx ON latency_samples (ts)`).catch(() => {});
+    });
+}
+
+/**
+ * Aggregate latency over a window into an hourly series for the graph.
+ * Buckets spanning `days` back to now; each carries count/avg/p50/p95/max.
+ * Always returns the full contiguous series (missing hours = empty buckets) so
+ * the client can draw a stable axis.
+ */
+async function getLatencySeries({ days = 30, granularityMs = 60 * 60 * 1000 } = {}) {
+    let rows = [];
+    try {
+        await ensureLatencySamplesTable();
+        const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+        const p = getSeasonPool();
+        const res = await p.query(
+            `SELECT
+                date_trunc('hour', ts) AS bucket,
+                COUNT(*)      AS n,
+                ROUND(AVG(ms))::int                              AS avg_ms,
+                PERCENTILE_CONT(0.5)  WITHIN GROUP (ORDER BY ms) AS p50_ms,
+                PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY ms) AS p95_ms,
+                MAX(ms)                                          AS max_ms
+             FROM latency_samples
+             WHERE ts >= $1
+             GROUP BY bucket
+             ORDER BY bucket ASC`,
+            [since]
+        );
+        rows = res.rows || [];
+    } catch (err) {
+        // A missing/unreachable latency DB must never block the Stats page — it
+        // degrades to an empty series (the client renders the empty state).
+        console.error('[DASHBOARD DB] getLatencySeries failed:', err.message);
+        rows = [];
+    }
+
+    const byHour = new Map();
+    for (const r of rows) {
+        byHour.set(r.bucket.toISOString(), {
+            ts: r.bucket,
+            count: Number(r.n || 0),
+            avg: r.avg_ms != null ? Number(r.avg_ms) : null,
+            p50: r.p50_ms != null ? Math.round(Number(r.p50_ms)) : null,
+            p95: r.p95_ms != null ? Math.round(Number(r.p95_ms)) : null,
+            max: r.max_ms != null ? Number(r.max_ms) : null,
+        });
+    }
+
+    // Contiguous hourly series from the start of the window to the current hour.
+    const series = [];
+    const step = Number(granularityMs);
+    const start = new Date(Math.floor(since.getTime() / step) * step);
+    const nowHour = new Date(Math.floor(Date.now() / step) * step);
+    for (let t = start.getTime(); t <= nowHour.getTime(); t += step) {
+        const key = new Date(t).toISOString();
+        series.push(byHour.get(key) || { ts: new Date(t), count: 0, avg: null, p50: null, p95: null, max: null });
+    }
+
+    // Merge unbuffered recent samples (last 10 min) into the final hour.
+    const recent = require('./latency').getLatencyRecorder().recent();
+    const cutoff = Date.now() - 10 * 60 * 1000;
+    const tail = recent.filter(s => s.t >= cutoff && s.t <= nowHour.getTime() + step);
+    if (tail.length) {
+        const last = series[series.length - 1];
+        const ms = tail.map(s => s.ms);
+        const sum = ms.reduce((a, b) => a + b, 0);
+        last.count += ms.length;
+        last.avg = last.avg != null
+            ? Math.round((last.avg * (last.count - ms.length) + sum) / last.count)
+            : Math.round(sum / ms.length);
+        last.p50 = percentile(ms, 0.5);
+        last.p95 = percentile(ms, 0.95);
+        last.max = Math.max(last.max || 0, ...ms);
+    }
+
+    const summary = summarizeLatency(series);
+    return { series, summary, days, granularityMs: step };
+}
+
+function percentile(sorted, p) {
+    if (!sorted.length) return null;
+    const a = [...sorted].sort((x, y) => x - y);
+    const idx = Math.min(a.length - 1, Math.ceil(p * a.length) - 1);
+    return a[Math.max(0, idx)];
+}
+
+/** Compact headline numbers for the graph's status strip. */
+function summarizeLatency(series) {
+    const withData = series.filter(b => b.count > 0);
+    if (!withData.length) {
+        return { sampleCount: 0, avg: null, p95: null, max: null, bucketsWithData: 0 };
+    }
+    const avg = Math.round(withData.reduce((a, b) => a + (b.avg || 0), 0) / withData.length);
+    const p95s = withData.map(b => b.p95).filter(v => v != null);
+    const max = Math.max(...withData.map(b => b.max || 0));
+    const sampleCount = withData.reduce((a, b) => a + b.count, 0);
+    return {
+        sampleCount,
+        avg,
+        p95: p95s.length ? percentile(p95s, 0.5) : null,
+        max,
+        bucketsWithData: withData.length,
+    };
+}
+
 // ── Saved embeds (EMBED_DATABASE_URL) ───────────────────────────────────────
 //
 // The Embed Builder in the Features sidebar is a fully client-side editor: a
@@ -4272,6 +4398,10 @@ module.exports = {
     startEventSchedule,
     cancelEventSchedule,
     getNodeStats,
+    ensureLatencySamplesTable,
+    getLatencySeries,
+    percentileLatency: percentile,
+    summarizeLatency,
     getSavedEmbeds,
     getSavedEmbed,
     createSavedEmbed,

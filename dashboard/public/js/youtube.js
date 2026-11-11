@@ -21,6 +21,23 @@
   let subs = [];
   let editingId = null;
 
+  // The server renders the whole page from guild._config, so the initial
+  // subscription/announcement state is already in the HTML — no API round-trip
+  // needed on first load (that used to re-run requireGuildAdmin on every view:
+  // another Discord REST call + ~4 more YouTube queries per page visit).
+  // load() is still wired to the Refresh buttons to re-fetch on demand.
+  function initialSubs() {
+    try {
+      const node = document.getElementById('yt-creators');
+      if (!node) return [];
+      return Array.from(node.querySelectorAll('script.yt-sub-data'))
+        .map(el => { try { return JSON.parse(el.textContent); } catch { return null; } })
+        .filter(Boolean);
+    } catch { return []; }
+  }
+  const subsFromServer = initialSubs();
+  if (subsFromServer.length) subs = subsFromServer;
+
   // ── Section switching ─────────────────────────────────────────────────────
   function showSection(key) {
     $$('.yt-section').forEach(s => { s.hidden = s.dataset.section !== key; });
@@ -291,7 +308,10 @@
     // Keep the color text input in sync with the picker.
     $('#yt-tpl-color')?.addEventListener('input', (e) => { const t = $('#yt-tpl-color-text'); if (t) t.value = e.target.value; });
     $('#yt-tpl-color-text')?.addEventListener('input', (e) => { const c = $('#yt-tpl-color'); if (c && /^#[0-9a-fA-F]{6}$/.test(e.target.value)) c.value = e.target.value; });
-    load();
+    // The server already rendered the current subscriptions/stats/history —
+    // only wire the template picker to those creators. The Refresh buttons
+    // call load() to re-fetch on demand.
+    renderTemplatePicker();
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);

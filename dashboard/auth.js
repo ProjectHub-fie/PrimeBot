@@ -229,12 +229,16 @@ async function requireGuildAdmin(req, res, next) {
  * channel/role lookups for pages with no <select>; `antiNukeExtras` loads the
  * lockdown/incident/permission context only where the Anti-Nuke console needs
  * it. `betaGates` loads the beta/upcoming flags — only pages that render a
- * beta or "Coming Soon" overlay consult them.
+ * beta or "Coming Soon" overlay consult them. `roles` refines the selector
+ * role fetch: 'all' returns plain guild roles (1 REST call — enough for a
+ * mention/role select), 'unassignable' (the default) additionally excludes
+ * roles the bot cannot assign, which costs 2-3 sequential REST calls. Pages
+ * whose role select only mentions roles (e.g. YouTube) should pass 'all'.
  *
  * The JSON variant (requireGuildAdmin) is unchanged and still used by all
  * /api/* routes.
  */
-function guildPage({ config = null, selectors = true, antiNukeExtras = false, betaGates = false } = {}) {
+function guildPage({ config = null, selectors = true, roles = 'unassignable', antiNukeExtras = false, betaGates = false } = {}) {
     return async function guildPageGuard(req, res, next) {
         try {
             const guildId = req.params.guildId;
@@ -264,7 +268,7 @@ function guildPage({ config = null, selectors = true, antiNukeExtras = false, be
             // These are independent of each other, so they run in ONE parallel
             // batch: bot presence, the optional channel/role lookups, the config
             // slices this page renders, and the beta/bypass flags.
-            const [botGuild, channels, roles, configData, betaAccess, bypassGates] = await Promise.all([
+            const [botGuild, channels, guildRoles, configData, betaAccess, bypassGates] = await Promise.all([
                 discord.getBotGuild(guildId).then(g => ({ guild: g })).catch(err => ({ err })),
                 selectors
                     ? discord.getGuildChannels(guildId)
@@ -275,7 +279,7 @@ function guildPage({ config = null, selectors = true, antiNukeExtras = false, be
                 // role, not integration-managed) so reaction-role / leveling
                 // selectors never offer a role that fails with a 50007 error.
                 selectors
-                    ? discord.getGuildRoles(guildId, { excludeUnassignable: true })
+                    ? discord.getGuildRoles(guildId, { excludeUnassignable: roles === 'unassignable' })
                         .then(rs => rs.map(r => ({ id: r.id, name: r.name, position: r.position })))
                         .catch(err => { console.error('[AUTH] getGuildRoles failed:', err.message); return []; })
                     : Promise.resolve([]),
@@ -312,7 +316,7 @@ function guildPage({ config = null, selectors = true, antiNukeExtras = false, be
                 userIsOwner: userGuild.owner,
             };
             req.guild._channels = channels;
-            req.guild._roles = roles;
+            req.guild._roles = guildRoles;
             req.guild._config = configData;
 
             // Anti-Nuke page extras: lockdown status, the bot's permission report

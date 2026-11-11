@@ -252,6 +252,22 @@ test('a light tab (Embed builder) skips the channel/role lookups entirely', asyn
     assert.equal(calls.getGuildRoles, 0);
 });
 
+test('the YouTube tab renders server-side and skips the extra role REST calls', async () => {
+    resetCalls();
+    const cookie = await signIn();
+    const r = await get(`/guild/${GUILD}/youtube`, cookie);
+
+    assert.equal(r.status, 200, r.body.slice(0, 300));
+    // The page renders from the three youtube slices the spreadsheet now asks for.
+    assert.deepEqual(calls.getGuildConfig[0],
+        { only: ['youtubeSubscriptions', 'youtubeAnnouncements', 'youtubeStats'] },
+        'YouTube loads only its own feature slices');
+    assert.equal(calls.getGuildChannels, 1, 'YouTube needs the channel select for the add-creator row');
+    // `roles: 'all'` only fetches plain guild roles (1 call) instead of walking
+    // the bot member + guild roles again for the assignability filter.
+    assert.equal(calls.getGuildRoles, 1, 'YouTube roles fetch must not call getBotHighestRolePosition');
+});
+
 // ── getGuildConfig honours `only` (real DB layer, no DB configured) ─────────
 
 test('getGuildConfig loads only the requested slices', async () => {

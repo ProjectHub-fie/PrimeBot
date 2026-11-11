@@ -556,9 +556,10 @@
           unfiltered ? 'Nothing has been actioned yet. Incidents appear here as rules fire.' : 'No incidents match these filters.');
       } else {
         el.innerHTML = `<table class="am-table">
-          <thead><tr><th>User</th><th>Rule</th><th>Action</th><th>Severity</th><th>Channel</th><th>Time</th></tr></thead>
+          <thead><tr><th>CID</th><th>User</th><th>Rule</th><th>Action</th><th>Severity</th><th>Channel</th><th>Time</th></tr></thead>
           <tbody>${rows.map(r => `
             <tr>
+              <td data-label="CID">${Number.isFinite(r.cid) ? `<code>${esc(String(r.cid))}</code>` : '—'}</td>
               <td data-label="User">${r.userId ? `<code>${esc(r.username || r.userId)}</code>` : '—'}</td>
               <td data-label="Rule">${esc(r.ruleLabel || r.ruleType)}</td>
               <td data-label="Action">${(r.actions || []).map(a => `<span class="am-chip am-chip-sm">${esc(actionLabel(a))}</span>`).join(' ') || '—'}${r.dryRun ? ' <span class="am-chip am-chip-sm am-chip-warn">dry run</span>' : ''}</td>
