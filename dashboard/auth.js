@@ -217,148 +217,167 @@ async function requireGuildAdmin(req, res, next) {
 }
 
 /**
- * Page-route variant of requireGuildAdmin. Verifies the same guild-management
- * access and bot presence, but instead of returning JSON errors it renders an
- * HTML error page (or redirects to /login on an expired session). On success it
- * also fetches the guild's channels, roles, and full config, attaching them as
- * req.guild._channels / req.guild._roles / req.guild._config so the
- * server-rendered page can pre-populate its forms in one round-trip.
+ * Build the guard for a guild settings page.
+ *
+ * Verifies guild-management access and bot presence, then attaches what the
+ * page renders: `req.guild._channels` / `_roles` / `_config` plus the beta and
+ * upcoming flags. Pages declare the config they need — a tab like /prefix
+ * renders one field, and loading every feature's settings slice for it meant
+ * ~18 queries across every feature pool (plus the Anti-Nuke extras) on a
+ * request that can be killed by the host's function timeout before it finishes
+ * (the browser reports ERR_CONNECTION_ABORTED). `selectors: false` skips the
+ * channel/role lookups for pages with no <select>; `antiNukeExtras` loads the
+ * lockdown/incident/permission context only where the Anti-Nuke console needs
+ * it. `betaGates` loads the beta/upcoming flags — only pages that render a
+ * beta or "Coming Soon" overlay consult them.
  *
  * The JSON variant (requireGuildAdmin) is unchanged and still used by all
  * /api/* routes.
  */
-async function requireGuildAdminPage(req, res, next) {
-    try {
-        const guildId = req.params.guildId;
-        if (!/^\d{17,20}$/.test(guildId)) {
-            return res.status(404).type('html').send(pages.notFoundPage({ user: req.session && req.session.user }));
-        }
-
-        const accessToken = req.session && req.session.accessToken;
-        if (!accessToken) {
-            return res.redirect('/login');
-        }
-
-        let guilds = req.session.guilds;
-        const fetchedAt = req.session.guildsFetchedAt || 0;
-        if (!Array.isArray(guilds) || Date.now() - fetchedAt > 10 * 60 * 1000) {
-            guilds = await discord.getUserGuilds(accessToken);
-            req.session.guilds = guilds;
-            req.session.guildsFetchedAt = Date.now();
-        }
-
-        const userGuild = guilds.find(g => g.id === guildId);
-        if (!userGuild || !discord.canManageGuild(userGuild.permissions)) {
-            const body = `<div class="card"><div class="alert alert-error">You do not have permission to manage this server.</div><p><a href="/">← Back to servers</a></p></div>`;
-            return res.status(403).type('html').send(L.render({ title: 'PrimeBot · Access denied', body, user: req.session && req.session.user }));
-        }
-
-        let botGuild;
+function guildPage({ config = null, selectors = true, antiNukeExtras = false, betaGates = false } = {}) {
+    return async function guildPageGuard(req, res, next) {
         try {
-            botGuild = await discord.getBotGuild(guildId);
-        } catch (err) {
-            if (err.status === 401) {
-                const body = `<div class="card"><div class="alert alert-error">PrimeBot is not reachable (bot token not configured). Ask an admin to set DISCORD_TOKEN on the dashboard deployment.</div><p><a href="/">← Back to servers</a></p></div>`;
-                return res.status(503).type('html').send(L.render({ title: 'PrimeBot · Unreachable', body, user: req.session && req.session.user }));
+            const guildId = req.params.guildId;
+            if (!/^\d{17,20}$/.test(guildId)) {
+                return res.status(404).type('html').send(pages.notFoundPage({ user: req.session && req.session.user }));
             }
-            if (err.status === 403 || err.status === 404) {
-                const cid = process.env.DISCORD_CLIENT_ID || '';
-                const invite = `https://discord.com/oauth2/authorize?client_id=${cid}&permissions=8&integration_type=0&scope=bot%20applications.commands`;
-                const body = `<div class="card"><div class="alert alert-warn">PrimeBot is not in this server.</div><p>To configure PrimeBot here, add it to your server first.</p><p style="margin-top:16px"><a class="btn btn-primary" href="${invite}" target="_blank" rel="noopener">Invite PrimeBot</a></p><p style="margin-top:12px"><a href="/">← Back to servers</a></p></div>`;
-                return res.status(404).type('html').send(L.render({ title: 'PrimeBot · Not in server', body, user: req.session && req.session.user }));
+
+            const accessToken = req.session && req.session.accessToken;
+            if (!accessToken) {
+                return res.redirect('/login');
             }
-            throw err;
-        }
 
-        req.guild = {
-            id: botGuild.id,
-            name: botGuild.name,
-            icon: botGuild.icon,
-            owner_id: botGuild.owner_id,
-            approximate_member_count: botGuild.approximate_member_count,
-            userIsOwner: userGuild.owner,
-        };
+            let guilds = req.session.guilds;
+            const fetchedAt = req.session.guildsFetchedAt || 0;
+            if (!Array.isArray(guilds) || Date.now() - fetchedAt > 10 * 60 * 1000) {
+                guilds = await discord.getUserGuilds(accessToken);
+                req.session.guilds = guilds;
+                req.session.guildsFetchedAt = Date.now();
+            }
 
-        // Fetch channels + roles + config for server-side form pre-population.
-        // Each degrades gracefully so a partial Discord/DB failure still renders
-        // the page with empty selectors rather than a 500.
-        const [channels, roles, config] = await Promise.all([
-            discord.getGuildChannels(req.guild.id)
-                .then(cs => cs.map(c => ({ id: c.id, name: c.name })))
-                .catch(err => { console.error('[AUTH] getGuildChannels failed:', err.message); return []; }),
-            // Only show roles the bot can actually assign (below its highest
-            // role, not integration-managed) so reaction-role / leveling
-            // selectors never offer a role that fails with a 50007 error.
-            discord.getGuildRoles(req.guild.id, { excludeUnassignable: true })
-                .then(rs => rs.map(r => ({ id: r.id, name: r.name, position: r.position })))
-                .catch(err => { console.error('[AUTH] getGuildRoles failed:', err.message); return []; }),
-            dashboardDb.getGuildConfig(req.guild.id).catch(err => {
-                console.error('[AUTH] getGuildConfig failed:', err.message);
-                return { server: {}, welcome: {}, logging: {}, reactionRoles: [], automod: {}, ticketPanels: [] };
-            }),
-        ]);
-        req.guild._channels = channels;
-        req.guild._roles = roles;
-        req.guild._config = config;
+            const userGuild = guilds.find(g => g.id === guildId);
+            if (!userGuild || !discord.canManageGuild(userGuild.permissions)) {
+                const body = `<div class="card"><div class="alert alert-error">You do not have permission to manage this server.</div><p><a href="/">← Back to servers</a></p></div>`;
+                return res.status(403).type('html').send(L.render({ title: 'PrimeBot · Access denied', body, user: req.session && req.session.user }));
+            }
 
-        // Anti-Nuke page extras: lockdown status, the bot's permission report
-        // (for the honest "missing permissions" warning) and the setup progress.
-        // Each degrades gracefully — a failure here must not break the page.
-        try {
-            const { validatePermissionsFromBitfield } = require('../utils/antiNukeContainment');
-            const { computeProgress } = require('../utils/antiNukeSetup');
-            const [lockdown, summary, botPerms] = await Promise.all([
-                dashboardDb.getAntiNukeLockdown(req.guild.id).catch(() => ({ active: false })),
-                dashboardDb.getAntiNukeIncidentSummary(req.guild.id).catch(() => ({ total: 0, byAction: [] })),
-                discord.computeBotPermissions(req.guild.id, process.env.DISCORD_CLIENT_ID).catch(() => null),
+            // These are independent of each other, so they run in ONE parallel
+            // batch: bot presence, the optional channel/role lookups, the config
+            // slices this page renders, and the beta/bypass flags.
+            const [botGuild, channels, roles, configData, betaAccess, bypassGates] = await Promise.all([
+                discord.getBotGuild(guildId).then(g => ({ guild: g })).catch(err => ({ err })),
+                selectors
+                    ? discord.getGuildChannels(guildId)
+                        .then(cs => cs.map(c => ({ id: c.id, name: c.name })))
+                        .catch(err => { console.error('[AUTH] getGuildChannels failed:', err.message); return []; })
+                    : Promise.resolve([]),
+                // Only show roles the bot can actually assign (below its highest
+                // role, not integration-managed) so reaction-role / leveling
+                // selectors never offer a role that fails with a 50007 error.
+                selectors
+                    ? discord.getGuildRoles(guildId, { excludeUnassignable: true })
+                        .then(rs => rs.map(r => ({ id: r.id, name: r.name, position: r.position })))
+                        .catch(err => { console.error('[AUTH] getGuildRoles failed:', err.message); return []; })
+                    : Promise.resolve([]),
+                dashboardDb.getGuildConfig(guildId, { only: config }).catch(err => {
+                    console.error('[AUTH] getGuildConfig failed:', err.message);
+                    return { server: {}, welcome: {}, logging: {}, reactionRoles: [], automod: {}, ticketPanels: [] };
+                }),
+                betaGates ? betaManager.canAccess(guildId).catch(() => false) : Promise.resolve(false),
+                betaGates ? canBypassFeatureGates(req).catch(() => false) : Promise.resolve(false),
             ]);
-            const antiNuke = config.antiNuke || {};
-            const method = antiNuke.setupMethod || null;
-            req.guild._config.antiNukeLockdown = lockdown;
-            req.guild._config.antiNukeSummary = summary;
-            req.guild._config.antiNukePermissions = validatePermissionsFromBitfield(botPerms);
-            req.guild._config.antiNukeSetup = {
-                method,
-                status: antiNuke.setupStatus || 'not_started',
-                // The raw step map so the manual wizard can resume at the right
-                // section (the computed `progress` alone cannot restore which
-                // sections are already complete).
-                state: antiNuke.setupState || {},
-                progress: computeProgress(method || 'automatic', antiNuke.setupState || {}),
+
+            if (botGuild.err) {
+                const err = botGuild.err;
+                if (err.status === 401) {
+                    const body = `<div class="card"><div class="alert alert-error">PrimeBot is not reachable (bot token not configured). Ask an admin to set DISCORD_TOKEN on the dashboard deployment.</div><p><a href="/">← Back to servers</a></p></div>`;
+                    return res.status(503).type('html').send(L.render({ title: 'PrimeBot · Unreachable', body, user: req.session && req.session.user }));
+                }
+                if (err.status === 403 || err.status === 404) {
+                    const cid = process.env.DISCORD_CLIENT_ID || '';
+                    const invite = `https://discord.com/oauth2/authorize?client_id=${cid}&permissions=8&integration_type=0&scope=bot%20applications.commands`;
+                    const body = `<div class="card"><div class="alert alert-warn">PrimeBot is not in this server.</div><p>To configure PrimeBot here, add it to your server first.</p><p style="margin-top:16px"><a class="btn btn-primary" href="${invite}" target="_blank" rel="noopener">Invite PrimeBot</a></p><p style="margin-top:12px"><a href="/">← Back to servers</a></p></div>`;
+                    return res.status(404).type('html').send(L.render({ title: 'PrimeBot · Not in server', body, user: req.session && req.session.user }));
+                }
+                throw err;
+            }
+
+            const bg = botGuild.guild;
+            req.guild = {
+                id: bg.id,
+                name: bg.name,
+                icon: bg.icon,
+                owner_id: bg.owner_id,
+                approximate_member_count: bg.approximate_member_count,
+                userIsOwner: userGuild.owner,
             };
+            req.guild._channels = channels;
+            req.guild._roles = roles;
+            req.guild._config = configData;
+
+            // Anti-Nuke page extras: lockdown status, the bot's permission report
+            // (for the honest "missing permissions" warning), the incident
+            // summary and the setup progress. Each degrades gracefully.
+            if (antiNukeExtras) {
+                try {
+                    const { validatePermissionsFromBitfield } = require('../utils/antiNukeContainment');
+                    const { computeProgress } = require('../utils/antiNukeSetup');
+                    const [lockdown, summary, botPerms] = await Promise.all([
+                        dashboardDb.getAntiNukeLockdown(req.guild.id).catch(() => ({ active: false })),
+                        dashboardDb.getAntiNukeIncidentSummary(req.guild.id).catch(() => ({ total: 0, byAction: [] })),
+                        discord.computeBotPermissions(req.guild.id, process.env.DISCORD_CLIENT_ID).catch(() => null),
+                    ]);
+                    const antiNukeCfg = configData.antiNuke || {};
+                    const method = antiNukeCfg.setupMethod || null;
+                    req.guild._config.antiNukeLockdown = lockdown;
+                    req.guild._config.antiNukeSummary = summary;
+                    req.guild._config.antiNukePermissions = validatePermissionsFromBitfield(botPerms);
+                    req.guild._config.antiNukeSetup = {
+                        method,
+                        status: antiNukeCfg.setupStatus || 'not_started',
+                        // The raw step map so the manual wizard can resume at the
+                        // right section (the computed `progress` alone cannot
+                        // restore which sections are already complete).
+                        state: antiNukeCfg.setupState || {},
+                        progress: computeProgress(method || 'automatic', antiNukeCfg.setupState || {}),
+                    };
+                } catch (err) {
+                    console.error('[AUTH] anti-nuke extras failed:', err.message);
+                }
+                // Anti-Nuke access context (owner-controlled hierarchy).
+                try {
+                    await attachAntiNukeAccess(req);
+                } catch (err) {
+                    console.error('[AUTH] attachAntiNukeAccess failed:', err.message);
+                    req.guild._antiNukeAccess = { ok: false, reason: 'error' };
+                }
+            }
+
+            // Beta access flag (allowed && enabled) — developer/owner-role users
+            // bypass the gate entirely (they can exercise beta features anywhere).
+            // Degrades to false on any DB error so non-beta servers stay locked.
+            // Only loaded for pages that render a beta/upcoming overlay; every
+            // other page gets `false`, which it never reads.
+            req.guild._beta = betaAccess || bypassGates;
+            // Upcoming-gate bypass (same privileged roles). eventsPage skips the
+            // "Coming Soon" overlay when this is set.
+            req.guild._bypassUpcoming = bypassGates;
+            next();
         } catch (err) {
-            console.error('[AUTH] anti-nuke extras failed:', err.message);
+            console.error('[AUTH] requireGuildAdminPage error:', err.message);
+            if (err.status === 401) {
+                req.session.destroy(() => {});
+                return res.redirect('/login');
+            }
+            const body = `<div class="card"><div class="alert alert-error">Failed to verify guild access.</div><p><a href="/">← Back to servers</a></p></div>`;
+            return res.status(500).type('html').send(L.render({ title: 'PrimeBot · Error', body, user: req.session && req.session.user }));
         }
-        // Beta access flag (allowed && enabled) — developer/owner-role users
-        // bypass the gate entirely (they can exercise beta features anywhere).
-        // Degrades to false on any DB error so non-beta servers stay locked.
-        const [betaAccess, bypassGates] = await Promise.all([
-            betaManager.canAccess(req.guild.id).catch(() => false),
-            canBypassFeatureGates(req).catch(() => false),
-        ]);
-        req.guild._beta = betaAccess || bypassGates;
-        // Upcoming-gate bypass (same privileged roles). eventsPage skips the
-        // "Coming Soon" overlay when this is set.
-        req.guild._bypassUpcoming = bypassGates;
-        // Anti-Nuke access context (owner-controlled hierarchy). Attached for
-        // every guild page so the anti-nuke renderer can lock per-viewer.
-        try {
-            await attachAntiNukeAccess(req);
-        } catch (err) {
-            console.error('[AUTH] attachAntiNukeAccess failed:', err.message);
-            req.guild._antiNukeAccess = { ok: false, reason: 'error' };
-        }
-        next();
-    } catch (err) {
-        console.error('[AUTH] requireGuildAdminPage error:', err.message);
-        if (err.status === 401) {
-            req.session.destroy(() => {});
-            return res.redirect('/login');
-        }
-        const body = `<div class="card"><div class="alert alert-error">Failed to verify guild access.</div><p><a href="/">← Back to servers</a></p></div>`;
-        return res.status(500).type('html').send(L.render({ title: 'PrimeBot · Error', body, user: req.session && req.session.user }));
-    }
+    };
 }
+
+// Full-config guard (channels + roles + every config slice + all extras).
+// Kept for callers that have not been narrowed to the data they render.
+const requireGuildAdminPage = guildPage({ antiNukeExtras: true, betaGates: true });
 
 /**
  * Guard for beta-only guild features (e.g. Events). Verifies the guild has beta
@@ -447,4 +466,4 @@ async function attachAntiNukeAccess(req) {
     return ctx;
 }
 
-module.exports = { requireAuth, requireAuthReadonly, requireGuildAdmin, requireGuildAdminPage, requireBeta, requireUpcoming, requireAntiNukePermission, attachAntiNukeAccess, touchIdleDeadline, isIdleExpired, IDLE_TIMEOUT_MS };
+module.exports = { requireAuth, requireAuthReadonly, requireGuildAdmin, requireGuildAdminPage, guildPage, requireBeta, requireUpcoming, requireAntiNukePermission, attachAntiNukeAccess, touchIdleDeadline, isIdleExpired, IDLE_TIMEOUT_MS };

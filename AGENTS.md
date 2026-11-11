@@ -1026,3 +1026,47 @@ Announces new uploads from public YouTube channels. Configured **only** from the
 - **Dashboard page:** `dashboard/render/youtube-page.js` (server-rendered, 5 sections Overview/Creators/Announcement/History/Health — same console design as AutoMod/AntiNuke) + `dashboard/public/js/youtube.js` (IIFE-wrapped to avoid the classic-script `const` collision). Tab in `render/guild.js` TABS (`key: 'youtube'`). Styles: `.yt-*` in `styles.css`. Every control persists via the API (no mockup controls); the Announcement editor writes per-creator `template` JSONB.
 - **Env vars:** `YOUTUBE_DATABASE_URL` (optional, falls back to FALLBACK/DATABASE_URL), `YOUTUBE_POLL_INTERVAL_MS` (default 180000), `YOUTUBE_LEASE_TTL_SECONDS` (default 90), `YOUTUBE_BATCH_SIZE`, `YOUTUBE_CONCURRENCY`.
 - **Tests:** `tests/youtube.test.js` (33) — reference parsing + SSRF guard, Atom parsing (incl. malformed/empty), template + allowed-mentions + payload, and the manager against an in-memory pool stub modeling the UNIQUE dedup constraint (baseline announces nothing, new-upload detection oldest-first, duplicate blocked, failed send recorded, feed error backoff, one-broken-doesn't-stop-others, lease single-holder + expiry recovery, non-holder never polls, test announcement) plus real-HTTP 401 guards on all routes.
+
+## Guild page render: per-page data loading (ERR_CONNECTION_ABORTED)
+
+Selecting a server lands on `/guild/:guildId/prefix`, and that render used to be
+one monolithic guard (`requireGuildAdminPage`) that fetched the guild channels,
+the roles, EVERY feature's settings slice (`getGuildConfig` → ~18 queries across
+every feature pool), the Anti-Nuke extras (lockdown + incident summary + bot
+permissions + access row) and the beta/bypass flags — for a page that renders a
+single text field. On Vercel a slow pool or a stalled Discord call then exceeded
+the function budget and the connection was killed (`ERR_CONNECTION_ABORTED` /
+"took a long time to reach the page").
+
+- **`dashboard/auth.js` `guildPage({ config, selectors, antiNukeExtras, betaGates })`**
+  is the guard factory used by every `/guild/:guildId/<tab>` route. Each route
+  declares exactly what it renders:
+  - `config` = the `getGuildConfig` slices the page reads (`['server']` for
+    General/Leveling/Role Rewards/Reactions/Broadcast, `['welcome']`, `['logging']`,
+    `['automod']`, `['antiNuke']`, `['ticketPanels']`, `['reactionRoles']`,
+    `['birthdaySettings']`, the three youtube slices, `[]` for Embed/Badges/Live/Events).
+  - `selectors: false` skips `getGuildChannels` + `getGuildRoles` for pages with no
+    `<select>` — note `getGuildRoles({excludeUnassignable})` is 3 Sequential REST
+    calls (`/roles` → bot member → `/roles`), so this is the biggest REST saving.
+  - `antiNukeExtras: true` only on the Anti-Nuke page (lockdown/incidents/bot
+    permissions + `attachAntiNukeAccess`, which sets `guild._antiNukeAccess`).
+  - `betaGates: true` only on pages that render a beta or "Coming Soon" overlay
+    (`_beta` / `_bypassUpcoming`): Badges, Role Rewards, the three Events pages.
+- **Add a new tab:** add its route with the slices it renders. Do NOT reach for
+  the legacy `requireGuildAdminPage` (= `guildPage({ antiNukeExtras: true, betaGates: true })`)
+  — it still exists for back-compat but reintroduces the whole-page load. If you
+  forget `betaGates`, a beta/upcoming page silently renders locked.
+- **`dashboard/db.js` `getGuildConfig(guildId, { only })`** returns every key (so
+  no page null-checks) but only loads the requested slices; the rest keep their
+  empty defaults. `server` also pulls `levelingRoleRewards` (they ride on
+  `server.leveling.roleRewards`), and `ticketPanels` pulls its components.
+- **`dashboard/discord.js` `fetchJson` is bounded** by `DISCORD_API_TIMEOUT_MS`
+  (default 8000) via `AbortSignal.timeout`, so a stalled Discord request fails
+  into the caller's catch instead of hanging until the host kills the function.
+- **`vercel.json`** sets `maxDuration: 60` on the serverless function so a slow
+  but successful render is not aborted at the default limit.
+- **Tests:** `tests/guildPageDataNarrowing.test.js` boots the real dashboard with
+  the DB + Discord mocked and asserts what each tab asks for (prefix: one config
+  slice, no channel/role/permission lookups, no beta lookups; automod: its slice +
+  selectors; antinuke: its slice + extras; embed: nothing; badges: beta flags) and
+  that `getGuildConfig({ only: [] })` issues no query at all.

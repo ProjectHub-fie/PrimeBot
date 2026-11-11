@@ -10,8 +10,25 @@ const { GUILD_CHANNELS_WITH_COUNTS } = require('./constants');
 
 const API_BASE = 'https://discord.com/api/v10';
 
+// Discord REST calls must never outlive the dashboard's request budget. A
+// stalled socket used to hang a page render until the serverless host killed
+// the function (browsers then report ERR_CONNECTION_ABORTED). Bounding each
+// call lets a slow Discord degrade into the caller's own catch — empty
+// channel/role lists, or the 503 "bot unreachable" page — instead of a dead
+// request. `DISCORD_API_TIMEOUT_MS` overrides the 8s default.
+const DISCORD_API_TIMEOUT_MS = (() => {
+    const raw = parseInt(process.env.DISCORD_API_TIMEOUT_MS, 10);
+    return Number.isFinite(raw) && raw > 0 ? raw : 8000;
+})();
+
+function requestTimeoutSignal() {
+    return typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+        ? AbortSignal.timeout(DISCORD_API_TIMEOUT_MS)
+        : undefined;
+}
+
 async function fetchJson(url, options = {}) {
-    const res = await fetch(url, options);
+    const res = await fetch(url, options.signal ? options : { ...options, signal: requestTimeoutSignal() });
     let body = null;
     const text = await res.text();
     if (text) {
@@ -49,6 +66,7 @@ async function exchangeCode(code, redirectUri) {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: params.toString(),
+        signal: requestTimeoutSignal(),
     });
     const text = await res.text();
     let body = null;
@@ -73,6 +91,7 @@ async function refreshToken(refreshTokenValue) {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: params.toString(),
+        signal: requestTimeoutSignal(),
     });
     const text = await res.text();
     let body = null;
