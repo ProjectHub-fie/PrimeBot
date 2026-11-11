@@ -2241,84 +2241,134 @@ async function listAntiNukeAccessHistory(guildId, opts) {
 }
 
 // ── Combined view (one fetch per guild for the settings page) ───────────────
+//
+// Loading every feature's slice for every page made a tab render cost ~18
+// queries across every feature pool, plus the Anti-Nuke extras, even though a
+// page like /prefix renders a single field. On a serverless host one slow or
+// unreachable pool then stalls the whole render until the function is killed
+// (the browser reports ERR_CONNECTION_ABORTED). Callers therefore pass `only`
+// to load just the slices a page renders; every other key still comes back with
+// its empty default so no page has to null-check.
 
-async function getGuildConfig(guildId) {
-    let ticketPanelComponents = [];
-    const [server, welcome, logging, reactionRoles, automod, antiNuke, ticketPanels, levelingRoleRewards, birthdaySettings, birthdays, comps, youtubeSubscriptions, youtubeAnnouncements, youtubeStats] = await Promise.all([
-        getServerSettings(guildId).catch(err => {
-            console.error('[DASHBOARD DB] server_settings read failed:', err.message);
-            return defaultServerSettings();
-        }),
-        getWelcomeSettings(guildId).catch(err => {
-            console.error('[DASHBOARD DB] welcome_settings read failed:', err.message);
-            return defaultWelcomeSettings();
-        }),
-        getLoggingSettings(guildId).catch(err => {
-            console.error('[DASHBOARD DB] logging_settings read failed:', err.message);
-            return defaultLoggingSettings();
-        }),
-        getReactionRoles(guildId).catch(err => {
-            console.error('[DASHBOARD DB] reaction_roles read failed:', err.message);
-            return [];
-        }),
-        getAutomodSettings(guildId).catch(err => {
-            console.error('[DASHBOARD DB] automod_settings read failed:', err.message);
-            return defaultAutomodSettings();
-        }),
-        getAntiNukeSettings(guildId).catch(err => {
-            console.error('[DASHBOARD DB] antinuke_settings read failed:', err.message);
-            return null;
-        }),
-        getTicketPanels(guildId).catch(err => {
-            console.error('[DASHBOARD DB] ticket_panels read failed:', err.message);
-            return [];
-        }),
-        getLevelingRoleRewards(guildId).catch(err => {
-            console.error('[DASHBOARD DB] leveling_role_rewards read failed:', err.message);
-            return [];
-        }),
-        getGuildBirthdaySettings(guildId).catch(err => {
-            console.error('[DASHBOARD DB] birthday settings read failed:', err.message);
-            return { channelId: null, roleId: null, imageUrl: null };
-        }),
-        getGuildBirthdays(guildId).catch(err => {
-            console.error('[DASHBOARD DB] birthdays read failed:', err.message);
-            return [];
-        }),
-        getTicketPanelComponentsByGuild(guildId).then(components => {
-            ticketPanelComponents = components;
-            return components;
-        }).catch(err => {
-            console.error('[DASHBOARD DB] ticket_panel_components read failed:', err.message);
-            return [];
-        }),
-        getYoutubeSubscriptions(guildId).catch(err => {
-            console.error('[DASHBOARD DB] youtube_subscriptions read failed:', err.message);
-            return [];
-        }),
-        getYoutubeAnnouncements(guildId, { limit: 25 }).catch(err => {
-            console.error('[DASHBOARD DB] youtube_announcements read failed:', err.message);
-            return [];
-        }),
-        getYoutubeStats(guildId).catch(err => {
-            console.error('[DASHBOARD DB] youtube stats read failed:', err.message);
-            return { totalSubscriptions: 0, activeSubscriptions: 0, pausedSubscriptions: 0, erroredSubscriptions: 0, announcementsSent: 0, announcementsFailed: 0, lastSuccessAt: null };
-        }),
-    ]);
-    // Attach durable role rewards onto the leveling settings (kept in a separate
-    // pool so they survive restarts and reach the bot via its cache reload).
-    if (server && server.leveling) {
-        server.leveling.roleRewards = levelingRoleRewards || [];
-    }
-    const panelMap = new Map((ticketPanels || []).map(p => [String(p.id), p]));
-    for (const c of comps || []) {
+function defaultBirthdaySettings() {
+    return { channelId: null, roleId: null, imageUrl: null };
+}
+
+function defaultYoutubeStats() {
+    return {
+        totalSubscriptions: 0,
+        activeSubscriptions: 0,
+        pausedSubscriptions: 0,
+        erroredSubscriptions: 0,
+        announcementsSent: 0,
+        announcementsFailed: 0,
+        lastSuccessAt: null,
+    };
+}
+
+// One loader per settings slice. Each degrades to its default so a single
+// unreachable pool can never fail the whole page render.
+const GUILD_CONFIG_SLICES = {
+    server: (guildId) => getServerSettings(guildId).catch(err => {
+        console.error('[DASHBOARD DB] server_settings read failed:', err.message);
+        return defaultServerSettings();
+    }),
+    welcome: (guildId) => getWelcomeSettings(guildId).catch(err => {
+        console.error('[DASHBOARD DB] welcome_settings read failed:', err.message);
+        return defaultWelcomeSettings();
+    }),
+    logging: (guildId) => getLoggingSettings(guildId).catch(err => {
+        console.error('[DASHBOARD DB] logging_settings read failed:', err.message);
+        return defaultLoggingSettings();
+    }),
+    reactionRoles: (guildId) => getReactionRoles(guildId).catch(err => {
+        console.error('[DASHBOARD DB] reaction_roles read failed:', err.message);
+        return [];
+    }),
+    automod: (guildId) => getAutomodSettings(guildId).catch(err => {
+        console.error('[DASHBOARD DB] automod_settings read failed:', err.message);
+        return defaultAutomodSettings();
+    }),
+    antiNuke: (guildId) => getAntiNukeSettings(guildId).catch(err => {
+        console.error('[DASHBOARD DB] antinuke_settings read failed:', err.message);
+        return null;
+    }),
+    ticketPanels: (guildId) => getTicketPanels(guildId).catch(err => {
+        console.error('[DASHBOARD DB] ticket_panels read failed:', err.message);
+        return [];
+    }),
+    levelingRoleRewards: (guildId) => getLevelingRoleRewards(guildId).catch(err => {
+        console.error('[DASHBOARD DB] leveling_role_rewards read failed:', err.message);
+        return [];
+    }),
+    birthdaySettings: (guildId) => getGuildBirthdaySettings(guildId).catch(err => {
+        console.error('[DASHBOARD DB] birthday settings read failed:', err.message);
+        return defaultBirthdaySettings();
+    }),
+    birthdays: (guildId) => getGuildBirthdays(guildId).catch(err => {
+        console.error('[DASHBOARD DB] birthdays read failed:', err.message);
+        return [];
+    }),
+    ticketPanelComponents: (guildId) => getTicketPanelComponentsByGuild(guildId).catch(err => {
+        console.error('[DASHBOARD DB] ticket_panel_components read failed:', err.message);
+        return [];
+    }),
+    youtubeSubscriptions: (guildId) => getYoutubeSubscriptions(guildId).catch(err => {
+        console.error('[DASHBOARD DB] youtube_subscriptions read failed:', err.message);
+        return [];
+    }),
+    youtubeAnnouncements: (guildId) => getYoutubeAnnouncements(guildId, { limit: 25 }).catch(err => {
+        console.error('[DASHBOARD DB] youtube_announcements read failed:', err.message);
+        return [];
+    }),
+    youtubeStats: (guildId) => getYoutubeStats(guildId).catch(err => {
+        console.error('[DASHBOARD DB] youtube stats read failed:', err.message);
+        return defaultYoutubeStats();
+    }),
+};
+
+async function getGuildConfig(guildId, { only = null } = {}) {
+    const keys = new Set(
+        Array.isArray(only)
+            ? only.filter(k => Object.prototype.hasOwnProperty.call(GUILD_CONFIG_SLICES, k))
+            : Object.keys(GUILD_CONFIG_SLICES)
+    );
+    // Derived slices: role rewards ride on `server.leveling`, and each ticket
+    // panel carries its components.
+    if (keys.has('server')) keys.add('levelingRoleRewards');
+    if (keys.has('ticketPanels')) keys.add('ticketPanelComponents');
+
+    const names = [...keys];
+    const values = await Promise.all(names.map(k => GUILD_CONFIG_SLICES[k](guildId)));
+    const slice = new Map(names.map((k, i) => [k, values[i]]));
+
+    const server = slice.get('server') || defaultServerSettings();
+    if (server.leveling) server.leveling.roleRewards = slice.get('levelingRoleRewards') || [];
+
+    const ticketPanels = slice.get('ticketPanels') || [];
+    const panelMap = new Map(ticketPanels.map(p => [String(p.id), p]));
+    for (const c of slice.get('ticketPanelComponents') || []) {
         const panel = panelMap.get(String(c.panelId));
         if (panel) {
             if (!panel.components) panel.components = [];
             panel.components.push(c);
         }
     }
-    return { server, welcome, logging, reactionRoles, automod, antiNuke, ticketPanels, birthdaySettings, birthdays, youtubeSubscriptions, youtubeAnnouncements, youtubeStats };
+
+    return {
+        server,
+        welcome: slice.get('welcome') || defaultWelcomeSettings(),
+        logging: slice.get('logging') || defaultLoggingSettings(),
+        reactionRoles: slice.get('reactionRoles') || [],
+        automod: slice.get('automod') || defaultAutomodSettings(),
+        antiNuke: slice.has('antiNuke') ? slice.get('antiNuke') : null,
+        ticketPanels,
+        birthdaySettings: slice.get('birthdaySettings') || defaultBirthdaySettings(),
+        birthdays: slice.get('birthdays') || [],
+        youtubeSubscriptions: slice.get('youtubeSubscriptions') || [],
+        youtubeAnnouncements: slice.get('youtubeAnnouncements') || [],
+        youtubeStats: slice.get('youtubeStats') || defaultYoutubeStats(),
+    };
 }
 
 // ── Event Management (server/eventMgmtRepo.js — EVENTMGMT_DATABASE_URL) ──────

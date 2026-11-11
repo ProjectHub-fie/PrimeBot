@@ -46,11 +46,18 @@ const mockAuth = {
         }
         next();
     },
+    requireAuthReadonly: (req, res, next) => mockAuth.requireAuth(req, res, next),
+    requireAntiNukePermission: () => (req, res, next) => next(),
     requireGuildAdmin: (req, res, next) => {
         req.guild = { id: req.params.guildId, name:'Test Guild', approximate_member_count: 42, _channels:[{id:'111-ch1',name:'general',type:0}], _roles:[], _config:{ server:{}, welcome:{}, leveling:{} } };
         next();
     },
     requireGuildAdminPage: (req, res, next) => {
+        req.guild = { id: req.params.guildId, name:'Test Guild', approximate_member_count: 42, _channels:[{id:'111-ch1',name:'general',type:0}], _roles:[], _config:{ server:{}, welcome:{}, leveling:{}, antiNuke:{} }, _beta: true, _bypassUpcoming: true };
+        next();
+    },
+    // Per-page guard factory used by the guild tab routes.
+    guildPage: () => (req, res, next) => {
         req.guild = { id: req.params.guildId, name:'Test Guild', approximate_member_count: 42, _channels:[{id:'111-ch1',name:'general',type:0}], _roles:[], _config:{ server:{}, welcome:{}, leveling:{}, antiNuke:{} }, _beta: true, _bypassUpcoming: true };
         next();
     },

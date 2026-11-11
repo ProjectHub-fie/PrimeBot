@@ -25,7 +25,7 @@ const PgSession = require('connect-pg-simple')(session);
 
 const discord = require('./discord');
 const turnstile = require('./turnstile');
-const { requireAuth, requireAuthReadonly, requireGuildAdmin, requireGuildAdminPage, requireBeta, requireUpcoming, requireAntiNukePermission } = require('./auth');
+const { requireAuth, requireAuthReadonly, requireGuildAdmin, guildPage, requireBeta, requireUpcoming, requireAntiNukePermission } = require('./auth');
 const eventAuth = require('./eventAuth');
 const dashboardDb = require('./db');
 const constants = require('./constants');
@@ -3191,60 +3191,61 @@ app.get('/live/giveaways', requireAuth, (req, res) => {
     res.type('html').send(pages.liveGiveawaysPage({ user: req.user }));
 });
 
-// Guild settings: each tab is its own page. requireGuildAdminPage fetches
-// channels/roles/config so the page is pre-populated server-side. Selecting a
-// server lands on the prefix page; the rest of the features live behind the
-// slide-in sidebar menu.
+// Guild settings: each tab is its own page. Each route's guildPage() guard
+// fetches only the channels/roles/config slices that page renders, so a light
+// tab (e.g. General) does not pay for every other feature's settings read.
+// Selecting a server lands on the prefix page; the rest of the features live
+// behind the slide-in sidebar menu.
 app.get('/guild/:guildId', (req, res) => res.redirect(`/guild/${req.params.guildId}/prefix`));
 
-app.get('/guild/:guildId/welcome', requireAuth, requireGuildAdminPage, (req, res) =>
+app.get('/guild/:guildId/welcome', requireAuth, guildPage({ config: ['welcome'] }), (req, res) =>
     res.type('html').send(guildPages.welcomePage({ guild: req.guild, user: req.user })));
-app.get('/guild/:guildId/leveling', requireAuth, requireGuildAdminPage, (req, res) =>
+app.get('/guild/:guildId/leveling', requireAuth, guildPage({ config: ['server'] }), (req, res) =>
     res.type('html').send(guildPages.levelingPage({ guild: req.guild, user: req.user })));
-app.get('/guild/:guildId/badges', requireAuth, requireGuildAdminPage, (req, res) =>
+app.get('/guild/:guildId/badges', requireAuth, guildPage({ config: [], selectors: false, betaGates: true }), (req, res) =>
     res.type('html').send(guildPages.badgesPage({ guild: req.guild, user: req.user })));
-app.get('/guild/:guildId/rolerewards', requireAuth, requireGuildAdminPage, (req, res) =>
+app.get('/guild/:guildId/rolerewards', requireAuth, guildPage({ config: ['server'], betaGates: true }), (req, res) =>
     res.type('html').send(guildPages.roleRewardsPage({ guild: req.guild, user: req.user })));
-app.get('/guild/:guildId/autoresponder', requireAuth, requireGuildAdminPage, (req, res) =>
+app.get('/guild/:guildId/autoresponder', requireAuth, guildPage({ config: ['server'], selectors: false }), (req, res) =>
     res.type('html').send(guildPages.autoResponderPage({ guild: req.guild, user: req.user })));
-app.get('/guild/:guildId/prefix', requireAuth, requireGuildAdminPage, (req, res) =>
+app.get('/guild/:guildId/prefix', requireAuth, guildPage({ config: ['server'], selectors: false }), (req, res) =>
     res.type('html').send(guildPages.prefixPage({ guild: req.guild, user: req.user })));
-app.get('/guild/:guildId/reactions', requireAuth, requireGuildAdminPage, (req, res) =>
+app.get('/guild/:guildId/reactions', requireAuth, guildPage({ config: ['server'], selectors: false }), (req, res) =>
     res.type('html').send(guildPages.reactionsPage({ guild: req.guild, user: req.user })));
-app.get('/guild/:guildId/reactionroles', requireAuth, requireGuildAdminPage, (req, res) =>
+app.get('/guild/:guildId/reactionroles', requireAuth, guildPage({ config: ['reactionRoles'] }), (req, res) =>
     res.type('html').send(guildPages.reactionRolesPage({ guild: req.guild, user: req.user })));
-app.get('/guild/:guildId/broadcast', requireAuth, requireGuildAdminPage, (req, res) =>
+app.get('/guild/:guildId/broadcast', requireAuth, guildPage({ config: ['server'] }), (req, res) =>
     res.type('html').send(guildPages.broadcastPage({ guild: req.guild, user: req.user })));
-app.get('/guild/:guildId/birthdays', requireAuth, requireGuildAdminPage, (req, res) =>
+app.get('/guild/:guildId/birthdays', requireAuth, guildPage({ config: ['birthdaySettings'] }), (req, res) =>
     res.type('html').send(guildPages.birthdaysPage({ guild: req.guild, user: req.user })));
 // YouTube Notifications (Creator Hub) — dashboard-only feature.
-app.get('/guild/:guildId/youtube', requireAuth, requireGuildAdminPage, (req, res) =>
+app.get('/guild/:guildId/youtube', requireAuth, guildPage({ config: ['youtubeSubscriptions', 'youtubeAnnouncements', 'youtubeStats'] }), (req, res) =>
     res.type('html').send(guildPages.youtubePage({ guild: req.guild, user: req.user })));
-app.get('/guild/:guildId/embed', requireAuth, requireGuildAdminPage, (req, res) =>
+app.get('/guild/:guildId/embed', requireAuth, guildPage({ config: [], selectors: false }), (req, res) =>
     res.type('html').send(guildPages.embedPage({ guild: req.guild, user: req.user })));
-app.get('/guild/:guildId/logging', requireAuth, requireGuildAdminPage, (req, res) =>
+app.get('/guild/:guildId/logging', requireAuth, guildPage({ config: ['logging'] }), (req, res) =>
     res.type('html').send(guildPages.loggingPage({ guild: req.guild, user: req.user })));
-app.get('/guild/:guildId/automod', requireAuth, requireGuildAdminPage, (req, res) =>
+app.get('/guild/:guildId/automod', requireAuth, guildPage({ config: ['automod'] }), (req, res) =>
     res.type('html').send(guildPages.automodPage({ guild: req.guild, user: req.user })));
 // Anti-Nuke stays behind the owner-controlled access hierarchy: the page
 // renders the setup wizard / protection console / access control only for the
 // actual guild owner and bot-defined assignments (Co-Owners / Trusted Admins).
 // Everyone else sees an explanatory "no access" panel.
-app.get('/guild/:guildId/antinuke', requireAuth, requireGuildAdminPage, (req, res) => {
+app.get('/guild/:guildId/antinuke', requireAuth, guildPage({ config: ['antiNuke'], antiNukeExtras: true }), (req, res) => {
     // `?view=` lets the client switch between the setup chooser, the manual
     // wizard and the protection console without a round trip. Only these three
     // values are honoured (never echoed into the page).
     const view = ['setup', 'wizard', 'console'].includes(req.query.view) ? req.query.view : undefined;
     res.type('html').send(guildPages.antiNukePage({ guild: req.guild, user: req.user, view }));
 });
-app.get('/guild/:guildId/tickets', requireAuth, requireGuildAdminPage, (req, res) =>
+app.get('/guild/:guildId/tickets', requireAuth, guildPage({ config: ['ticketPanels'] }), (req, res) =>
     res.type('html').send(guildPages.ticketsPage({ guild: req.guild, user: req.user })));
 // Full-page ticket panel editor — reached from "Create a panel" (after an
 // Untitled-N panel is auto-created) or a panel card's "Edit" button. Renders
 // a horizontal SPA-style tab bar (Panel, Buttons, Message, Permission,
 // Logging, Animation, Transcript, Input) with the editor form split across
 // the tab panels, so editing before creation isn't needed anymore.
-app.get('/guild/:guildId/tickets/:panelId/edit', requireAuth, requireGuildAdminPage, async (req, res) => {
+app.get('/guild/:guildId/tickets/:panelId/edit', requireAuth, guildPage({ config: ['ticketPanels'] }), async (req, res) => {
     try {
         const panelId = parseInt(req.params.panelId, 10);
         if (!Number.isFinite(panelId)) {
@@ -3274,7 +3275,7 @@ app.get('/guild/:guildId/tickets/:panelId/edit', requireAuth, requireGuildAdminP
 // pre-loads the first page of events + the guild-wide event policy so the page
 // renders server-side (no API round-trip on load); the wizard and manage pages
 // load their event data server-side too.
-app.get('/guild/:guildId/events', requireAuth, requireGuildAdminPage, async (req, res) => {
+app.get('/guild/:guildId/events', requireAuth, guildPage({ config: [], betaGates: true }), async (req, res) => {
     try {
         const [list, policy] = await Promise.all([
             dashboardDb.getEventList(req.guild.id, { limit: 100, sort: 'start' }).catch(() => ({ events: [], total: 0 })),
@@ -3293,11 +3294,11 @@ app.get('/guild/:guildId/events', requireAuth, requireGuildAdminPage, async (req
         res.status(500).type('html').send(L.render({ title: 'PrimeBot · Error', body, user: req.session && req.session.user }));
     }
 });
-app.get('/guild/:guildId/events/new', requireAuth, requireGuildAdminPage, (req, res) => {
+app.get('/guild/:guildId/events/new', requireAuth, guildPage({ config: [], betaGates: true }), (req, res) => {
     const template = typeof req.query.template === 'string' ? req.query.template : 'custom';
     res.type('html').send(guildPages.eventWizardPage({ guild: req.guild, user: req.user, template }));
 });
-app.get('/guild/:guildId/events/:id', requireAuth, requireGuildAdminPage, async (req, res) => {
+app.get('/guild/:guildId/events/:id', requireAuth, guildPage({ config: [], betaGates: true }), async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);
         const event = Number.isFinite(id) ? await dashboardDb.getEventById(id) : null;
@@ -3331,9 +3332,9 @@ app.get('/guild/:guildId/events/:id', requireAuth, requireGuildAdminPage, async 
         res.status(500).type('html').send(L.render({ title: 'PrimeBot · Error', body, user: req.session && req.session.user }));
     }
 });
-app.get('/guild/:guildId/live/polls', requireAuth, requireGuildAdminPage, (req, res) =>
+app.get('/guild/:guildId/live/polls', requireAuth, guildPage({ config: [], selectors: false }), (req, res) =>
     res.type('html').send(guildPages.livePollsPage({ guild: req.guild, user: req.user })));
-app.get('/guild/:guildId/live/giveaways', requireAuth, requireGuildAdminPage, (req, res) =>
+app.get('/guild/:guildId/live/giveaways', requireAuth, guildPage({ config: [], selectors: false }), (req, res) =>
     res.type('html').send(guildPages.liveGiveawaysPage({ guild: req.guild, user: req.user })));
 
 // ── Health check ────────────────────────────────────────────────────────────
