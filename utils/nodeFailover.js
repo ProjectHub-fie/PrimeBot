@@ -650,6 +650,7 @@ module.exports = {
     writeHeartbeat,
     writeHeartbeatWithLease,
     setStatsProvider,
+    setPulseProvider,
     getStatus,
     getPrimaryAgeMs,
     getOtherActiveNode,
