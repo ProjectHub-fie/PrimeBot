@@ -608,3 +608,30 @@ test('shard infrastructure aggregation (pure)', () => {
     assert.ok(Math.abs(combined - 94.167) < 0.01);
     assert.ok(combined !== 94, 'not an average of rounded per-node percentages');
 });
+// ── 21. index.js boot wiring must only call exports that exist ───────────────
+// Regression for the production crash "nodeFailover.setPulseProvider is not a
+// function": a helper defined but not added to module.exports only surfaces at
+// runtime, after a deploy, taking the whole bot down. Statically verify every
+// `module.fn(` call in index.js resolves to a real export.
+test('index.js only calls exported monitor/failover helpers', () => {
+    const fs = require('node:fs');
+    const src = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
+
+    const modules = {
+        monitorPulse: require('../utils/monitorPulse'),
+        statusWorker: require('../utils/statusWorker'),
+        nodeFailover: require('../utils/nodeFailover'),
+    };
+
+    const missing = [];
+    const re = /\b(monitorPulse|statusWorker|nodeFailover)\.([A-Za-z_$][\w$]*)\s*\(/g;
+    let m;
+    while ((m = re.exec(src)) !== null) {
+        const [, mod, fn] = m;
+        if (typeof modules[mod][fn] !== 'function') missing.push(`${mod}.${fn}`);
+    }
+
+    assert.deepEqual(missing, [], `index.js calls unexported helpers: ${missing.join(', ')}`);
+    // Guard the exact helper that crashed production.
+    assert.equal(typeof modules.nodeFailover.setPulseProvider, 'function');
+});
