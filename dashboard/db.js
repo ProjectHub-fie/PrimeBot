@@ -4176,6 +4176,75 @@ async function getLatencySeries({ days = 30, granularityMs = 60 * 60 * 1000 } = 
     return { series, summary, days, granularityMs: step };
 }
 
+/**
+ * Per-route latency breakdown over a window, worst-avg-first, for the Stat's
+ * "Slowest routes" table. Route strings are the coarse normalised form the
+ * recorder writes (e.g. "GET /guild/:guildId"), so the set stays small.
+ */
+async function getLatencyRoutes({ days = 30, limit = 12 } = {}) {
+    let rows = [];
+    try {
+        await ensureLatencySamplesTable();
+        const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+        const p = getSeasonPool();
+        const res = await p.query(
+            `SELECT route,
+                    COUNT(*)      AS n,
+                    ROUND(AVG(ms))::int                              AS avg_ms,
+                    PERCENTILE_CONT(0.5)  WITHIN GROUP (ORDER BY ms) AS p50_ms,
+                    PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY ms) AS p95_ms,
+                    MAX(ms)                                          AS max_ms
+             FROM latency_samples
+             WHERE ts >= $1 AND route <> ''
+             GROUP BY route
+             ORDER BY avg_ms DESC
+             LIMIT $2`,
+            [since, limit]
+        ).catch(err => {
+            console.error('[DASHBOARD DB] getLatencyRoutes failed:', err.message);
+            return { rows: [] };
+        });
+        rows = res.rows || [];
+    } catch (err) {
+        console.error('[DASHBOARD DB] getLatencyRoutes failed:', err.message);
+        rows = [];
+    }
+
+    // Fold any not-yet-flushed in-memory samples into the last-10-min slice so a
+    // freshly slow route shows up before the next DB flush.
+    const mapped = rows.map(r => ({
+        route: r.route,
+        count: Number(r.n || r.count || 0),
+        avg: r.avg_ms != null ? Number(r.avg_ms) : (r.avg != null ? Number(r.avg) : null),
+        p50: r.p50_ms != null ? Math.round(Number(r.p50_ms)) : (r.p50 != null ? Number(r.p50) : null),
+        p95: r.p95_ms != null ? Math.round(Number(r.p95_ms)) : (r.p95 != null ? Number(r.p95) : null),
+        max: r.max_ms != null ? Number(r.max_ms) : (r.max != null ? Number(r.max) : null),
+    }));
+
+    const recent = require('./latency').getLatencyRecorder().recent();
+    const cutoff = Date.now() - 10 * 60 * 1000;
+    const tail = recent.filter(s => s.route && s.t >= cutoff);
+    if (tail.length) {
+        const byRoute = new Map();
+        for (const r of mapped) byRoute.set(r.route, r);
+        for (const s of tail) {
+            const agg = byRoute.get(s.route);
+            if (agg) {
+                agg.avg = agg.count ? Math.round((agg.avg * agg.count + s.ms) / (agg.count + 1)) : s.ms;
+                agg.count += 1;
+                agg.max = Math.max(agg.max || 0, s.ms);
+            } else {
+                const fresh = { route: s.route, count: 1, avg: s.ms, p50: s.ms, p95: s.ms, max: s.ms };
+                byRoute.set(s.route, fresh);
+                mapped.push(fresh);
+            }
+        }
+        mapped.sort((a, b) => (b.avg || 0) - (a.avg || 0));
+        return mapped.slice(0, limit);
+    }
+    return mapped;
+}
+
 function percentile(sorted, p) {
     if (!sorted.length) return null;
     const a = [...sorted].sort((x, y) => x - y);
@@ -4400,6 +4469,7 @@ module.exports = {
     getNodeStats,
     ensureLatencySamplesTable,
     getLatencySeries,
+    getLatencyRoutes,
     percentileLatency: percentile,
     summarizeLatency,
     getSavedEmbeds,

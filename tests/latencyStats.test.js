@@ -113,6 +113,83 @@ test('summarizeLatency handles empty and populated series', () => {
     assert.equal(s.bucketsWithData, 2);
 });
 
+// ── getLatencyRoutes DB aggregation (stubbed season pool) ───────────────────
+
+test('getLatencyRoutes aggregates per-route rows worst-first and folds in-flight samples', async () => {
+    const DASH = path.join(__dirname, '..', 'dashboard');
+    const queries = [];
+    const fakeSeasonPool = {
+        async query(sql, params) {
+            queries.push({ sql, params });
+            if (sql.includes('CREATE TABLE')) return { rows: [] };
+            if (sql.includes('GROUP BY route')) {
+                return {
+                    rows: [
+                        { route: 'GET /guild/:guildId', n: '40', avg_ms: 820, p50_ms: 700, p95_ms: 1600, max_ms: 2400 },
+                        { route: 'GET /api/stats/latency', n: '12', avg_ms: 310, p50_ms: 250, p95_ms: 600, max_ms: 900 },
+                    ],
+                };
+            }
+            return { rows: [] };
+        },
+    };
+    // Seed the shared recorder with a fresh in-flight sample for a route that is
+    // NOT in the DB result, to prove the fold-in path adds it.
+    const { getLatencyRecorder } = require('../dashboard/latency');
+    getLatencyRecorder({ force: true, poolFn: async () => ({ query: async () => ({ rows: [] }) }) })
+        .record(5000, 'GET /api/guilds/:guildId/slow');
+
+    const origLoad = Module._load;
+    Module._load = function (request, parent, isMain) {
+        if (parent && parent.filename && parent.filename.startsWith(DASH + path.sep + 'db.js') && request === '../server/seasonDb') {
+            return { seasonPool: fakeSeasonPool };
+        }
+        return origLoad.apply(this, arguments);
+    };
+    let db;
+    try {
+        delete require.cache[require.resolve('../dashboard/db')];
+        db = require('../dashboard/db');
+        const routes = await db.getLatencyRoutes({ days: 7, limit: 10 });
+        assert.ok(Array.isArray(routes));
+        // The fresh in-flight route (5000ms) should sort to the top.
+        assert.equal(routes[0].route, 'GET /api/guilds/:guildId/slow');
+        assert.equal(routes[0].avg, 5000);
+        const guild = routes.find(r => r.route === 'GET /guild/:guildId');
+        assert.ok(guild, 'DB route should still be present');
+        assert.equal(guild.avg, 820);
+        assert.equal(guild.count, 40);
+        // The aggregate query asked for the 7-day window with the limit.
+        const agg = queries.find(q => q.sql.includes('GROUP BY route'));
+        assert.ok(agg);
+        assert.equal(agg.params[1], 10);
+    } finally {
+        Module._load = origLoad;
+        delete require.cache[require.resolve('../dashboard/db')];
+    }
+});
+
+test('getLatencyRoutes degrades to [] when the season pool is unreachable', async () => {
+    const DASH = path.join(__dirname, '..', 'dashboard');
+    const origLoad = Module._load;
+    Module._load = function (request, parent, isMain) {
+        if (parent && parent.filename && parent.filename.startsWith(DASH + path.sep + 'db.js') && request === '../server/seasonDb') {
+            return { seasonPool: { query: async () => { throw new Error('boom'); } } };
+        }
+        return origLoad.apply(this, arguments);
+    };
+    try {
+        delete require.cache[require.resolve('../dashboard/db')];
+        const db = require('../dashboard/db');
+        const routes = await db.getLatencyRoutes({ days: 30 });
+        assert.ok(Array.isArray(routes));
+    } finally {
+        Module._load = origLoad;
+        delete require.cache[require.resolve('../dashboard/db')];
+    }
+});
+
+
 // ── HTTP route guard + happy path (real dashboard/server.js boot) ───────────
 
 function mockDb() {
@@ -134,6 +211,10 @@ function mockDb() {
                 { ts: new Date(Date.now() - 1 * 3600000), count: 3, avg: 90, p50: 80, p95: 120, max: 160 },
             ],
         }),
+        getLatencyRoutes: async ({ days }) => ([
+            { route: 'GET /guild/:guildId', count: 40, avg: 820, p50: 700, p95: 1600, max: 2400 },
+            { route: 'GET /api/stats/latency', count: 12, avg: 310, p50: 250, p95: 600, max: 900 },
+        ]),
     };
 }
 
@@ -236,6 +317,10 @@ test('HTTP: /api/stats/latency is 401 unauthenticated and 200 with a session (7d
         assert.equal(body.days, 30);
         assert.ok(Array.isArray(body.series));
         assert.equal(body.summary.sampleCount, 10);
+        // The route breakdown ships in the same response (one round-trip).
+        assert.ok(Array.isArray(body.routes));
+        assert.equal(body.routes[0].route, 'GET /guild/:guildId');
+        assert.equal(body.routes[0].avg, 820);
     } finally {
         await closeServer(server);
     }
@@ -266,6 +351,7 @@ function makeEl(id, attrs = {}) {
 test('client renders a latency SVG graph with bands and summary from API data', async () => {
     const els = {
         'stats-latency': makeEl('stats-latency'),
+        'stats-latency-routes': makeEl('stats-latency-routes'),
         'stats-bot': makeEl('stats-bot'),
         'stats-nodes': makeEl('stats-nodes'),
         'latency-windows': makeEl('latency-windows'),
@@ -273,6 +359,7 @@ test('client renders a latency SVG graph with bands and summary from API data', 
     for (const key of ['stats-bot', 'stats-nodes']) {
         els[key].innerHTML = '<div class="splash">Loading…</div>';
     }
+    els['stats-latency-routes'].innerHTML = '<h3 class="lat-routes-title">Slowest routes</h3><div class="splash">Loading…</div>';
     const calls = [];
     const sandbox = {
         window: {
@@ -288,8 +375,11 @@ test('client renders a latency SVG graph with bands and summary from API data', 
             getElementById: id => els[id] || null,
             querySelector: () => null,
             querySelectorAll: () => [],
+            hidden: false,
             addEventListener: (t, fn) => { sandbox._docListeners = sandbox._docListeners || {}; (sandbox._docListeners[t] = sandbox._docListeners[t] || []).push(fn); },
         },
+        setInterval: () => ({ unref: () => {} }),
+        clearInterval: () => {},
         api: async (url) => {
             calls.push(url);
             if (url.includes('/api/stats/latency')) {
@@ -301,6 +391,10 @@ test('client renders a latency SVG graph with bands and summary from API data', 
                         { ts: new Date(Date.now() - 3 * 3600000).toISOString(), count: 4, avg: 100, p50: 90, p95: 140, max: 220 },
                         { ts: new Date(Date.now() - 2 * 3600000).toISOString(), count: 3, avg: 200, p50: 180, p95: 400, max: 900 },
                         { ts: new Date(Date.now() - 1 * 3600000).toISOString(), count: 3, avg: 170, p50: 160, p95: 300, max: 500 },
+                    ],
+                    routes: [
+                        { route: 'GET /guild/:guildId', count: 40, avg: 820, p50: 700, p95: 1600, max: 2400 },
+                        { route: 'GET /api/stats/latency', count: 12, avg: 310, p50: 250, p95: 600, max: 900 },
                     ],
                 };
             }
@@ -324,4 +418,12 @@ test('client renders a latency SVG graph with bands and summary from API data', 
     assert.ok(wrap.innerHTML.includes('lat-band'), 'colored bands should render');
     assert.ok(wrap.innerHTML.includes('42'), 'summary sample count should render');
     assert.ok(els['latency-windows'].hidden === false, 'window switcher should be shown');
+
+    // Route breakdown table renders beneath the graph.
+    const routes = els['stats-latency-routes'].innerHTML;
+    assert.ok(routes.includes('lat-routes'), 'routes table should render');
+    assert.ok(routes.includes('/guild/:guildId'), 'slowest route should render');
+    assert.ok(routes.includes('820ms'), 'route avg should render');
+    assert.ok(routes.includes('lat-route-method'), 'method chip should render');
+    assert.ok(routes.includes('lat-route-bar'), 'proportional bar should render');
 });

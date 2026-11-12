@@ -271,6 +271,44 @@ function niceStep(rough) {
   return nice * pow;
 }
 
+/** Render the "Slowest routes" breakdown table beneath the latency graph. */
+function renderLatencyRoutes(routes) {
+  const wrap = document.getElementById('stats-latency-routes');
+  if (!wrap) return;
+  const title = '<h3 class="lat-routes-title">Slowest routes</h3>';
+  const list = routes || [];
+  if (!list.length) {
+    wrap.innerHTML = `${title}<p class="lat-routes-empty">No route breakdown yet in this window.</p>`;
+    return;
+  }
+  const maxAvg = Math.max(...list.map(r => r.avg || 0));
+  const rows = list.map(r => {
+    const pct = maxAvg > 0 ? Math.round(((r.avg || 0) / maxAvg) * 100) : 0;
+    const band = bandFor(r.avg);
+    // Route strings are "METHOD /path"; split so the method gets its own chip.
+    const sp = String(r.route || '').split(' ');
+    const method = r.method || sp[0] || '';
+    const path = sp.length > 1 ? sp.slice(1).join(' ') : String(r.route || '');
+    return `<tr>
+      <td class="lat-route-name"><span class="lat-route-method">${esc(method)}</span> <code>${esc(path)}</code></td>
+      <td class="lat-num">${esc(String(r.avg ?? '—'))}ms</td>
+      <td class="lat-num">${esc(String(r.p95 ?? '—'))}ms</td>
+      <td class="lat-num">${esc(String(r.max ?? '—'))}ms</td>
+      <td class="lat-num">${esc(String(r.count ?? 0))}</td>
+      <td class="lat-bar-cell"><div class="lat-route-bar ${band || ''}" style="width:${pct}%"></div></td>
+    </tr>`;
+  }).join('');
+
+  wrap.innerHTML = `
+    ${title}
+    <table class="lat-routes">
+      <thead><tr>
+        <th>Route</th><th>Avg</th><th>P95</th><th>Max</th><th>Count</th><th></th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
 async function loadStatsLatency() {
   const wrap = document.getElementById('stats-latency');
   const windows = document.getElementById('latency-windows');
@@ -280,6 +318,7 @@ async function loadStatsLatency() {
     const data = await api(`/api/stats/latency?days=${latencyDays}`);
     latencyData = data;
     renderLatencyGraph(data);
+    renderLatencyRoutes(data.routes);
   } catch (err) {
     wrap.innerHTML = `<div class="alert alert-error">${esc(err.message || 'Failed to load latency stats.')}</div>`;
   }
@@ -295,6 +334,21 @@ document.addEventListener('click', (e) => {
   loadStatsLatency();
 });
 
+// Auto-refresh so the graph stays live while the Stats page is open. Pauses
+// while the tab is hidden (Neon-friendly: no background polling).
+let latencyRefreshTimer = null;
+function scheduleLatencyRefresh() {
+  if (latencyRefreshTimer) clearInterval(latencyRefreshTimer);
+  latencyRefreshTimer = setInterval(() => {
+    if (document.hidden) return;
+    loadStatsLatency();
+  }, 60000);
+}
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) loadStatsLatency();
+});
+
 loadStatsBot();
 loadStatsNodes();
 loadStatsLatency();
+scheduleLatencyRefresh();

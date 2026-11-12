@@ -31,6 +31,7 @@ test('stats page: renders the website-latency card shell with 7/30/90 switcher',
     const html = pages.statsPage({});
     assert.match(html, /Website latency/);
     assert.match(html, /id="stats-latency"/);
+    assert.match(html, /id="stats-latency-routes"/);
     assert.match(html, /lat-window/);
     // Exactly three day-window buttons, 30 days active by default.
     assert.match(html, /data-days="7"/);
