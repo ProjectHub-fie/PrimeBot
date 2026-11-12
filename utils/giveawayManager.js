@@ -126,21 +126,34 @@ class GiveawayManager {
                     .where(eq(this.schema.giveawayParticipants.giveawayId, giveaway.messageId));
 
                 const endTime = new Date(giveaway.endsAt).getTime();
-                
-                // If giveaway has already ended, mark it as ended in database without processing
+                // If the giveaway already ended while we were offline, END it
+                // for real (declare winners + update the message) instead of
+                // silently marking the row. Silent-ending was the "winner never
+                // declared" bug: participants and the message were discarded and
+                // the giveaway vanished with no announcement.
                 if (endTime <= now) {
-                    console.log(`[GIVEAWAY] Silently marking expired giveaway ${giveaway.messageId} as ended (startup cleanup)`);
-                    
+                    console.log(`[GIVEAWAY] Giveaway ${giveaway.messageId} ended while the bot was offline — declaring winners now (startup recovery).`);
+
+                    const expiredGiveaway = {
+                        messageId: giveaway.messageId,
+                        channelId: giveaway.channelId,
+                        guildId: giveaway.guildId,
+                        prize: giveaway.prize,
+                        description: giveaway.description || '',
+                        winnerCount: giveaway.winnerCount,
+                        hostId: giveaway.hostId,
+                        endTime,
+                        participants: new Set(participants.map(p => p.userId)),
+                        active: true,
+                        ended: false
+                    };
+                    this.giveaways.set(giveaway.messageId, expiredGiveaway);
+
                     try {
-                        await this.db.update(this.schema.giveaways)
-                            .set({
-                                isActive: false,
-                                ended: true
-                            })
-                            .where(eq(this.schema.giveaways.messageId, giveaway.messageId));
+                        await this.endGiveaway(giveaway.messageId);
                         silentlyEndedCount++;
                     } catch (dbError) {
-                        console.error(`[GIVEAWAY] Error marking giveaway ${giveaway.messageId} as ended:`, dbError);
+                        console.error(`[GIVEAWAY] Error ending expired giveaway ${giveaway.messageId} at startup:`, dbError);
                     }
                     continue;
                 }
@@ -447,8 +460,13 @@ class GiveawayManager {
             const giveaway = this.giveaways.get(messageId);
             if (!giveaway || giveaway.ended) return false;
             
-            // Mark as ended
+            // Mark as ended. ALSO clear the active flag: updateGiveawayInDatabase
+            // persists `ended: !giveaway.active`, so leaving `active` true meant
+            // the DB row was re-written with ended=false and the giveaway was
+            // treated as still-running after a restart (the "winner never
+            // declared" bug — winners were re-picked or silently discarded).
             giveaway.ended = true;
+            giveaway.active = false;
             console.log(`[GIVEAWAY] Marked giveaway ${messageId} as ended. Updating in storage.`);
             
             // Get channel and message

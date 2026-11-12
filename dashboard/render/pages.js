@@ -193,7 +193,11 @@ function statsPage({ user } = {}) {
     const body = `
     <div class="page-head">
       <h1>Stats</h1>
-      <p>Live bot statistics and shardnode health across the PrimeBot cluster.</p>
+      <p>Infrastructure status, uptime history and live statistics across the PrimeBot cluster.</p>
+    </div>
+
+    <div id="stats-status" class="status-board">
+      <div class="splash"><div class="spinner"></div><p>Loading infrastructure status…</p></div>
     </div>
 
     <div id="stats-bot" class="stats-band">
@@ -225,7 +229,7 @@ function statsPage({ user } = {}) {
         <div class="splash"><div class="spinner"></div><p>Loading node stats…</p></div>
       </div>
     </div>`;
-    return render({ title: 'PrimeBot · Stats', body, active: 'stats', scripts: ['/js/stats.js'], user });
+    return render({ title: 'PrimeBot · Stats', body, active: 'stats', scripts: ['/js/stats.js', '/js/status.js'], user });
 }
 
 // ── Live (split into Polls and Giveaways) ────────────────────────────────────

@@ -362,6 +362,16 @@ async function getYoutubeSubscription(guildId, id) {
     return res.rows[0] ? mapYoutubeRow(res.rows[0]) : null;
 }
 
+/** Look up a subscription by its stable YouTube channel id (for de-dupe). */
+async function getYoutubeSubscriptionByChannel(guildId, youtubeChannelId) {
+    await ensureYoutubeTables();
+    const res = await getYoutubePool().query(
+        `SELECT * FROM youtube_subscriptions WHERE guild_id = $1 AND youtube_channel_id = $2`,
+        [String(guildId), String(youtubeChannelId)]
+    );
+    return res.rows[0] ? mapYoutubeRow(res.rows[0]) : null;
+}
+
 /**
  * Insert or update a subscription (keyed on guild + youtube channel id). The
  * dashboard resolves the channel first (utils/youtubeFeed.js) and passes the
@@ -478,34 +488,34 @@ async function getYoutubeAnnouncements(guildId, { limit = 50 } = {}) {
 async function getYoutubeStats(guildId) {
     await ensureYoutubeTables();
     const pool = getYoutubePool();
-    const [subsRes, sentRes, failedRes] = await Promise.all([
-        pool.query(
-            `SELECT
-                COUNT(*)::int AS total,
-                COUNT(*) FILTER (WHERE enabled = true AND paused = false)::int AS active,
-                COUNT(*) FILTER (WHERE paused = true)::int AS paused,
-                COUNT(*) FILTER (WHERE last_error IS NOT NULL)::int AS errored,
-                MAX(last_success_at) AS last_success_at
-             FROM youtube_subscriptions WHERE guild_id = $1`,
-            [String(guildId)]
-        ),
-        pool.query(
-            `SELECT COUNT(*)::int AS n FROM youtube_announcements WHERE guild_id = $1 AND status = 'sent'`,
-            [String(guildId)]
-        ),
-        pool.query(
-            `SELECT COUNT(*)::int AS n FROM youtube_announcements WHERE guild_id = $1 AND status = 'failed'`,
-            [String(guildId)]
-        ),
-    ]);
-    const s = subsRes.rows[0] || {};
+    // One query instead of three: the overview card needs subscription counts,
+    // announcement counts and the last-success timestamp; firing three separate
+    // COUNTs serialises three pool round-trips on the page-render path (and
+    // on a cold serverless container, three connection acquisitions). A single
+    // statement with correlated subqueries is identical on small datasets and
+    // avoids the extra latency entirely.
+    const res = await pool.query(
+        `SELECT
+            COUNT(*)::int AS total,
+            COUNT(*) FILTER (WHERE enabled = true AND paused = false)::int AS active,
+            COUNT(*) FILTER (WHERE paused = true)::int AS paused,
+            COUNT(*) FILTER (WHERE last_error IS NOT NULL)::int AS errored,
+            MAX(last_success_at) AS last_success_at,
+            (SELECT COUNT(*)::int FROM youtube_announcements a
+              WHERE a.guild_id = $1 AND a.status = 'sent') AS sent,
+            (SELECT COUNT(*)::int FROM youtube_announcements a
+              WHERE a.guild_id = $1 AND a.status = 'failed') AS failed
+         FROM youtube_subscriptions WHERE guild_id = $1`,
+        [String(guildId)]
+    );
+    const s = res.rows[0] || {};
     return {
         totalSubscriptions: s.total || 0,
         activeSubscriptions: s.active || 0,
         pausedSubscriptions: s.paused || 0,
         erroredSubscriptions: s.errored || 0,
-        announcementsSent: sentRes.rows[0] ? sentRes.rows[0].n : 0,
-        announcementsFailed: failedRes.rows[0] ? failedRes.rows[0].n : 0,
+        announcementsSent: s.sent || 0,
+        announcementsFailed: s.failed || 0,
         lastSuccessAt: s.last_success_at || null,
     };
 }
@@ -4515,6 +4525,7 @@ module.exports = {
     ensureYoutubeTables,
     getYoutubeSubscriptions,
     getYoutubeSubscription,
+    getYoutubeSubscriptionByChannel,
     upsertYoutubeSubscription,
     updateYoutubeSubscription,
     deleteYoutubeSubscription,

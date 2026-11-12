@@ -470,4 +470,4 @@ async function attachAntiNukeAccess(req) {
     return ctx;
 }
 
-module.exports = { requireAuth, requireAuthReadonly, requireGuildAdmin, requireGuildAdminPage, guildPage, requireBeta, requireUpcoming, requireAntiNukePermission, attachAntiNukeAccess, touchIdleDeadline, isIdleExpired, IDLE_TIMEOUT_MS };
+module.exports = { requireAuth, requireAuthReadonly, requireGuildAdmin, requireGuildAdminPage, guildPage, requireBeta, requireUpcoming, requireAntiNukePermission, attachAntiNukeAccess, touchIdleDeadline, isIdleExpired, IDLE_TIMEOUT_MS, canBypassFeatureGates };

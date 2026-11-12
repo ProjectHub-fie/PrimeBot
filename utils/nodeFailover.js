@@ -127,6 +127,28 @@ function setStatsProvider(fn) {
     statsProvider = typeof fn === 'function' ? fn : null;
 }
 
+// Optional provider of the status-monitoring pulse. Set via setPulseProvider()
+// from index.js; the pulse rides the same heartbeat cadence so every shard node
+// keeps its monitor_node_pulse fresh without a second timer or pool.
+let pulseProvider = null;
+function setPulseProvider(fn) {
+    pulseProvider = typeof fn === 'function' ? fn : null;
+}
+
+async function writePulse() {
+    if (!pulseProvider) return;
+    try {
+        const pulse = await pulseProvider();
+        if (pulse && pulse.nodeName) {
+            const { upsertNodePulse } = require('../server/monitorDb');
+            await upsertNodePulse(pulse);
+        }
+    } catch (err) {
+        // A monitoring failure must never break the failover heartbeat.
+        console.warn('[FAILOVER] pulse provider failed (heartbeat continues):', err.message);
+    }
+}
+
 async function ensureTable() {
     if (tableReady) return;
     await seasonDb.execute(sql`
@@ -193,6 +215,7 @@ async function writeHeartbeat(role, active) {
             member_count = EXCLUDED.member_count,
             heartbeat_interval_ms = EXCLUDED.heartbeat_interval_ms
     `);
+    await writePulse();
 }
 
 /**
