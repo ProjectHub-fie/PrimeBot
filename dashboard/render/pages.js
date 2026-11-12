@@ -201,6 +201,20 @@ function statsPage({ user } = {}) {
     </div>
 
     <div class="card">
+      <div class="card-title"><span><span class="icon">${svgIcon('activity')}</span> Website latency</span>
+        <span class="card-title-actions" id="latency-windows" hidden>
+          <button class="btn btn-sm lat-window" data-days="7" type="button">7 days</button>
+          <button class="btn btn-sm lat-window active" data-days="30" type="button">30 days</button>
+          <button class="btn btn-sm lat-window" data-days="90" type="button">90 days</button>
+        </span>
+      </div>
+      <p class="card-desc">How long the dashboard takes to respond to real page and API requests, bucketed hourly.</p>
+      <div id="stats-latency">
+        <div class="splash"><div class="spinner"></div><p>Loading latency graph…</p></div>
+      </div>
+    </div>
+
+    <div class="card">
       <div class="card-title"><span><span class="icon">${svgIcon('globe')}</span> Shardnode status</span></div>
       <p class="card-desc">Per-node heartbeats and the active failover lease across the sn1 / sn2 / sn3 shard nodes.</p>
       <div id="stats-nodes">

@@ -1356,12 +1356,24 @@ class AutomodManager {
     async _logToChannel(message, settings, meta, fields, cid = null, { severity = null } = {}) {
         if (!settings || !settings.logChannelId) return null;
         const sev = severityMeta(severity || (meta && meta.severity) || 'medium');
+        const hasCid = Number.isInteger(cid);
         const embed = new EmbedBuilder()
             .setColor(sev.color)
-            .setTitle(cid ? `${meta.icon} Automod · ${meta.label} (CID ${cid})` : `${meta.icon} Automod · ${meta.label}`)
+            .setTitle(hasCid ? `${meta.icon} Automod · ${meta.label} (CID ${cid})` : `${meta.icon} Automod · ${meta.label}`)
             .setTimestamp();
+        let hasCidField = false;
         for (const f of fields) {
-            if (f && f.name && f.value) embed.addFields({ name: f.name, value: String(f.value), inline: !!f.inline });
+            if (f && f.name && f.value) {
+                if (f.name === 'CID') hasCidField = true;
+                embed.addFields({ name: f.name, value: String(f.value), inline: !!f.inline });
+            }
+        }
+        // Always surface a CID key so moderators can target this report with
+        // "$rmr <CID> [reason]" — a missing CID key previously made some report
+        // embeds (e.g. dry-run) look unreferenceable. When the caller already
+        // included a CID field, it is kept as-is instead of double-adding.
+        if (!hasCidField) {
+            embed.addFields({ name: 'CID', value: hasCid ? String(cid) : '—', inline: true });
         }
         embed.setFooter({ text: `PrimeBot Automod · Severity ${sev.label}` });
         try {

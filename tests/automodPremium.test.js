@@ -256,6 +256,35 @@ test('action catalog keys are all real and unique', () => {
     for (const a of ACTIONS) assert.ok(a.label && a.iconName, `action ${a.key} missing label/iconName`);
 });
 
+
+test('automod report embed always surfaces a CID key for $rmr targeting', async () => {
+    const mod = require('../utils/automodManager');
+    const mgr = Object.create(mod.AutomodManager.prototype);
+    // Capture what the bot would send to the log channel.
+    let sent = null;
+    mgr.client = { channels: { fetch: async () => ({ send: async (payload) => { sent = payload; return { id: 'm1' }; } }) } };
+    const settingsFalse = { logChannelId: '999', logChannel: 'x' };
+    // Real CID → shown as the CID field and in the title.
+    sent = null;
+    await mgr._logToChannel(null, settingsFalse,
+        { icon: '🛡️', label: 'Blocked words' }, [{ name: 'Rule', value: 'x', inline: true }],
+        12, { severity: 'high' });
+    const j = sent.embeds[0].toJSON();
+    assert.ok(j.title.includes('CID 12'), 'title should carry the real CID');
+    assert.ok(j.fields.some(f => f.name === 'CID' && f.value === '12'),
+        'CID field must show the real value');
+    // Null CID (e.g. dry-run reports) → still render the CID key so moderators
+    // can see the report is referenceable (shows '—', never disappears).
+    sent = null;
+    await mgr._logToChannel(sent, { logChannelId: '999' },
+        { icon: '🛡️', label: 'Dry run' }, [], null, { severity: 'low' });
+    const j2 = sent.embeds[0].toJSON();
+    assert.ok(j2.fields.some(f => f.name === 'CID' && f.value === '—'),
+        'CID key must always be present in report embeds');
+    // No log channel configured → nothing sent, no throw.
+    await mgr._logToChannel(sent, { logChannelId: null }, { icon: '🛡️', label: 'x' }, [], 5, {});
+});
+
 // ── AutomodManager import hygiene ───────────────────────────────────────────
 
 test('automodManager imports AdaptivePoller (init previously threw "AdaptivePoller is not defined")', () => {

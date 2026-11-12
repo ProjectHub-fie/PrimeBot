@@ -1070,3 +1070,29 @@ the function budget and the connection was killed (`ERR_CONNECTION_ABORTED` /
   slice, no channel/role/permission lookups, no beta lookups; automod: its slice +
   selectors; antinuke: its slice + extras; embed: nothing; badges: beta flags) and
   that `getGuildConfig({ only: [] })` issues no query at all.
+
+## Website latency graph (Stats page) + YouTube page reachability
+
+- **Latency sampling:** `dashboard/latency.js` (`LatencyRecorder`) times every
+  real dashboard request (page loads + API, after the session middleware; static
+  assets, `/version.json`, `/api/session/heartbeat`, `/login` and `/` are
+  skipped) and batches samples into the season pool's `latency_samples` table
+  (`SEASON_DATABASE_URL` → `FALLBACK_DATABASE_URL` → `DATABASE_URL`; table/DDL +
+  aggregates in `dashboard/db.js` `ensureLatencySamplesTable` +
+  `getLatencySeries`). **Neon rule:** a quiet dashboard performs zero writes —
+  samples buffer in memory and flush in ONE batched INSERT, coalesced to at most
+  once per `MIN_FLUSH_GAP_MS` (15s) of traffic or every 60s via an unref'd timer;
+  a local `SIGINT`/`SIGTERM` flushes the tail. A burst is capped by `MAX_BUFFER`
+  (5000) and chunked into 1000-row INSERTs.
+- **API:** `GET /api/stats/latency?days=7|30|90` (default 30, requireAuth).
+  Returns a contiguous hourly `series` (`ts/count/avg/p50/p95/max`) + `summary`
+  (sampleCount/avg/p95/max), degrading to an empty series if the DB is
+  unreachable (never blocks the Stats page).
+- **Client:** `dashboard/public/js/stats.js` renders a githubstatus-style SVG
+  graph (colored bars by band: green <500ms, yellow <1.5s, red ≥1.5s, accent
+  line for the hourly avg) with a 7/30/90-day switcher. **Missing hours are
+  empty buckets** (no data) so the axis stays stable.
+- **Gotchas for future edits:** if you add a timed dashboard response, route it
+  through `coarsenRoute`-style normalization (in `dashboard/server.js`) so the
+  route string stays a small stable set; never write one row per request to
+  Postgres — always go through the recorder's batch path.

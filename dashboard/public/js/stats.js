@@ -151,5 +151,150 @@ async function loadStatsNodes() {
   }
 }
 
+// ── Website latency graph (githubstatus-style) ──────────────────────────────
+//
+// The API returns an hourly series { ts, count, avg, p50, p95, max }. We draw a
+// stroked line for the hourly average over soft threshold bands (green/yellow/
+// red) so slow periods read at a glance. No chart library — a pure SVG polyline.
+
+const LATENCY_BANDS = [
+  { max: 500, cls: 'lat-band-ok', label: 'Good (<500ms)' },
+  { max: 1500, cls: 'lat-band-warn', label: 'Slow (<1.5s)' },
+  { max: Infinity, cls: 'lat-band-bad', label: 'Degraded (≥1.5s)' },
+];
+
+let latencyData = null;
+let latencyDays = 30;
+
+function bandFor(ms) {
+  if (ms == null) return null;
+  for (const b of LATENCY_BANDS) if (ms < b.max) return b.cls;
+  return 'lat-band-bad';
+}
+
+function fmtAxisValue(v) {
+  if (!v) return '';
+  const d = new Date(v);
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function renderLatencyGraph(data) {
+  const wrap = document.getElementById('stats-latency');
+  if (!wrap) return;
+  const series = data.series || [];
+  const summary = data.summary || {};
+  const withData = series.filter(b => b.count > 0);
+  const hasData = withData.length > 0;
+  const win = data.days || latencyDays;
+  const step = data.granularityMs || 3600000;
+
+  if (!hasData) {
+    wrap.innerHTML = `
+      <div class="lat-empty">
+        ${window.svgIcon ? window.svgIcon('activity') : ''}
+        <p>No latency samples recorded yet in this window. Samples are captured automatically as the dashboard serves pages and API requests.</p>
+      </div>`;
+    return;
+  }
+
+  const W = 760, H = 200, PAD = { top: 12, right: 8, bottom: 26, left: 40 };
+  const innerW = W - PAD.left - PAD.right;
+  const innerH = H - PAD.top - PAD.bottom;
+
+  // Y scale: from 0 to a comfortable ceiling (a bit above the max, aligned to a
+  // "nice" step). Guarantees a minimum span so a flat low-latency line still
+  // has visible breathing room.
+  const maxMs = Math.max(...withData.map(b => b.max || 0));
+  const rawMax = Math.max(500, Math.ceil(maxMs * 1.15 / 100) * 100);
+  const yStep = niceStep(rawMax / 4);
+  const yMax = Math.ceil(rawMax / yStep) * yStep;
+  const y = v => PAD.top + innerH - (Math.min(v, yMax) / yMax) * innerH;
+
+  // X scale: map timestamp -> pixel over the full window span.
+  const t0 = new Date(series[0].ts).getTime();
+  const t1 = new Date(series[series.length - 1].ts).getTime() + step;
+  const span = Math.max(t1 - t0, step);
+  const x = ts => PAD.left + ((new Date(ts).getTime() - t0) / span) * innerW;
+
+  const grid = [];
+  for (let v = 0; v <= yMax; v += yStep) {
+    grid.push(`<line x1="${PAD.left}" x2="${W - PAD.right}" y1="${y(v)}" y2="${y(v)}" class="lat-grid"/>`);
+  }
+
+  const bars = series.map(b => {
+    const cx = x(b.ts) + ((x(b.ts + step) - x(b.ts)) / 2);
+    const ms = b.avg;
+    if (ms == null) return '';
+    const cls = bandFor(ms);
+    return `<rect class="lat-bar ${cls}" x="${(cx - 2).toFixed(1)}" y="${y(ms).toFixed(1)}" width="4" height="${(H - PAD.bottom - y(ms)).toFixed(1)}"/>`;
+  }).join('');
+
+  const line = withData.map(b => `${x(b.ts).toFixed(1)},${y(b.avg).toFixed(1)}`).join(' ');
+
+  const xLabels = [];
+  const labelEvery = Math.ceil(series.length / 6);
+  series.forEach((b, i) => {
+    if (i % labelEvery === 0) {
+      xLabels.push(`<text x="${x(b.ts).toFixed(1)}" y="${H - 8}" class="lat-axis">${fmtAxisValue(b.ts)}</text>`);
+    }
+  });
+
+  const lastPoint = withData[withData.length - 1];
+  const nowLabel = lastPoint ? `${Math.round(lastPoint.avg)}ms avg` : '';
+
+  const bands = LATENCY_BANDS.map(b => `<span class="lat-legend ${b.cls}">${b.label}</span>`).join('');
+
+  wrap.innerHTML = `
+    <div class="lat-head">
+      <span class="lat-now">${nowLabel}</span>
+      <span class="lat-summary">
+        ${summary.avg != null ? `<b>${esc(String(summary.avg))}ms</b> avg · ` : ''}
+        ${summary.p95 != null ? `<b>${esc(String(summary.p95))}ms</b> p95 · ` : ''}
+        ${summary.max != null ? `<b>${esc(String(summary.max))}ms</b> max · ` : ''}
+        <b>${Number(summary.sampleCount).toLocaleString()}</b> samples over <b>${win}</b> days
+      </span>
+      <span class="lat-legend-wrap">${bands}</span>
+    </div>
+    <svg class="lat-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Dashboard latency over the last ${win} days" preserveAspectRatio="none">
+      ${grid}
+      <line x1="${PAD.left}" x2="${W - PAD.right}" y1="${H - PAD.bottom}" y2="${H - PAD.bottom}" class="lat-axis-line"/>
+      ${bars}
+      ${line ? `<polyline points="${line}" class="lat-line" fill="none"/>` : ''}
+      ${xLabels}
+    </svg>`;
+}
+
+function niceStep(rough) {
+  const pow = Math.pow(10, Math.floor(Math.log10(rough)));
+  const n = rough / pow;
+  const nice = n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10;
+  return nice * pow;
+}
+
+async function loadStatsLatency() {
+  const wrap = document.getElementById('stats-latency');
+  const windows = document.getElementById('latency-windows');
+  if (!wrap) return;
+  if (windows) windows.hidden = false;
+  try {
+    const data = await api(`/api/stats/latency?days=${latencyDays}`);
+    latencyData = data;
+    renderLatencyGraph(data);
+  } catch (err) {
+    wrap.innerHTML = `<div class="alert alert-error">${esc(err.message || 'Failed to load latency stats.')}</div>`;
+  }
+}
+
+// Window switcher: re-fetch with the selected range without reloading the page.
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('.lat-window');
+  if (!btn) return;
+  const days = Number(btn.dataset.days);
+  latencyDays = days;
+  document.querySelectorAll('.lat-window').forEach(b => b.classList.toggle('active', Number(b.dataset.days) === days));
+  loadStatsLatency();
+});
+
 loadStatsBot();
 loadStatsNodes();
+loadStatsLatency();

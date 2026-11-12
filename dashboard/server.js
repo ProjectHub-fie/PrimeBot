@@ -286,6 +286,44 @@ if (process.env.DASHBOARD_LOG_REQUESTS === 'true') {
     });
 }
 
+// Website-latency recording. Times real request handling (page loads + API)
+// and feeds the samples to the in-memory recorder (dashboard/latency.js), which
+// batches them into the season pool so the Stats page can render a
+// githubstatus-style latency graph. Placed after the session middleware so the
+// static assets (which short-circuit earlier) are never timed; skips the
+// keepalive/version endpoints that would skew the distribution. Deliberately
+// cheap: record() is a push into a bounded array, and the DB write is batched.
+const { getLatencyRecorder } = require('./latency');
+const latencyRecorder = getLatencyRecorder();
+app.use((req, res, next) => {
+    const pathname = req.path || req.url;
+    const skip =
+        req.method === 'GET' && (
+            pathname === '/version.json' ||
+            pathname === '/api/session/heartbeat' ||
+            pathname.startsWith('/login') ||
+            pathname === '/'
+        );
+    if (skip) {
+        return next();
+    }
+    const startedAt = process.hrtime.bigint();
+    res.on('finish', () => {
+        const ms = Number(process.hrtime.bigint() - startedAt) / 1e6;
+        latencyRecorder.record(ms, coarsenRoute(req.method, pathname));
+    });
+    next();
+});
+
+/** Collapse dynamic ids so the route field stays a small, stable set. */
+function coarsenRoute(method, pathname) {
+    const p = pathname
+        .replace(/^\/guild\/[^/]+/, '/guild/:guildId')
+        .replace(/^\/api\/guilds\/[^/]+/, '/api/guilds/:guildId')
+        .replace(/\/[0-9]{8,}/g, '/:id');
+    return `${method} ${p}`;
+}
+
 // ── Auth routes ─────────────────────────────────────────────────────────────
 
 app.get('/login', (req, res) => {
@@ -509,6 +547,20 @@ app.get('/api/stats/db', requireAuth, (req, res) => {
     } catch (err) {
         console.error('[API] /api/stats/db error:', err.message);
         res.status(500).json({ error: 'Failed to load DB usage.' });
+    }
+});
+
+// Website-latency series for the Stats page's githubstatus-style graph.
+// Supports ?days=7|30|90 (default 30). Requires auth (the graph shows internal
+// responsiveness data).
+app.get('/api/stats/latency', requireAuth, async (req, res) => {
+    try {
+        const days = [7, 30, 90].includes(Number(req.query.days)) ? Number(req.query.days) : 30;
+        const data = await dashboardDb.getLatencySeries({ days });
+        res.json(data);
+    } catch (err) {
+        console.error('[API] /api/stats/latency error:', err.message);
+        res.status(500).json({ error: 'Failed to load latency stats.' });
     }
 });
 
@@ -3219,7 +3271,7 @@ app.get('/guild/:guildId/broadcast', requireAuth, guildPage({ config: ['server']
 app.get('/guild/:guildId/birthdays', requireAuth, guildPage({ config: ['birthdaySettings'] }), (req, res) =>
     res.type('html').send(guildPages.birthdaysPage({ guild: req.guild, user: req.user })));
 // YouTube Notifications (Creator Hub) — dashboard-only feature.
-app.get('/guild/:guildId/youtube', requireAuth, guildPage({ config: ['youtubeSubscriptions', 'youtubeAnnouncements', 'youtubeStats'] }), (req, res) =>
+app.get('/guild/:guildId/youtube', requireAuth, guildPage({ config: ['youtubeSubscriptions', 'youtubeAnnouncements', 'youtubeStats'], roles: 'all' }), (req, res) =>
     res.type('html').send(guildPages.youtubePage({ guild: req.guild, user: req.user })));
 app.get('/guild/:guildId/embed', requireAuth, guildPage({ config: [], selectors: false }), (req, res) =>
     res.type('html').send(guildPages.embedPage({ guild: req.guild, user: req.user })));
@@ -3435,6 +3487,14 @@ if (require.main === module) {
         console.log(` PrimeBot Dashboard running at ${BASE_URL}`);
         preflightCheck();
     });
+    // Persist buffered latency samples when the local dev server stops so none
+    // of the just-measured traffic is lost. (Vercel serverless instances are
+    // recycled between requests; the recorder's coalesced flush-on-traffic +
+    // its timer cover that case.)
+    const flushLatencyOnExit = () => { latencyRecorder.flush().catch(() => {}); };
+    process.on('beforeExit', flushLatencyOnExit);
+    process.on('SIGINT', () => { flushLatencyOnExit(); process.exit(0); });
+    process.on('SIGTERM', () => { flushLatencyOnExit(); process.exit(0); });
 }
 
 // Exposed for Vercel's serverless runtime (@vercel/node) and for tests.

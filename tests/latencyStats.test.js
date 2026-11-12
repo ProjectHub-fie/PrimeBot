@@ -1,0 +1,327 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const path = require('node:path');
+const http = require('node:http');
+const Module = require('node:module');
+const fs = require('node:fs');
+const vm = require('node:vm');
+
+const { LatencyRecorder } = require('../dashboard/latency');
+const { summarizeLatency, percentileLatency } = require('../dashboard/db');
+
+const DASH = path.join(__dirname, '..', 'dashboard');
+
+// A fake pg pool that records queries so we can assert on what gets written.
+function fakePool({ failQuery = false } = {}) {
+    const queries = [];
+    return {
+        queries,
+        async query(sql, params) {
+            if (failQuery) throw new Error('mock pool down');
+            queries.push({ sql, params });
+            // The aggregation query returns a single empty row-set placeholder.
+            if (sql.includes('date_trunc')) return { rows: [] };
+            return { rows: [] };
+        },
+    };
+}
+
+// ── LatencyRecorder unit tests (no DB — a fake pool) ───────────────────────
+
+test('recorder buffers samples and never throws', () => {
+    const pool = fakePool();
+    const r = new LatencyRecorder({
+        poolFn: async () => pool,
+        flushIntervalMs: 100000,
+        minFlushGap: Infinity,   // disable traffic-driven coalescing for this test
+        maxBuffer: 10,
+        nowFn: () => 1000000,
+    });
+    r.record(120, 'GET /');          // below maxBuffer → buffered, no immediate flush
+    r.record(300, 'GET /guild/:guildId');
+    assert.equal(r.counts().buffered, 2);
+    assert.equal(r._buffer.length, 2);
+    assert.equal(r._buffer[0].ms, 120);
+    assert.equal(r._buffer[0].route, 'GET /');
+});
+
+test('recorder discards invalid durations and caps the bound window', () => {
+    const pool = fakePool();
+    const r = new LatencyRecorder({ poolFn: async () => pool, maxBuffer: 100, maxBound: 5, nowFn: () => 0 });
+    r.record('nope', 'x');
+    r.record(-5, 'x');
+    r.record(1.9, 'x');
+    assert.equal(r._buffer.length, 1);
+    assert.equal(r._buffer[0].ms, 2);
+    for (let i = 0; i < 20; i++) r.record(i, 'x');
+    assert.ok(r._bound.length <= 5, 'bound window must stay capped');
+});
+
+test('recorder flushes to the pool in one batched INSERT', async () => {
+    const pool = fakePool();
+    const r = new LatencyRecorder({
+        poolFn: async () => pool,
+        flushIntervalMs: 100000,
+        maxBuffer: 5,           // every 5th sample forces a flush
+        nowFn: () => 5,
+    });
+    for (let i = 0; i < 5; i++) r.record(100 + i, 'GET /docs');
+    // maxBuffer reached → record() triggers an async flush; await a tick.
+    await new Promise(res => setImmediate(res));
+    assert.equal(r._buffer.length, 0, 'buffer should be drained by the flush');
+    assert.ok(pool.queries.length >= 1, 'a flush should have hit the pool');
+    const insert = pool.queries.find(q => q.sql.startsWith('INSERT INTO latency_samples'));
+    assert.ok(insert, 'INSERT should be present');
+    // 5 samples × 3 placeholders each.
+    assert.equal(insert.params.length, 15);
+    assert.equal(insert.params[1], 100);
+});
+
+test('recorder retries the batch on a failed flush (re-buffers)', async () => {
+    const pool = fakePool({ failQuery: true });
+    const r = new LatencyRecorder({
+        poolFn: async () => pool,
+        flushIntervalMs: 100000,
+        maxBuffer: 100,
+        nowFn: () => 1,
+    });
+    r.record(50, 'GET /stats');
+    await r.flush();
+    assert.equal(r._buffer.length, 1, 'failed flush must put the sample back');
+});
+
+// ── Pure aggregation helpers ─────────────────────────────────────────────
+
+test('percentileLatency computes quantiles on unsorted input', () => {
+    assert.equal(percentileLatency([], 0.5), null);
+    assert.equal(percentileLatency([1, 2, 3, 4, 5], 0.5), 3);
+    assert.equal(percentileLatency([5, 3, 1, 4, 2], 0.5), 3);
+    assert.equal(percentileLatency([1, 2, 3, 4, 5], 0.95), 5);
+    assert.equal(percentileLatency([100], 0.9), 100);
+});
+
+test('summarizeLatency handles empty and populated series', () => {
+    assert.deepEqual(summarizeLatency([]), { sampleCount: 0, avg: null, p95: null, max: null, bucketsWithData: 0 });
+    const s = summarizeLatency([
+        { count: 10, avg: 100, p95: 150, max: 220 },
+        { count: 5, avg: 300, p95: 400, max: 950 },
+    ]);
+    assert.equal(s.sampleCount, 15);
+    assert.equal(s.avg, Math.round((100 + 300) / 2)); // avg of bucket averages
+    assert.equal(s.avg, 200);
+    assert.equal(s.max, 950);
+    assert.equal(s.bucketsWithData, 2);
+});
+
+// ── HTTP route guard + happy path (real dashboard/server.js boot) ───────────
+
+function mockDb() {
+    return {
+        getPlatformStats: async () => ({ servers: 0, botName: 'PrimeBot', botVersion: '1.0.0', features: {} }),
+        getNodeStats: async () => ({ nodes: [], lease: null, thresholdMs: 45000 }),
+        getLivePolls: async () => [], getLiveGiveaways: async () => [],
+        getEndedLivePolls: async () => [], getEndedLiveGiveaways: async () => [],
+        getGuildConfig: async () => ({ server: {}, welcome: {}, logging: {}, reactionRoles: [], automod: {}, ticketPanels: [] }),
+        getServerSettings: async () => ({}),
+        upsertServerSettings: async (gid, patch) => patch,
+        getLatencySeries: async ({ days }) => ({
+            days,
+            granularityMs: 3600000,
+            summary: { sampleCount: 10, avg: 120, p95: 190, max: 400, bucketsWithData: 3 },
+            series: [
+                { ts: new Date(Date.now() - 3 * 3600000), count: 4, avg: 100, p50: 90, p95: 140, max: 220 },
+                { ts: new Date(Date.now() - 2 * 3600000), count: 3, avg: 180, p50: 160, p95: 300, max: 400 },
+                { ts: new Date(Date.now() - 1 * 3600000), count: 3, avg: 90, p50: 80, p95: 120, max: 160 },
+            ],
+        }),
+    };
+}
+
+function mockDiscord() {
+    return {
+        getBotSelf: async () => ({ id: '999', username: 'PrimeBot' }),
+        getBotGuildCount: async () => 0,
+        getBotGuild: async () => ({ id: '1', name: 'Test', approximate_member_count: 1 }),
+        getGuildChannels: async () => [],
+        getGuildRoles: async () => [],
+        exchangeCode: async () => ({ access_token: 'fake-access', refresh_token: 'fake-refresh', expires_in: 3600 }),
+        getCurrentUser: async () => ({ id: '1', username: 'tester', discriminator: '0', global_name: 'Tester', avatar: null }),
+        getUserGuilds: async () => [],
+    };
+}
+
+let app;
+function bootApp() {
+    const savedDbUrl = process.env.DATABASE_URL;
+    delete process.env.DATABASE_URL;
+    process.env.SESSION_SECRET = process.env.SESSION_SECRET || 'test-secret';
+    process.env.DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID || '999';
+    process.env.DISCORD_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET || 'secret';
+    process.env.DASHBOARD_BOT_TOKEN = process.env.DASHBOARD_BOT_TOKEN || 'fake-token';
+
+    const origLoad = Module._load;
+    Module._load = function (request, parent, isMain) {
+        const fromServer = parent && parent.filename && parent.filename.startsWith(DASH + path.sep + 'server.js');
+        if (fromServer && request === './db') return mockDb();
+        if (fromServer && request === './discord') return mockDiscord();
+        if (fromServer && request === '../server/seasonDb') throw new Error('mock: no season pool');
+        return origLoad.apply(this, arguments);
+    };
+    try {
+        delete require.cache[require.resolve('../dashboard/server')];
+        app = require('../dashboard/server');
+    } finally {
+        Module._load = origLoad;
+        if (savedDbUrl !== undefined) process.env.DATABASE_URL = savedDbUrl;
+    }
+    return app;
+}
+
+function startServer(appInstance) {
+    return new Promise((resolve) => {
+        const server = appInstance.listen(0, () => resolve(server));
+    });
+}
+function closeServer(server) {
+    return new Promise((resolve) => server.close(resolve));
+}
+
+async function fetchOnce(server, urlPath, opts = {}) {
+    const { method = 'GET', headers = {}, body } = opts;
+    return new Promise((resolve, reject) => {
+        const req = http.request(
+            { port: server.address().port, path: urlPath, method, headers: { ...headers } },
+            (res) => {
+                let data = '';
+                res.on('data', (c) => (data += c));
+                res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: data }));
+            }
+        );
+        req.on('error', reject);
+        if (body) req.write(body);
+        req.end();
+    });
+}
+
+function makeSession(server) {
+    // Perform a login via the real OAuth callback with mocked discord to obtain
+    // a valid signed session cookie.
+    const clientId = process.env.DISCORD_CLIENT_ID || '999';
+    const fakeCode = 'code-latency';
+    return new Promise((resolve) => {
+        const req = http.get(
+            { port: server.address().port, path: `/auth/callback?code=${fakeCode}` },
+            (res) => {
+                resolve(res.headers['set-cookie'] || []);
+                res.resume();
+            }
+        );
+        req.on('error', () => resolve([]));
+    });
+}
+
+test('HTTP: /api/stats/latency is 401 unauthenticated and 200 with a session (7d default clamp)', async () => {
+    const a = bootApp();
+    const server = await startServer(a);
+    try {
+        const anon = await fetchOnce(server, '/api/stats/latency', { headers: { Accept: 'application/json' } });
+        assert.equal(anon.status, 401);
+
+        const cookies = await makeSession(server);
+        assert.ok(cookies.length, 'expected a session cookie from the OAuth callback');
+        const cookieHeader = cookies.map(c => c.split(';')[0]).join('; ');
+        const authed = await fetchOnce(server, '/api/stats/latency?days=30', { headers: { Accept: 'application/json', Cookie: cookieHeader } });
+        assert.equal(authed.status, 200);
+        const body = JSON.parse(authed.body);
+        assert.equal(body.days, 30);
+        assert.ok(Array.isArray(body.series));
+        assert.equal(body.summary.sampleCount, 10);
+    } finally {
+        await closeServer(server);
+    }
+});
+
+// ── Client graph render (vm-sandbox) ───────────────────────────────────────
+
+const STATS_JS = fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'public', 'js', 'stats.js'), 'utf8');
+
+function makeEl(id, attrs = {}) {
+    const el = {
+        id, innerHTML: '', textContent: '', hidden: false, style: {},
+        dataset: attrs.dataset || {}, classes: new Set(),
+        addEventListener: (t, fn) => { el._listeners = el._listeners || {}; (el._listeners[t] = el._listeners[t] || []).push(fn); },
+        classList: {
+            add: (...c) => c.forEach(x => el.classes.add(x)),
+            remove: (...c) => c.forEach(x => el.classes.delete(x)),
+            toggle: (c, on) => { if (on) el.classes.add(c); else el.classes.delete(c); },
+            contains: c => el.classes.has(c),
+        },
+        querySelector: () => null,
+        querySelectorAll: () => [],
+        closest: () => null,
+    };
+    return el;
+}
+
+test('client renders a latency SVG graph with bands and summary from API data', async () => {
+    const els = {
+        'stats-latency': makeEl('stats-latency'),
+        'stats-bot': makeEl('stats-bot'),
+        'stats-nodes': makeEl('stats-nodes'),
+        'latency-windows': makeEl('latency-windows'),
+    };
+    for (const key of ['stats-bot', 'stats-nodes']) {
+        els[key].innerHTML = '<div class="splash">Loading…</div>';
+    }
+    const calls = [];
+    const sandbox = {
+        window: {
+            document: {
+                getElementById: id => els[id] || null,
+                querySelector: () => null,
+                querySelectorAll: () => [],
+                addEventListener: () => {},
+            },
+            svgIcon: (n) => `<svg class="ico" data-i="${n}"></svg>`,
+        },
+        document: {
+            getElementById: id => els[id] || null,
+            querySelector: () => null,
+            querySelectorAll: () => [],
+            addEventListener: (t, fn) => { sandbox._docListeners = sandbox._docListeners || {}; (sandbox._docListeners[t] = sandbox._docListeners[t] || []).push(fn); },
+        },
+        api: async (url) => {
+            calls.push(url);
+            if (url.includes('/api/stats/latency')) {
+                return {
+                    days: 30,
+                    granularityMs: 3600000,
+                    summary: { sampleCount: 42, avg: 160, p95: 310, max: 900, bucketsWithData: 3 },
+                    series: [
+                        { ts: new Date(Date.now() - 3 * 3600000).toISOString(), count: 4, avg: 100, p50: 90, p95: 140, max: 220 },
+                        { ts: new Date(Date.now() - 2 * 3600000).toISOString(), count: 3, avg: 200, p50: 180, p95: 400, max: 900 },
+                        { ts: new Date(Date.now() - 1 * 3600000).toISOString(), count: 3, avg: 170, p50: 160, p95: 300, max: 500 },
+                    ],
+                };
+            }
+            if (url.includes('/api/stats/bot')) return { servers: 2, totalUsers: 5, totalUsersSource: 'rest', features: {} };
+            if (url.includes('/api/stats/nodes')) return { nodes: [], lease: null, thresholdMs: 45000 };
+            return {};
+        },
+        esc: (v) => String(v),
+        console,
+    };
+    sandbox.window.window = sandbox.window;
+    sandbox.window.document.addEventListener = () => {};
+    vm.createContext(sandbox);
+    vm.runInContext(STATS_JS, sandbox);
+    // Three loaders kick off async work; wait for the microtasks.
+    await new Promise(res => setTimeout(res, 30));
+
+    assert.ok(calls.some(u => u.includes('/api/stats/latency?days=30')), 'latency endpoint should be fetched');
+    const wrap = els['stats-latency'];
+    assert.ok(wrap.innerHTML.includes('<svg'), 'graph should render an svg');
+    assert.ok(wrap.innerHTML.includes('lat-band'), 'colored bands should render');
+    assert.ok(wrap.innerHTML.includes('42'), 'summary sample count should render');
+    assert.ok(els['latency-windows'].hidden === false, 'window switcher should be shown');
+});
