@@ -18,6 +18,7 @@ const Module = require('node:module');
 const yc = require('../shared/youtubeConstants');
 const { buildAnnouncementPayload } = require('../shared/youtubeAnnouncement');
 const { parseAtomFeed, parseChannelHtml, YouTubeFetchError, httpGet } = require('../utils/youtubeFeed');
+const { withDeadline } = require('../utils/withDeadline');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. Channel reference parsing
@@ -487,7 +488,7 @@ function bootApp() {
         getServerSettings: async () => ({}), upsertServerSettings: async (g, p) => p,
         getYoutubeSubscriptions: async () => [], getYoutubeAnnouncements: async () => [],
         getYoutubeStats: async () => ({}), getYoutubeGroups: async () => [],
-        getYoutubeSubscription: async () => null, upsertYoutubeSubscription: async () => ({}),
+        getYoutubeSubscription: async () => null, getYoutubeSubscriptionByChannel: async () => null, upsertYoutubeSubscription: async () => ({}),
         updateYoutubeSubscription: async () => ({}), deleteYoutubeSubscription: async () => true,
         addWebsiteLog: async () => {},
     };
@@ -562,3 +563,24 @@ test('HTTP: the youtube API is guarded (no unauthenticated write reaches the DB)
         assert.match(body.error, /Not authenticated/i);
     } finally { server.close(); }
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 6. Serverless 504 hardening (YouTube resolve deadline)
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('withDeadline resolves when the promise beats the deadline', async () => {
+    const value = await withDeadline(Promise.resolve(42), 5000);
+    assert.equal(value, 42);
+});
+
+test('withDeadline rejects with status 504 when the promise never settles', async () => {
+    const never = () => new Promise(() => {});
+    const err = await withDeadline(never(), 30).then(
+        () => { throw new Error('should have timed out'); },
+        (e) => e
+    );
+    assert.equal(err.status, 504);
+    assert.match(err.message, /timed out/i);
+});
+
+

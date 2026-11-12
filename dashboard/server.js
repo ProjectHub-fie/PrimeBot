@@ -25,9 +25,11 @@ const PgSession = require('connect-pg-simple')(session);
 
 const discord = require('./discord');
 const turnstile = require('./turnstile');
-const { requireAuth, requireAuthReadonly, requireGuildAdmin, guildPage, requireBeta, requireUpcoming, requireAntiNukePermission } = require('./auth');
+const { requireAuth, requireAuthReadonly, requireGuildAdmin, guildPage, requireBeta, requireUpcoming, requireAntiNukePermission, canBypassFeatureGates } = require('./auth');
 const eventAuth = require('./eventAuth');
 const dashboardDb = require('./db');
+const monitorDb = require('../server/monitorDb');
+const statusView = require('./statusView');
 const constants = require('./constants');
 const pages = require('./render/pages');
 const guildPages = require('./render/guild-pages');
@@ -567,6 +569,217 @@ app.get('/api/stats/latency', requireAuth, async (req, res) => {
     }
 });
 
+// ── Infrastructure status (Infrastructure Status page) ───────────────────────
+
+// Public, zero-DB liveness probe used by the monitoring worker's API/website
+// checks. Must stay secret-free and cheap.
+app.get('/api/status/ping', (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.json({ ok: true, service: 'primebot-dashboard', now: new Date().toISOString() });
+});
+
+// Public overall system status — sanitized: component states + 30-day uptime,
+// active/resolved incident headlines, maintenance windows. No node names, no
+// error internals, no credentials. Used by authenticated pages too (they join
+// with detail for the full view).
+app.get('/api/status', async (req, res) => {
+    try {
+        const summary = await statusView.getStatusSummary();
+        res.set('Cache-Control', 'no-store');
+        res.json(sanitizeSummary(summary));
+    } catch (err) {
+        console.error('[API] /api/status error:', err.message);
+        res.status(500).json({ error: 'Failed to load status.' });
+    }
+});
+
+// Full internal status (node identities, error details) — auth only.
+app.get('/api/status/detailed', requireAuth, async (req, res) => {
+    try {
+        const summary = await statusView.getStatusSummary();
+        let isAdmin = false;
+        try { isAdmin = await canBypassFeatureGates(req); } catch (_) {}
+        res.json({ ...summary, isAdmin });
+    } catch (err) {
+        console.error('[API] /api/status/detailed error:', err.message);
+        res.status(500).json({ error: 'Failed to load status.' });
+    }
+});
+
+// 30-day uptime history for one component (auth only — internal data).
+app.get('/api/status/history', requireAuth, async (req, res) => {
+    try {
+        const { component } = req.query;
+        if (!component) return res.status(400).json({ error: 'component is required' });
+        const safe = /^[a-z0-9_]+$/.test(component) ? component : null;
+        if (!safe) return res.status(400).json({ error: 'invalid component' });
+        const days = [7, 30, 90].includes(Number(req.query.days)) ? Number(req.query.days) : 30;
+        const detail = await statusView.getComponentDetail(safe, { days, heartbeatLimit: 250 });
+        if (!detail) return res.status(404).json({ error: 'unknown component' });
+        res.json(detail);
+    } catch (err) {
+        console.error('[API] /api/status/history error:', err.message);
+        res.status(500).json({ error: 'Failed to load component history.' });
+    }
+});
+
+// Incident list (public, sanitized) + detail (auth).
+app.get('/api/status/incidents', async (req, res) => {
+    try {
+        const { component, status, limit = 50 } = req.query;
+        const incidents = await monitorDb.getIncidents({
+            component: component && /^[a-z0-9_]+$/.test(component) ? component : undefined,
+            status: status && ['investigating', 'identified', 'monitoring', 'resolved'].includes(status) ? status : undefined,
+            limit: Math.min(100, Number(limit) || 50),
+        });
+        res.set('Cache-Control', 'no-store');
+        res.json({ incidents: incidents.map(sanitizeIncident) });
+    } catch (err) {
+        console.error('[API] /api/status/incidents error:', err.message);
+        res.status(500).json({ error: 'Failed to load incidents.' });
+    }
+});
+
+// ── Admin: incident / maintenance / component management ───────────────────────
+// Status configuration APIs are global (not per-guild), so they use a global
+// admin gate: the session must be authenticated AND the user must hold a
+// developer/owner bot role (canBypassFeatureGates). This mirrors how the
+// upcoming-page bypass works and keeps the bar high for mute-worthy actions.
+
+async function requireStatusAdmin(req, res, next) {
+    try {
+        if (!req.session || !req.session.user) {
+            return res.status(401).json({ error: 'Not authenticated' });
+        }
+        const bypass = await canBypassFeatureGates(req);
+        if (!bypass) return res.status(403).json({ error: 'Administrator access required.' });
+        next();
+    } catch (err) {
+        console.error('[AUTH] requireStatusAdmin error:', err.message);
+        return res.status(403).json({ error: 'Administrator access required.' });
+    }
+}
+
+app.post('/api/status/incidents', requireAuth, requireStatusAdmin, async (req, res) => {
+    try {
+        const { component, title, description, severity, status, startedAt } = req.body || {};
+        const safeComponent = /^[a-z0-9_]+$/.test(component || '') ? component : null;
+        if (!safeComponent || !title || typeof title !== 'string' || !title.trim()) {
+            return res.status(400).json({ error: 'Component and title are required.' });
+        }
+        const allowedSev = ['notice', 'minor', 'major', 'critical'].includes(severity) ? severity : 'notice';
+        const allowedStatus = ['investigating', 'identified', 'monitoring'].includes(status) ? status : 'investigating';
+        const inc = await monitorDb.createIncident({
+            component: safeComponent,
+            title: title.trim(),
+            description: typeof description === 'string' ? description : '',
+            severity: allowedSev,
+            status: allowedStatus,
+            startedAt: startedAt ? new Date(startedAt) : undefined,
+            createdBy: req.session.user?.username || 'admin',
+        });
+        res.status(201).json({ incident: inc });
+    } catch (err) {
+        console.error('[API] POST /api/status/incidents error:', err.message);
+        res.status(500).json({ error: 'Failed to create incident.' });
+    }
+});
+
+app.patch('/api/status/incidents/:id', requireAuth, requireStatusAdmin, async (req, res) => {
+    try {
+        const id = Number(req.params.id);
+        if (!Number.isInteger(id)) return res.status(400).json({ error: 'invalid id' });
+        const { title, description, severity, status, resolvedAt } = req.body || {};
+        const patch = {};
+        if (typeof title === 'string' && title.trim()) patch.title = title.trim();
+        if (typeof description === 'string') patch.description = description;
+        if (severity && ['notice', 'minor', 'major', 'critical'].includes(severity)) patch.severity = severity;
+        if (status) {
+            if (!['investigating', 'identified', 'monitoring', 'resolved'].includes(status)) {
+                return res.status(400).json({ error: 'invalid status' });
+            }
+            patch.status = status;
+        }
+        if (resolvedAt) patch.resolvedAt = new Date(resolvedAt);
+        const inc = await monitorDb.updateIncident(id, patch);
+        if (!inc) return res.status(404).json({ error: 'incident not found' });
+        res.json({ incident: inc });
+    } catch (err) {
+        console.error('[API] PATCH /api/status/incidents/:id error:', err.message);
+        res.status(500).json({ error: 'Failed to update incident.' });
+    }
+});
+
+app.post('/api/status/incidents/:id/resolve', requireAuth, requireStatusAdmin, async (req, res) => {
+    try {
+        const id = Number(req.params.id);
+        if (!Number.isInteger(id)) return res.status(400).json({ error: 'invalid id' });
+        const inc = await monitorDb.resolveIncident(id);
+        if (!inc) return res.status(404).json({ error: 'incident not found' });
+        res.json({ incident: inc });
+    } catch (err) {
+        console.error('[API] POST /api/status/incidents/:id/resolve error:', err.message);
+        res.status(500).json({ error: 'Failed to resolve incident.' });
+    }
+});
+
+app.post('/api/status/maintenance', requireAuth, requireStatusAdmin, async (req, res) => {
+    try {
+        const { component, title, startsAt, endsAt } = req.body || {};
+        const safeComponent = /^[a-z0-9_]+$/.test(component || '') ? component : null;
+        if (!safeComponent || !title || !startsAt || !endsAt) {
+            return res.status(400).json({ error: 'component, title, startsAt and endsAt are required' });
+        }
+        const start = new Date(startsAt), end = new Date(endsAt);
+        if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {
+            return res.status(400).json({ error: 'invalid maintenance window' });
+        }
+        const m = await monitorDb.addMaintenance({
+            component: safeComponent, title, startsAt: start, endsAt: end,
+            createdBy: req.session.user?.username || 'admin',
+        });
+        res.status(201).json({ maintenance: m });
+    } catch (err) {
+        console.error('[API] POST /api/status/maintenance error:', err.message);
+        res.status(500).json({ error: 'Failed to create maintenance window.' });
+    }
+});
+
+app.delete('/api/status/maintenance/:id', requireAuth, requireStatusAdmin, async (req, res) => {
+    try {
+        const id = Number(req.params.id);
+        if (!Number.isInteger(id)) return res.status(400).json({ error: 'invalid id' });
+        await monitorDb.deleteMaintenance(id);
+        res.json({ ok: true });
+    } catch (err) {
+        console.error('[API] DELETE /api/status/maintenance/:id error:', err.message);
+        res.status(500).json({ error: 'Failed to delete maintenance window.' });
+    }
+});
+
+function sanitizeSummary(summary) {
+    return {
+        overall: summary.overall,
+        openIncidents: summary.openIncidents,
+        lastCheckedAt: summary.lastCheckedAt,
+        maintenances: (summary.maintenances || []).map(m => ({ component: m.component, title: m.title, startsAt: m.startsAt, endsAt: m.endsAt })),
+        components: (summary.components || []).map(c => ({
+            key: c.key, label: c.label, status: c.status, uptime30: c.uptime30,
+            lastObservedAt: c.lastObservedAt, ageMs: c.ageMs, enabled: c.enabled,
+        })),
+        activeIncidents: (summary.activeIncidents || []).map(sanitizeIncident),
+        resolvedIncidents: (summary.resolvedIncidents || []).map(sanitizeIncident),
+    };
+}
+
+function sanitizeIncident(i) {
+    return {
+        id: i.id, component: i.component, title: i.title, description: i.description,
+        severity: i.severity, status: i.status, startedAt: i.startedAt,
+        detectedAt: i.detectedAt, resolvedAt: i.resolvedAt, durationMs: i.durationMs,
+    };
+}
+
 app.get('/api/guilds', requireAuth, async (req, res) => {
     try {
         const accessToken = req.session.accessToken;
@@ -881,6 +1094,22 @@ const { resolveChannelReference, YouTubeFetchError } = require('../utils/youtube
 const { normalizeTemplate, isValidChannelId } = require('../shared/youtubeConstants');
 const { buildAnnouncementPayload } = require('../shared/youtubeAnnouncement');
 
+// Hard cap on the dashboard's own YouTube channel resolution. THE #1
+// serverless-scaling trap for this feature: resolving a channel runs up to two
+// external YouTube requests (the Atom feed to verify + the channel HTML for the
+// avatar) sequentially, each with its own 10s timeout. A slow, throttled (429)
+// or just unreachable YouTube can hold the Vercel serverless function open past
+// its invocation budget → FUNCTION_INVOCATION_TIMEOUT (504) while the browser
+// waits indefinitely on "Add creator". `resolveChannelReference` already
+// accepts per-call `{ timeoutMs }`; this env tunes the DASHBOARD's cap, which
+// is intentionally tighter than the bot's background polling timeout (the UI
+// must fail fast; the background worker can retry later).
+const YOUTUBE_RESOLVE_TIMEOUT_MS = parseInt(process.env.YOUTUBE_RESOLVE_TIMEOUT_MS, 10) || 8000;
+
+// Race a promise against a deadline, rejecting with a clear, non-hanging error.
+// Used so no dashboard request can outlive the serverless function budget.
+const { withDeadline } = require('../utils/withDeadline');
+
 // Resolve a Discord channel id and confirm it belongs to this guild (never let
 // a client point a subscription at another server's channel).
 async function assertGuildChannel(guildId, channelId) {
@@ -916,33 +1145,69 @@ app.post('/api/guilds/:guildId/youtube', requireAuth, requireGuildAdmin, async (
         if (!reference || typeof reference !== 'string') {
             return res.status(400).json({ error: 'A YouTube channel URL, ID or @handle is required.' });
         }
-        const destChannelId = await assertGuildChannel(req.guild.id, channelId);
+        const destChannelId = await withDeadline(
+            assertGuildChannel(req.guild.id, channelId),
+            YOUTUBE_RESOLVE_TIMEOUT_MS,
+            'Timed out validating the Discord channel.'
+        );
         let resolved;
         try {
-            resolved = await resolveChannelReference(reference.trim());
+            // Bound every external YouTube fetch so a slow/throttled host can
+            // never hold the serverless function past its invocation budget.
+            resolved = await withDeadline(
+                resolveChannelReference(reference.trim(), { timeoutMs: Math.min(YOUTUBE_RESOLVE_TIMEOUT_MS, 6000) }),
+                YOUTUBE_RESOLVE_TIMEOUT_MS,
+                'Timed out resolving the YouTube channel.'
+            );
         } catch (err) {
             if (err instanceof YouTubeFetchError) {
                 return res.status(400).json({ error: err.message, reason: err.code });
+            }
+            if (err.status === 504) {
+                console.error('[API] youtube resolve timeout:', err.message);
+                return res.status(504).json({
+                    error: 'Resolving that YouTube channel took too long. YouTube may be rate-limiting or slow right now — try again in a minute.',
+                    reason: 'resolve_timeout',
+                });
             }
             throw err;
         }
         if (!isValidChannelId(resolved.channelId)) {
             return res.status(400).json({ error: 'Could not resolve that channel to a valid YouTube channel ID.' });
         }
-        const sub = await dashboardDb.upsertYoutubeSubscription(req.guild.id, {
-            youtubeChannelId: resolved.channelId,
-            channelName: resolved.name,
-            channelUrl: resolved.url,
-            channelHandle: resolved.handle,
-            avatarUrl: resolved.avatarUrl,
-            discordChannelId: destChannelId,
-            enabled: true,
-            groupName: groupName ? String(groupName).slice(0, 80) : null,
-        });
-        recordWebsiteLog(req, `Subscribed to YouTube channel ${resolved.name || resolved.channelId}`);
+
+        // Already subscribed? Reuse the persisted metadata instead of making any
+        // more YouTube requests (avatar URL etc. are already stored). The upsert
+        // is still idempotent on (guild_id, youtube_channel_id).
+        const existing = await withDeadline(
+            dashboardDb.getYoutubeSubscriptionByChannel(req.guild.id, resolved.channelId),
+            YOUTUBE_RESOLVE_TIMEOUT_MS,
+            'Timed out checking existing subscriptions.'
+        ).catch(() => null);
+        const meta = existing || resolved;
+
+        const sub = await withDeadline(
+            dashboardDb.upsertYoutubeSubscription(req.guild.id, {
+                youtubeChannelId: resolved.channelId,
+                channelName: meta.name || resolved.name,
+                channelUrl: meta.url || resolved.url,
+                channelHandle: meta.handle || resolved.handle,
+                avatarUrl: meta.avatarUrl || resolved.avatarUrl,
+                discordChannelId: destChannelId,
+                enabled: true,
+                groupName: groupName ? String(groupName).slice(0, 80) : null,
+            }),
+            YOUTUBE_RESOLVE_TIMEOUT_MS,
+            'Timed out saving the YouTube subscription.'
+        );
+        recordWebsiteLog(req, `Subscribed to YouTube channel ${meta.name || resolved.name || resolved.channelId}`);
         res.json({ subscription: sub });
     } catch (err) {
         if (err.status === 400) return res.status(400).json({ error: err.message });
+        if (err.status === 504) {
+            console.error('[API] youtube add timeout:', err.message);
+            return res.status(504).json({ error: err.message, reason: 'resolve_timeout' });
+        }
         console.error('[API] add youtube subscription error:', err.message);
         res.status(500).json({ error: 'Failed to add the YouTube subscription.' });
     }

@@ -68,6 +68,19 @@ function readPermissionChange(entry) {
     return null;
 }
 
+/**
+ * True when a RoleUpdate entry actually changed the permission bitfield (any
+ * bit, granted OR removed). Discord emits a `RoleUpdate` entry for cosmetic
+ * changes (name, colour, position, hoist, mentionable, icon) that carry no
+ * `permissions` change — those are NOT "role permission changes" and must
+ * never count toward the role-permission guard.
+ */
+function entryHasPermissionChange(entry) {
+    const change = readPermissionChange(entry);
+    if (!change) return false;
+    return change.granted !== 0n || change.removed !== 0n;
+}
+
 /** Role ids added to a member by a MemberRoleUpdate entry (best-effort). */
 function readAddedRoleIds(entry) {
     const changes = Array.isArray(entry && entry.changes) ? entry.changes : [];
@@ -168,7 +181,15 @@ function evaluateAuditEntry(entry, guild) {
         // Target-type filter (e.g. categoryDelete only fires for categories).
         if (action.targetType != null && readTargetType(entry) !== action.targetType) continue;
         // Permission filter (only count the entry when the permission was granted).
-        if (action.permission && !entryGrantsPermission(entry, action.permission, guild)) continue;
+        if (action.permission) {
+            // 'anyChange' = the RoleUpdate must have changed the actual
+            // permission bitfield (cosmetic role edits never count).
+            if (action.permission === 'anyChange') {
+                if (!entryHasPermissionChange(entry)) continue;
+            } else if (!entryGrantsPermission(entry, action.permission, guild)) {
+                continue;
+            }
+        }
         out.push({ actionKey: key, details: describeEntry(entry) });
     }
     return out;
@@ -184,6 +205,7 @@ module.exports = {
     auditEventName,
     evaluateAuditEntry,
     entryGrantsPermission,
+    entryHasPermissionChange,
     readPermissionChange,
     readAddedRoleIds,
     roleGrants,

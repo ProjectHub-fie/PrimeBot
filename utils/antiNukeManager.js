@@ -108,6 +108,10 @@ class AntiNukeManager {
         // counted twice when both the live audit-log stream and a per-event
         // correlation path observe it. Bounded (cleared when it grows).
         this._seenEventIds = new Set();
+        // Per-(guild, action) windows of UNATTRIBUTED events (executor unknown).
+        // Used by _handleUnattributed to apply the action threshold before a
+        // fully-unattributable burst raises an alert. Bounded per entry.
+        this._unattributed = {};
         // Set once the live audit-log stream (`guildAuditLogEntryCreate`) has
         // been observed, which makes the per-event correlation fallback
         // unnecessary (it would only add API calls).
@@ -649,10 +653,31 @@ class AntiNukeManager {
 
     async _handleUnattributed({ guild, settings, action, watch, reason, details, stages = [] }) {
         // An unattributable burst is still a signal worth surfacing, but the
-        // spec is explicit: never punish when the executor is unknown. We log
-        // an informational incident and alert, with no containment.
+        // spec is explicit: never punish when the executor is unknown. We only
+        // escalate once the SAME action has repeatedly failed attribution
+        // within the action's window (reaching its threshold) — a single
+        // isolated event (e.g. one ordinary role assignment the bot could not
+        // correlate) must NOT raise a full "nuke alert" on its own. So we count
+        // the unknown-executor events per (guild, action) and gate the alert on
+        // the same threshold the attributed path uses.
+        const now = Date.now();
+        const key = `unattr|${guild.id}|${action.key}`;
+        const windowMs = Math.max(1, watch.seconds) * 1000;
+        const arr = this._unattributed[key] || (this._unattributed[key] = []);
+        arr.push(now);
+        // Trim stale entries from the front (append-ordered).
+        while (arr.length && arr[0] <= now - windowMs) arr.shift();
+        const count = arr.length;
+        // Bound the list so an unbounded flood cannot grow memory.
+        if (arr.length > 100) arr.splice(0, arr.length - 100);
+
+        if (count < Math.max(1, watch.threshold)) {
+            stages.push({ key: 'unattributed', result: 'below_threshold', reason, count, at: now });
+            return { handled: false, reason: 'below_threshold', executorId: null, count, stages };
+        }
+
         stages.push({ key: 'unattributed', result: 'blocked', reason, at: Date.now() });
-        const dedupKey = `unattr|${guild.id}|${action.key}|${Math.floor(Date.now() / (Math.max(1, watch.seconds) * 1000))}`;
+        const dedupKey = `unattr|${guild.id}|${action.key}|${Math.floor(now / windowMs)}`;
         let claimed = true;
         try { claimed = await claimDedupKey(dedupKey, { guildId: guild.id, ttlSeconds: Math.max(10, watch.seconds) }); }
         catch (_) { claimed = true; }
@@ -668,7 +693,7 @@ class AntiNukeManager {
         await this._recordIncident({
             guildId: guild.id, executorId: null, executorName: null,
             action: action.key, module: action.module, severity: action.severity,
-            count: 0, threshold: watch.threshold, windowSeconds: watch.seconds,
+            count, threshold: watch.threshold, windowSeconds: watch.seconds,
             responseTaken: ['alertChannel'], responseResult: { reason, stages }, responseOk: true,
             dryRun: settings.dryRun !== false, attribution: 'unknown', status: 'unattributed',
             details: `${reason}${details && details.summary ? ` · ${details.summary}` : ''}`,

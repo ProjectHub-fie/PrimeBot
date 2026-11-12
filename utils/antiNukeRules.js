@@ -127,6 +127,13 @@ const NUKE_ACTIONS = [
         icon: 'key',
         iconName: 'key',
         auditEvent: 'RoleUpdate',
+        // Only count a RoleUpdate when the actual permission bitfield changed.
+        // Discord emits a RoleUpdate entry for ANY role change (rename, colour,
+        // position, hoist, mentionable, …) — counting all of them as "permission
+        // changes" made 3 cosmetic edits by an admin trip the guard and strip
+        // their roles. The mapper (`evaluateAuditEntry`) treats this marker as
+        // "require a real permissions diff".
+        permission: 'anyChange',
         description: 'Role permission bits changed (privilege escalation).',
         threshold: 3,
         seconds: 15,
@@ -226,8 +233,17 @@ const NUKE_ACTIONS = [
         icon: 'key',
         iconName: 'key',
         auditEvent: 'MemberRoleUpdate',
+        // Only map when the added role actually grants a dangerous permission.
+        // Without this filter, ANY MemberRoleUpdate (including a normal member
+        // receiving an ordinary role) mapped to botPermissionEscalation — one
+        // of the "role assignment flagged as an attack" false positives.
+        permission: 'dangerous',
         description: 'A bot member was granted a dangerous role/permission.',
-        threshold: 1,
+        // Threshold raised above a single grant: granting one dangerous role is
+        // a routine admin action and must not be treated as an attack on its
+        // own. Only repeated grants in a short window (e.g. a compromised admin
+        // escalating several alts, or granting dangerous roles in bulk) trip.
+        threshold: 2,
         seconds: 60,
         severity: 'high',
     },
@@ -265,9 +281,16 @@ const NUKE_ACTIONS = [
         iconName: 'shieldAlert',
         auditEvent: 'MemberRoleUpdate',
         permission: 'Administrator',
+        // A single Administrator-role grant is a routine promotion (the owner
+        // staffing a new mod). Threshold 1 made ANY grant trip with role-strip/
+        // quarantine responses, so a legitimate promotion punished the admin and
+        // the new mod immediately. Only repeated grants in a short window trip
+        // now. NOTE: a genuinely privileged actor (owner, trusted user/role) is
+        // still exempt entirely; a compromised moderator granting Administrator
+        // several times in 60s is deliberately still caught.
         description: 'The Administrator permission was granted to a member.',
-        threshold: 1,
-        seconds: 30,
+        threshold: 3,
+        seconds: 60,
         severity: 'critical',
     },
     {
@@ -462,7 +485,12 @@ const DEFAULT_ACTION_RESPONSES = {
     // Role
     roleDelete:           ['quarantine', 'alertOwner', 'alertChannel', 'logOnly'],
     roleCreate:           ['alertOwner', 'alertChannel', 'logOnly'],
-    rolePermissionUpdate: ['removeRoles', 'alertOwner', 'alertChannel'],
+    // Generic "some permission bit changed" → alert for a human decision, never
+    // auto-strip. A role permission ITERATION is routine admin work and can hit
+    // the window with benign edits; the dedicated dangerous/manage-* grant
+    // rules (which require the specific dangerous bit) stay the enforcement
+    // path.
+    rolePermissionUpdate: ['manualReview', 'alertOwner', 'alertChannel'],
     // Webhook
     webhookCreate:        ['deleteWebhook', 'quarantine', 'alertOwner', 'alertChannel'],
     webhookDelete:        ['alertOwner', 'alertChannel', 'logOnly'],

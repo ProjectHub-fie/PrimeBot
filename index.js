@@ -583,6 +583,8 @@ client.on('shardDisconnect', async (closeEvent, shardId) => {
 const nodeFailover = require('./utils/nodeFailover');
 const activityGate = require('./utils/activityGate');
 const standbyKeepAlive = require('./utils/standbyKeepAlive');
+const monitorPulse = require('./utils/monitorPulse');
+const statusWorker = require('./utils/statusWorker');
 const failoverEnabled = process.env.BOT_FAILOVER_ENABLED !== 'false';
 
 // Publish the live guild/member counts on each failover heartbeat so the
@@ -593,6 +595,10 @@ nodeFailover.setStatsProvider(() => ({
     guildCount: client.guilds.cache.size,
     memberCount: client.guilds.cache.reduce((sum, g) => sum + (g.memberCount || 0), 0),
 }));
+
+// The ACTIVE node's status pulse rides the failover heartbeat; standby nodes run
+// their own pulse loop (started below) so all three nodes report independently.
+nodeFailover.setPulseProvider(() => monitorPulse.buildPulse(client));
 
 // Webhook logger — sends shard-node events to Discord channel.
 // Reads FAILOVER_WEBHOOK_URL from env; silently no-ops when not set.
@@ -746,6 +752,10 @@ function startStandbyMonitor() {
     // panel would restart it in a loop. This arms the single ref'd timer that
     // keeps a waiting node alive; it is cleared on login (see connectBot).
     standbyKeepAlive.arm();
+
+    // Standbys don't run the failover heartbeat loop, so their status pulse
+    // needs its own (single, unref'd) timer to stay visible to the monitors.
+    monitorPulse.startPulseLoop(client);
     console.log('[FAILOVER] Armed standby keep-alive timer (prevents clean-exit restart loop while waiting to take over).');
 
     console.log(`[FAILOVER] Running as STANDBY node (${nodeFailover.NODE_NAME}, configured role: ${nodeFailover.NODE_ROLE}). Watching for another active node...`);
@@ -891,6 +901,11 @@ async function startWithFailoverCheck() {
 }
 
 async function gracefulShutdown() {
+    // Stop the status monitor loops so a shutting-down node stops being the
+    // monitoring worker (its lease will expire and another node takes over).
+    try { statusWorker.stopWorker(); } catch (_) {}
+    try { monitorPulse.stopPulseLoop(); } catch (_) {}
+
     // Flush any accumulated XP before stepping down so a normal restart loses
     // nothing; the bounded periodic flush covers hard crashes.
     try {
@@ -966,5 +981,13 @@ process.on('warning', (warning) => {
 // down and monitors instead of connecting, so two hosts never both reply to
 // the same command — even if NODE_ROLE is misconfigured on one/both hosts.
 {
+    // The status-monitoring worker runs on EVERY node; the db lease picks one.
+    // A single node never double-workers. Failover-disabled single-host
+    // deployments still pulse + run the worker so monitoring works without
+    // the 3-node lease machinery.
+    statusWorker.startWorker();
+    if (!failoverEnabled) {
+        monitorPulse.startPulseLoop(client);
+    }
     startWithFailoverCheck();
 }
