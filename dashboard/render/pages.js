@@ -212,6 +212,10 @@ function statsPage({ user } = {}) {
       <div id="stats-latency">
         <div class="splash"><div class="spinner"></div><p>Loading latency graph…</p></div>
       </div>
+      <div id="stats-latency-routes" class="lat-routes-wrap">
+        <h3 class="lat-routes-title">Slowest routes</h3>
+        <div class="splash"><div class="spinner"></div><p>Loading route breakdown…</p></div>
+      </div>
     </div>
 
     <div class="card">

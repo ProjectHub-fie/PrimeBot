@@ -557,6 +557,9 @@ app.get('/api/stats/latency', requireAuth, async (req, res) => {
     try {
         const days = [7, 30, 90].includes(Number(req.query.days)) ? Number(req.query.days) : 30;
         const data = await dashboardDb.getLatencySeries({ days });
+        // The route-level breakdown is a second cheap aggregate; keep it in the
+        // same response so the Stats page renders both in one round-trip.
+        data.routes = await dashboardDb.getLatencyRoutes({ days });
         res.json(data);
     } catch (err) {
         console.error('[API] /api/stats/latency error:', err.message);

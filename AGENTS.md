@@ -1096,3 +1096,18 @@ the function budget and the connection was killed (`ERR_CONNECTION_ABORTED` /
   through `coarsenRoute`-style normalization (in `dashboard/server.js`) so the
   route string stays a small stable set; never write one row per request to
   Postgres — always go through the recorder's batch path.
+- **Route breakdown ("Slowest routes"):** `dashboard/db.js` `getLatencyRoutes({days, limit})`
+  runs one `GROUP BY route` aggregate (worst-avg-first, `LIMIT`), maps the raw
+  snake_case columns (`n/avg_ms/p50_ms/p95_ms/max_ms`) to the client shape
+  (`count/avg/p50/p95/max`) and folds the recorder's not-yet-flushed in-memory
+  samples into the last-10-min slice so a fresh route shows before the next
+  flush. It is returned as `routes` on the **same** `/api/stats/latency`
+  response (one round-trip) and rendered by `stats.js` `renderLatencyRoutes()`
+  as a table (method chip + path, avg/p95/max/count, proportional band-colored
+  bar; P95/Max columns hide under 720px). Degrades to `[]` when the season pool
+  is unreachable.
+- **Auto-refresh:** `stats.js` re-fetches `/api/stats/latency` every 60s while
+  the Stats page is visible (skips while `document.hidden`; re-fetches once on
+  `visibilitychange`). No background polling — keeps Neon quiet when the tab is
+  hidden. The 7/30/90 switcher re-fetches the same endpoint without a reload.
+

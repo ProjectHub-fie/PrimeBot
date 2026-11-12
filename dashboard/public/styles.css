@@ -4303,3 +4303,63 @@ select:focus {
   .lat-head { flex-direction: column; align-items: flex-start; gap: 8px; }
   .lat-summary { min-width: 0; }
 }
+
+/* ── Stats page: slowest-routes breakdown table ──────────────────────────── */
+.lat-routes-wrap { margin-top: 18px; }
+
+.lat-routes-title {
+  font-size: 12px; font-weight: 700; color: var(--text-dim);
+  text-transform: uppercase; letter-spacing: 0.04em; margin: 0 0 10px;
+}
+
+.lat-routes-empty { font-size: 13px; color: var(--text-faint); }
+
+.lat-routes {
+  width: 100%; border-collapse: collapse; font-size: 13px;
+}
+
+.lat-routes th {
+  text-align: left; font-size: 11px; font-weight: 700; color: var(--text-faint);
+  text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 6px 10px; border-bottom: 1px solid var(--border-soft);
+}
+
+.lat-routes th:nth-child(2), .lat-routes th:nth-child(3),
+.lat-routes th:nth-child(4), .lat-routes th:nth-child(5) { text-align: right; }
+
+.lat-routes td {
+  padding: 8px 10px; border-bottom: 1px solid var(--border-soft);
+  color: var(--text); vertical-align: middle;
+}
+
+.lat-routes tr:last-child td { border-bottom: none; }
+.lat-routes tr:hover td { background: var(--surface-hover); }
+
+.lat-route-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.lat-route-name code {
+  background: var(--surface-1); border: 1px solid var(--border-soft);
+  padding: 1px 7px; border-radius: 6px; font-size: 12px; color: var(--text-dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.lat-route-method {
+  font-size: 10px; font-weight: 800; letter-spacing: 0.04em;
+  padding: 2px 6px; border-radius: 5px; flex: 0 0 auto;
+  background: var(--accent-soft); color: var(--accent-strong);
+}
+
+.lat-num { text-align: right; font-variant-numeric: tabular-nums; color: var(--text-dim); }
+
+.lat-bar-cell { width: 90px; }
+.lat-route-bar {
+  height: 6px; border-radius: 999px; min-width: 3px;
+  background: var(--accent); opacity: 0.7;
+}
+.lat-route-bar.lat-band-ok { background: var(--green); }
+.lat-route-bar.lat-band-warn { background: var(--yellow); }
+.lat-route-bar.lat-band-bad { background: var(--red); }
+
+@media (max-width: 720px) {
+  .lat-routes th:nth-child(3), .lat-routes td:nth-child(3),
+  .lat-routes th:nth-child(4), .lat-routes td:nth-child(4) { display: none; }
+}
