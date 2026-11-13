@@ -359,6 +359,8 @@ code {
 
 /* ── Page headers ────────────────────────────────────────────────────────── */
 .page-head { margin-bottom: 26px; }
+/* Public pages (no top nav) render an in-body back button above the title. */
+.page-head .back-btn { margin-bottom: 14px; }
 .page-head h1 {
   margin: 0 0 8px;
   font-size: 30px;

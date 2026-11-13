@@ -203,8 +203,13 @@ function statsSkeletonHTML() {
 }
 
 function statsPage({ user } = {}) {
+    // Public page: logged-out visitors get the no-nav shell (like /docs), so the
+    // nav's back button never appears — render an in-body back button for them.
+    const backBtn = user ? '' : `<a href="javascript:history.back()" class="back-btn stats-back" aria-label="Go back to previous page" title="Go back to previous page">${svgIcon('arrowLeft', 'back-symbol')}</a>`;
+
     const body = `
     <div class="page-head">
+      ${backBtn}
       <h1>Stats</h1>
       <p>Live infrastructure status, uptime history and incidents across the PrimeBot cluster.</p>
     </div>
@@ -212,7 +217,9 @@ function statsPage({ user } = {}) {
     <div id="stats-status" class="status-board" aria-busy="true">
       ${statsSkeletonHTML()}
     </div>`;
-    return render({ title: 'PrimeBot · Stats', body, active: 'stats', scripts: ['/js/status.js'], user });
+    // login: !user renders the no-nav shell for logged-out visitors (Stats is a
+    // public status page, linked from the login screen).
+    return render({ title: 'PrimeBot · Stats', body, active: 'stats', scripts: ['/js/status.js'], user, login: !user });
 }
 
 // ── Live (split into Polls and Giveaways) ────────────────────────────────────

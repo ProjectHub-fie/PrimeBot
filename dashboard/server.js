@@ -593,10 +593,19 @@ app.get('/api/status', async (req, res) => {
     }
 });
 
-// Full internal status (node identities, error details) — auth only.
-app.get('/api/status/detailed', requireAuth, async (req, res) => {
+// Status board data. Public read-only: anonymous visitors get a sanitized
+// payload (no node identities / error internals); authenticated users get the
+// full internal view (node names, pulse timelines, restart history) plus the
+// isAdmin flag. Never exposes credentials — sanitizeSummary/sanitizeDetail drop
+// detail internals for anon callers.
+app.get('/api/status/detailed', async (req, res) => {
     try {
+        const authed = !!(req.session && req.session.user);
         const summary = await statusView.getStatusSummary();
+        if (!authed) {
+            res.set('Cache-Control', 'no-store');
+            return res.json(sanitizeSummary(summary));
+        }
         let isAdmin = false;
         try { isAdmin = await canBypassFeatureGates(req); } catch (_) {}
         res.json({ ...summary, isAdmin });
@@ -606,9 +615,12 @@ app.get('/api/status/detailed', requireAuth, async (req, res) => {
     }
 });
 
-// 30-day uptime history for one component (auth only — internal data).
-app.get('/api/status/history', requireAuth, async (req, res) => {
+// 30-day uptime history for one component. Public read-only: anonymous callers
+// get the sanitized series + incidents (no heartbeat timeline / restart history,
+// which carry node names + pids).
+app.get('/api/status/history', async (req, res) => {
     try {
+        const authed = !!(req.session && req.session.user);
         const { component } = req.query;
         if (!component) return res.status(400).json({ error: 'component is required' });
         const safe = /^[a-z0-9_]+$/.test(component) ? component : null;
@@ -616,6 +628,10 @@ app.get('/api/status/history', requireAuth, async (req, res) => {
         const days = [7, 30, 90].includes(Number(req.query.days)) ? Number(req.query.days) : 30;
         const detail = await statusView.getComponentDetail(safe, { days, heartbeatLimit: 250 });
         if (!detail) return res.status(404).json({ error: 'unknown component' });
+        if (!authed) {
+            res.set('Cache-Control', 'no-store');
+            return res.json(sanitizeDetail(detail));
+        }
         res.json(detail);
     } catch (err) {
         console.error('[API] /api/status/history error:', err.message);
@@ -762,10 +778,14 @@ function sanitizeSummary(summary) {
         overall: summary.overall,
         openIncidents: summary.openIncidents,
         lastCheckedAt: summary.lastCheckedAt,
+        measurement: summary.measurement,
         maintenances: (summary.maintenances || []).map(m => ({ component: m.component, title: m.title, startsAt: m.startsAt, endsAt: m.endsAt })),
         components: (summary.components || []).map(c => ({
             key: c.key, label: c.label, status: c.status, uptime30: c.uptime30,
             lastObservedAt: c.lastObservedAt, ageMs: c.ageMs, enabled: c.enabled,
+            // Daily uptime buckets drive the 30-day bars — non-sensitive.
+            series: c.series || [],
+            // `detail` (error internals / reasons) is intentionally omitted.
         })),
         activeIncidents: (summary.activeIncidents || []).map(sanitizeIncident),
         resolvedIncidents: (summary.resolvedIncidents || []).map(sanitizeIncident),
@@ -777,6 +797,17 @@ function sanitizeIncident(i) {
         id: i.id, component: i.component, title: i.title, description: i.description,
         severity: i.severity, status: i.status, startedAt: i.startedAt,
         detectedAt: i.detectedAt, resolvedAt: i.resolvedAt, durationMs: i.durationMs,
+    };
+}
+
+// Public (anonymous) view of a component's detail: series + incidents only.
+// The heartbeat timeline and restart history are dropped — they carry node
+// identities and process pids, which are internal.
+function sanitizeDetail(detail) {
+    return {
+        component: detail.component,
+        series: detail.series || [],
+        incidents: (detail.incidents || []).map(sanitizeIncident),
     };
 }
 
@@ -3497,8 +3528,11 @@ app.get('/terms', (req, res) => {
     res.type('html').send(pages.termsPage({ user: req.session && req.session.user }));
 });
 
-app.get('/stats', requireAuth, (req, res) => {
-    res.type('html').send(pages.statsPage({ user: req.user }));
+// Public infrastructure status page (no auth). Logged-out visitors get the
+// no-nav shell and a sanitized read-only view; signed-in users get the same
+// shell as before. Mirrors /docs.
+app.get('/stats', (req, res) => {
+    res.type('html').send(pages.statsPage({ user: req.session && req.session.user }));
 });
 
 // Live is split into two separate pages. The old /live redirects to the polls

@@ -570,13 +570,46 @@ test('admin endpoints 401 without a session', async () => {
         ['POST', '/api/status/incidents/1/resolve'],
         ['POST', '/api/status/maintenance'],
         ['DELETE', '/api/status/maintenance/1'],
-        ['GET', '/api/status/detailed'],
-        ['GET', '/api/status/history?component=sn1'],
     ];
     for (const [method, urlPath] of cases) {
         const r = await httpReq(urlPath, { method });
         assert.equal(r.status, 401, `${method} ${urlPath}`);
     }
+});
+
+// ── 16b. Public status board (the Stats page is not auth-required) ───────────
+test('GET /stats renders publicly for an anonymous visitor (no login bounce)', async () => {
+    const r = await httpReq('/stats');
+    assert.equal(r.status, 200, '/stats must not require auth');
+    assert.ok(r.body.includes('id="stats-status"'), 'status board rendered');
+    assert.ok(r.body.includes('status-skeleton'), 'skeleton rendered');
+    // Anonymous visitors get the no-nav shell (like /docs): no top nav, no
+    // idle-timeout script, but an in-body back button instead.
+    assert.ok(!r.body.includes('topnav'), 'anon /stats should not render the top nav');
+    assert.ok(!r.body.includes('session-timeout.js'), 'anon /stats should not load the idle script');
+    assert.ok(r.body.includes('stats-back'), 'anon /stats gets an in-body back button');
+});
+
+test('public /api/status/detailed + /api/status/history return sanitized data (no auth)', async () => {
+    const d = await httpReq('/api/status/detailed');
+    assert.equal(d.status, 200, 'detailed status must be public');
+    const body = JSON.parse(d.body);
+    assert.ok(Array.isArray(body.components) && body.components.length >= 3, 'component list present');
+    assert.ok(body.components[0].series, 'daily series included so bars render for anon');
+    assert.equal(body.isAdmin, undefined, 'anon never gets isAdmin');
+    // No secrets leak through the public payload.
+    for (const secret of ['token', 'secret', 'password', 'DATABASE_URL', 'postgres://', 'accessToken', 'refreshToken']) {
+        assert.ok(!d.body.toLowerCase().includes(secret.toLowerCase()), `should not leak: ${secret}`);
+    }
+    // `detail` (error internals) is stripped from the public component payload.
+    assert.ok(body.components.every(c => c.detail === undefined), 'component detail internals omitted');
+
+    const h = await httpReq('/api/status/history?component=sn1&days=30');
+    assert.equal(h.status, 200, 'component history must be public');
+    const hb = JSON.parse(h.body);
+    assert.ok(Array.isArray(hb.series), 'series present');
+    assert.ok(!('pulseTimeline' in hb), 'heartbeat timeline omitted for anon');
+    assert.ok(!('restarts' in hb), 'restart history omitted for anon');
 });
 
 test('input validation on admin endpoints', async () => {
@@ -599,6 +632,20 @@ test('stats page renders the status board + skeleton + loads status.js', async (
     assert.ok(!html.includes('id="stats-bot"'), 'bot statistics band removed');
     assert.ok(!html.includes('id="stats-latency"'), 'website latency card removed');
     assert.ok(!html.includes('id="stats-nodes"'), 'shardnode status card removed');
+});
+
+test('stats page shell is public: no-nav for anon, full nav for a signed-in user', () => {
+    const pages = require('../dashboard/render/pages');
+    const anon = pages.statsPage({ user: null });
+    assert.ok(!anon.includes('topnav'), 'anon gets the no-nav shell');
+    assert.ok(!anon.includes('session-timeout.js'), 'anon loads no idle script');
+    assert.ok(anon.includes('stats-back'), 'anon gets an in-body back button');
+    assert.ok(anon.includes('/js/status.js'), 'anon still loads the status client');
+
+    const authed = pages.statsPage({ user: { id: '1', username: 'tester', globalName: 'Tester' } });
+    assert.ok(authed.includes('topnav'), 'signed-in user keeps the top nav');
+    assert.ok(authed.includes('session-timeout.js'), 'signed-in user loads the idle script');
+    assert.ok(!authed.includes('stats-back'), 'signed-in user relies on the nav back button');
 });
 
 test('shard infrastructure aggregation (pure)', () => {

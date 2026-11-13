@@ -9,12 +9,18 @@
  * page load).
  */
 (() => {
-    if (!window.api) {
-        // common.js loads first; if missing, do nothing rather than crash.
-        return;
-    }
     const $ = (sel, root) => (root || document).querySelector(sel);
     const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
+
+    // Local JSON fetch — the Stats page is public, so it must NOT use the
+    // global api() helper (whose 401 handler bounces visitors to /login). The
+    // status endpoints are read-only and public; a failure just renders the
+    // error state.
+    async function fetchStatus(path) {
+        const res = await fetch(path, { headers: { Accept: 'application/json' } });
+        if (!res.ok) throw new Error(`Request failed (${res.status})`);
+        return res.json();
+    }
 
     const STATUS_META = {
         operational: { label: 'Operational', cls: 'ok' },
@@ -226,7 +232,7 @@
         modal.classList.remove('hidden');
         $('#status-detail-body').innerHTML = '<div class="splash"><div class="spinner"></div><p>Loading history…</p></div>';
         try {
-            const data = await window.api(`/api/status/history?component=${encodeURIComponent(component)}&days=30`);
+            const data = await fetchStatus(`/api/status/history?component=${encodeURIComponent(component)}&days=30`);
             renderDetailBody(component, label, data);
         } catch (err) {
             $('#status-detail-body').innerHTML = `<div class="status-error">Could not load history for ${esc(label)}.</div>`;
@@ -389,7 +395,7 @@
         bindMouseStrips();
 
         try {
-            const summary = await window.api('/api/status/detailed');
+            const summary = await fetchStatus('/api/status/detailed');
             render(summary);
             window.__statusSummary = summary;
         } catch (err) {
