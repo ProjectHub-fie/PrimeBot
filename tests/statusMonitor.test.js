@@ -585,13 +585,20 @@ test('input validation on admin endpoints', async () => {
 });
 
 // ── 20. Mobile / desktop dashboard rendering ─────────────────────────────────
-test('stats page renders the status board + loads status.js', async () => {
+test('stats page renders the status board + skeleton + loads status.js', async () => {
     const pages = require('../dashboard/render/pages');
     const html = pages.statsPage({ user: null });
     assert.ok(html.includes('id="stats-status"'), 'status board container rendered');
     assert.ok(html.includes('/js/status.js'), 'status client script loaded');
-    assert.ok(html.includes('/js/stats.js'), 'stats client still loads');
-    assert.ok(html.includes('class="stats-band"'), 'existing bot stats section preserved');
+    // The board ships a loading skeleton (not a bare spinner) while it fetches.
+    assert.ok(html.includes('status-skeleton'), 'loading skeleton rendered');
+    assert.ok(html.includes('sk-shimmer'), 'skeleton uses the shimmer placeholder');
+    assert.ok(html.includes('aria-busy="true"'), 'board marked busy while loading');
+    // Non-monitoring content was removed from the Stats page.
+    assert.ok(!html.includes('/js/stats.js'), 'bot-stats client script removed');
+    assert.ok(!html.includes('id="stats-bot"'), 'bot statistics band removed');
+    assert.ok(!html.includes('id="stats-latency"'), 'website latency card removed');
+    assert.ok(!html.includes('id="stats-nodes"'), 'shardnode status card removed');
 });
 
 test('shard infrastructure aggregation (pure)', () => {

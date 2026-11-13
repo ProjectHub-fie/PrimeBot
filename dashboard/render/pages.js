@@ -178,58 +178,41 @@ function docsPage({ clientId, user } = {}) {
     return render({ title: 'PrimeBot Command Documentation', body, active: 'docs', user, login: !user, scripts: ['/js/docs.js'] });
 }
 
-// ── Live ────────────────────────────────────────────────────────────────────
-
-// ── Stats (bot + shardnode node status) ──────────────────────────────────────
+// ── Stats (infrastructure status) ────────────────────────────────────────────
 //
-// The dashboard process can't read the bot's in-memory runtime stats (ping,
-// uptime, guilds.cache) because it runs separately from the bot. It can,
-// however, read the bot's authoritative server count (Discord REST) and the
-// shardnode/failover status tables the bot's nodeFailover module writes. The
-// page boots with a shell and the client fetches /api/stats/bot + /api/stats/nodes
-// so the numbers stay live without a full reload.
+// The page is a pure infrastructure-status dashboard: it boots with a skeleton
+// shell and the client fetches /api/status/detailed to paint the overall banner,
+// the per-component 30-day uptime graphs, the shard infrastructure summary and
+// the incident lists. Monitoring data loads asynchronously so the layout paints
+// immediately and no heavy queries run on page load.
+
+// Loading skeleton shown while the infrastructure status board fetches its
+// data — mirrors the real board (overall banner, shard-infra stats, component
+// cards, incident rows) so the page never flashes empty.
+function statsSkeletonHTML() {
+    const stat = '<div class="sk-stat sk-shimmer"></div>';
+    const card = '<div class="sk-card sk-shimmer"></div>';
+    const line = '<div class="sk-line sk-shimmer"></div>';
+    return `
+    <div class="status-skeleton" role="status" aria-label="Loading infrastructure status">
+      <div class="sk-banner sk-shimmer"></div>
+      <div class="sk-infra">${stat.repeat(6)}</div>
+      <div class="sk-grid">${card.repeat(8)}</div>
+      <div class="sk-lines">${line.repeat(3)}</div>
+    </div>`;
+}
 
 function statsPage({ user } = {}) {
     const body = `
     <div class="page-head">
       <h1>Stats</h1>
-      <p>Infrastructure status, uptime history and live statistics across the PrimeBot cluster.</p>
+      <p>Live infrastructure status, uptime history and incidents across the PrimeBot cluster.</p>
     </div>
 
-    <div id="stats-status" class="status-board">
-      <div class="splash"><div class="spinner"></div><p>Loading infrastructure status…</p></div>
-    </div>
-
-    <div id="stats-bot" class="stats-band">
-      <div class="splash"><div class="spinner"></div><p>Loading bot stats…</p></div>
-    </div>
-
-    <div class="card">
-      <div class="card-title"><span><span class="icon">${svgIcon('activity')}</span> Website latency</span>
-        <span class="card-title-actions" id="latency-windows" hidden>
-          <button class="btn btn-sm lat-window" data-days="7" type="button">7 days</button>
-          <button class="btn btn-sm lat-window active" data-days="30" type="button">30 days</button>
-          <button class="btn btn-sm lat-window" data-days="90" type="button">90 days</button>
-        </span>
-      </div>
-      <p class="card-desc">How long the dashboard takes to respond to real page and API requests, bucketed hourly.</p>
-      <div id="stats-latency">
-        <div class="splash"><div class="spinner"></div><p>Loading latency graph…</p></div>
-      </div>
-      <div id="stats-latency-routes" class="lat-routes-wrap">
-        <h3 class="lat-routes-title">Slowest routes</h3>
-        <div class="splash"><div class="spinner"></div><p>Loading route breakdown…</p></div>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-title"><span><span class="icon">${svgIcon('globe')}</span> Shardnode status</span></div>
-      <p class="card-desc">Per-node heartbeats and the active failover lease across the sn1 / sn2 / sn3 shard nodes.</p>
-      <div id="stats-nodes">
-        <div class="splash"><div class="spinner"></div><p>Loading node stats…</p></div>
-      </div>
+    <div id="stats-status" class="status-board" aria-busy="true">
+      ${statsSkeletonHTML()}
     </div>`;
-    return render({ title: 'PrimeBot · Stats', body, active: 'stats', scripts: ['/js/stats.js', '/js/status.js'], user });
+    return render({ title: 'PrimeBot · Stats', body, active: 'stats', scripts: ['/js/status.js'], user });
 }
 
 // ── Live (split into Polls and Giveaways) ────────────────────────────────────

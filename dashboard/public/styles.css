@@ -4224,146 +4224,6 @@ select:focus {
   .yt-creator-actions { justify-content: flex-start; width: 100%; }
 }
 
-/* ── Stats page: website-latency graph (githubstatus-style) ──────────────── */
-#stats-latency {
-  margin-top: 14px;
-}
-
-.lat-head {
-  display: flex; flex-wrap: wrap; align-items: baseline; gap: 14px;
-  margin-bottom: 10px; font-size: 12px; color: var(--text-dim);
-}
-
-.lat-now {
-  font-weight: 800; color: var(--text); background: var(--surface-1);
-  border: 1px solid var(--border-soft); border-radius: 999px;
-  padding: 3px 10px; font-size: 12px;
-}
-
-.lat-summary {
-  flex: 1; min-width: 200px;
-}
-
-.lat-summary b { color: var(--text); font-weight: 700; }
-
-.lat-legend-wrap { display: flex; gap: 10px; flex-wrap: wrap; }
-
-.lat-legend {
-  display: inline-flex; align-items: center; gap: 5px;
-  font-size: 11px; color: var(--text-dim);
-}
-.lat-legend::before {
-  content: ''; width: 9px; height: 9px; border-radius: 3px; background: var(--border);
-}
-.lat-legend.lat-band-ok::before { background: var(--green); }
-.lat-legend.lat-band-warn::before { background: var(--yellow); }
-.lat-legend.lat-band-bad::before { background: var(--red); }
-
-.lat-chart {
-  width: 100%; height: auto; max-height: 220px;
-  background: var(--surface-1); border: 1px solid var(--border-soft);
-  border-radius: var(--radius-sm); display: block;
-  overflow: visible;
-}
-
-.lat-grid { stroke: var(--border-soft); stroke-width: 1; stroke-dasharray: 3 4; }
-
-.lat-axis-line { stroke: var(--border); stroke-width: 1; }
-
-.lat-axis { fill: var(--text-faint); font-size: 10px; font-family: var(--font-body); }
-
-.lat-bar { opacity: 0.55; }
-.lat-bar.lat-band-ok { fill: var(--green); }
-.lat-bar.lat-band-warn { fill: var(--yellow); }
-.lat-bar.lat-band-bad { fill: var(--red); }
-
-.lat-line {
-  stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke;
-  stroke-linejoin: round; stroke-linecap: round;
-}
-
-.lat-empty {
-  display: flex; align-items: center; gap: 12px; padding: 22px;
-  color: var(--text-dim); font-size: 13px; background: var(--surface-1);
-  border: 1px dashed var(--border-strong); border-radius: var(--radius-sm);
-}
-.lat-empty svg.ico, .lat-empty .ico { width: 26px; height: 26px; color: var(--text-faint); flex: 0 0 auto; }
-
-#latency-windows { display: inline-flex; gap: 6px; }
-
-.lat-window {
-  border: 1px solid var(--border-strong); background: var(--surface-1);
-  color: var(--text-dim); border-radius: 999px; padding: 3px 10px;
-  font-size: 11px; cursor: pointer; transition: all var(--transition);
-}
-.lat-window:hover { color: var(--text); border-color: var(--accent); }
-.lat-window.active { background: var(--accent); border-color: var(--accent); color: #fff; }
-
-@media (max-width: 720px) {
-  .lat-head { flex-direction: column; align-items: flex-start; gap: 8px; }
-  .lat-summary { min-width: 0; }
-}
-
-/* ── Stats page: slowest-routes breakdown table ──────────────────────────── */
-.lat-routes-wrap { margin-top: 18px; }
-
-.lat-routes-title {
-  font-size: 12px; font-weight: 700; color: var(--text-dim);
-  text-transform: uppercase; letter-spacing: 0.04em; margin: 0 0 10px;
-}
-
-.lat-routes-empty { font-size: 13px; color: var(--text-faint); }
-
-.lat-routes {
-  width: 100%; border-collapse: collapse; font-size: 13px;
-}
-
-.lat-routes th {
-  text-align: left; font-size: 11px; font-weight: 700; color: var(--text-faint);
-  text-transform: uppercase; letter-spacing: 0.04em;
-  padding: 6px 10px; border-bottom: 1px solid var(--border-soft);
-}
-
-.lat-routes th:nth-child(2), .lat-routes th:nth-child(3),
-.lat-routes th:nth-child(4), .lat-routes th:nth-child(5) { text-align: right; }
-
-.lat-routes td {
-  padding: 8px 10px; border-bottom: 1px solid var(--border-soft);
-  color: var(--text); vertical-align: middle;
-}
-
-.lat-routes tr:last-child td { border-bottom: none; }
-.lat-routes tr:hover td { background: var(--surface-hover); }
-
-.lat-route-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.lat-route-name code {
-  background: var(--surface-1); border: 1px solid var(--border-soft);
-  padding: 1px 7px; border-radius: 6px; font-size: 12px; color: var(--text-dim);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-
-.lat-route-method {
-  font-size: 10px; font-weight: 800; letter-spacing: 0.04em;
-  padding: 2px 6px; border-radius: 5px; flex: 0 0 auto;
-  background: var(--accent-soft); color: var(--accent-strong);
-}
-
-.lat-num { text-align: right; font-variant-numeric: tabular-nums; color: var(--text-dim); }
-
-.lat-bar-cell { width: 90px; }
-.lat-route-bar {
-  height: 6px; border-radius: 999px; min-width: 3px;
-  background: var(--accent); opacity: 0.7;
-}
-.lat-route-bar.lat-band-ok { background: var(--green); }
-.lat-route-bar.lat-band-warn { background: var(--yellow); }
-.lat-route-bar.lat-band-bad { background: var(--red); }
-
-@media (max-width: 720px) {
-  .lat-routes th:nth-child(3), .lat-routes td:nth-child(3),
-  .lat-routes th:nth-child(4), .lat-routes td:nth-child(4) { display: none; }
-}
-
 /* ── Infrastructure Status board ─────────────────────────────────────────── */
 
 .status-board { display: flex; flex-direction: column; gap: 16px; margin-bottom: 20px; }
@@ -4547,3 +4407,25 @@ select:focus {
   .status-card-name { font-size: 0.85rem; }
   .status-update-hint { display: none; }
 }
+
+/* ── Stats page loading skeleton (infrastructure status board) ──────────────── */
+.status-skeleton { display: flex; flex-direction: column; gap: 14px; }
+.sk-shimmer {
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 50%, var(--surface-2) 75%);
+  background-size: 200% 100%;
+  animation: sk-shimmer 1.4s ease-in-out infinite;
+  border: 1px solid var(--border-soft);
+}
+@keyframes sk-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+.sk-banner { height: 76px; border-radius: var(--radius-lg, 14px); }
+.sk-infra { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; }
+.sk-stat { height: 66px; border-radius: 10px; }
+.sk-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
+.sk-card { height: 132px; border-radius: var(--radius-lg, 14px); }
+.sk-lines { display: flex; flex-direction: column; gap: 10px; }
+.sk-line { height: 44px; border-radius: 10px; }
+@media (max-width: 720px) {
+  .sk-infra { grid-template-columns: repeat(3, 1fr); }
+  .sk-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+}
+@media (prefers-reduced-motion: reduce) { .sk-shimmer { animation: none; } }
