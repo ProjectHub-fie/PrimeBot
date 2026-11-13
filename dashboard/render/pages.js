@@ -43,7 +43,10 @@ function loginPage({ errorKey, turnstileSiteKey } = {}) {
         <a href="/auth/discord" id="login-discord-btn" class="btn btn-discord">${svgIcon('logIn')} Login with Discord</a>
         <a href="${esc(constants.BOT_INVITE_URL)}" class="btn btn-secondary" target="_blank" rel="noopener">${svgIcon('plus')} Invite PrimeBot</a>
       </div>
-      <a href="/docs" class="btn btn-secondary">${svgIcon('book')} Documentation</a>
+      <div class="login-secondary-actions">
+        <a href="/docs" class="btn btn-secondary">${svgIcon('book')} Documentation</a>
+        <a href="/stats" class="btn btn-secondary">${svgIcon('activity')} Set stats</a>
+      </div>
       <p class="login-legal">By signing in you agree to the <a href="/terms">Terms of Service</a> and <a href="/privacy">Privacy Policy</a>.</p>
       ${turnstileHTML}
 

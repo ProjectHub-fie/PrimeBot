@@ -96,11 +96,14 @@ async function ensureMonitorTables() {
                     shards_total INTEGER NOT NULL DEFAULT 0,
                     shards_ready INTEGER NOT NULL DEFAULT 0,
                     shards_active INTEGER NOT NULL DEFAULT 0,
+                    shard_ids JSONB,
                     pid INTEGER,
                     started_at TIMESTAMPTZ,
                     resource JSONB,
                     detail JSONB
                 )`);
+            // Self-migrate older tables that predate the shard-id column.
+            await p.query(`ALTER TABLE monitor_node_pulse ADD COLUMN IF NOT EXISTS shard_ids JSONB`);
             await p.query(`
                 CREATE TABLE IF NOT EXISTS monitor_observations (
                     id BIGSERIAL PRIMARY KEY,
@@ -196,13 +199,14 @@ async function upsertNodePulse(pulse) {
         nodeName, role = 'sn1', processHealth = 'unknown',
         gatewayConnected = false, gatewayReady = false,
         shardsTotal = 0, shardsReady = 0, shardsActive = 0,
+        shardIds = null,
         pid = null, startedAt = null, resource = null, detail = null,
     } = pulse;
     await monitorPool.query(`
         INSERT INTO monitor_node_pulse
             (node_name, role, ts, process_health, gateway_connected, gateway_ready,
-             shards_total, shards_ready, shards_active, pid, started_at, resource, detail)
-        VALUES ($1,$2,NOW(),$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+             shards_total, shards_ready, shards_active, shard_ids, pid, started_at, resource, detail)
+        VALUES ($1,$2,NOW(),$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
         ON CONFLICT (node_name) DO UPDATE SET
             role = EXCLUDED.role,
             ts = NOW(),
@@ -212,18 +216,24 @@ async function upsertNodePulse(pulse) {
             shards_total = EXCLUDED.shards_total,
             shards_ready = EXCLUDED.shards_ready,
             shards_active = EXCLUDED.shards_active,
+            shard_ids = EXCLUDED.shard_ids,
             pid = EXCLUDED.pid,
             started_at = EXCLUDED.started_at,
             resource = EXCLUDED.resource,
             detail = EXCLUDED.detail
-    `, [nodeName, role, processHealth, gatewayConnected, gatewayReady, shardsTotal, shardsReady, shardsActive, pid, startedAt, resource, detail]);
+    `, [
+        nodeName, role, processHealth, gatewayConnected, gatewayReady,
+        shardsTotal, shardsReady, shardsActive,
+        shardIds && shardIds.length ? JSON.stringify(shardIds) : null,
+        pid, startedAt, resource, detail,
+    ]);
 }
 
 async function getNodePulses() {
     await ensureMonitorTables();
     const res = await monitorPool.query(`
         SELECT node_name, role, ts, process_health, gateway_connected, gateway_ready,
-               shards_total, shards_ready, shards_active, pid, started_at, resource, detail,
+               shards_total, shards_ready, shards_active, shard_ids, pid, started_at, resource, detail,
                EXTRACT(EPOCH FROM (NOW() - ts)) * 1000 AS age_ms
         FROM monitor_node_pulse
     `).catch(() => ({ rows: [] }));
@@ -238,11 +248,34 @@ async function getNodePulses() {
         shardsTotal: Number(r.shards_total) || 0,
         shardsReady: Number(r.shards_ready) || 0,
         shardsActive: Number(r.shards_active) || 0,
+        shardIds: Array.isArray(r.shard_ids) ? r.shard_ids : [],
         pid: r.pid != null ? Number(r.pid) : null,
         startedAt: r.started_at,
         resource: r.resource || null,
         detail: r.detail || null,
     }));
+}
+
+/**
+ * The failover lease holder (bot_failover_lock, id=1) — the node actually
+ * connected to Discord. This is the AUTHORITATIVE active-node source: the
+ * monitoring worker lease (monitor_worker) is a different, unrelated thing and
+ * must never be used to decide which node is ACTIVE.
+ */
+async function getFailoverLock() {
+    await ensureMonitorTables();
+    const res = await monitorPool.query(
+        `SELECT owner_node_name, owner_role,
+                EXTRACT(EPOCH FROM (NOW() - last_seen)) * 1000 AS age_ms
+         FROM bot_failover_lock WHERE id = 1`
+    ).catch(() => ({ rows: [] }));
+    const row = res.rows && res.rows[0];
+    if (!row) return { nodeName: null, role: null, ageMs: null };
+    return {
+        nodeName: row.owner_node_name,
+        role: row.owner_role,
+        ageMs: Math.round(Number(row.age_ms) || 0),
+    };
 }
 
 // ── Node restarts ────────────────────────────────────────────────────────────
@@ -281,6 +314,30 @@ async function insertObservation(component, status, detail) {
         `INSERT INTO monitor_observations (component, ts, status, detail) VALUES ($1, NOW(), $2, $3)`,
         [component, status, detail || null]
     ).catch(() => {});
+}
+
+/**
+ * The most recent observation for a component, read from the SAME pool the
+ * writer uses (monitorPool). The dashboard's statusView previously read this
+ * from the season pool directly, so when MONITOR_DATABASE_URL differed from
+ * SEASON_DATABASE_URL the page showed "no data" for components that were
+ * actively observed. Returns null when there is no row.
+ */
+async function getLatestObservation(component) {
+    await ensureMonitorTables();
+    const res = await monitorPool.query(
+        `SELECT status, detail, ts, EXTRACT(EPOCH FROM (NOW() - ts)) * 1000 AS age_ms
+         FROM monitor_observations WHERE component = $1 ORDER BY ts DESC LIMIT 1`,
+        [component]
+    ).catch(() => ({ rows: [] }));
+    const row = res.rows && res.rows[0];
+    if (!row) return null;
+    return {
+        status: row.status,
+        detail: row.detail || null,
+        ts: row.ts,
+        ageMs: Math.round(Number(row.age_ms) || 0),
+    };
 }
 
 async function pruneObservations(keepDays) {
@@ -462,12 +519,12 @@ async function rollDaily() {
                 FROM bucket
             )
             SELECT component, day,
-                   COALESCE(SUM(span_ms) FILTER (WHERE status <> 'maintenance'), 0),
+                   COALESCE(SUM(span_ms) FILTER (WHERE status IN ('operational','degraded','unavailable')), 0),
                    COALESCE(SUM(span_ms) FILTER (WHERE status = 'operational'), 0),
                    COALESCE(SUM(span_ms) FILTER (WHERE status = 'degraded'), 0),
                    COALESCE(SUM(span_ms) FILTER (WHERE status = 'unavailable'), 0),
                    COALESCE(SUM(span_ms) FILTER (WHERE status = 'maintenance'), 0),
-                   COUNT(*)
+                   COUNT(*) FILTER (WHERE status IN ('operational','degraded','unavailable','maintenance'))
             FROM spans
             GROUP BY component, day
             ON CONFLICT (component, day) DO UPDATE SET
@@ -539,12 +596,12 @@ async function getDailySeries(component, days = 30) {
             FROM bucket
         )
         SELECT
-            COALESCE(SUM(span_ms) FILTER (WHERE status <> 'maintenance'), 0) AS monitored_ms,
+            COALESCE(SUM(span_ms) FILTER (WHERE status IN ('operational','degraded','unavailable')), 0) AS monitored_ms,
             COALESCE(SUM(span_ms) FILTER (WHERE status = 'operational'), 0) AS operational_ms,
             COALESCE(SUM(span_ms) FILTER (WHERE status = 'degraded'), 0) AS degraded_ms,
             COALESCE(SUM(span_ms) FILTER (WHERE status = 'unavailable'), 0) AS downtime_ms,
             COALESCE(SUM(span_ms) FILTER (WHERE status = 'maintenance'), 0) AS maintenance_ms,
-            COUNT(*) AS samples
+            COUNT(*) FILTER (WHERE status IN ('operational','degraded','unavailable','maintenance')) AS samples
         FROM spans
     `, [component, todayStart.toISOString()]).catch(() => ({ rows: [] }));
 
@@ -643,9 +700,9 @@ function rowToMaintenance(r) {
 module.exports = {
     resolveConnectionString, monitorPool,
     COMPONENT_KEYS, STATUS_OK, STATUS_DEGRADED, STATUS_DOWN, INCIDENT_STATUSES,
-    ensureMonitorTables, upsertNodePulse, getNodePulses,
+    ensureMonitorTables, upsertNodePulse, getNodePulses, getFailoverLock,
     recordNodeRestart, getNodeRestarts,
-    insertObservation, pruneObservations,
+    insertObservation, getLatestObservation, pruneObservations,
     acquireWorkerLease, refreshWorkerLease, getWorkerLease,
     getOpenIncidents, getIncidents, getIncidentById, createIncident, updateIncident, resolveIncident,
     rollDaily, getDailySeries,

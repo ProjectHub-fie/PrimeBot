@@ -1500,6 +1500,14 @@ select:focus {
   margin-bottom: 12px;
 }
 
+/* Documentation + Set stats sit together, side by side (stacked on mobile). */
+.login-secondary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: center;
+}
+
 /* ── Discord-style floating "Save changes" bar ─────────────────────────── */
 /* Slides up from the bottom when the user edits a settings field. Mirrors
    Discord's settings footer: a label + a green "Save" box and a borderless
@@ -2547,6 +2555,8 @@ select:focus {
   .login-sub { font-size: 13.5px; margin-bottom: 18px; max-width: 100%; }
   .login-actions { flex-direction: column; align-items: stretch; margin-bottom: 14px; }
   .login-actions .btn, .login-actions + .btn { width: 100%; justify-content: center; }
+  .login-secondary-actions { flex-direction: column; align-items: stretch; }
+  .login-secondary-actions .btn { width: 100%; justify-content: center; }
   .feature-grid { grid-template-columns: 1fr; margin: 20px auto 0; }
   .stats-band { padding: 16px 14px; margin: 26px auto 0; }
   .stats-band-head { flex-direction: column; align-items: flex-start; gap: 5px; margin-bottom: 12px; }
@@ -4279,6 +4289,31 @@ select:focus {
 .pill-degraded { color: #d9a43a; background: rgba(240,178,50,0.14); }
 .pill-down { color: #ed4245; background: rgba(237,66,69,0.14); }
 .pill-no-data { color: #8c8c94; background: rgba(140,140,148,0.14); }
+.pill-stale { color: #d9a43a; background: rgba(240,178,50,0.12); }
+/* A healthy standby node reads BLUE, never red — it is not a fault. */
+.pill-standby { color: #6ea8ff; background: rgba(88,140,242,0.16); }
+.dot-stale { background: #f0b232; }
+.dot-standby { background: #6ea8ff; }
+.status-card-standby { border-color: rgba(88,140,242,0.4); }
+.status-card-down { border-color: rgba(237,66,69,0.45); }
+.status-card-degraded { border-color: rgba(240,178,50,0.4); }
+.status-card-stale { border-color: rgba(240,178,50,0.35); }
+.status-card-no-data { border-color: var(--border-soft); }
+.status-card-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.badge {
+  font-size: 0.62rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+  padding: 2px 7px; border-radius: 999px; border: 1px solid transparent;
+}
+.badge-role.badge-active { color: #23a55a; background: rgba(35,165,90,0.14); border-color: rgba(35,165,90,0.3); }
+.badge-role.badge-standby { color: #6ea8ff; background: rgba(88,140,242,0.16); border-color: rgba(88,140,242,0.35); }
+.badge-gw.badge-ok { color: #23a55a; background: rgba(35,165,90,0.1); }
+.badge-gw.badge-down { color: #ed4245; background: rgba(237,66,69,0.12); }
+.badge-gw.badge-muted { color: var(--text-dim); background: rgba(140,140,148,0.12); }
+.bar-stale { background: #f0b232; }
+.bar-standby { background: #6ea8ff; }
+.infra-num.infra-ok { color: #23a55a; }
+.infra-num.infra-warn { color: #d9a43a; }
+.infra-num.infra-down { color: #ed4245; }
 .status-card-uptime { margin-top: 4px; }
 .status-uptime-big { font-family: 'Sora', sans-serif; font-size: 1.6rem; font-weight: 700; }
 .status-uptime-cap { margin-left: 8px; color: var(--text-dim); font-size: 0.78rem; }

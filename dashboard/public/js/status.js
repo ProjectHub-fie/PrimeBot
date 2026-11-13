@@ -25,10 +25,31 @@
     const STATUS_META = {
         operational: { label: 'Operational', cls: 'ok' },
         degraded: { label: 'Degraded', cls: 'degraded' },
+        stale: { label: 'Checking…', cls: 'stale' },
         unavailable: { label: 'Outage', cls: 'down' },
         unknown: { label: 'No data', cls: 'no-data' },
         maintenance: { label: 'Maintenance', cls: 'maint' },
     };
+
+    // Node role / gateway / health badges (kept orthogonal to the status pill).
+    const ROLE_META = {
+        active: { label: 'ACTIVE', cls: 'active' },
+        standby: { label: 'STANDBY', cls: 'standby' },
+    };
+    const GATEWAY_META = {
+        connected: { label: 'Gateway connected', cls: 'ok' },
+        disconnected: { label: 'Gateway disconnected', cls: 'down' },
+        not_assigned: { label: 'Gateway not assigned', cls: 'muted' },
+    };
+    // A node's card uses a BLUE (standby) accent when it is a healthy standby,
+    // never the red "down" accent — a standby with no shards is not a fault.
+    function nodeAccent(c) {
+        if (c.health === 'offline' || c.status === 'unavailable') return 'down';
+        if (c.health === 'unknown' || c.status === 'unknown') return 'no-data';
+        if (c.health === 'stale' || c.status === 'stale') return 'stale';
+        if (c.status === 'degraded') return 'degraded';
+        return c.role === 'standby' ? 'standby' : 'ok';
+    }
 
     function fmtDuration(ms) {
         if (ms == null) return '—';
@@ -100,67 +121,120 @@
     }
 
     function componentCard(c, incByDay) {
-        const meta = STATUS_META[c.status] || STATUS_META.unknown;
-        const label = c.label || c.key;
         const isNode = c.key === 'sn1' || c.key === 'sn2' || c.key === 'sn3';
+        const accent = isNode ? nodeAccent(c) : (STATUS_META[c.status] || STATUS_META.unknown).cls;
+        const meta = isNode
+            ? { label: nodeStatusLabel(c), cls: accent }
+            : (STATUS_META[c.status] || STATUS_META.unknown);
+        const label = c.label || c.key;
         const stri = c.series ? barStrip(c.series, label, incByDay) : '';
+
+        // Node-specific badges: role + gateway.
+        let nodeBadges = '';
+        if (isNode) {
+            const role = ROLE_META[c.role] || null;
+            const gw = GATEWAY_META[c.gateway] || null;
+            nodeBadges = `
+              <div class="status-card-badges">
+                ${role ? `<span class="badge badge-role badge-${role.cls}">${role.label}</span>` : ''}
+                ${gw ? `<span class="badge badge-gw badge-${gw.cls}">${gw.label}</span>` : ''}
+              </div>`;
+        }
+
+        // Node footer details: shards + last heartbeat.
+        let foot = '';
+        if (isNode) {
+            const shards = c.shardsTotal > 0
+                ? `${c.shardsReady}/${c.shardsTotal} shards`
+                : 'No shards assigned';
+            foot = `
+              <div class="status-card-foot">
+                <span class="status-foot-chip">${shards}</span>
+                <span class="status-foot-last">Heartbeat ${lastCheckLabel(c.lastObservedAt)}</span>
+              </div>`;
+        } else {
+            const chip = (label === 'Main Website' || label === 'Dashboard / API') ? 'HTTP' : '';
+            foot = `
+              <div class="status-card-foot">
+                ${chip ? `<span class="status-foot-chip">${chip}</span>` : ''}
+                <span class="status-foot-last">Last check ${lastCheckLabel(c.lastObservedAt)}</span>
+              </div>`;
+        }
+
         return `
-        <button type="button" class="status-card" data-component="${c.key}" aria-label="View ${label} history">
+        <button type="button" class="status-card status-card-${accent}" data-component="${c.key}" aria-label="View ${label} history">
           <div class="status-card-top">
             <span class="status-dot dot-${meta.cls}"></span>
             <span class="status-card-name">${label}</span>
             <span class="status-pill pill-${meta.cls}">${meta.label}</span>
           </div>
+          ${nodeBadges}
           <div class="status-card-uptime">
-            <span class="status-uptime-big">${fmtPct(c.uptime30 && c.uptime30.pct)}</span>
-            <span class="status-uptime-cap">30-day uptime</span>
+            <span class="status-uptime-big">${uptimeText(c)}</span>
+            <span class="status-uptime-cap">${uptimeCap(c)}</span>
           </div>
           <div class="uptime-strip" title="">
             ${stri}
           </div>
-          <div class="status-card-foot">
-            ${isNode ? `<span class="status-foot-chip">Node</span>` : (label === 'Main Website' || label === 'Dashboard / API') ? `<span class="status-foot-chip">HTTP</span>` : ''}
-            <span class="status-foot-last">Last check ${lastCheckLabel(c.lastObservedAt)}</span>
-          </div>
+          ${foot}
         </button>`;
+    }
+
+    // A node that is online and healthy reads "Online"/"Standby online" rather
+    // than a bare "Operational" — and never "Outage" just for having no shards.
+    function nodeStatusLabel(c) {
+        if (c.health === 'offline' || c.status === 'unavailable') return 'Offline';
+        if (c.health === 'unknown' || c.status === 'unknown') return 'No data';
+        if (c.health === 'stale' || c.status === 'stale') return 'Checking…';
+        if (c.status === 'degraded') return 'Degraded';
+        return c.role === 'standby' ? 'Online (standby)' : 'Online (active)';
+    }
+
+    // NO DATA must never read "100%". Show a dash + honest caption instead.
+    function uptimeText(c) {
+        if (!c.uptime30 || c.uptime30.pct == null) return '—';
+        return fmtPct(c.uptime30.pct);
+    }
+
+    function uptimeCap(c) {
+        if (!c.uptime30 || c.uptime30.pct == null) return 'No monitoring data';
+        const days = c.uptime30.daysWithData;
+        if (c.uptime30.partial) return `${days}/${c.uptime30.windowDays} days monitored`;
+        return '30-day uptime';
     }
 
     function shardInfra(components, summary) {
         const nodes = ['sn1', 'sn2', 'sn3'].map(k => components[k]).filter(Boolean);
-        const healthy = nodes.filter(n => n.status === 'operational').length;
-        const unhealthy = nodes.filter(n => n.status !== 'operational' && n.status !== 'unknown').length;
-        let combinedMonitored = 0, combinedDown = 0, combinedDeg = 0;
-        for (const n of nodes) {
-            if (n.uptime30) {
-                combinedMonitored += n.uptime30.monitoredMs;
-                combinedDown += n.uptime30.downtimeMs;
-                combinedDeg += n.uptime30.degradedMs;
-            }
-        }
-        const combinedPct = combinedMonitored > 0 ? ((combinedMonitored - combinedDown) / combinedMonitored) * 100 : null;
+        const infra = summary.infra || {};
+        const total = infra.total || nodes.length || 3;
+        const online = infra.online != null ? infra.online : nodes.filter(n => n.health === 'online').length;
+        const active = infra.active != null ? infra.active : nodes.filter(n => n.role === 'active').length;
+        const standby = infra.standby != null ? infra.standby : nodes.filter(n => n.role === 'standby').length;
+        const offline = infra.offline != null ? infra.offline : nodes.filter(n => n.health === 'offline').length;
+        const unhealthy = infra.unhealthy != null ? infra.unhealthy : 0;
 
-        let mostReliable = null, mostDown = null;
-        for (const n of nodes) {
-            if (!n.uptime30) continue;
-            if (!mostReliable || (n.uptime30.pct || 0) > (mostReliable.uptime30.pct || 0)) mostReliable = n;
-            if (!mostDown || (n.uptime30.downtimeMs || 0) > (mostDown.uptime30.downtimeMs || 0)) mostDown = n;
-        }
-
+        const combinedPct = infra.combinedPct != null ? infra.combinedPct : null;
+        const mostReliable = infra.mostReliable ? (components[infra.mostReliable] || {}).label : '—';
+        const mostDown = infra.mostDown ? (components[infra.mostDown] || {}).label : '—';
         const botComp = components.bot;
+
+        const pctText = combinedPct == null ? '—' : fmtPct(combinedPct);
         return `
         <div class="card status-infra">
           <div class="card-title"><span><span class="icon">${window.svgIcon ? window.svgIcon('activity') : ''}</span> Shard infrastructure</span></div>
           <div class="infra-grid">
-            <div class="infra-stat"><span class="infra-num">${healthy}/3</span><span class="infra-cap">Healthy nodes</span></div>
-            <div class="infra-stat"><span class="infra-num">${unhealthy}/3</span><span class="infra-cap">Unhealthy nodes</span></div>
-            <div class="infra-stat"><span class="infra-num">${fmtPct(combinedPct)}</span><span class="infra-cap">Combined shard availability</span></div>
-            <div class="infra-stat"><span class="infra-num">${summary.openIncidents || 0}</span><span class="infra-cap">Open incidents</span></div>
-            <div class="infra-stat"><span class="infra-num">${fmtDuration(combinedDown)}</span><span class="infra-cap">Total shard downtime (30d)</span></div>
-            <div class="infra-stat"><span class="infra-num">${mostReliable ? mostReliable.label : '—'}</span><span class="infra-cap">Most reliable node</span></div>
+            <div class="infra-stat"><span class="infra-num infra-ok">${online}/${total}</span><span class="infra-cap">Online nodes</span></div>
+            <div class="infra-stat"><span class="infra-num">${active}/${total}</span><span class="infra-cap">Active nodes</span></div>
+            <div class="infra-stat"><span class="infra-num">${standby}/${total}</span><span class="infra-cap">Standby nodes</span></div>
+            <div class="infra-stat"><span class="infra-num">${offline}/${total}</span><span class="infra-cap">Offline nodes</span></div>
+            <div class="infra-stat"><span class="infra-num">${unhealthy}/${total}</span><span class="infra-cap">Unhealthy nodes</span></div>
+            <div class="infra-stat"><span class="infra-num">${pctText}</span><span class="infra-cap">Combined shard availability</span></div>
+            <div class="infra-stat"><span class="infra-num">${mostReliable}</span><span class="infra-cap">Most reliable node</span></div>
+            <div class="infra-stat"><span class="infra-num">${mostDown}</span><span class="infra-cap">Highest downtime node</span></div>
           </div>
           <div class="infra-service">
             <span>PrimeBot service availability (30d):</span>
-            <strong>${fmtPct(botComp && botComp.uptime30 && botComp.uptime30.pct)}</strong>
+            <strong>${uptimeText(botComp || {})}</strong>
           </div>
         </div>`;
     }
@@ -260,7 +334,7 @@
                   <div class="pulse-row">
                     <span class="pulse-node">${esc(p.nodeName)}</span>
                     <span class="pulse-state ${p.gatewayReady ? 'ok' : (p.gatewayConnected ? 'degraded' : 'no-data')}">${p.gatewayReady ? 'gateway ready' : (p.gatewayConnected ? 'connecting' : 'not connected')}</span>
-                    <span class="pulse-shards">${p.shardsReady}/${p.shardsTotal} shards</span>
+                    <span class="pulse-shards">${p.shardsReady}/${p.shardsTotal} shards${(p.shardIds && p.shardIds.length) ? ' [' + p.shardIds.join(', ') + ']' : ''}</span>
                     <span class="pulse-time">${lastCheckLabel(p.ts)}</span>
                   </div>`).join('')}
               </div>
