@@ -113,9 +113,20 @@ test('GET /privacy and /terms stay public alongside /docs', async () => {
   });
 });
 
+test('GET /stats is public like /docs (no login bounce)', async () => {
+  await withServer(async (server) => {
+    const res = await fetchOnce(server, '/stats');
+    assert.equal(res.status, 200, '/stats should render publicly');
+    assert.match(res.body, /id="stats-status"/);
+    // Anonymous visitors get the no-nav shell.
+    assert.ok(!res.body.includes('topnav'), 'anon stats should not render the top nav');
+    assert.ok(!res.body.includes('session-timeout.js'), 'anon stats should not load the idle-timeout script');
+  });
+});
+
 test('auth-guarded pages still redirect anonymous visitors to /login', async () => {
   await withServer(async (server) => {
-    for (const p of ['/', '/dashboard', '/stats', '/live/polls']) {
+    for (const p of ['/', '/dashboard', '/live/polls']) {
       const res = await fetchOnce(server, p);
       assert.equal(res.status, 302, `${p} should redirect`);
       assert.equal(res.headers.location, '/login');
