@@ -1112,3 +1112,52 @@ the function budget and the connection was killed (`ERR_CONNECTION_ABORTED` /
   `visibilitychange`). No background polling — keeps Neon quiet when the tab is
   hidden. The 7/30/90 switcher re-fetches the same endpoint without a reload.
 
+## Infrastructure status monitoring (`server/monitorDb.js` + `utils/statusWorker.js`)
+
+The public **Stats page** (`/stats`) is a GitHub-Status-style board backed by real
+persisted monitoring, not a mockup. Storage lives on the **season pool**
+(`SEASON_DATABASE_URL` → `FALLBACK_DATABASE_URL` → `DATABASE_URL`, or a dedicated
+`MONITOR_DATABASE_URL`) — no new database, no Redis, no paid service. Tables
+(self-created + indexed, all `TIMESTAMPTZ`/UTC): `monitor_components`,
+`monitor_node_pulse` (per-node rich heartbeat), `monitor_observations` (raw state
+observations), `monitor_daily` (per-component per-UTC-day aggregates),
+`monitor_incidents`, `monitor_worker` (single-worker DB lease),
+`monitor_maintenance`, `monitor_node_restarts`.
+
+- **Uptime formula (per component per bucket):**
+  `Uptime% = (monitored_ms - downtime_ms) / monitored_ms * 100`. Each observation
+  represents the interval from its own `ts` until the next (`LEAD`), so a data gap
+  **shaves monitored duration instead of counting as operational**. A day with no
+  observations is **grey / no-data**, never green.
+- **Daily roll (`monitorDb.rollDaily()`, called by the worker each tick):** folds
+  finished (pre-today) observations into `monitor_daily` via one `INSERT … ON
+  CONFLICT` (idempotent), then prunes the consumed raw rows. Two hard-won rules:
+  - **The UTC day boundary must be built UTC-explicit and parenthesized.**
+    `LEAST(next_ts, date_trunc('day', NOW())::timestamp + interval '1 day' - ts)`
+    is a **trap**: `-` binds tighter than `+`, so it parses as
+    `A + (interval '1 day' - ts)` and `LEAST()` compares a `timestamptz` against
+    an `interval` → `error: LEAST types timestamp with time zone and interval
+    cannot be matched`, failing the whole roll every tick. The correct form is
+    `LEAST(next_ts, (date_trunc('day', NOW() AT TIME ZONE 'UTC') + interval '1
+    day') AT TIME ZONE 'UTC') - ts` (parenthesized, UTC-explicit, timestamptz on
+    both sides). The same UTC-explicit boundary is used on the `DELETE`.
+  - **Never prune on a failed roll.** The old code chained `.catch()` on the
+    `INSERT` and then ran the `DELETE` **unconditionally** — so when the roll
+    threw, finished days were deleted from `monitor_observations` *without ever
+    being aggregated*, losing history permanently. The roll is now wrapped in
+    `try/catch` and returns early on failure, so the raw rows survive and the
+    next tick retries. (`pruneObservations(keepDays)` is a separate, safe
+    retention purge — it runs only after a successful roll and only drops rows
+    older than the retention window, far past the aggregation boundary.)
+- **Worker coordination:** `utils/statusWorker.js` runs at most one worker via the
+  `monitor_worker` DB lease (atomic claim, TTL, `refreshWorkerLease`) so the three
+  shard nodes never run duplicate monitors; a crashed worker's lease expires and
+  another node recovers it. No per-component timers — one adaptive tick.
+- **Tests (`tests/statusMonitor.test.js`):** includes a fake-pool regression that
+  the `DELETE` is **skipped** when the roll's `INSERT` fails (and runs after a
+  success), a static assertion pinning the parenthesized/UTC-explicit boundary
+  string, and an **opt-in real-Postgres** test (set `MONITOR_TEST_DATABASE_URL` to
+  a throwaway DB) that executes the actual SQL and asserts the uptime math
+  (monitored/operational/downtime/degraded ms + prune). Reverting to the buggy
+  form makes the last two fail — keep them.
+

@@ -431,43 +431,65 @@ async function rollDaily() {
     // shave the monitored duration instead of being counted as operational.
     // Only fully-finished days are rolled; the current UTC day stays raw.
     await ensureMonitorTables();
-    await monitorPool.query(`
-        INSERT INTO monitor_daily (component, day, monitored_ms, operational_ms, degraded_ms, downtime_ms, maintenance_ms, samples)
-        WITH bucket AS (
-            SELECT component,
-                   date_trunc('day', ts)::date AS day,
-                   ts,
-                   LEAD(ts) OVER (PARTITION BY component ORDER BY ts) AS next_ts,
-                   status
-            FROM monitor_observations
-            WHERE ts < date_trunc('day', NOW())
-        ),
-        spans AS (
-            SELECT component, day, status,
-                   CASE
-                       WHEN next_ts IS NULL THEN 0
-                       ELSE GREATEST(EXTRACT(EPOCH FROM (LEAST(next_ts, date_trunc('day', NOW())::timestamp + interval '1 day' - ts)) - ts) * 1000, 0)
-                   END AS span_ms
-            FROM bucket
-        )
-        SELECT component, day,
-               COALESCE(SUM(span_ms) FILTER (WHERE status <> 'maintenance'), 0),
-               COALESCE(SUM(span_ms) FILTER (WHERE status = 'operational'), 0),
-               COALESCE(SUM(span_ms) FILTER (WHERE status = 'degraded'), 0),
-               COALESCE(SUM(span_ms) FILTER (WHERE status = 'unavailable'), 0),
-               COALESCE(SUM(span_ms) FILTER (WHERE status = 'maintenance'), 0),
-               COUNT(*)
-        FROM spans
-        GROUP BY component, day
-        ON CONFLICT (component, day) DO UPDATE SET
-            monitored_ms = EXCLUDED.monitored_ms,
-            operational_ms = EXCLUDED.operational_ms,
-            degraded_ms = EXCLUDED.degraded_ms,
-            downtime_ms = EXCLUDED.downtime_ms,
-            maintenance_ms = EXCLUDED.maintenance_ms,
-            samples = EXCLUDED.samples
-    `).catch(err => console.error('[MONITOR] rollDaily error:', err.message));
-    await monitorPool.query(`DELETE FROM monitor_observations WHERE ts < date_trunc('day', NOW())`).catch(() => {});
+    // The next UTC midnight is built UTC-explicit (`NOW() AT TIME ZONE 'UTC'`
+    // yields a naive timestamp we can add a day to, then re-tag as timestamptz)
+    // so the rollover boundary does not drift with the session timezone, and
+    // every operand of the subtraction is a timestamptz. LEAST() must be
+    // parenthesized on both sides: `a + interval '1 day' - ts` parses as
+    // `a + (interval '1 day' - ts)`, which makes LEAST() compare a timestamptz
+    // against an interval and errors "LEAST types timestamp with time zone and
+    // interval cannot be matched".
+    try {
+        await monitorPool.query(`
+            INSERT INTO monitor_daily (component, day, monitored_ms, operational_ms, degraded_ms, downtime_ms, maintenance_ms, samples)
+            WITH bucket AS (
+                SELECT component,
+                       (ts AT TIME ZONE 'UTC')::date AS day,
+                       ts,
+                       LEAD(ts) OVER (PARTITION BY component ORDER BY ts) AS next_ts,
+                       status
+                FROM monitor_observations
+                WHERE ts < date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+            ),
+            spans AS (
+                SELECT component, day, status,
+                       CASE
+                           WHEN next_ts IS NULL THEN 0
+                           ELSE GREATEST(EXTRACT(EPOCH FROM (
+                               LEAST(next_ts, (date_trunc('day', NOW() AT TIME ZONE 'UTC') + interval '1 day') AT TIME ZONE 'UTC') - ts
+                           )) * 1000, 0)
+                       END AS span_ms
+                FROM bucket
+            )
+            SELECT component, day,
+                   COALESCE(SUM(span_ms) FILTER (WHERE status <> 'maintenance'), 0),
+                   COALESCE(SUM(span_ms) FILTER (WHERE status = 'operational'), 0),
+                   COALESCE(SUM(span_ms) FILTER (WHERE status = 'degraded'), 0),
+                   COALESCE(SUM(span_ms) FILTER (WHERE status = 'unavailable'), 0),
+                   COALESCE(SUM(span_ms) FILTER (WHERE status = 'maintenance'), 0),
+                   COUNT(*)
+            FROM spans
+            GROUP BY component, day
+            ON CONFLICT (component, day) DO UPDATE SET
+                monitored_ms = EXCLUDED.monitored_ms,
+                operational_ms = EXCLUDED.operational_ms,
+                degraded_ms = EXCLUDED.degraded_ms,
+                downtime_ms = EXCLUDED.downtime_ms,
+                maintenance_ms = EXCLUDED.maintenance_ms,
+                samples = EXCLUDED.samples
+        `);
+    } catch (err) {
+        // The roll failed — do NOT delete the raw rows. They are the only copy
+        // of that history until they are successfully folded into monitor_daily;
+        // deleting on failure would lose the day permanently. Retry next tick.
+        console.error('[MONITOR] rollDaily error:', err.message);
+        return;
+    }
+    // Only prune once the aggregate is safely persisted. Same UTC-explicit
+    // boundary as the roll above so the two never disagree by a timezone.
+    await monitorPool.query(
+        `DELETE FROM monitor_observations WHERE ts < date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'`
+    ).catch(() => {});
 }
 
 /**

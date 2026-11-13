@@ -662,6 +662,104 @@ test('shard infrastructure aggregation (pure)', () => {
     assert.ok(Math.abs(combined - 94.167) < 0.01);
     assert.ok(combined !== 94, 'not an average of rounded per-node percentages');
 });
+// ── 20b. rollDaily SQL correctness + no data loss on roll failure ────────────
+// Regression for the production log "[MONITOR] rollDaily error: LEAST types
+// timestamp with time zone and interval cannot be matched": `a + interval '1
+// day' - ts` parses as `a + (interval '1 day' - ts)`, so LEAST() compared a
+// timestamptz against an interval and threw. The roll silently failed every
+// tick — and because the DELETE ran unconditionally afterwards, finished days
+// were pruned from monitor_observations WITHOUT ever being aggregated.
+test('rollDaily prunes raw observations only after the aggregate persists', async () => {
+    // INSERT throws (e.g. the LEAST type error) → the DELETE must NOT run.
+    const executed = [];
+    const failing = {
+        async connect() { return { query: async () => ({ rows: [] }), release() {} }; },
+        async query(sql) {
+            executed.push(sql.replace(/\s+/g, ' ').trim());
+            if (/INSERT INTO monitor_daily/i.test(sql)) throw new Error('boom');
+            return { rows: [] };
+        },
+    };
+    const seasonDbPath = require.resolve('../server/seasonDb');
+    delete require.cache[seasonDbPath];
+    delete require.cache[require.resolve('../server/monitorDb')];
+    const seasonDb = require(seasonDbPath);
+    seasonDb.seasonPool = failing;
+    const fresh = require('../server/monitorDb');
+
+    await fresh.rollDaily();
+    const deleted = executed.some(s => /DELETE FROM monitor_observations/i.test(s));
+    assert.equal(deleted, false, 'must not delete raw observations when the roll fails');
+
+    // And when the INSERT succeeds the prune does run.
+    executed.length = 0;
+    const ok = {
+        async connect() { return { query: async () => ({ rows: [] }), release() {} }; },
+        async query(sql) { executed.push(sql.replace(/\s+/g, ' ').trim()); return { rows: [] }; },
+    };
+    seasonDb.seasonPool = ok;
+    delete require.cache[require.resolve('../server/monitorDb')];
+    const fresh2 = require('../server/monitorDb');
+    await fresh2.rollDaily();
+    assert.ok(executed.some(s => /DELETE FROM monitor_observations/i.test(s)), 'prunes after a successful roll');
+});
+
+test('rollDaily uses a UTC-explicit, correctly parenthesized day boundary', () => {
+    const fs = require('node:fs');
+    const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'monitorDb.js'), 'utf8');
+    // The LEAST() second argument must not be the bare `x + interval '1 day' - ts`
+    // form that mis-parses; require the parenthesized `( ... ) AT TIME ZONE 'UTC'`.
+    assert.match(src, /LEAST\(\s*next_ts,\s*\(date_trunc\('day', NOW\(\) AT TIME ZONE 'UTC'\) \+ interval '1 day'\) AT TIME ZONE 'UTC'\)/);
+    // And the same UTC-explicit boundary on the DELETE.
+    assert.match(src, /DELETE FROM monitor_observations WHERE ts < date_trunc\('day', NOW\(\) AT TIME ZONE 'UTC'\) AT TIME ZONE 'UTC'/);
+});
+
+// Real-Postgres execution of the roll (opt-in). Set MONITOR_TEST_DATABASE_URL to
+// a throwaway database to exercise the actual SQL; skipped otherwise so CI with
+// no Postgres still passes.
+test('rollDaily executes against a real Postgres and computes uptime', { skip: !process.env.MONITOR_TEST_DATABASE_URL }, async () => {
+    const url = process.env.MONITOR_TEST_DATABASE_URL;
+    const saved = { MONITOR: process.env.MONITOR_DATABASE_URL, SEASON: process.env.SEASON_DATABASE_URL, DB: process.env.DATABASE_URL };
+    process.env.MONITOR_DATABASE_URL = url;
+    process.env.SEASON_DATABASE_URL = url;
+    process.env.DATABASE_URL = url;
+    try {
+        delete require.cache[require.resolve('../server/seasonDb')];
+        delete require.cache[require.resolve('../server/monitorDb')];
+        const fresh = require('../server/monitorDb');
+        const { monitorPool } = fresh;
+        await fresh.ensureMonitorTables();
+        await monitorPool.query('DELETE FROM monitor_observations');
+        await monitorPool.query('DELETE FROM monitor_daily');
+        const rows = [
+            ['bot', '2026-11-01T00:00:00Z', 'operational'],
+            ['bot', '2026-11-01T06:00:00Z', 'operational'],
+            ['bot', '2026-11-01T12:00:00Z', 'unavailable'],
+            ['bot', '2026-11-01T18:00:00Z', 'degraded'],
+            ['bot', '2026-11-02T00:00:00Z', 'operational'],
+        ];
+        for (const [c, ts, s] of rows) {
+            await monitorPool.query('INSERT INTO monitor_observations (component, ts, status) VALUES ($1,$2,$3)', [c, ts, s]);
+        }
+        await fresh.rollDaily();
+        const r = (await monitorPool.query("SELECT * FROM monitor_daily WHERE component='bot' AND day='2026-11-01'")).rows[0];
+        assert.ok(r, 'a daily row was written (the SQL parsed and ran)');
+        assert.equal(Number(r.monitored_ms), 86400000);
+        assert.equal(Number(r.operational_ms), 43200000);
+        assert.equal(Number(r.downtime_ms), 21600000);
+        assert.equal(Number(r.degraded_ms), 21600000);
+        assert.equal(Number(r.samples), 4);
+        const left = (await monitorPool.query("SELECT COUNT(*)::int AS n FROM monitor_observations WHERE ts < date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'")).rows[0].n;
+        assert.equal(left, 0, 'finished days were pruned after a successful roll');
+    } finally {
+        if (saved.MONITOR === undefined) delete process.env.MONITOR_DATABASE_URL; else process.env.MONITOR_DATABASE_URL = saved.MONITOR;
+        if (saved.SEASON === undefined) delete process.env.SEASON_DATABASE_URL; else process.env.SEASON_DATABASE_URL = saved.SEASON;
+        if (saved.DB === undefined) delete process.env.DATABASE_URL; else process.env.DATABASE_URL = saved.DB;
+        delete require.cache[require.resolve('../server/seasonDb')];
+        delete require.cache[require.resolve('../server/monitorDb')];
+    }
+});
+
 // ── 21. index.js boot wiring must only call exports that exist ───────────────
 // Regression for the production crash "nodeFailover.setPulseProvider is not a
 // function": a helper defined but not added to module.exports only surfaces at
