@@ -1161,3 +1161,79 @@ observations), `monitor_daily` (per-component per-UTC-day aggregates),
   (monitored/operational/downtime/degraded ms + prune). Reverting to the buggy
   form makes the last two fail — keep them.
 
+### 3-node shard roles: active vs standby (never label a standby "offline")
+
+The three nodes run the SAME code; exactly one holds the Discord connection (the
+**ACTIVE** node, owner of the `bot_failover_lock` row) and the other two are
+**STANDBY** — process alive, deliberately idle, owning **no shards and no
+gateway**. The old worker judged every node by "does it have a fresh gateway",
+so a healthy standby read as *offline/unavailable* and its `monitor_node_pulse`
+row (written on a backed-off idle cadence) looked stale → a false **Major
+Service Outage** from one stale open incident.
+
+- **Active node = the failover-lock holder, NOT the monitoring-worker lease.**
+  `statusWorker.evaluate()` now reads `monitorDb.getFailoverLock()`
+  (`bot_failover_lock` id=1, `owner_node_name`/`owner_role`) — the node actually
+  serving Discord. The `monitor_worker` lease is a *different* thing (which node
+  runs the monitor) and must never decide who is active. `evaluateState(pulses,
+  lease)` accepts `{ nodeName, role }` (preferred) or the legacy `{ holder }`.
+- **Four orthogonal axes per node** (`statusWorker.classifyNode`): `role`
+  (active/standby), `health` (online/stale/offline/unknown), `gateway`
+  (connected/disconnected/**not_assigned**), and a derived `status`
+  (operational/degraded/**stale**/unavailable/never). A standby has `gateway:
+  not_assigned` and is **online + operational** — its lack of shards is not a
+  fault. Only the ACTIVE node's gateway affects service health.
+- **Stale ≠ offline.** A node is `stale` ("Checking…", not a confirmed outage)
+  after `STATUS_STALE_FACTOR` (default 3) × **its own published cadence**
+  (`resource.pulseIntervalMs`, so a standby that backed off to a 5-min idle beat
+  is judged against 5 min, not a fixed 45s), and `offline` only after
+  `STATUS_OFFLINE_FACTOR` (default 6) ×. A `stale` observation is recorded but
+  opens **no** incident and resolves **no** incident.
+- **Incidents:** standby outages are labelled `… (standby) offline — failover
+  capacity reduced` at `minor` severity (`statusWorker.isStandbyNode`), so the
+  active node's health is what drives the overall banner. Recovery requires
+  `STATUS_RECOVERY_CONFIRMATIONS` (default 2) consecutive operational ticks, so a
+  flapping node can't resolve-and-recreate an incident every tick.
+- **Overall status ignores node ranks.** `dashboard/statusView.js` excludes
+  `sn1/sn2/sn3` from the overall rank (they're surfaced in the infra section +
+  node cards); the service-level `bot`/`gateway`/`website`/`api`/`db` components
+  carry the outage states. A healthy active node + dead standby therefore reads
+  **Partial System Degradation** at worst, never Major/Critical.
+- **`bot` component:** operational iff the active node is online+operational; if
+  no node holds the lease, `degraded` when some node is online (mid-failover) or
+  `unavailable` when all are down; `never` when no node has ever reported.
+- **Infra counters** (`statusView.buildInfra`): online/offline/healthy/unhealthy
+  counts, active+standby role counts, combined shard availability from real
+  monitored/downtime ms (never averaged rounded %s), most-reliable + highest-
+  downtime node — all computed from the classifications, never hardcoded.
+
+### NO DATA is never 100%
+
+`no_data`/`never` states are skipped in `statusWorker.apply` (never observed), so
+they can't be counted as monitored. The `rollDaily` + `getDailySeries` SQL now
+counts monitored time with `status IN ('operational','degraded','unavailable')`
+(was `status <> 'maintenance'`, which swept `no_data` into the denominator and
+made an unmonitored day read as 100%). `computeUptime30` returns `null` when
+nothing was monitored, plus `daysWithData`/`windowDays`/`partial` so the UI shows
+"—" + "No monitoring data" (or "N/30 days monitored") instead of a fake 100%.
+
+### Pulse node identity + visibility
+
+`utils/monitorPulse.js` takes its identity from `utils/nodeFailover`
+(`NODE_NAME`/`NODE_ROLE`, stable role-based defaults NR0008/NU3049/NUKN09) — never
+`process.env.NODE_NAME || 'local'`, which made every node write the SAME
+`monitor_node_pulse` row (PK = `node_name`) so two nodes vanished. The pulse now
+also carries `shardIds`, `pid`, `startedAt`, and `resource.pulseIntervalMs`.
+`getNodePulses` returns `shardIds`; `getFailoverLock()` is the active-node reader.
+`statusView` reads the latest observation via `monitorDb.getLatestObservation`
+(same pool as the writer) instead of the season pool directly, so a separate
+`MONITOR_DATABASE_URL` no longer shows "no data" for live components.
+
+- **Env vars (all optional):** `STATUS_STALE_FACTOR` (default 3),
+  `STATUS_OFFLINE_FACTOR` (default 6), `STATUS_RECOVERY_CONFIRMATIONS`
+  (default 2), `MONITOR_STANDBY_IDLE_INTERVAL_MS` (default 300000).
+- **Tests:** `tests/statusMonitoringRoles.test.js` (19) — 3-node roles, standby
+  healthy with no shards/gateway, active-node outage, standby redundancy
+  incidents, missed-heartbeat stale→offline, no-data ≠ 100%, partial-window
+  coverage, duplicate-role resolution, stable node identity.
+

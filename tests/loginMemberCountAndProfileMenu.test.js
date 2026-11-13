@@ -169,3 +169,20 @@ test('login.js paints the Anti-Nuke donut from the antiNuke feature stat', () =>
     assert.ok(/donut-antinuke[\s\S]{0,120}f\.antiNuke\?\.percent/.test(src),
         'the client reads features.antiNuke.percent into #donut-antinuke');
 });
+
+// ── "Set stats" link beside Documentation on the login page ──────────────────
+
+test('login page shows a "Set stats" link to /stats beside Documentation', () => {
+    const page = require('../dashboard/render/pages');
+    const html = page.loginPage({});
+    const docsIdx = html.indexOf('href="/docs"');
+    const statsIdx = html.indexOf('href="/stats"');
+    assert.ok(docsIdx !== -1, 'Documentation link present');
+    assert.ok(statsIdx !== -1, 'Set stats link present');
+    assert.ok(statsIdx > docsIdx, 'Set stats sits beside/after Documentation');
+    // The link is a real anchor with an SVG icon, labelled "Set stats".
+    const anchor = /<a href="\/stats"[^>]*>([\s\S]*?)<\/a>/.exec(html);
+    assert.ok(anchor, 'Set stats anchor found');
+    assert.match(anchor[1], /<svg/, 'Set stats uses an SVG icon');
+    assert.match(anchor[1], /Set stats/, 'Set stats label present');
+});

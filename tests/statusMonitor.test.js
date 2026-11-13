@@ -111,14 +111,19 @@ test('process-running-but-gateway-disconnected is never counted operational', ()
 });
 
 // ── 6. Missed heartbeat handling ─────────────────────────────────────────────
-test('missed heartbeat marks a node unavailable after stale threshold', () => {
-    const stale = pulse('sn1', { nodeName: 'NR0008', ageMs: 99999999 });
+test('missed heartbeat is STALE first, then unavailable past the offline threshold', () => {
+    // 30s cadence → stale at 3× (90s), offline at 6× (180s).
+    const offline = pulse('sn1', { nodeName: 'NR0008', ageMs: 99999999 });
     const fresh = pulse('sn2', { nodeName: 'NU3049' });
-    const state = statusWorker.evaluateState([stale, fresh], { holder: 'NR0008' });
+    const state = statusWorker.evaluateState([offline, fresh], { holder: 'NR0008' });
     assert.equal(state.nodes.sn1.status, 'unavailable');
-    assert.equal(state.nodes.sn1.detail.reason, 'stale');
+    assert.equal(state.nodes.sn1.detail.reason, 'offline');
     assert.equal(state.nodes.sn2.status, 'operational');
-    // A single stale heartbeat (within factor × interval) must NOT trip it.
+    // One delayed beat (120s > stale 90s but < offline 180s) → STALE, not down.
+    const late = statusWorker.evaluateState([pulse('sn1', { nodeName: 'NR0008', ageMs: 120000 })], { holder: 'NR0008' });
+    assert.equal(late.nodes.sn1.status, 'stale');
+    assert.equal(late.nodes.sn1.health, 'stale');
+    // Within the stale threshold → still operational (one missed beat is fine).
     const ok = statusWorker.evaluateState([pulse('sn1', { nodeName: 'NR0008', ageMs: 80000 })], { holder: 'NR0008' });
     assert.equal(ok.nodes.sn1.status, 'operational');
 });
@@ -172,14 +177,40 @@ test('duplicate incidents are prevented for a continuous outage', async () => {
     assert.equal(mon.calls.resolve, 0);
 });
 
-test('incident resolution updates the open incident on recovery', async () => {
+test('incident resolution requires sustained recovery (no flapping)', async () => {
     const mon = stubMonitor();
     await statusWorker.apply({ sn1: { status: 'unavailable' } }, mon);
     assert.equal(mon.calls.create, 1);
     assert.equal(mon.incidents[0].status, 'investigating');
+    // First healthy tick is not enough — RECOVERY_CONFIRMATIONS (default 2).
+    await statusWorker.apply({ sn1: { status: 'operational' } }, mon);
+    assert.equal(mon.calls.resolve, 0, 'not resolved after a single healthy check');
     await statusWorker.apply({ sn1: { status: 'operational' } }, mon);
     assert.equal(mon.calls.resolve, 1);
     assert.equal(mon.incidents[0].status, 'resolved');
+});
+
+test('a flapping node does not resolve-and-recreate an incident', async () => {
+    const mon = stubMonitor();
+    await statusWorker.apply({ sn1: { status: 'unavailable' } }, mon);
+    // operational (streak 1) then down again → streak resets, incident stays open.
+    await statusWorker.apply({ sn1: { status: 'operational' } }, mon);
+    await statusWorker.apply({ sn1: { status: 'unavailable' } }, mon);
+    await statusWorker.apply({ sn1: { status: 'operational' } }, mon);
+    await statusWorker.apply({ sn1: { status: 'unavailable' } }, mon);
+    assert.equal(mon.calls.create, 1, 'still one incident for the same continuous outage');
+    assert.equal(mon.calls.resolve, 0);
+});
+
+test('a STALE node neither opens nor resolves an incident', async () => {
+    const mon = stubMonitor();
+    await statusWorker.apply({ sn3: { status: 'unavailable', role: 'standby' } }, mon);
+    assert.equal(mon.calls.create, 1);
+    // Heartbeat late → checking; do not resolve yet.
+    await statusWorker.apply({ sn3: { status: 'stale', role: 'standby' } }, mon);
+    await statusWorker.apply({ sn3: { status: 'stale', role: 'standby' } }, mon);
+    assert.equal(mon.calls.resolve, 0, 'stale is not a recovery');
+    assert.equal(mon.calls.create, 1, 'stale does not open a new incident');
 });
 
 test('unknown components never fabricate observations or incidents', async () => {
