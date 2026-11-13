@@ -351,13 +351,26 @@
 
     // ── Bootstrap ──────────────────────────────────────────────────────────────
 
+    // Skeleton markup mirroring the real board, kept in sync with the
+    // server-rendered shell in render/pages.js (used for the detail modal's
+    // own loading state).
+    const SKELETON = `
+      <div class="sk-banner sk-shimmer"></div>
+      <div class="sk-infra">${'<div class="sk-stat sk-shimmer"></div>'.repeat(6)}</div>
+      <div class="sk-grid">${'<div class="sk-card sk-shimmer"></div>'.repeat(8)}</div>
+      <div class="sk-lines">${'<div class="sk-line sk-shimmer"></div>'.repeat(3)}</div>`;
+
     async function init() {
         const root = $('#stats-status');
         if (!root) return;
 
-        // Build the static shell + shared tooltip/modal once.
+        // Build the static shell + shared tooltip/modal once. The skeleton the
+        // server rendered stays in place until the data arrives, so the board
+        // never flashes empty.
         root.innerHTML = `
-        <div id="status-result"></div>
+        <div id="status-result">
+          <div class="status-skeleton" role="status" aria-label="Loading infrastructure status">${SKELETON}</div>
+        </div>
         <div id="status-detail-modal" class="modal-overlay hidden">
           <div class="modal-floating-window status-detail">
             <div class="status-detail-close" id="status-detail-close" title="Close (Esc)">×</div>
@@ -381,6 +394,8 @@
             window.__statusSummary = summary;
         } catch (err) {
             root.innerHTML = `<div class="status-error">Monitoring data is unavailable right now. It will appear after the monitor starts collecting observations.</div>`;
+        } finally {
+            root.setAttribute('aria-busy', 'false');
         }
     }
 
