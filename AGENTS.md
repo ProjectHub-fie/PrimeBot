@@ -1112,3 +1112,80 @@ the function budget and the connection was killed (`ERR_CONNECTION_ABORTED` /
   `visibilitychange`). No background polling — keeps Neon quiet when the tab is
   hidden. The 7/30/90 switcher re-fetches the same endpoint without a reload.
 
+
+## Infrastructure status monitoring — the two production bugs (fixed)
+
+The Stats page (`/stats`, public) is driven by the monitoring pipeline
+`node process → pulse → monitorDb (Postgres) → statusWorker → statusView →
+/api/status* → public/js/status.js`. Two long-standing bugs were fixed together;
+both had been "fixed" before by changing frontend labels only, which is why they
+recurred.
+
+### BUG 1 — standby nodes shown OFFLINE/DEGRADED
+
+- **Root cause (identity):** every node wrote the SAME pulse identity. The old
+  `buildPulse()` used `nodeName: process.env.NODE_NAME || 'local'`, so all three
+  nodes upserted one `monitor_node_pulse` row (production held exactly one row,
+  `node_name='local'`, role `sn3`) and overwrote each other. Fix:
+  `utils/nodeIdentity.js` `resolveNodeIdentity(env)` (NODE_ID/NODE_NAME →
+  role-based default `NR0008`/`NU3049`/`NUKN09`), consumed by `utils/monitorPulse.js`,
+  `utils/nodeFailover.js` (exports `NODE_ID`) and the worker's lease id.
+- **Root cause (classification):** node health was judged by the wrong lease and
+  by the gateway. It used the **monitoring-worker** lease (who runs monitoring)
+  instead of the **shardnode failover** lease (who serves Discord), and it
+  required a ready gateway of every node. A standby has no gateway (no shards
+  assigned), so it read as degraded/offline. Fix: `statusWorker.classifyNode()`
+  + `summarizeFleet()` keep every signal INDEPENDENT — process health, role,
+  heartbeat freshness, gateway, shard assignment. Only the ACTIVE node is judged
+  by the gateway; a standby is online/healthy with no gateway and zero shards.
+- **The failover lease lives in a DIFFERENT database** (`bot_failover_lock` is on
+  the SEASON pool; monitoring tables can be on `MONITOR_DATABASE_URL`).
+  `monitorDb.getFailoverLease()` reads it from `seasonPool` — reading it from
+  `monitorPool` returns nothing and misclassifies every node.
+- `getNodePulses`/`evaluateState` pick the FRESHEST pulse per role, and the
+  worker calls `pruneStaleNodePulses()` so the orphaned legacy `'local'` row
+  cannot shadow a live node.
+
+### BUG 2 — 30-day graph showed only ONE illuminated bar
+
+- **Root cause:** `monitorDb.rollDaily()`'s INSERT had a SQL precedence bug —
+  `LEAST(next_ts, date_trunc('day', NOW())::timestamp + interval '1 day' - ts)`
+  parses as `(a + b) - ts` (interval), and Postgres rejects
+  `LEAST(timestamptz, interval)` ("LEAST types timestamp with time zone and
+  interval cannot be matched"). The `.catch()` swallowed it, but the
+  **unconditional** `DELETE FROM monitor_observations WHERE ts < date_trunc('day', NOW())`
+  still ran — so every prior day's raw rows were destroyed with NO daily
+  aggregate written. `monitor_daily` stayed empty (production: 0 rows) and only
+  today (never rolled) could light a bar.
+- **Fix:** the clamp is parenthesised correctly
+  (`LEAST(next_ts, date_trunc('day', NOW()) + interval '1 day') - ts`), and the
+  INSERT + DELETE now run in ONE transaction on one connection — a failed
+  aggregate ROLLBACKs and preserves the raw rows. `rollDaily()` returns the
+  inserted row count (or `null` on failure).
+- `getDailySeries()` always returns exactly N (default 30) consecutive UTC daily
+  positions via `buildSeriesBucket()`, each carrying `uptime`, `downtimePct`,
+  `degradedPct`, `monitoredMs`, `coverage` and `dataStatus`
+  (`complete`|`partial`|`no_data`). A missing day stays NO DATA (grey) — never
+  fabricated to 100%. The client (`public/js/status.js`) renders every position.
+
+### Incidents
+
+- One open incident per component (deduped by component); a status change
+  UPDATES it in place; resolution requires `STATUS_RECOVERY_CONFIRMATIONS`
+  (default 2) consecutive healthy readings so a flapping sample can't close/reopen
+  it. Node incidents state whether the failed node was ACTIVE (service impact)
+  or STANDBY (redundancy reduced) — never conflating a node failure with a
+  service-wide outage.
+
+### Where things live
+
+- `utils/nodeIdentity.js`, `utils/monitorPulse.js`, `utils/nodeFailover.js`,
+  `utils/statusWorker.js`, `server/monitorDb.js`, `dashboard/statusView.js`,
+  `dashboard/public/js/status.js`, `dashboard/server.js` (sanitizers).
+- API: `/api/status` + `/api/status/detailed` (public, sanitized — include the
+  `fleet` summary and per-node `node` fields; heartbeat timeline/restarts stay
+  authenticated-only).
+- Tests: `tests/monitoringPipeline.test.js` (23 — all 18 required scenarios +
+  both root causes), `tests/statusMonitor.test.js`.
+- Env: `MONITOR_DATABASE_URL` (optional; else SEASON → FALLBACK → DATABASE_URL),
+  `MONITOR_PULSE_INTERVAL_MS`, `STATUS_RECOVERY_CONFIRMATIONS`.

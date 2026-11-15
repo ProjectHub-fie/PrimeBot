@@ -177,7 +177,12 @@ test('incident resolution updates the open incident on recovery', async () => {
     await statusWorker.apply({ sn1: { status: 'unavailable' } }, mon);
     assert.equal(mon.calls.create, 1);
     assert.equal(mon.incidents[0].status, 'investigating');
-    await statusWorker.apply({ sn1: { status: 'operational' } }, mon);
+    // Recovery is CONFIRMED: it takes RECOVERY_CONFIRMATIONS healthy readings
+    // so a single flapping sample cannot close (and re-open) the incident.
+    for (let i = 0; i < statusWorker.RECOVERY_CONFIRMATIONS; i++) {
+        assert.equal(mon.calls.resolve, 0, 'not resolved before recovery is confirmed');
+        await statusWorker.apply({ sn1: { status: 'operational' } }, mon);
+    }
     assert.equal(mon.calls.resolve, 1);
     assert.equal(mon.incidents[0].status, 'resolved');
 });

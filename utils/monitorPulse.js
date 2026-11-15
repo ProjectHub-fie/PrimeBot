@@ -2,32 +2,52 @@
  * Per-node status pulse builder.
  *
  * Each shard node posts a lightweight status pulse alongside its failover
- * heartbeat. The pulse carries everything the monitoring worker needs to tell
- * "process running but gateway broken" apart from "fully healthy", and to
- * detect restarts (pid/startedAt drift).
+ * heartbeat (the active node) or on its own steady timer (a standby node that
+ * holds no Discord connection). The pulse carries INDEPENDENT signals so the
+ * monitoring worker can tell "process running but gateway broken" apart from
+ * "healthy standby with no gateway because it is unassigned", and so a restart
+ * (pid / startedAt drift) is detectable.
+ *
+ * The signals are deliberately separate and are never collapsed into one
+ * "healthy" boolean:
+ *   processHealth      - is the OS process alive? (healthy | running)
+ *   role               - sn1 | sn2 | sn3 (the node's configured priority)
+ *   gatewayConnected   - is the Discord websocket connected?
+ *   gatewayReady       - is the Discord websocket READY (all shards up)?
+ *   shardsTotal/Ready/Active - how many shards this node is assigned / up
+ *
+ * A standby node legitimately has gatewayConnected=false, gatewayReady=false
+ * and shardsTotal=0: it holds no Discord connection and is assigned no shards.
+ * That is a HEALTHY state, not a fault - the worker classifies it from the
+ * role + process health, never from the absence of a gateway.
  */
 
+const { resolveNodeIdentity } = require('./nodeIdentity');
+
 const STARTED_AT = new Date();
+const NODE_IDENTITY = resolveNodeIdentity(process.env);
 
 /**
  * Build the pulse payload for this process.
  * @param {object} client discord.js client (may be disconnected / undefined on
  *                a standby node that has not logged in).
+ * @param {{ pulseIntervalMs?: number }} [opts]
  */
-function buildPulse(client) {
+function buildPulse(client, opts = {}) {
     const clientObj = client || {};
     const ws = clientObj.ws || {};
-    const shards = Array.isArray(clientObj.shards) ? clientObj.shards : null;
+    const shards = clientObj.shards || null;
 
     // Gateway states a discord.js client can be in.
     const wsStatus = ws.status; // 0 = ready, 1 = connecting, 2 = reconnecting, ...
     const wsReady = Number(wsStatus) === 0;
     const wsConnecting = Number(wsStatus) === 1 || Number(wsStatus) === 2;
 
-    const shardsTotal = shards ? shards.length : (clientObj.shards?.size || 0);
+    // discord.js exposes `client.shards` as a Collection (has .size / iterable).
+    const shardsTotal = shards ? (Number(shards.size) || 0) : 0;
     let shardsReady = 0;
     let shardsActive = 0;
-    if (shards) {
+    if (shards && typeof shards[Symbol.iterator] === 'function') {
         for (const shard of shards) {
             if (shard.status === 'ready') shardsReady++;
             if (shard.status === 'ready' || shard.status === 'idle') shardsActive++;
@@ -35,12 +55,17 @@ function buildPulse(client) {
     }
 
     return {
-        nodeName: process.env.NODE_NAME || 'local',
-        role: (process.env.NODE_ROLE || 'sn1').toString().trim().toLowerCase(),
-        processHealth: clientObj.user ? 'healthy' : (clientObj ? 'running' : 'standby'),
+        nodeName: NODE_IDENTITY.nodeId,
+        nodeId: NODE_IDENTITY.nodeId,
+        role: NODE_IDENTITY.role,
+        // 'healthy' means the process is up AND has a usable gateway; 'running'
+        // means the process is up with no gateway (a normal standby). We never
+        // report 'dead' - an unresponsive process simply stops pulsing, which
+        // the worker detects from heartbeat age.
+        processHealth: clientObj.user ? 'healthy' : 'running',
         gatewayConnected: wsReady || wsConnecting,
         gatewayReady: wsReady,
-        shardsTotal: Number(shardsTotal) || 0,
+        shardsTotal,
         shardsReady,
         shardsActive,
         pid: process.pid,
@@ -50,16 +75,26 @@ function buildPulse(client) {
             nodeVersion: process.version,
             platform: process.platform,
             memoryMB: Number.isFinite(process.memoryUsage?.().rss) ? Math.round(process.memoryUsage().rss / 1024 / 1024) : null,
+            // Publish the cadence we are actually using so the worker's staleness
+            // threshold scales with the writer's own interval instead of a fixed
+            // constant that a slower node would always fail.
+            pulseIntervalMs: Number(opts.pulseIntervalMs) > 0 ? Number(opts.pulseIntervalMs) : PULSE_INTERVAL_MS,
         },
     };
 }
 
-// ── Standby pulse loop ───────────────────────────────────────────────────────
+// -- Pulse loop --------------------------------------------------------------
 // The ACTIVE node's pulse rides the failover heartbeat (nodeFailover.writePulse).
-// Standby nodes have no heartbeat loop, so this dedicated (single, unref'd,
-// idle-aware) timer keeps their pulse fresh so the status worker can see all
-// three nodes independently even when only one holds the Discord lease.
-
+// A standby node holds no Discord connection, so this dedicated (single,
+// unref'd) timer keeps its pulse fresh - otherwise only the active node would
+// ever appear in monitoring and every standby would read as "no data".
+//
+// The cadence is STEADY (not activity-gated). Monitoring liveness requires a
+// predictable beat: if a standby backed off to a multi-minute cadence while the
+// worker was also idling, every check would land outside the staleness window
+// and a healthy standby would be reported as offline. The active node already
+// heartbeats every 30s (a failover guarantee), so Neon is kept awake regardless
+// and backing the pulse off would buy nothing but blind spots.
 const PULSE_INTERVAL_MS = parseInt(process.env.MONITOR_PULSE_INTERVAL_MS, 10) || 30000;
 let pulseTimer = null;
 let pulseClient = null;
@@ -70,7 +105,7 @@ function startPulseLoop(client) {
     const write = async () => {
         try {
             const { upsertNodePulse } = require('../server/monitorDb');
-            await upsertNodePulse(buildPulse(pulseClient));
+            await upsertNodePulse(buildPulse(pulseClient, { pulseIntervalMs: PULSE_INTERVAL_MS }));
         } catch (err) {
             console.warn('[STATUS] pulse write failed:', err.message);
         }
@@ -78,11 +113,7 @@ function startPulseLoop(client) {
     const tick = () => {
         write().finally(() => {
             if (!pulseTimer) return;
-            let next = PULSE_INTERVAL_MS;
-            try {
-                if (require('./activityGate').isIdle() && !pulseClient?.user) next = 5 * 60000; // quiet standby
-            } catch (_) {}
-            pulseTimer = setTimeout(tick, next);
+            pulseTimer = setTimeout(tick, PULSE_INTERVAL_MS);
             pulseTimer.unref?.();
         });
     };
@@ -96,4 +127,4 @@ function stopPulseLoop() {
     pulseClient = null;
 }
 
-module.exports = { buildPulse, STARTED_AT, startPulseLoop, stopPulseLoop, PULSE_INTERVAL_MS };
+module.exports = { buildPulse, STARTED_AT, startPulseLoop, stopPulseLoop, PULSE_INTERVAL_MS, NODE_IDENTITY };

@@ -6,9 +6,16 @@
  * layout immediately and loads these aggregates asynchronously; each endpoint
  * here is cheap (indexed aggregates + a small incident list), so loading the
  * page never pulls raw heartbeat history.
+ *
+ * Node/gateway/bot status is computed LIVE from the node pulses + the shardnode
+ * failover lease using the same pure classifier the worker uses
+ * (`utils/statusWorker`), instead of reading the last observation row. That
+ * keeps the API self-consistent with the worker and immune to a stale or
+ * missing observation for a node that simply has not changed state.
  */
 
 const monitorDb = require('../server/monitorDb');
+const { evaluateState } = require('../utils/statusWorker');
 
 // Cache public aggregates briefly (per the Neon/CPU rules).
 const CACHE_TTL_MS = 15000;
@@ -25,15 +32,8 @@ function cached(key, fn) {
 // Visual states for a component's CURRENT status.
 const STATUS_RANK = { operational: 0, degraded: 1, unavailable: 2 };
 
-// A component is "operational" only if its latest observation is operational
-// AND that observation is recent. If we have never observed it, it is unknown.
-async function currentStatusOf(component) {
-    const series = await monitorDb.getDailySeries(component, 2);
-    // Current status = the latest raw observation. Fetch it directly to stay
-    // independent of daily aggregation.
-    const latest = await latestObservation(component);
-    return latest;
-}
+// Components whose status is derived from the node fleet (not an observation).
+const NODE_DERIVED = new Set(['bot', 'gateway', 'sn1', 'sn2', 'sn3']);
 
 async function latestObservation(component) {
     const { seasonPool } = require('../server/seasonDb');
@@ -53,6 +53,22 @@ async function latestObservation(component) {
         ts: row.ts,
         ageMs: Math.round(Number(row.age_ms) || 0),
     };
+}
+
+/**
+ * Live node-derived state: the three node classifications, the gateway state
+ * and the overall bot state, plus the fleet summary (online/healthy/active/
+ * standby/offline).
+ */
+async function computeFleetState() {
+    const [pulses, lease] = await Promise.all([
+        monitorDb.getNodePulses(),
+        monitorDb.getFailoverLease().catch(() => ({ activeNodeId: null })),
+    ]);
+    const state = evaluateState(pulses, lease);
+    const pulseByRole = {};
+    for (const p of pulses || []) pulseByRole[p.role] = p;
+    return { state, pulseByRole };
 }
 
 function summarize(components, incidents) {
@@ -82,16 +98,34 @@ function summarize(components, incidents) {
 
 /**
  * Public-ish summary for the status page:
- *  { overall, components: [{key,label,status,uptime30,...}], incidents, lastChecked }
+ *  { overall, fleet, components: [{key,label,status,uptime30,series,...}],
+ *    incidents, lastChecked }
  */
 async function getStatusSummary() {
     return cached('summary', async () => {
         const components = await monitorDb.listComponents();
+        const { state, pulseByRole } = await computeFleetState();
         const componentsMap = {};
         for (const c of components) {
-            const cur = await latestObservation(c.key);
             const series = await monitorDb.getDailySeries(c.key, 30);
             const uptime30 = computeUptime30(series);
+            let cur;
+            if (NODE_DERIVED.has(c.key)) {
+                // Live classification (nodes/gateway/bot).
+                const node = state.nodes[c.key];
+                const derived = state[c.key]; // gateway / bot
+                const live = node || derived || { status: 'never', detail: null };
+                const pulse = pulseByRole[c.key] || null;
+                cur = {
+                    status: live.status,
+                    detail: live.detail || null,
+                    ts: pulse ? pulse.ts : null,
+                    ageMs: pulse ? pulse.ageMs : null,
+                };
+            } else {
+                cur = await latestObservation(c.key);
+            }
+            const node = state.nodes[c.key] || null;
             componentsMap[c.key] = {
                 key: c.key,
                 label: c.label,
@@ -103,6 +137,19 @@ async function getStatusSummary() {
                 ageMs: cur.ageMs,
                 uptime30,
                 series,
+                // Independent per-node signals (nodes only).
+                node: node ? {
+                    role: node.role,
+                    nodeId: node.nodeId,
+                    isActive: node.isActive,
+                    online: node.online,
+                    healthy: node.healthy,
+                    statusReason: node.statusReason,
+                    process: node.process,
+                    heartbeat: node.heartbeat,
+                    gateway: node.gateway,
+                    shards: node.shards,
+                } : null,
             };
         }
         const incidents = await monitorDb.getIncidents({ limit: 50 });
@@ -114,7 +161,7 @@ async function getStatusSummary() {
 
         return {
             overall,
-            openIncidents,
+            fleet: state.fleet,
             components: Object.values(componentsMap),
             activeIncidents: active,
             resolvedIncidents: resolved.slice(0, 10),
@@ -135,8 +182,10 @@ function computeUptime30(series) {
     let downtime = 0;
     let degraded = 0;
     let maintenance = 0;
+    let daysMonitored = 0;
     for (const day of series) {
         if (!day.hasData) continue;
+        daysMonitored++;
         monitored += day.monitoredMs;
         downtime += day.downtimeMs;
         degraded += day.degradedMs;
@@ -149,6 +198,8 @@ function computeUptime30(series) {
         downtimeMs: downtime,
         degradedMs: degraded,
         maintenanceMs: maintenance,
+        daysMonitored,
+        daysTotal: series.length,
     };
 }
 
@@ -168,19 +219,24 @@ async function getComponentDetail(component, { days = 30, heartbeatLimit = 200 }
 
     let pulseTimeline = null;
     let restarts = [];
+    let node = null;
     if (component === 'sn1' || component === 'sn2' || component === 'sn3') {
         const pulses = await monitorDb.getNodePulses();
         pulseTimeline = pulses
             .filter(p => p.role === component)
             .slice(-Number(heartbeatLimit) || -200);
         restarts = await monitorDb.getNodeRestarts(
-            (pulseTimeline[0] && pulseTimeline[0].nodeName) || component,
+            (pulseTimeline[0] && (pulseTimeline[0].nodeId || pulseTimeline[0].nodeName)) || component,
             100
         );
+        const lease = await monitorDb.getFailoverLease().catch(() => ({ activeNodeId: null }));
+        const state = evaluateState(pulses, lease);
+        node = state.nodes[component] || null;
     }
 
     return {
         component: { key: comp.key, label: comp.label, description: comp.description || '', enabled: comp.enabled },
+        node,
         series,
         incidents,
         pulseTimeline,
@@ -188,4 +244,4 @@ async function getComponentDetail(component, { days = 30, heartbeatLimit = 200 }
     };
 }
 
-module.exports = { getStatusSummary, getComponentDetail, computeUptime30, latestObservation };
+module.exports = { getStatusSummary, getComponentDetail, computeUptime30, latestObservation, computeFleetState };

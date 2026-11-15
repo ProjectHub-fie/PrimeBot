@@ -773,9 +773,31 @@ app.delete('/api/status/maintenance/:id', requireAuth, requireStatusAdmin, async
     }
 });
 
+function sanitizeNode(node) {
+    // Node identity (role/id) + independent health signals are non-sensitive:
+    // they describe the shard fleet the public status page is about. Process
+    // pids / startedAt / raw error internals are NOT included.
+    if (!node) return null;
+    return {
+        role: node.role,
+        nodeId: node.nodeId,
+        isActive: !!node.isActive,
+        online: !!node.online,
+        healthy: !!node.healthy,
+        statusReason: node.statusReason,
+        process: node.process ? { health: node.process.health, uptimeSeconds: node.process.uptimeSeconds } : null,
+        heartbeat: node.heartbeat ? { fresh: !!node.heartbeat.fresh, ageMs: node.heartbeat.ageMs, intervalMs: node.heartbeat.intervalMs } : null,
+        gateway: node.gateway ? { connected: !!node.gateway.connected, ready: !!node.gateway.ready } : null,
+        shards: node.shards ? { assigned: node.shards.assigned, ready: node.shards.ready, active: node.shards.active, status: node.shards.status } : null,
+    };
+}
+
 function sanitizeSummary(summary) {
     return {
         overall: summary.overall,
+        // Fleet counts (online/healthy/active/standby/offline) — the headline
+        // numbers the status page shows. Non-sensitive.
+        fleet: summary.fleet || null,
         openIncidents: summary.openIncidents,
         lastCheckedAt: summary.lastCheckedAt,
         measurement: summary.measurement,
@@ -785,6 +807,8 @@ function sanitizeSummary(summary) {
             lastObservedAt: c.lastObservedAt, ageMs: c.ageMs, enabled: c.enabled,
             // Daily uptime buckets drive the 30-day bars — non-sensitive.
             series: c.series || [],
+            // Independent per-node health fields (nodes only).
+            node: sanitizeNode(c.node),
             // `detail` (error internals / reasons) is intentionally omitted.
         })),
         activeIncidents: (summary.activeIncidents || []).map(sanitizeIncident),
@@ -806,6 +830,9 @@ function sanitizeIncident(i) {
 function sanitizeDetail(detail) {
     return {
         component: detail.component,
+        // Live node classification (role/health/gateway/shards) is fine for the
+        // public status page; the heartbeat timeline + restart history are not.
+        node: sanitizeNode(detail.node),
         series: detail.series || [],
         incidents: (detail.incidents || []).map(sanitizeIncident),
     };

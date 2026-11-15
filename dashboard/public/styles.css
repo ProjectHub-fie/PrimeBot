@@ -4298,6 +4298,9 @@ select:focus {
   color: var(--text-dim); border: 1px solid var(--border-soft); border-radius: 6px; padding: 2px 6px;
 }
 .status-foot-last { font-size: 0.72rem; color: var(--text-dim); }
+/* Node role chip: distinguishes the active node from a healthy standby. */
+.status-foot-chip.node-role.role-active { color: #23a55a; border-color: rgba(35,165,90,0.4); }
+.status-foot-chip.node-role.role-standby { color: #5865f2; border-color: rgba(88,101,242,0.4); }
 
 .status-tooltip {
   position: fixed; z-index: 1600; pointer-events: none; max-width: 300px;
@@ -4387,7 +4390,9 @@ select:focus {
 .lg-ok { background: #23a55a; }
 .lg-degraded { background: #f0b232; }
 .lg-partial { background: #e67e22; }
+.lg-down { background: #ed4245; }
 .lg-maint { background: #5865f2; }
+.lg-no-data { background: rgba(140,140,148,0.35); }
 .detail-bars { display: flex; gap: 4px; height: 34px; align-items: stretch; }
 .uptime-bar-bar { flex: 1 1 0; border-radius: 4px; }
 .pulse-list { display: flex; flex-direction: column; gap: 5px; }

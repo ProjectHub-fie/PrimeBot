@@ -27,7 +27,7 @@ const WORKER_TTL_S = parseInt(process.env.STATUS_WORKER_TTL_S, 10) || 90;
 const OBSERVATION_RETENTION_DAYS = parseInt(process.env.STATUS_RETENTION_DAYS, 10) || 31;
 const STALE_FACTOR = 3; // miss up to ~2 beats before a node is "unavailable"
 
-const WORKER_ID = 'status-worker:' + process.env.NODE_NAME + ':' + process.pid;
+const WORKER_ID = 'status-worker:' + (require('./nodeIdentity').resolveNodeIdentity(process.env).nodeId) + ':' + process.pid;
 const BASE_URL = process.env.MONITOR_WEBSITE_URL || process.env.DASHBOARD_BASE_URL || null;
 
 let timer = null;
@@ -93,94 +93,262 @@ async function dbCheck() {
 // ── Per-node + derived statuses ──────────────────────────────────────────────
 
 function pulseStaleMs(pulse) {
-    // The node publishes its own cadence; stale threshold scales with it so an
-    // idle node that backs off to 5-minute beats is not misjudged as dead.
+    // The node publishes its own cadence; stale threshold scales with it so a
+    // node on a slower cadence is not misjudged as dead. Defaults match the
+    // 30s steady pulse.
     const interval = Number(pulse?.resource?.pulseIntervalMs || 30000);
     return interval * STALE_FACTOR;
 }
 
+const NODE_ROLES = ['sn1', 'sn2', 'sn3'];
+
 /**
- * Stateless evaluation: given the node pulses + current worker lease holder,
+ * Normalize the two lease shapes we accept: the shardnode failover lease
+ * (`{ activeNodeId, activeRole }`) and the legacy `{ holder }`. Node
+ * classification MUST key off the failover lease (who serves Discord), never
+ * the monitoring-worker lease (who runs monitoring) — conflating them is what
+ * made a healthy standby look like the active node and therefore degraded.
+ */
+function normalizeLease(lease) {
+    if (!lease) return { activeNodeId: null, activeRole: null };
+    const activeNodeId = lease.activeNodeId || lease.holder || null;
+    return { activeNodeId, activeRole: lease.activeRole || null };
+}
+
+/**
+ * Classify ONE node from its pulse and whether it currently holds the failover
+ * lease. Pure. Every signal stays independent so a standby is never punished
+ * for the things it does not have (a gateway connection, assigned shards).
+ *
+ * @returns {{
+ *   role, nodeId, online, healthy, status, statusReason,
+ *   process: {health, uptimeSeconds},
+ *   heartbeat: {fresh, ageMs, intervalMs},
+ *   gateway: {connected, ready},
+ *   shards: {assigned, ready, active, status},
+ *   isActive, ageMs
+ * }}
+ */
+function classifyNode(pulse, { isActive = false } = {}) {
+    if (!pulse) {
+        return {
+            role: null,
+            nodeId: null,
+            online: false,
+            healthy: false,
+            status: 'never',
+            statusReason: 'no_pulse',
+            process: { health: 'unknown', uptimeSeconds: null },
+            heartbeat: { fresh: false, ageMs: null, intervalMs: null },
+            gateway: { connected: false, ready: false },
+            shards: { assigned: 0, ready: 0, active: 0, status: 'unknown' },
+            isActive: false,
+            ageMs: null,
+        };
+    }
+
+    const intervalMs = Number(pulse.resource?.pulseIntervalMs || 30000);
+    const staleMs = pulseStaleMs(pulse);
+    const ageMs = pulse.ageMs == null ? null : Number(pulse.ageMs);
+    const fresh = ageMs != null && ageMs <= staleMs;
+
+    const processHealth = pulse.processHealth || 'unknown';
+    const processDead = processHealth === 'dead' || processHealth === 'stopped';
+    const assigned = Number(pulse.shardsTotal) || 0;
+    const ready = Number(pulse.shardsReady) || 0;
+    const active = Number(pulse.shardsActive) || 0;
+    // Zero assigned shards is a NORMAL standby state, never a failure.
+    const shardStatus = assigned <= 0 ? 'none' : (ready >= assigned ? 'all' : (ready > 0 ? 'partial' : 'none'));
+
+    const base = {
+        role: pulse.role || null,
+        nodeId: pulse.nodeId || pulse.nodeName || null,
+        isActive,
+        ageMs,
+        process: { health: processHealth, uptimeSeconds: pulse.resource?.uptimeSeconds ?? null },
+        heartbeat: { fresh, ageMs, intervalMs },
+        gateway: { connected: !!pulse.gatewayConnected, ready: !!pulse.gatewayReady },
+        shards: { assigned, ready, active, status: shardStatus },
+    };
+
+    // 1. Stale heartbeat — the process genuinely stopped reporting.
+    if (!fresh) {
+        return {
+            ...base,
+            online: false,
+            healthy: false,
+            status: 'unavailable',
+            statusReason: ageMs == null ? 'stale' : 'stale',
+        };
+    }
+
+    // 2. Fresh heartbeat but the process itself reported dead.
+    if (processDead) {
+        return { ...base, online: false, healthy: false, status: 'unavailable', statusReason: 'process_' + processHealth };
+    }
+
+    // 3. Fresh, live process. The only gateway expectation is on the ACTIVE
+    //    node: a standby legitimately has no gateway connection because it is
+    //    assigned no shards. Judging a standby by the gateway is the bug that
+    //    showed healthy standbys as OFFLINE/DEGRADED.
+    if (isActive && !pulse.gatewayReady) {
+        return {
+            ...base,
+            online: true,
+            healthy: false,
+            status: 'degraded',
+            statusReason: 'gateway_not_ready',
+        };
+    }
+
+    return { ...base, online: true, healthy: true, status: 'operational', statusReason: isActive ? 'serving' : 'standby' };
+}
+
+/**
+ * Fleet-level counts derived from the per-node classifications. Active/standby
+ * come from the failover lease; online/healthy come from each node's own
+ * heartbeat + process health.
+ */
+function summarizeFleet(nodes) {
+    const list = NODE_ROLES.map(r => nodes[r]).filter(Boolean);
+    const online = list.filter(n => n.online).length;
+    const healthy = list.filter(n => n.healthy).length;
+    const active = list.filter(n => n.isActive && n.online).length;
+    const standby = list.filter(n => n.online && !n.isActive).length;
+    const offline = list.filter(n => !n.online && n.status !== 'never').length;
+    const unknown = list.filter(n => n.status === 'never').length;
+    return {
+        total: list.length,
+        online,
+        healthy,
+        active,
+        standby,
+        offline,
+        unknown,
+        // Redundancy is intact only when every node is online AND at least one
+        // node is serving Discord.
+        redundancyIntact: online === list.length && active >= 1,
+    };
+}
+
+/**
+ * Stateless evaluation: given the node pulses + the shardnode FAILOVER lease,
  * compute every component's status. Pure — no DB/network — so it is directly
  * unit-testable (and the tick path feeds it the same data).
+ *
+ * @param {Array} pulses  per-node pulses from monitorDb.getNodePulses()
+ * @param {object} lease  failover lease ({ activeNodeId } or legacy { holder })
  */
 function evaluateState(pulses, lease) {
     const pulsesArr = Array.isArray(pulses) ? pulses : [];
-    const holderNode = (lease && lease.holder) || null;
+    const { activeNodeId } = normalizeLease(lease);
 
-    // The lease holder's node name → its pulse and role.
-    let holderPulse = null;
-    if (holderNode) holderPulse = pulsesArr.find(p => p.nodeName === holderNode) || null;
-    const activeRole = holderPulse ? holderPulse.role : null;
-    const byRole = {
-        sn1: pulsesArr.find(p => p.role === 'sn1') || null,
-        sn2: pulsesArr.find(p => p.role === 'sn2') || null,
-        sn3: pulsesArr.find(p => p.role === 'sn3') || null,
+    // Pick the FRESHEST pulse per role. A pre-upgrade deployment left an
+    // orphaned row (node_name='local') that shares a role with a live node;
+    // without this the stale row could shadow the real one and make a healthy
+    // node look offline.
+    const byRole = {};
+    for (const p of pulsesArr) {
+        const role = p.role;
+        if (!role) continue;
+        const cur = byRole[role];
+        if (!cur || (Number(p.ageMs) || Infinity) < (Number(cur.ageMs) || Infinity)) byRole[role] = p;
+    }
+    for (const role of NODE_ROLES) if (!(role in byRole)) byRole[role] = null;
+    const activeRoleFromLease = normalizeLease(lease).activeRole || null;
+
+    const isNodeActive = (p) => {
+        if (!p) return false;
+        if (activeNodeId && (p.nodeId === activeNodeId || p.nodeName === activeNodeId)) return true;
+        if (activeNodeId) return false;
+        // No lease id at all: fall back to the lease role, else the highest
+        // priority node that reports a ready gateway (so an unleased single
+        // node is still treated as the active one).
+        if (activeRoleFromLease) return p.role === activeRoleFromLease;
+        return false;
     };
 
-    // ── node statuses ─────────────────────────────────────────────────────
+    // ── node classifications ─────────────────────────────────────────────
     const nodes = {};
-    let anyNodeOps = false;
-    let anyNodeFresh = false;
-    let anyNodeNever = false;
-    for (const role of ['sn1', 'sn2', 'sn3']) {
+    for (const role of NODE_ROLES) {
         const p = byRole[role];
-        if (!p) { nodes[role] = { status: 'never', detail: { reason: 'no_pulse' } }; anyNodeNever = true; continue; }
-        const staleMs = pulseStaleMs(p);
-        if (p.ageMs == null || p.ageMs > staleMs) {
-            nodes[role] = { status: 'unavailable', detail: { reason: 'stale', ageMs: p.ageMs } };
-            continue;
-        }
-        anyNodeFresh = true;
-        const isActive = p.nodeName === holderNode;
-        if (p.processHealth === 'dead' || p.processHealth === 'stopped') {
-            nodes[role] = { status: 'unavailable', detail: { reason: 'process_' + p.processHealth } };
-            continue;
-        }
-        // Active node must also have a live gateway to be fully operational.
-        if (isActive && !p.gatewayReady) {
-            nodes[role] = { status: 'degraded', detail: { reason: 'gateway_not_ready', gatewayConnected: p.gatewayConnected } };
-            continue;
-        }
-        nodes[role] = { status: 'operational', detail: { gateway: p.gatewayReady } };
-        anyNodeOps = true;
+        const cls = classifyNode(p, { isActive: isNodeActive(p) });
+        nodes[role] = { ...cls, role, nodeId: p ? (p.nodeId || p.nodeName) : null, ...nodeDetail(cls) };
     }
 
-    // ── gateway (from the active/lease-holder node's pulse) ──────────────
-    let gateway = { status: 'never', detail: { reason: 'no_active_node' } };
-    if (holderPulse) {
-        if (holderPulse.gatewayReady) gateway = { status: 'operational', detail: { shardsReady: holderPulse.shardsReady } };
-        else if (holderPulse.gatewayConnected) gateway = { status: 'degraded', detail: { reason: 'connecting_or_reconnecting' } };
-        else gateway = { status: 'unavailable', detail: { reason: 'disconnected' } };
-    }
-
-    // ── bot ──────────────────────────────────────────────────────────────
-    let bot;
-    if (anyNodeNever && !anyNodeFresh) {
-        bot = { status: 'never', detail: { reason: 'no_nodes_reported' } };
-    } else if (!anyNodeFresh) {
-        bot = { status: 'unavailable', detail: { reason: 'all_nodes_down' } };
-    } else if (!anyNodeOps) {
-        bot = { status: 'degraded', detail: { reason: 'nodes_running_but_gateway_down' } };
-    } else if (gateway.status !== 'operational' && gateway.status !== 'never') {
-        bot = { status: 'degraded', detail: { reason: 'gateway:' + gateway.status } };
+    // ── gateway (from the active node's pulse) ───────────────────────────
+    const activePulse = pulsesArr.find(p => isNodeActive(p)) || null;
+    let gateway;
+    if (!activePulse) {
+        const anyFreshStandby = NODE_ROLES.some(r => nodes[r].online);
+        gateway = anyFreshStandby
+            ? { status: 'unavailable', detail: { reason: 'no_active_node' } }
+            : { status: 'never', detail: { reason: 'no_active_node' } };
+    } else if (activePulse.gatewayReady) {
+        gateway = { status: 'operational', detail: { shardsReady: activePulse.shardsReady } };
+    } else if (activePulse.gatewayConnected) {
+        gateway = { status: 'degraded', detail: { reason: 'connecting_or_reconnecting' } };
     } else {
+        gateway = { status: 'unavailable', detail: { reason: 'disconnected' } };
+    }
+
+    const fleet = summarizeFleet(nodes);
+
+    // ── bot (overall PrimeBot service availability) ──────────────────────
+    // The bot is available when the ACTIVE node's own CLASSIFICATION is
+    // operational — i.e. it is online AND serving a ready gateway. Using the
+    // classification (not the raw pulse) means a stale active node counts as
+    // down even though its last pulse claimed a ready gateway. Standbys alone
+    // (no active node) cannot serve, so the bot is degraded — but the nodes
+    // themselves stay ONLINE/HEALTHY.
+    const activeNodeState = activePulse ? nodes[activePulse.role] : null;
+    let bot;
+    if (fleet.online === 0 && fleet.unknown === fleet.total) {
+        bot = { status: 'never', detail: { reason: 'no_nodes_reported' } };
+    } else if (fleet.online === 0) {
+        bot = { status: 'unavailable', detail: { reason: 'all_nodes_down' } };
+    } else if (!activePulse || !activeNodeState) {
+        bot = { status: 'degraded', detail: { reason: 'no_active_node' } };
+    } else if (activeNodeState.status === 'operational') {
         bot = { status: 'operational', detail: {} };
+    } else if (activeNodeState.status === 'unavailable') {
+        // The node holding the lease is down: a real service outage.
+        bot = { status: 'unavailable', detail: { reason: 'active_node_down' } };
+    } else {
+        bot = { status: 'degraded', detail: { reason: 'active_node:' + activeNodeState.statusReason } };
     }
 
     return {
         nodes,
+        fleet,
         gateway,
         bot,
-        lease: holderNode,
-        activeRole,
+        lease: activeNodeId,
+        activeRole: activePulse ? activePulse.role : activeRoleFromLease,
+    };
+}
+
+/** Human-facing detail for a node classification (kept out of classifyNode so
+ *  the pure classifier stays small). */
+function nodeDetail(cls) {
+    return {
+        online: cls.online,
+        healthy: cls.healthy,
+        statusReason: cls.statusReason,
+        detail: {
+            reason: cls.statusReason,
+            role: cls.isActive ? 'active' : 'standby',
+            heartbeatAgeMs: cls.heartbeat.ageMs,
+            gateway: cls.gateway,
+            shards: cls.shards,
+        },
     };
 }
 
 async function evaluate() {
     const [pulses, lease] = await Promise.all([
         monitorDb.getNodePulses(),
-        monitorDb.getWorkerLease().catch(() => ({ holder: null })),
+        monitorDb.getFailoverLease().catch(() => ({ activeNodeId: null })),
     ]);
     const state = evaluateState(pulses, lease);
     const { nodes, gateway, bot } = state;
@@ -204,8 +372,24 @@ async function evaluate() {
 
 // ── Observation + incident application ───────────────────────────────────────
 
-async function apply(components, monitor = monitorDb) {
-    // Load open incidents once (restart-safe duplicate prevention).
+// Consecutive OPERATIONAL readings required before an open incident is
+// resolved. Without this a single flapping sample (one missed heartbeat, one
+// 5xx blip) would close and immediately re-open an incident, producing the
+// endless "Shard Node 3 down" churn. Recovery must be CONFIRMED, not assumed.
+const RECOVERY_CONFIRMATIONS = Math.max(1, parseInt(process.env.STATUS_RECOVERY_CONFIRMATIONS, 10) || 2);
+const _recoveryStreak = new Map(); // component -> consecutive operational observations
+
+/**
+ * Apply a tick's component statuses: record observations, open/update/resolve
+ * incidents. Restart-safe and duplicate-proof:
+ *   • one open incident per component is reused (never duplicated);
+ *   • a status change on an already-open incident UPDATES it in place;
+ *   • resolution requires RECOVERY_CONFIRMATIONS consecutive healthy readings;
+ *   • node incidents say whether the failed node was ACTIVE (service impact) or
+ *     a STANDBY (redundancy loss) so a node failure is never confused with a
+ *     service-wide outage.
+ */
+async function apply(components, monitor = monitorDb, snapshot = null) {
     const openIncidents = await monitor.getOpenIncidents();
     const openByComponent = new Map();
     for (const inc of openIncidents) openByComponent.set(inc.component, inc);
@@ -218,25 +402,51 @@ async function apply(components, monitor = monitorDb) {
         const open = openByComponent.get(key);
         if (status === 'operational') {
             if (open) {
-                await monitor.resolveIncident(open.id);
-                log(`Resolved incident #${open.id} (${COMPONENT_LABELS[key] || key})`);
+                // Confirm recovery before resolving: require N consecutive
+                // healthy readings so a single flapping sample cannot close and
+                // immediately re-open an incident.
+                const streak = (_recoveryStreak.get(key) || 0) + 1;
+                _recoveryStreak.set(key, streak);
+                if (streak >= RECOVERY_CONFIRMATIONS) {
+                    _recoveryStreak.delete(key);
+                    await monitor.resolveIncident(open.id);
+                    log(`Resolved incident #${open.id} (${COMPONENT_LABELS[key] || key}) after ${streak} healthy reading(s)`);
+                    openByComponent.delete(key);
+                } else {
+                    log(`Incident #${open.id} (${COMPONENT_LABELS[key] || key}) healthy reading ${streak}/${RECOVERY_CONFIRMATIONS} — awaiting confirmation`);
+                }
+            } else {
+                _recoveryStreak.delete(key);
             }
-        } else {
-            if (!open) {
-                const title = incidentTitle(key, status);
-                const severity = COMPONENT_SEVERITY[key] || 'minor';
-                const created = await monitor.createIncident({
-                    component: key,
+            continue;
+        }
+
+        // Non-operational: reset the recovery streak and open/update an incident.
+        _recoveryStreak.delete(key);
+        if (!open) {
+            const title = incidentTitle(key, status);
+            const severity = status === 'unavailable' ? (COMPONENT_SEVERITY[key] || 'minor') : 'minor';
+            const created = await monitor.createIncident({
+                component: key,
+                title,
+                description: incidentDescription(key, status, snapshot),
+                severity,
+                status: 'investigating',
+                createdBy: 'system',
+            });
+            if (created) log(`Opened incident #${created.id} — ${title}`);
+            openByComponent.set(key, { id: created?.id, component: key });
+        } else if (monitor.updateIncident && typeof open.id === 'number') {
+            // The component was already down and its state changed (e.g.
+            // degraded → unavailable). Update the existing incident instead of
+            // stacking a duplicate.
+            const title = incidentTitle(key, status);
+            if (open.title !== title || open.severity !== (status === 'unavailable' ? (COMPONENT_SEVERITY[key] || 'minor') : 'minor')) {
+                await monitor.updateIncident(open.id, {
                     title,
-                    description: status === 'degraded'
-                        ? `${COMPONENT_LABELS[key] || key} is experiencing degraded performance.`
-                        : `${COMPONENT_LABELS[key] || key} is currently unavailable.`,
-                    severity: status === 'unavailable' ? severity : 'minor',
-                    status: 'investigating',
-                    createdBy: 'system',
-                });
-                if (created) log(`Opened incident #${created.id} — ${title}`);
-                openByComponent.set(key, { id: created?.id, component: key });
+                    description: incidentDescription(key, status, snapshot),
+                    severity: status === 'unavailable' ? (COMPONENT_SEVERITY[key] || 'minor') : 'minor',
+                }).catch(() => {});
             }
         }
     }
@@ -246,6 +456,28 @@ function incidentTitle(component, status) {
     const label = COMPONENT_LABELS[component] || component;
     if (status === 'degraded') return `Degraded performance on ${label}`;
     return `${label} down`;
+}
+
+/**
+ * A node incident must say whether the node was the ACTIVE node (a real
+ * service impact) or a STANDBY (redundancy reduced, no service impact) — that
+ * is the difference between a node failure and a service-wide outage.
+ */
+function incidentDescription(component, status, snapshot) {
+    const label = COMPONENT_LABELS[component] || component;
+    if (component === 'sn1' || component === 'sn2' || component === 'sn3') {
+        const node = snapshot && snapshot.nodes ? snapshot.nodes[component] : null;
+        const role = node ? (node.isActive ? 'active' : 'standby') : 'shard';
+        if (status === 'degraded') {
+            return `${label} (${role}) is reporting degraded health.`;
+        }
+        if (role === 'active') {
+            return `${label} (active node) is not responding — Discord service availability is affected.`;
+        }
+        return `${label} (standby node) is not responding — redundancy is reduced but Discord service is unaffected.`;
+    }
+    if (status === 'degraded') return `${label} is experiencing degraded performance.`;
+    return `${label} is currently unavailable.`;
 }
 
 // ── Restart detection ────────────────────────────────────────────────────────
@@ -289,7 +521,10 @@ function startWorker() {
             const held = await monitorDb.acquireWorkerLease(WORKER_ID, WORKER_TTL_S);
             if (!held) { reschedule(); return; } // another node is the worker
             const pulses = await monitorDb.getNodePulses();
-            const lease = await monitorDb.getWorkerLease().catch(() => ({ holder: null }));
+            // Node classification keys off the SHARDNODE FAILOVER lease (who is
+            // serving Discord), never the monitoring-worker lease — otherwise a
+            // healthy standby is mistaken for the active node.
+            const lease = await monitorDb.getFailoverLease().catch(() => ({ activeNodeId: null }));
             const state = evaluateState(pulses, lease);
             const { nodes, gateway, bot } = state;
             const website = await httpCheck(BASE_URL ? BASE_URL + '/' : null);
@@ -303,8 +538,9 @@ function startWorker() {
                 gateway,
                 sn1: nodes.sn1, sn2: nodes.sn2, sn3: nodes.sn3,
             };
-            await apply(components);
+            await apply(components, monitorDb, state);
             await applyRestartDetection(pulses);
+            await monitorDb.pruneStaleNodePulses();
             await monitorDb.rollDaily();
             await monitorDb.pruneObservations(OBSERVATION_RETENTION_DAYS);
             await monitorDb.refreshWorkerLease(WORKER_ID, WORKER_TTL_S);
@@ -333,5 +569,7 @@ function stopWorker() {
 
 module.exports = {
     startWorker, stopWorker, evaluate, evaluateState, apply, applyRestartDetection,
-    pulseStaleMs, detectRestart, incidentTitle, WORKER_ID,
+    pulseStaleMs, detectRestart, incidentTitle, incidentDescription,
+    classifyNode, summarizeFleet, normalizeLease, WORKER_ID,
+    RECOVERY_CONFIRMATIONS,
 };
