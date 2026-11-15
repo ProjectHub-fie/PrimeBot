@@ -9,7 +9,7 @@
  *
  * Tables (all self-created, indexed, UTC via NOW()):
  *   monitor_components    component registry (key -> label/description/enabled)
- *   monitor_node_pulse    per-node rich heartbeat (node_name PK, upsert)
+ *   monitor_node_pulse    per-node rich heartbeat (node_name PK = stable node id, upsert)
  *   monitor_observations  raw state observations for uptime math
  *   monitor_daily         per-component per-UTC-day aggregates
  *   monitor_incidents     incident ledger (auto + manual)
@@ -20,7 +20,11 @@
  *   Uptime% = (monitored_ms - downtime_ms) / monitored_ms * 100
  * A bucket's monitored_ms is the time inside the bucket that had at least one
  * observation; gaps (no data) are NEVER counted as operational — they reduce
- * the monitored duration instead.
+ * the monitored duration (and the reported `coverage`) instead.
+ *
+ * The roll (raw -> daily) and the raw-observation prune are the ONLY writes
+ * that consume history, and they run in one transaction so a failed aggregate
+ * can never destroy the raw rows it was meant to fold.
  */
 
 const { sql } = require('drizzle-orm');
@@ -88,6 +92,7 @@ async function ensureMonitorTables() {
             await p.query(`
                 CREATE TABLE IF NOT EXISTS monitor_node_pulse (
                     node_name TEXT PRIMARY KEY,
+                    node_id TEXT,
                     role TEXT NOT NULL DEFAULT 'sn1',
                     ts TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     process_health TEXT DEFAULT 'unknown',
@@ -101,6 +106,21 @@ async function ensureMonitorTables() {
                     resource JSONB,
                     detail JSONB
                 )`);
+            // Older deployments keyed the pulse row on `node_name` only and had
+            // no `node_id`. Add the column; the row stays unique per node_name
+            // (which is now always a stable id — never the literal 'local').
+            await p.query(`ALTER TABLE monitor_node_pulse ADD COLUMN IF NOT EXISTS node_id TEXT`);
+            // One row per (role) is the invariant that makes the three-node
+            // fleet coherent: a role can only ever have one live pulse. Collapse
+            // any legacy duplicate rows (e.g. several 'local' writers) so the
+            // dashboard shows three distinct nodes instead of one.
+            await p.query(`
+                DELETE FROM monitor_node_pulse a
+                USING monitor_node_pulse b
+                WHERE a.node_name <> b.node_name
+                  AND a.role = b.role
+                  AND a.ts < b.ts`);
+            await p.query(`CREATE INDEX IF NOT EXISTS idx_monitor_pulse_role ON monitor_node_pulse (role, ts DESC)`);
             await p.query(`
                 CREATE TABLE IF NOT EXISTS monitor_observations (
                     id BIGSERIAL PRIMARY KEY,
@@ -193,17 +213,22 @@ async function ensureMonitorTables() {
 async function upsertNodePulse(pulse) {
     await ensureMonitorTables();
     const {
-        nodeName, role = 'sn1', processHealth = 'unknown',
+        nodeName, nodeId = null, role = 'sn1', processHealth = 'unknown',
         gatewayConnected = false, gatewayReady = false,
         shardsTotal = 0, shardsReady = 0, shardsActive = 0,
         pid = null, startedAt = null, resource = null, detail = null,
     } = pulse;
+    // A node's identity is its stable node_id (falling back to node_name).
+    // Writing the same id from every node is what collapsed the fleet into a
+    // single row — callers now supply a per-node id.
+    const id = nodeId || nodeName;
     await monitorPool.query(`
         INSERT INTO monitor_node_pulse
-            (node_name, role, ts, process_health, gateway_connected, gateway_ready,
+            (node_name, node_id, role, ts, process_health, gateway_connected, gateway_ready,
              shards_total, shards_ready, shards_active, pid, started_at, resource, detail)
-        VALUES ($1,$2,NOW(),$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+        VALUES ($1,$2,$3,NOW(),$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
         ON CONFLICT (node_name) DO UPDATE SET
+            node_id = EXCLUDED.node_id,
             role = EXCLUDED.role,
             ts = NOW(),
             process_health = EXCLUDED.process_health,
@@ -216,19 +241,20 @@ async function upsertNodePulse(pulse) {
             started_at = EXCLUDED.started_at,
             resource = EXCLUDED.resource,
             detail = EXCLUDED.detail
-    `, [nodeName, role, processHealth, gatewayConnected, gatewayReady, shardsTotal, shardsReady, shardsActive, pid, startedAt, resource, detail]);
+    `, [id, id, role, processHealth, gatewayConnected, gatewayReady, shardsTotal, shardsReady, shardsActive, pid, startedAt, resource, detail]);
 }
 
 async function getNodePulses() {
     await ensureMonitorTables();
     const res = await monitorPool.query(`
-        SELECT node_name, role, ts, process_health, gateway_connected, gateway_ready,
+        SELECT node_name, node_id, role, ts, process_health, gateway_connected, gateway_ready,
                shards_total, shards_ready, shards_active, pid, started_at, resource, detail,
                EXTRACT(EPOCH FROM (NOW() - ts)) * 1000 AS age_ms
         FROM monitor_node_pulse
     `).catch(() => ({ rows: [] }));
     return (res.rows || []).map(r => ({
         nodeName: r.node_name,
+        nodeId: r.node_id || r.node_name,
         role: r.role,
         ts: r.ts,
         ageMs: Math.round(Number(r.age_ms) || 0),
@@ -243,6 +269,23 @@ async function getNodePulses() {
         resource: r.resource || null,
         detail: r.detail || null,
     }));
+}
+
+/**
+ * Drop pulse rows that have not been refreshed for a long time. This clears
+ * orphaned rows from a pre-upgrade deployment (which wrote the same literal
+ * node_name from every node) once the real per-node rows are flowing, so a
+ * dead row can never keep a role occupied. `keepMs` is generous (a day) so a
+ * genuinely down node is still reported as offline rather than silently
+ * forgotten — only long-dead rows are removed.
+ */
+async function pruneStaleNodePulses(keepMs = 86400000) {
+    await ensureMonitorTables();
+    const res = await monitorPool.query(
+        `DELETE FROM monitor_node_pulse WHERE ts < NOW() - ($1::bigint * interval '1 millisecond')`,
+        [Number(keepMs) || 86400000]
+    ).catch(() => ({ rowCount: 0 }));
+    return Number(res.rowCount || 0);
 }
 
 // ── Node restarts ────────────────────────────────────────────────────────────
@@ -294,6 +337,36 @@ async function pruneObservations(keepDays) {
 }
 
 // ── Worker lease ─────────────────────────────────────────────────────────────
+
+/**
+ * The shardnode failover lease (which node is actually serving Discord).
+ *
+ * IMPORTANT: this reads `bot_failover_lock` from the SEASON pool, not the
+ * monitoring pool. The monitoring tables can be pointed at their own database
+ * (`MONITOR_DATABASE_URL`) while the failover service always lives on the
+ * season database — so the lease must be read from `seasonPool` or it silently
+ * returns nothing and every node is misclassified.
+ *
+ * This is a DIFFERENT thing from the monitoring-worker lease below: the worker
+ * lease only decides who runs monitoring. Node classification must use THIS
+ * lease, otherwise a healthy standby node is mistaken for the active node and
+ * flagged degraded for having no gateway.
+ */
+async function getFailoverLease() {
+    const res = await seasonPool.query(`
+        SELECT owner_node_name, owner_role,
+               EXTRACT(EPOCH FROM (NOW() - last_seen)) * 1000 AS age_ms
+        FROM bot_failover_lock
+        WHERE id = 1
+    `).catch(() => ({ rows: [] }));
+    const row = res.rows && res.rows[0];
+    if (!row) return { activeNodeId: null, activeRole: null, ageMs: null };
+    return {
+        activeNodeId: row.owner_node_name || null,
+        activeRole: row.owner_role || null,
+        ageMs: row.age_ms != null ? Math.round(Number(row.age_ms)) : null,
+    };
+}
 
 async function acquireWorkerLease(holder, ttlSeconds = 45) {
     // Atomic claim: INSERT the row; on conflict, only take over a stale lease.
@@ -430,44 +503,131 @@ async function rollDaily() {
     // from its own timestamp until the next observation (LEAD), so cloudy gaps
     // shave the monitored duration instead of being counted as operational.
     // Only fully-finished days are rolled; the current UTC day stays raw.
+    //
+    // The INSERT and the DELETE run in ONE transaction on the same connection.
+    // They used to be two independent pool queries: the INSERT silently failed
+    // (a `LEAST(timestamptz, interval)` precedence error — `a + b - ts` parsed
+    // as `(a + b) - ts`, yielding an interval) while the unconditional DELETE
+    // still ran, so every prior day's raw observations were destroyed WITHOUT a
+    // daily aggregate ever being written. monitor_daily stayed empty forever and
+    // only the current day (never rolled) could light a bar.
     await ensureMonitorTables();
-    await monitorPool.query(`
-        INSERT INTO monitor_daily (component, day, monitored_ms, operational_ms, degraded_ms, downtime_ms, maintenance_ms, samples)
-        WITH bucket AS (
-            SELECT component,
-                   date_trunc('day', ts)::date AS day,
-                   ts,
-                   LEAD(ts) OVER (PARTITION BY component ORDER BY ts) AS next_ts,
-                   status
-            FROM monitor_observations
-            WHERE ts < date_trunc('day', NOW())
-        ),
-        spans AS (
-            SELECT component, day, status,
-                   CASE
-                       WHEN next_ts IS NULL THEN 0
-                       ELSE GREATEST(EXTRACT(EPOCH FROM (LEAST(next_ts, date_trunc('day', NOW())::timestamp + interval '1 day' - ts)) - ts) * 1000, 0)
-                   END AS span_ms
-            FROM bucket
-        )
-        SELECT component, day,
-               COALESCE(SUM(span_ms) FILTER (WHERE status <> 'maintenance'), 0),
-               COALESCE(SUM(span_ms) FILTER (WHERE status = 'operational'), 0),
-               COALESCE(SUM(span_ms) FILTER (WHERE status = 'degraded'), 0),
-               COALESCE(SUM(span_ms) FILTER (WHERE status = 'unavailable'), 0),
-               COALESCE(SUM(span_ms) FILTER (WHERE status = 'maintenance'), 0),
-               COUNT(*)
-        FROM spans
-        GROUP BY component, day
-        ON CONFLICT (component, day) DO UPDATE SET
-            monitored_ms = EXCLUDED.monitored_ms,
-            operational_ms = EXCLUDED.operational_ms,
-            degraded_ms = EXCLUDED.degraded_ms,
-            downtime_ms = EXCLUDED.downtime_ms,
-            maintenance_ms = EXCLUDED.maintenance_ms,
-            samples = EXCLUDED.samples
-    `).catch(err => console.error('[MONITOR] rollDaily error:', err.message));
-    await monitorPool.query(`DELETE FROM monitor_observations WHERE ts < date_trunc('day', NOW())`).catch(() => {});
+    const client = await monitorPool.connect();
+    try {
+        await client.query('BEGIN');
+        const inserted = await client.query(`
+            INSERT INTO monitor_daily (component, day, monitored_ms, operational_ms, degraded_ms, downtime_ms, maintenance_ms, samples)
+            WITH bucket AS (
+                SELECT component,
+                       date_trunc('day', ts)::date AS day,
+                       ts,
+                       LEAD(ts) OVER (PARTITION BY component ORDER BY ts) AS next_ts,
+                       status
+                FROM monitor_observations
+                WHERE ts < date_trunc('day', NOW())
+            ),
+            spans AS (
+                SELECT component, day, status,
+                       CASE
+                           WHEN next_ts IS NULL THEN 0
+                           -- Clamp the span to the end of the UTC day it belongs
+                           -- to. The parentheses matter: without them the "- ts"
+                           -- binds to the interval and Postgres rejects the LEAST.
+                           ELSE GREATEST(EXTRACT(EPOCH FROM (
+                               LEAST(next_ts, date_trunc('day', NOW()) + interval '1 day') - ts
+                           )) * 1000, 0)
+                       END AS span_ms
+                FROM bucket
+            )
+            SELECT component, day,
+                   COALESCE(SUM(span_ms) FILTER (WHERE status <> 'maintenance'), 0),
+                   COALESCE(SUM(span_ms) FILTER (WHERE status = 'operational'), 0),
+                   COALESCE(SUM(span_ms) FILTER (WHERE status = 'degraded'), 0),
+                   COALESCE(SUM(span_ms) FILTER (WHERE status = 'unavailable'), 0),
+                   COALESCE(SUM(span_ms) FILTER (WHERE status = 'maintenance'), 0),
+                   COUNT(*)
+            FROM spans
+            GROUP BY component, day
+            ON CONFLICT (component, day) DO UPDATE SET
+                monitored_ms = EXCLUDED.monitored_ms,
+                operational_ms = EXCLUDED.operational_ms,
+                degraded_ms = EXCLUDED.degraded_ms,
+                downtime_ms = EXCLUDED.downtime_ms,
+                maintenance_ms = EXCLUDED.maintenance_ms,
+                samples = EXCLUDED.samples
+        `);
+        // Only consume the raw rows once the aggregate is safely written, and
+        // never delete rows newer than the roll cutoff (a day boundary that
+        // arrived mid-transaction would otherwise lose observations).
+        await client.query(`DELETE FROM monitor_observations WHERE ts < date_trunc('day', NOW())`);
+        await client.query('COMMIT');
+        return Number(inserted?.rowCount || 0);
+    } catch (err) {
+        try { await client.query('ROLLBACK'); } catch (_) {}
+        console.error('[MONITOR] rollDaily error (raw observations preserved):', err.message);
+        return null;
+    } finally {
+        client.release();
+    }
+}
+
+/**
+ * Build the 30-day series for one component: exactly `days` consecutive daily
+ * positions ending today (UTC), including days with NO data.
+ *
+ * Each position carries the independent facts the graph needs:
+ *   day          — the calendar day (UTC, YYYY-MM-DD)
+ *   uptime       — % of MONITORED time that was operational (null when unmonitored)
+ *   downtimePct  — % of monitored time confirmed down
+ *   degradedPct  — % of monitored time degraded
+ *   monitoredMs  — total monitored duration in the bucket
+ *   coverage     — monitored / expected duration for that day (0..1)
+ *   dataStatus   — 'complete' | 'partial' | 'no_data'
+ *
+ * A day with no monitoring records stays NO DATA: uptime is null and coverage
+ * is 0. We never fabricate 100% for a missing day, and never count unmonitored
+ * time as operational (it reduces coverage instead).
+ */
+function buildSeriesBucket(day, isToday, agg, expectedMs) {
+    const dayLengthMs = 86400000;
+    if (!agg || !(agg.monitoredMs > 0)) {
+        return {
+            day,
+            isToday,
+            hasData: false,
+            dataStatus: 'no_data',
+            monitoredMs: 0, operationalMs: 0, degradedMs: 0, downtimeMs: 0, maintenanceMs: 0,
+            coverage: 0,
+            uptime: null,
+            downtimePct: null,
+            degradedPct: null,
+            samples: 0,
+        };
+    }
+    const monitoredMs = agg.monitoredMs;
+    const denom = monitoredMs > 0 ? monitoredMs : 1;
+    const uptime = ((monitoredMs - agg.downtimeMs) / denom) * 100;
+    const expected = Number(expectedMs) > 0 ? Number(expectedMs) : dayLengthMs;
+    const coverage = Math.max(0, Math.min(1, monitoredMs / expected));
+    // "Partial" means the day was not monitored end-to-end (monitor started
+    // late, or there were gaps), so its uptime covers less than the full day.
+    const dataStatus = coverage >= 0.98 ? 'complete' : 'partial';
+    return {
+        day,
+        isToday,
+        hasData: true,
+        dataStatus,
+        monitoredMs,
+        operationalMs: agg.operationalMs,
+        degradedMs: agg.degradedMs,
+        downtimeMs: agg.downtimeMs,
+        maintenanceMs: agg.maintenanceMs,
+        coverage,
+        uptime,
+        downtimePct: (agg.downtimeMs / denom) * 100,
+        degradedPct: (agg.degradedMs / denom) * 100,
+        samples: agg.samples,
+    };
 }
 
 /**
@@ -537,6 +697,12 @@ async function getDailySeries(component, days = 30) {
         }
         : null;
 
+    // Expected duration for coverage: a past day is 24h; today is the time
+    // elapsed so far (so a monitor running since UTC midnight reads complete
+    // rather than permanently partial).
+    const now = new Date();
+    const elapsedTodayMs = now.getTime() - todayStart.getTime();
+
     const series = [];
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);
@@ -545,21 +711,8 @@ async function getDailySeries(component, days = 30) {
         const day = d.toISOString().slice(0, 10);
         const isToday = d.getTime() === today.getTime();
         const agg = isToday ? (todayAgg || null) : (byDay.get(day) || null);
-        if (!agg || agg.monitoredMs <= 0) {
-            series.push({
-                day,
-                isToday,
-                hasData: false,
-                monitoredMs: 0, operationalMs: 0, degradedMs: 0, downtimeMs: 0, maintenanceMs: 0,
-                uptime: null,
-                samples: 0,
-            });
-            continue;
-        }
-        const uptime = agg.monitoredMs > 0
-            ? ((agg.monitoredMs - agg.downtimeMs) / agg.monitoredMs) * 100
-            : null;
-        series.push({ day, isToday, hasData: true, ...agg, uptime });
+        const expectedMs = isToday ? Math.max(elapsedTodayMs, 60000) : 86400000;
+        series.push(buildSeriesBucket(day, isToday, agg, expectedMs));
     }
     return series;
 }
@@ -621,12 +774,13 @@ function rowToMaintenance(r) {
 module.exports = {
     resolveConnectionString, monitorPool,
     COMPONENT_KEYS, STATUS_OK, STATUS_DEGRADED, STATUS_DOWN, INCIDENT_STATUSES,
-    ensureMonitorTables, upsertNodePulse, getNodePulses,
+    ensureMonitorTables, upsertNodePulse, getNodePulses, pruneStaleNodePulses,
     recordNodeRestart, getNodeRestarts,
     insertObservation, pruneObservations,
+    getFailoverLease,
     acquireWorkerLease, refreshWorkerLease, getWorkerLease,
     getOpenIncidents, getIncidents, getIncidentById, createIncident, updateIncident, resolveIncident,
-    rollDaily, getDailySeries,
+    rollDaily, getDailySeries, buildSeriesBucket,
     listComponents, updateComponent,
     addMaintenance, deleteMaintenance, activeMaintenances,
 };

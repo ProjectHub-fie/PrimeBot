@@ -5,28 +5,25 @@ const { sql } = require('drizzle-orm');
 // Set NODE_ROLE=sn1 on panel.visionhost.com, NODE_ROLE=sn2 on wispbyte.com,
 // and NODE_ROLE=sn3 on the third host (e.g. Replit).
 // Priority: sn1 > sn2 > sn3
-function normalizeNodeRole(rawRole) {
-    const value = String(rawRole || 'sn1').trim().toLowerCase();
-    if (value === 'sn2' || value === 'secondary'  || value === 'secoundary') return 'sn2';
-    if (value === 'sn3' || value === 'tertiary')                              return 'sn3';
-    if (value === 'sn1' || value === 'primary')                               return 'sn1';
-    return 'sn1';
-}
+//
+// Identity is resolved by utils/nodeIdentity.js so the failover heartbeat, the
+// per-node status pulse and the monitoring worker all publish the SAME stable
+// id. They used to disagree (the pulse fell back to the literal 'local'), which
+// collapsed all three nodes into one monitoring row.
+const { normalizeNodeRole, resolveNodeIdentity } = require('./nodeIdentity');
 
 // Role priority: lower number = higher priority (wins the lease).
 // sn1 always wins; sn2 beats sn3; sn3 is last resort.
 const ROLE_PRIORITY = { sn1: 1, sn2: 2, sn3: 3 };
 
-const NODE_ROLE = normalizeNodeRole(process.env.NODE_ROLE);
-// Use NODE_NAME if explicitly set; otherwise use a stable role-based name.
-// We deliberately skip process.env.HOSTNAME because hosting panels assign
+const NODE_IDENTITY = resolveNodeIdentity(process.env);
+const NODE_ROLE = NODE_IDENTITY.role;
+// Use NODE_ID / NODE_NAME if explicitly set; otherwise a stable role-based
+// name. We deliberately skip process.env.HOSTNAME because hosting panels assign
 // random container hostnames that change between restarts, which causes the
 // DB to treat the same physical host as a brand-new node every time it starts.
-const NODE_NAME = process.env.NODE_NAME || (
-    NODE_ROLE === 'sn2' ? 'NU3049' :
-    NODE_ROLE === 'sn3' ? 'NUKN09' :
-                          'NR0008'
-);
+const NODE_NAME = NODE_IDENTITY.nodeName;
+const NODE_ID = NODE_IDENTITY.nodeId;
 
 const HEARTBEAT_INTERVAL_MS = parseInt(process.env.FAILOVER_HEARTBEAT_INTERVAL_MS, 10) || 30000;
 // Cadence used once the bot has seen no Discord activity for a while.
@@ -140,6 +137,10 @@ async function writePulse() {
     try {
         const pulse = await pulseProvider();
         if (pulse && pulse.nodeName) {
+            // The active node's pulse rides the failover heartbeat, so its
+            // published cadence is the heartbeat interval (not the standby
+            // pulse loop's) — the worker uses this to size the staleness window.
+            if (pulse.resource) pulse.resource.pulseIntervalMs = HEARTBEAT_INTERVAL_MS;
             const { upsertNodePulse } = require('../server/monitorDb');
             await upsertNodePulse(pulse);
         }
@@ -637,6 +638,7 @@ async function isLeaseHeldByHigherPriority(selfRole, selfNodeName) {
 module.exports = {
     NODE_ROLE,
     NODE_NAME,
+    NODE_ID,
     ROLE_PRIORITY,
     HEARTBEAT_INTERVAL_MS,
     IDLE_HEARTBEAT_INTERVAL_MS,
