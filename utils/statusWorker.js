@@ -34,10 +34,10 @@ let timer = null;
 let running = false;
 
 const COMPONENT_LABELS = {
-    bot: 'PrimeBot Bot',
+    bot: 'PrimeBot',
     website: 'Main Website',
     api: 'Dashboard / API',
-    db: 'PostgreSQL Database',
+    db: 'Database',
     gateway: 'Discord Gateway',
     sn1: 'Shard Node 1',
     sn2: 'Shard Node 2',
