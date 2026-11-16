@@ -1300,3 +1300,79 @@ bugs were fixed at the SOURCE (never by relabelling the frontend).
 - **Tests:** `tests/monitoringFalseOutage.test.js` (the 11 required regression
   scenarios) + `tests/monitoringPipeline.test.js` + `tests/statusMonitor.test.js`.
   Env: `STATUS_STALE_FACTOR` (3), `STATUS_OUTAGE_FACTOR` (6).
+
+## Music (on-demand playback + admin 24/7 voice) — dashboard Music tab + /music
+
+A full on-demand music feature (`MusicManager`), separate from the 24/7 **Radio**
+engine but shipped on the same dashboard tab. **The Radio tab was renamed to
+Music** and the radio station/session sections are embedded *inside* the Music
+tab (radio lives inside music). `/guild/:guildId/radio` now 302-redirects to
+`/guild/:guildId/music`. The bot commands stay `/radio` and `/music`.
+
+- **Manager:** `utils/music/musicManager.js` (`MusicManager`). One authoritative
+  player per guild; a queue with add/remove/clear/shuffle/repeat/seek/volume;
+  continuous playback with **bounded retries** (`MUSIC_MAX_TRACK_RETRIES`,
+  default 2) and safe skipping of unplayable tracks. **Playback state is
+  independent of connection state** — pausing, stopping, an empty queue or a
+  finished track NEVER disconnect. `_playNext` walks the queue in a single pass
+  (`_advancing` guard) so ONE bad stream cannot stall the queue; `_onStreamError`
+  returns early when called from inside that walk (re-entering stalled the queue
+  — this was a real bug, covered by `tests/music.test.js`). `manualPause` is
+  never overridden by a listener joining. `ownsGuild()` gates every session so
+  only the node with the guild cached drives it. Voice layer
+  (`utils/music/musicVoice.js`) is injected (`deps.voice`) so the machine is
+  unit-testable with a mock; providers (`deps.providers`) likewise.
+- **Providers:** `utils/music/providers/registry.js` + `youtube.js`
+  (`youtube-sr` + `@distube/ytdl-core`), `soundcloud.js` (wraps the existing
+  verified `utils/soundcloudSource.js` — the ONLY music module that touches
+  `soundcloud-core` transitively), `spotify.js` (oEmbed metadata matched to a
+  streamable source) and `direct.js` (direct audio URLs). A URL routes to its
+  owner; a free-text query searches YouTube then SoundCloud; a Spotify result is
+  matched to a streamable provider but keeps its metadata with `source` = the
+  actual playback provider (honest about where audio comes from).
+- **Persistence:** `music_settings` / `music_playlists` / `music_playlist_tracks`
+  / `music_history` / `music_sessions` in the dedicated `MUSIC_DATABASE_URL` pool
+  (`server/musicDb.js`; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL`
+  via `server/resolveDbUrl.js`; covered by `tests/fallbackDatabaseUrl.test.js`).
+  Self-creates its tables (`ensureMusicTables()`). **Stream URLs are never
+  persisted** (`stripTrackForPersist`); they are re-resolved on every play so an
+  expired URL recovers. After a restart `restore()` recreates the connection for
+  every enabled 24/7 session this node owns (the voice connection did NOT
+  survive — never pretend it did). Shard ownership: only the owning node
+  restores/drives a guild.
+- **Commands:** `/music` (play/search/pause/resume/skip/previous/stop/seek/queue/
+  remove/clear/shuffle/loop/nowplaying/volume/status/help), `/247`
+  (enable/disable/status/channel, Admin) and `/playlist`
+  (list/create/rename/delete/view/add/remove/save/play/queue) — all
+  auto-registered by `deploy-commands.js`. Prefix `$music` in
+  `events/messageCreate.js` (there is **no** `m` alias — deliberately, to avoid
+  colliding with `mute`/`move`). Interactive control buttons + the search
+  string-select + the `music_247_channel` channel-select are routed in
+  `events/interactionCreate.js` (module `utils/music/musicButtons.js`, embed
+  helper `utils/music/musicEmbed.js`).
+- **Dashboard:** `dashboard/render/music-page.js` (sections: overview /
+  playlists / history + the embedded radio `stations`/`radio` sections from
+  `dashboard/render/radio-page.js`, which now exports its section builders) +
+  `dashboard/public/js/music.js`. `dashboard/db.js` adds `getMusicSettings` /
+  `upsertMusicSettings` / `getMusicHistory` / `getMusicPlaylists` /
+  `getMusicPlaylistTracks` / `deleteMusicPlaylist` and wires the
+  `musicSettings` / `musicHistory` / `musicPlaylists` slices into
+  `getGuildConfig`. Route `GET /guild/:guildId/music` uses
+  `guildPage({ config: [...], roles: 'all' })` (roles as plain guild roles —
+  the DJ role select only *mentions* roles).
+- **Help/docs:** `music` category in `utils/prefixHelp.js` (the Sash menu
+  auto-derives from `CATALOG`/`CATEGORY_ORDER`, so Music appears there with zero
+  extra wiring), `/music` + `/247` + `/playlist` in `commands/help.js`, and a
+  `Music` category + `music` metadata in `dashboard/commandDocs.js` (the `/docs`
+  page extracts `music` from the prefix switch automatically).
+- **Env vars:** `MUSIC_DATABASE_URL` (optional), `MUSIC_MAX_TRACK_RETRIES`
+  (default 2), `MUSIC_RECONNECT_DELAY_MS` (default 5000), `MUSIC_MAX_QUEUE`
+  (default 500), `MUSIC_RELOAD_INTERVAL_MS` (default 30000). All documented in
+  `.env.example`.
+- **Tests:** `tests/music.test.js` (15) drives the REAL `MusicManager` with a
+  mocked voice layer + provider registry (playback, track advance, empty-queue
+  stays connected, failing stream skipped with bounded retries, manual-pause
+  protection, 24/7 enable/disable + no-reconnect-after-disable, shard ownership,
+  stream-URL persistence stripping, Music page render). `musicPage` is in the
+  `redesignSmoke.test.js` guild-page loop.
+
