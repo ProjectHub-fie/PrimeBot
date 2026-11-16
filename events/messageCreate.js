@@ -678,7 +678,33 @@ module.exports = {
                         return message.reply({ embeds: [rEmbed.errorEmbed(err.message || 'Something went wrong.')] });
                     }
                 }
+                // Music — `$music <sub>` plus each subcommand usable directly
+                // ($play, $skip, $247, $playlist …). The alias cases fall through
+                // here and are prepended to `args` so the block below can treat
+                // args[0] as the subcommand unchanged.
+                case "play":
+                case "pause":
+                case "resume":
+                case "skip":
+                case "stop":
+                case "join":
+                case "leave":
+                case "queue":
+                case "search":
+                case "shuffle":
+                case "loop":
+                case "seek":
+                case "previous":
+                case "prev":
+                case "nowplaying":
+                case "volume":
+                case "vol":
+                case "playlist":
+                case "247":
+                case "24/7":
                 case "music": {
+                    // `$play x` → treat `play` as the subcommand.
+                    if (commandName !== 'music') args.unshift(commandName);
                     const mUi = require('../utils/music/musicEmbed');
                     const mPerms = require('../utils/music/musicPermissions');
                     const mStore = require('../utils/music/musicStore');
