@@ -232,6 +232,10 @@ async function showCategoryHelp(interaction, category) {
                     { name: '/giveaway', value: 'Create exciting giveaways with role requirements', inline: true },
                     { name: '/reroll', value: 'Reroll giveaway winners', inline: true },
                     { name: '/birthday', value: 'Birthday celebration system', inline: true },
+                    { name: '/radio', value: 'Continuous 24/7 SoundCloud radio that pauses when the channel is empty (start/stop/pause/resume/skip/station/status/volume/channel)', inline: false },
+                    { name: '/music', value: 'On-demand music with an admin-controlled 24/7 voice connection (play/search/pause/resume/skip/previous/stop/seek/queue/remove/clear/shuffle/loop/nowplaying/volume/status/help)', inline: false },
+                    { name: '/247', value: 'Persistent 24/7 voice connection — stays connected with an empty queue and nobody listening (enable/disable/status/channel, Admin)', inline: false },
+                    { name: '/playlist', value: 'Public and personal playlists (list/create/rename/delete/view/add/remove/save/play/queue)', inline: false },
                     { name: '/welcomeconfig', value: 'Configure welcome messages for new members', inline: true },
                     { name: '/broadcast', value: 'Send announcements to all servers', inline: true }
                 );

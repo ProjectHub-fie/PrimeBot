@@ -157,6 +157,17 @@ module.exports = {
             }, 7000);
         }
 
+        // Restore 24/7 Music sessions: reconnect to each configured voice channel
+        // (the connection did NOT survive the restart) and stay connected silently
+        // with an empty queue until a listener requests music.
+        if (client.musicManager && typeof client.musicManager.restore === 'function') {
+            setTimeout(() => {
+                client.musicManager.restore().catch(err =>
+                    console.error('[MUSIC] Restore failed:', err.message)
+                );
+            }, 7500);
+        }
+
         // Anti-Nuke readiness. The manager loads its own configuration cache in
         // its constructor; here we only log the per-guild permission state so a
         // misconfigured deployment (missing View Audit Log, or the

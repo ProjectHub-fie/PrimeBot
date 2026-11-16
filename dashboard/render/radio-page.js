@@ -187,4 +187,28 @@ function radioPageHTML({ guild, user }) {
     };
 }
 
-module.exports = { radioPageHTML, SECTIONS };
+module.exports = {
+    radioPageHTML,
+    SECTIONS,
+    sectionNav,
+    overviewSection,
+    stationsSection,
+    sessionSection,
+    radioSectionsHTML,
+};
+
+/**
+ * The radio sections (Stations + Session) plus their nav buttons, for embedding
+ * inside the Music dashboard page (radio now lives inside the Music tab). The
+ * returned markup reuses the same `rd-*` classes and ids, so
+ * dashboard/public/js/radio.js drives it unchanged.
+ */
+function radioSectionsHTML({ session, stations, channels }) {
+    return {
+        nav: [
+            { key: 'stations', label: 'Radio stations', icon: 'music' },
+            { key: 'radio', label: 'Radio session', icon: 'radio' },
+        ],
+        html: `${stationsSection(stations)}\n${sessionSection(session, channels)}`,
+    };
+}

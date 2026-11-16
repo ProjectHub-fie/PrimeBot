@@ -28,7 +28,7 @@ const TABS = [
   { key: 'broadcast',      label: 'Broadcasts',      icon: 'megaphone' },
   { key: 'birthdays',      label: 'Birthdays',       icon: 'cake' },
   { key: 'youtube',        label: 'YouTube',         icon: 'youtube' },
-  { key: 'radio',          label: 'Radio',           icon: 'radio' },
+  { key: 'music',          label: 'Music',           icon: 'music' },
   { key: 'embed',          label: 'Embed',           icon: 'message' },
   { key: 'logging',        label: 'Logging',         icon: 'scroll' },
   { key: 'automod',        label: 'Automod',         icon: 'shield' },

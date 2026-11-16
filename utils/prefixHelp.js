@@ -207,6 +207,37 @@ const CATALOG = {
         ],
     },
 
+    music: {
+        icon: '🎵',
+        label: 'Music',
+        title: '🎵 Music',
+        color: config.colors.primary,
+        description: 'On-demand music with an admin-controlled 24/7 persistent voice connection — every feature is free:',
+        selectDesc: 'On-demand music + 24/7',
+        commands: [
+            { names: ['music'], args: 'play <song or URL>', desc: 'Play a song, or queue it if something is playing' },
+            { names: ['music'], args: 'search <query>', desc: 'Search and pick a result to play' },
+            { names: ['music'], args: 'pause', desc: 'Pause playback' },
+            { names: ['music'], args: 'resume', desc: 'Resume playback' },
+            { names: ['music'], args: 'skip [count]', desc: 'Skip the current track' },
+            { names: ['music'], args: 'previous', desc: 'Play the previous track' },
+            { names: ['music'], args: 'stop', desc: 'Stop playback (stays connected)' },
+            { names: ['music'], args: 'seek <timestamp>', desc: 'Jump to a position (e.g. 1:30)' },
+            { names: ['music'], args: 'queue', desc: 'Show the queue' },
+            { names: ['music'], args: 'remove <position>', desc: 'Remove your own queued track' },
+            { names: ['music'], args: 'clear', desc: 'Clear the queue' },
+            { names: ['music'], args: 'shuffle', desc: 'Shuffle the queue' },
+            { names: ['music'], args: 'loop <off|track|queue>', desc: 'Set the repeat mode' },
+            { names: ['music'], args: 'nowplaying', desc: 'Show what is playing' },
+            { names: ['music'], args: 'volume <1-100>', desc: 'Set the volume' },
+            { names: ['music'], args: 'join', desc: 'Join your voice channel' },
+            { names: ['music'], args: 'leave', desc: 'Leave the voice channel' },
+            { names: ['music'], args: '247 <enable|disable|status|channel>', desc: 'Persistent 24/7 voice connection (Admin)' },
+            { names: ['music'], args: 'playlist <list|create|view|add|play|queue|delete>', desc: 'Manage public + personal playlists' },
+            { names: ['music'], args: 'help', desc: 'Show the music help card' },
+        ],
+    },
+
     welcome: {
         icon: '👋',
         label: 'Welcome',
@@ -222,7 +253,7 @@ const CATALOG = {
     },
 };
 
-const CATEGORY_ORDER = ['general', 'leveling', 'games', 'community', 'radio', 'tickets', 'youtube', 'welcome', 'moderation', 'admin'];
+const CATEGORY_ORDER = ['general', 'leveling', 'games', 'community', 'radio', 'music', 'tickets', 'youtube', 'welcome', 'moderation', 'admin'];
 
 const BETA_TAG = '🧪';
 
@@ -366,6 +397,8 @@ function getCategoryUsageLevel(category) {
         leveling: 'Intermediate',
         games: 'Beginner Friendly',
         community: 'Beginner Friendly',
+        radio: 'Intermediate',
+        music: 'Beginner Friendly',
         tickets: 'Beginner Friendly',
         welcome: 'Intermediate',
         moderation: 'Intermediate',
@@ -379,6 +412,8 @@ function getCategoryPermissionLevel(category) {
         leveling: 'Members / Mods',
         games: 'Everyone',
         community: 'Everyone',
+        radio: 'Everyone (Admins to configure)',
+        music: 'Everyone (Admins to configure 24/7)',
         tickets: 'Everyone',
         welcome: 'Admins',
         moderation: 'Moderators',

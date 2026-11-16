@@ -563,6 +563,16 @@ function radioPage({ guild, user }) {
     return render({ title, body, active: 'servers', scripts, user });
 }
 
+// ── Music (on-demand music + 24/7 radio, in one tab) ────────────────────────
+// The bot's MusicManager owns the live player; this page reads the persisted
+// music settings / playlists / history and embeds the radio sections. Heavy
+// markup lives in render/music-page.js.
+
+function musicPage({ guild, user }) {
+    const { body, scripts, title } = require('./music-page').musicPageHTML({ guild, user });
+    return render({ title, body, active: 'servers', scripts, user });
+}
+
 // ── Logging ─────────────────────────────────────────────────────────────────
 
 function loggingPanelHTML(logging, channels) {
@@ -1845,6 +1855,7 @@ module.exports = {
     birthdaysPage, embedPage, loggingPage, reactionRolesPage, ticketsPage, ticketEditPage, automodPage, antiNukePage, eventsPage,
     youtubePage,
     radioPage,
+    musicPage,
     eventWizardPage, eventManagePage,
     livePollsPage, liveGiveawaysPage,
     ticketEmbedBuilderHTML,

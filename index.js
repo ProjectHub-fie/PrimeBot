@@ -229,6 +229,27 @@ client.betaManager = betaManager;
         restore: noopAsync,
         shutdown: noopAsync,
     };
+    // On-demand Music — stub keeps commands inert until the real manager is
+    // constructed in initializeManagers().
+    client.musicManager = {
+        sessions: new Map(),
+        getSession: () => null,
+        describe: () => null,
+        play: async () => { throw new Error('Music is not available right now.'); },
+        addToQueue: async () => { throw new Error('Music is not available right now.'); },
+        pause: async () => { throw new Error('Music is not available right now.'); },
+        resume: async () => { throw new Error('Music is not available right now.'); },
+        skip: async () => { throw new Error('Music is not available right now.'); },
+        stop: async () => { throw new Error('Music is not available right now.'); },
+        setVolume: async () => { throw new Error('Music is not available right now.'); },
+        setRepeat: async () => { throw new Error('Music is not available right now.'); },
+        enable247: async () => { throw new Error('Music is not available right now.'); },
+        disable247: async () => { throw new Error('Music is not available right now.'); },
+        set247Channel: async () => { throw new Error('Music is not available right now.'); },
+        handleVoiceStateUpdate: noopAsync,
+        restore: noopAsync,
+        shutdown: noopAsync,
+    };
 }
 
 // ── Real manager boot — runs exactly once when this node connects ─────────
@@ -399,6 +420,19 @@ async function initializeManagers() {
         console.log('[MANAGERS] RadioManager loaded.');
     } catch (err) {
         console.error('[MANAGERS] Failed to load RadioManager:', err.message);
+    }
+
+    // On-demand Music. Owns one authoritative player per guild, the queue and
+    // the admin-controlled 24/7 persistent voice connection. 24/7 sessions are
+    // restored on ready. Separate from the radio feature.
+    try {
+        const { MusicManager } = require('./utils/music/musicManager');
+        const musicStore = require('./utils/music/musicStore');
+        client.musicManager = new MusicManager(client, { store: musicStore });
+        client.musicManager.start().catch(err => console.error('[MUSIC] start failed:', err.message));
+        console.log('[MANAGERS] MusicManager loaded.');
+    } catch (err) {
+        console.error('[MANAGERS] Failed to load MusicManager:', err.message);
     }
 
     // LevelingManager needs the DB fully ready — brief delay is intentional
