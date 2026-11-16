@@ -1423,3 +1423,47 @@ depend on it.
   cache, proves `Options.cacheWithLimits({ VoiceStateManager: { maxSize: 0 } })`
   discards entries while `Infinity` keeps them, and drives `countListeners` with
   a populated voice-state cache (bots ignored, uncached members counted).
+
+## Zombie voice connection: "leave/247 disable succeeds but the bot stays connected"
+
+`utils/music/musicVoice.js` and `utils/radioVoice.js` `join()` called
+`joinVoiceChannel(...)` then `entersState(connection, Ready, 20000)`. On timeout
+it **threw without destroying the connection**, and because `join()` threw before
+the caller could assign `session.connection`, the manager held **no reference** to
+it either.
+
+`@discordjs/voice` tracks every connection in a module-level registry
+(`getVoiceConnection(guildId)`). So the abandoned, permanently non-Ready
+connection stayed registered and:
+
+- every later `joinVoiceChannel()` for that guild returned **the same wedged
+  object** (`existing.state.status !== 'destroyed'` → reused), so re-joins could
+  never become Ready;
+- `/leave` and `/music 247 disable` called `voice.leave(session.connection)` with
+  `session.connection === null` → a silent no-op. The manager then cleared its own
+  state and replied **success** while the bot was still sitting in the voice
+  channel. That is the reported bug.
+
+**Reproduced** (fake adapter that never completes the handshake):
+`join threw: The operation was aborted` → `registry after failed join: STILL
+TRACKED (zombie)` → `next join returns the SAME wedged connection: true` →
+`leave() would destroy: null -> reports success but stays connected`.
+
+**Fix (three layers):**
+
+1. `join()` destroys the half-open connection in its `catch` before rethrowing, so
+   a failed handshake never leaves a tracked zombie.
+2. `leave(connection, guildId)` now also sweeps the registry via
+   `destroyGuildConnection(guildId)`, so an untracked connection (failed join on an
+   older build, restarted manager) is still disconnected. All manager
+   `this.voice.leave(...)` call sites pass `session.guildId`.
+3. `_connect()` drops any non-active connection before joining (destroy by
+   reference, else `destroyGuildConnection`), so a stale registry entry can never
+   be handed back on a reconnect.
+
+The ready timeout is now `VOICE_READY_TIMEOUT_MS` (default 20000, min 1000), read
+per call so it is tunable without a restart.
+
+- **Tests:** `tests/music.test.js` — a join that never becomes ready destroys its
+  connection and frees the guild (a fresh join then creates a new object), and
+  `leave(null, guildId)` disconnects a connection we hold no reference to.

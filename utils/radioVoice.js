@@ -30,6 +30,23 @@ function voice() {
 // discord.js ChannelType.GuildVoice === 2, GuildStageVoice === 13
 const VOICE_CHANNEL_TYPES = new Set([2, 13]);
 
+// How long to wait for the voice handshake (signalling → ready) before giving
+// up. Read per call so tests and operators can tune it without a reload.
+function readyTimeoutMs() {
+    return Math.max(1000, parseInt(process.env.VOICE_READY_TIMEOUT_MS, 10) || 20000);
+}
+
+/** Destroy a guild's tracked voice connection even without a session reference. */
+function destroyGuildConnection(guildId) {
+    if (!guildId) return false;
+    try {
+        const { getVoiceConnection } = voice();
+        const existing = getVoiceConnection(String(guildId));
+        if (existing) { existing.destroy(); return true; }
+    } catch (_) {}
+    return false;
+}
+
 function isVoiceChannel(channel) {
     return !!channel && (VOICE_CHANNEL_TYPES.has(channel.type) || (typeof channel.isVoiceBased === 'function' && channel.isVoiceBased()));
 }
@@ -75,10 +92,13 @@ async function join({ client, guildId, channelId, onDisconnect }) {
     }
 
     try {
-        await entersState(connection, VoiceConnectionStatus.Ready, 20000);
+        await entersState(connection, VoiceConnectionStatus.Ready, readyTimeoutMs());
     } catch (err) {
-        // A failed ready handshake is recoverable — surface it so the manager
-        // can retry, but leave the connection object in place.
+        // A failed ready handshake is recoverable — but destroy the half-open
+        // connection first. Leaving it tracked wedges the guild: every later
+        // join returns this same non-Ready object and any /stop or /leave with
+        // no session reference silently fails while the bot stays connected.
+        try { connection.destroy(); } catch (_) {}
         throw new Error(`Voice connection did not become ready: ${err.message}`);
     }
     return connection;
@@ -157,6 +177,7 @@ module.exports = {
     isVoiceChannel,
     isConnectionActive,
     getConnectionState,
+    destroyGuildConnection,
     join,
     leave,
     createPlayer,

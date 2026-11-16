@@ -40,6 +40,28 @@ function ffmpeg() {
 // discord.js ChannelType.GuildVoice === 2, GuildStageVoice === 13
 const VOICE_CHANNEL_TYPES = new Set([2, 13]);
 
+// How long to wait for the voice handshake (signalling → ready) before giving
+// up. Read per call so tests and operators can tune it without a reload.
+function readyTimeoutMs() {
+    return Math.max(1000, parseInt(process.env.VOICE_READY_TIMEOUT_MS, 10) || 20000);
+}
+
+/**
+ * Destroy a guild's tracked voice connection, even when we hold no reference to
+ * it. A connection can be tracked without a session reference when a join
+ * timed out (join() threw before the manager stored it) — /leave must still be
+ * able to disconnect in that case.
+ */
+function destroyGuildConnection(guildId) {
+    if (!guildId) return false;
+    try {
+        const { getVoiceConnection } = voice();
+        const existing = getVoiceConnection(String(guildId));
+        if (existing) { existing.destroy(); return true; }
+    } catch (_) {}
+    return false;
+}
+
 function isVoiceChannel(channel) {
     return !!channel && (VOICE_CHANNEL_TYPES.has(channel.type) || (typeof channel.isVoiceBased === 'function' && channel.isVoiceBased()));
 }
@@ -79,16 +101,27 @@ async function join({ client, guildId, channelId, onDisconnect }) {
     }
 
     try {
-        await entersState(connection, VoiceConnectionStatus.Ready, 20000);
+        await entersState(connection, VoiceConnectionStatus.Ready, readyTimeoutMs());
     } catch (err) {
+        // CRITICAL: destroy the half-open connection before throwing. If we do
+        // not, @discordjs/voice keeps it registered for the guild, so every
+        // later joinVoiceChannel() returns this same wedged object — which can
+        // never become Ready. The manager also never stores it (join() threw),
+        // so a later /leave or /247 disable has no reference to destroy and the
+        // bot reports success while still sitting in the voice channel.
+        try { connection.destroy(); } catch (_) {}
         throw new Error(`Voice connection did not become ready: ${err.message}`);
     }
     return connection;
 }
 
-function leave(connection) {
-    if (!connection) return;
-    try { connection.destroy(); } catch (_) {}
+function leave(connection, guildId = null) {
+    // Destroy the specific connection if we have it, then sweep the registry so
+    // a connection we lost track of (failed join, restarted manager) cannot
+    // linger. Without the sweep the bot reports a successful leave while still
+    // sitting in the voice channel.
+    if (connection) { try { connection.destroy(); } catch (_) {} }
+    destroyGuildConnection(guildId);
 }
 
 function createPlayer({ onError, onIdle, onStateChange } = {}) {
@@ -180,6 +213,7 @@ module.exports = {
     isVoiceChannel,
     isConnectionActive,
     getConnectionState,
+    destroyGuildConnection,
     join,
     leave,
     createPlayer,

@@ -210,6 +210,14 @@ class MusicManager {
 
     async _connect(session) {
         if (this.voice.isConnectionActive(session.connection)) return session.connection;
+        // Drop any connection we are not tracking (e.g. left behind by a failed
+        // join before the destroy-on-timeout fix) so join() cannot hand back a
+        // wedged, permanently non-Ready object for this guild.
+        if (session.connection) { try { this.voice.leave(session.connection, session.guildId); } catch (_) {} }
+        else if (typeof this.voice.destroyGuildConnection === 'function') {
+            try { this.voice.destroyGuildConnection(session.guildId); } catch (_) {}
+        }
+        session.connection = null;
         const connection = await this.voice.join({
             client: this.client,
             guildId: session.guildId,
@@ -607,7 +615,7 @@ class MusicManager {
             session.disabledIntentionally = true;
             await this._persist(session, { twentyFourSevenEnabled: false, disabledIntentionally: true });
             this._destroyPlayer(session);
-            try { this.voice.leave(session.connection); } catch (_) {}
+            try { this.voice.leave(session.connection, session.guildId); } catch (_) {}
             this.sessions.delete(String(guildId));
         } else {
             // Persist the disable even if this node never held the session.
@@ -623,7 +631,7 @@ class MusicManager {
         if (!channel || !this.voice.isVoiceChannel(channel)) throw new Error('That is not a valid voice channel in this server.');
         const session = this.getSession(guildId);
         if (session && session.twentyFourSeven) {
-            try { this.voice.leave(session.connection); } catch (_) {}
+            try { this.voice.leave(session.connection, session.guildId); } catch (_) {}
             session.connection = null;
             session.channelId = channelId;
             await this._ensureConnected(session);
@@ -639,7 +647,7 @@ class MusicManager {
         const session = this.getSession(guildId);
         if (!session) return { guildId: String(guildId), left: false };
         this._destroyPlayer(session);
-        try { this.voice.leave(session.connection); } catch (_) {}
+        try { this.voice.leave(session.connection, session.guildId); } catch (_) {}
         session.connection = null;
         session.state = PLAYBACK_STATES.IDLE;
         if (session.twentyFourSeven) {
@@ -762,7 +770,7 @@ class MusicManager {
         for (const session of this.sessions.values()) {
             try { await this._persist(session); } catch (_) {}
             this._destroyPlayer(session);
-            try { this.voice.leave(session.connection); } catch (_) {}
+            try { this.voice.leave(session.connection, session.guildId); } catch (_) {}
         }
     }
 }

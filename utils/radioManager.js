@@ -134,7 +134,7 @@ class RadioManager {
     async _bringUp(session, { forceReconnect = false } = {}) {
         if (forceReconnect) {
             this._destroyPlayer(session);
-            try { this.voice.leave(session.connection); } catch (_) {}
+            try { this.voice.leave(session.connection, session.guildId); } catch (_) {}
             session.connection = null;
         }
         await this._connect(session);
@@ -152,7 +152,7 @@ class RadioManager {
         session.enabled = false;
         session.state = RADIO_STATES.STOPPED;
         this._destroyPlayer(session);
-        try { this.voice.leave(session.connection); } catch (_) {}
+        try { this.voice.leave(session.connection, session.guildId); } catch (_) {}
         session.connection = null;
         try { await this._persist(session); } catch (_) {}
     }
@@ -377,7 +377,7 @@ class RadioManager {
         session.state = RADIO_STATES.STOPPED;
         session.manualPause = false;
         this._destroyPlayer(session);
-        try { this.voice.leave(session.connection); } catch (_) {}
+        try { this.voice.leave(session.connection, session.guildId); } catch (_) {}
         session.connection = null;
         session.currentTrack = null;
         session.queue = [];
@@ -480,6 +480,14 @@ class RadioManager {
 
     async _connect(session) {
         if (this.voice.isConnectionActive(session.connection)) return session.connection;
+        // Drop any connection we are not tracking (e.g. left behind by a failed
+        // join before the destroy-on-timeout fix) so join() cannot hand back a
+        // wedged, permanently non-Ready object for this guild.
+        if (session.connection) { try { this.voice.leave(session.connection, session.guildId); } catch (_) {} }
+        else if (typeof this.voice.destroyGuildConnection === 'function') {
+            try { this.voice.destroyGuildConnection(session.guildId); } catch (_) {}
+        }
+        session.connection = null;
         const connection = await this.voice.join({
             client: this.client,
             guildId: session.guildId,
@@ -740,7 +748,7 @@ class RadioManager {
         for (const session of this.sessions.values()) {
             try { await this._persist(session); } catch (_) {}
             this._destroyPlayer(session);
-            try { this.voice.leave(session.connection); } catch (_) {}
+            try { this.voice.leave(session.connection, session.guildId); } catch (_) {}
         }
     }
 }
