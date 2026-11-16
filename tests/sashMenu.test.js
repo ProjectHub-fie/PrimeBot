@@ -59,8 +59,13 @@ test('the Sash menu no longer lags the prefix switch on its top-level commands',
     // Excluded by design (prefixHelp header) + subcommands handled inline by
     // their parent command when reading the switch cases.
     const EXCLUDED = new Set(['tokentest', 'test', 'ses', 'session', 'betaserver', 'np', 'noprefix', 'broadcast', 'sync']);
+    // Subcommands handled inline by their parent command when reading the
+    // switch cases — including the music subcommands, which are also exposed as
+    // top-level aliases ($play, $skip, $247, …) routed through the same block.
     const SUBS = new Set(['create', 'join', 'results', 'list', 'set', 'remove', 'check', 'channel',
-        'add', 'enable', 'on', 'disable', 'off', 'status', 'user', 'delete', 'exact']);
+        'add', 'enable', 'on', 'disable', 'off', 'status', 'user', 'delete', 'exact',
+        'play', 'pause', 'resume', 'skip', 'stop', 'leave', 'queue', 'search', 'shuffle',
+        'loop', 'seek', 'previous', 'prev', 'nowplaying', 'volume', 'vol', 'playlist', '247', '24/7']);
     const undocumented = [...names].filter(n => !documented.has(n) && !EXCLUDED.has(n) && !SUBS.has(n));
     assert.deepEqual(undocumented, [], `undocumented prefix commands: ${undocumented.join(', ')}`);
 });

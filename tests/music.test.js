@@ -102,6 +102,93 @@ function makeStore(rows = []) {
     };
 }
 
+// ── prefix command routing (the "music commands not working" regression) ─────
+
+/**
+ * Drive the REAL messageCreate handler so the prefix switch is exercised end to
+ * end. Regression for: only `$music` was wired, so `$play` / `$join` / `$247` /
+ * bare `play` (no-prefix mode) silently hit the switch default and did nothing.
+ */
+function makeHandlerClient({ noPrefix = false } = {}) {
+    const calls = [];
+    const manager = new Proxy({}, {
+        get(_t, prop) {
+            if (prop === 'getSession') return () => ({ channelId: 'vc1', twentyFourSeven: false, queue: [], djRoleId: null });
+            if (prop === 'describe') return () => ({ state: 'idle', queue: [], queueLength: 0, current: null, connected: false, volume: 100, repeat: 'off', twentyFourSeven: false, listeners: 0 });
+            return (...a) => {
+                calls.push(prop);
+                return Promise.resolve({
+                    track: { title: 'T', provider: 'youtube', id: '1' }, queued: false,
+                    queueLength: 0, current: { title: 'T' }, volume: 100, repeat: 'off',
+                    channelId: 'vc1', twentyFourSeven: true, connected: true, state: 'playing',
+                    listeners: 1, added: 1, removed: 1, tracks: [],
+                });
+            };
+        },
+    });
+    const client = {
+        user: { id: 'bot' },
+        musicManager: manager,
+        radioManager: null,
+        countingManager: { isCountingChannel: () => false, processCountingMessage: async () => false },
+        levelingManager: { processMessage: async () => {} },
+        serverSettingsManager: {
+            hasNoPrefixMode: () => noPrefix,
+            getGuildPrefix: () => '$',
+            getTriggeredReactions: () => [],
+            getTriggeredResponses: () => [],
+        },
+        commands: new Map(),
+    };
+    return { client, calls };
+}
+
+function makeHandlerMessage(content) {
+    const replies = [];
+    return {
+        content,
+        author: { id: 'u1', tag: 'u#1', bot: false },
+        member: { id: 'u1', permissions: { has: () => true }, voice: { channelId: 'vc1', channel: { id: 'vc1', type: 2 } }, roles: { cache: new Map() } },
+        guild: { id: 'g1', name: 'G' },
+        channel: { id: 'ch1', type: 0, send: async () => ({}) },
+        mentions: { channels: { first: () => null }, users: { first: () => null } },
+        reply: async (payload) => { replies.push(payload); return { edit: async () => ({}) }; },
+        _replies: replies,
+    };
+}
+
+test('prefix music commands work as $music <sub> AND as top-level aliases', async () => {
+    global.botActive = true;
+    const handler = require('../events/messageCreate.js');
+    const cases = [
+        ['$music play song', 'play'],
+        ['$play song', 'play'],
+        ['$join', 'join'],
+        ['$leave', 'leave'],
+        ['$skip', 'skip'],
+        ['$247 enable', 'enable247'],
+        ['$playlist list', null], // store-backed; just must reply, not be ignored
+    ];
+    for (const [content, expected] of cases) {
+        const { client, calls } = makeHandlerClient();
+        const msg = makeHandlerMessage(content);
+        await handler.execute(msg, client);
+        assert.ok(msg._replies.length >= 1, `${content} must reply (was silently ignored)`);
+        if (expected) assert.ok(calls.includes(expected), `${content} should call ${expected} (got ${calls.join(',') || 'none'})`);
+    }
+});
+
+test('no-prefix mode routes bare music words through the same handler', async () => {
+    global.botActive = true;
+    const handler = require('../events/messageCreate.js');
+    for (const [content, expected] of [['play song', 'play'], ['join', 'join']]) {
+        const { client, calls } = makeHandlerClient({ noPrefix: true });
+        const msg = makeHandlerMessage(content);
+        await handler.execute(msg, client);
+        assert.ok(calls.includes(expected), `bare "${content}" should call ${expected}`);
+    }
+});
+
 // ── pure helpers ────────────────────────────────────────────────────────────
 
 test('stripTrackForPersist removes the volatile stream URL', () => {
