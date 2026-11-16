@@ -127,12 +127,21 @@ test('6b: active node with a broken gateway is degraded, still online', () => {
     assert.equal(state.nodes.sn1.statusReason, 'gateway_not_ready');
 });
 
-// 7: stale heartbeat (beyond factor × published interval).
-test('7: stale heartbeat marks a node unavailable; a slower published cadence is honoured', () => {
-    // 80s old with a 30s cadence (90s window) → still fresh.
+// 7: a late heartbeat is STALE (needs verification) — only a heartbeat missing
+// long enough to confirm the process stopped is an OUTAGE. The stale/outage
+// thresholds scale with the cadence each writer publishes.
+test('7: a late heartbeat is STALE, a long-missing one is unavailable; a slower published cadence is honoured', () => {
+    // 80s old with a 30s cadence (90s stale window) → still fresh/operational.
     assert.equal(statusWorker.evaluateState([pulse('sn1', { ageMs: 80000 })], {}).nodes.sn1.status, 'operational');
-    // 100s old with a 30s cadence → stale.
-    assert.equal(statusWorker.evaluateState([pulse('sn1', { ageMs: 100000 })], {}).nodes.sn1.status, 'unavailable');
+    // 100s old with a 30s cadence → past the 90s stale window but well inside
+    // the 180s outage window → STALE, NOT a confirmed outage.
+    const late = statusWorker.evaluateState([pulse('sn1', { ageMs: 100000 })], {});
+    assert.equal(late.nodes.sn1.status, 'stale');
+    assert.equal(late.nodes.sn1.online, true, 'a stale node is still online');
+    assert.equal(late.nodes.sn1.healthy, false);
+    assert.equal(late.nodes.sn1.statusReason, 'heartbeat_stale');
+    // 250s old with a 30s cadence → past the 180s outage window → unavailable.
+    assert.equal(statusWorker.evaluateState([pulse('sn1', { ageMs: 250000 })], {}).nodes.sn1.status, 'unavailable');
     // 100s old but the writer publishes a 5-minute cadence → fresh.
     const slow = pulse('sn1', { ageMs: 100000, resource: { pulseIntervalMs: 300000 } });
     assert.equal(statusWorker.evaluateState([slow], {}).nodes.sn1.status, 'operational');

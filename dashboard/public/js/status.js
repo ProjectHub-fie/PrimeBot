@@ -25,6 +25,8 @@
     const STATUS_META = {
         operational: { label: 'Operational', cls: 'ok' },
         degraded: { label: 'Degraded', cls: 'degraded' },
+        // Outdated monitoring data — needs verification, NOT a confirmed outage.
+        stale: { label: 'Stale', cls: 'stale' },
         unavailable: { label: 'Outage', cls: 'down' },
         unknown: { label: 'No data', cls: 'no-data' },
         maintenance: { label: 'Maintenance', cls: 'maint' },
@@ -158,6 +160,7 @@
         const active = fleet ? fleet.active : nodes.filter(n => n.node && n.node.isActive).length;
         const standby = fleet ? fleet.standby : nodes.filter(n => n.node && !n.node.isActive && n.online).length;
         const offline = fleet ? fleet.offline : nodes.filter(n => n.status === 'unavailable').length;
+        const stale = fleet ? (fleet.stale || 0) : nodes.filter(n => n.status === 'stale').length;
 
         let combinedMonitored = 0, combinedDown = 0, combinedDeg = 0;
         for (const n of nodes) {
@@ -186,6 +189,7 @@
             <div class="infra-stat"><span class="infra-num">${active}/3</span><span class="infra-cap">Active node(s)</span></div>
             <div class="infra-stat"><span class="infra-num">${standby}/3</span><span class="infra-cap">Standby node(s)</span></div>
             <div class="infra-stat"><span class="infra-num">${offline}/3</span><span class="infra-cap">Offline nodes</span></div>
+            ${stale > 0 ? `<div class="infra-stat"><span class="infra-num">${stale}/3</span><span class="infra-cap">Stale nodes</span></div>` : ''}
             <div class="infra-stat"><span class="infra-num">${fmtPct(combinedPct)}</span><span class="infra-cap">Combined shard availability</span></div>
             <div class="infra-stat"><span class="infra-num">${summary.openIncidents || 0}</span><span class="infra-cap">Open incidents</span></div>
             <div class="infra-stat"><span class="infra-num">${fmtDuration(combinedDown)}</span><span class="infra-cap">Total shard downtime (30d)</span></div>

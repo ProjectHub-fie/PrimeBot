@@ -610,6 +610,74 @@ module.exports = {
 
             // Handle commands
             switch (commandName) {
+                case "radio": {
+                    const rMgr = client.radioManager;
+                    const rEmbed = require('../utils/radioEmbed');
+                    if (!rMgr) return message.reply({ embeds: [rEmbed.errorEmbed('The radio service is not available right now.')] });
+
+                    const rSub = (args[0] || 'status').toLowerCase();
+                    const rIsAdmin = message.member && (
+                        message.member.permissions.has('ManageGuild') || message.member.permissions.has('Administrator')
+                    );
+                    const rAdminSubs = new Set(['start', 'stop', 'station', 'channel']);
+                    const rPlaySubs = new Set(['pause', 'resume', 'skip', 'volume']);
+
+                    if (rAdminSubs.has(rSub) && !rIsAdmin) {
+                        return message.reply({ embeds: [rEmbed.errorEmbed('You need the **Manage Server** permission to configure the radio.')] });
+                    }
+                    if (rPlaySubs.has(rSub) && !rIsAdmin) {
+                        const rSession = rMgr.getSession(message.guild.id);
+                        const rInRadio = rSession && message.member.voice && message.member.voice.channelId === rSession.channelId;
+                        if (!rInRadio) {
+                            return message.reply({ embeds: [rEmbed.errorEmbed('Join the radio voice channel (or have **Manage Server**) to control playback.')] });
+                        }
+                    }
+
+                    try {
+                        switch (rSub) {
+                            case 'start': {
+                                const rChannel = message.member.voice && message.member.voice.channel;
+                                if (!rChannel) return message.reply({ embeds: [rEmbed.errorEmbed('Join a voice channel first, then run `$radio start`.')] });
+                                const rStatus = await rMgr.start(message.guild.id, rChannel.id, { actor: message.author.id });
+                                return message.reply({ embeds: [rEmbed.successEmbed('📻 Radio started', `Now broadcasting in <#${rChannel.id}>.`), rEmbed.statusEmbed(rStatus)] });
+                            }
+                            case 'stop': {
+                                const ok = await rMgr.stop(message.guild.id, { actor: message.author.id });
+                                return message.reply({ embeds: [ok ? rEmbed.successEmbed('📻 Radio stopped', 'Disconnected and cleared the session.') : rEmbed.errorEmbed('Radio is not active in this server.')] });
+                            }
+                            case 'pause': return message.reply({ embeds: [rEmbed.statusEmbed(await rMgr.pause(message.guild.id, { actor: message.author.id }))] });
+                            case 'resume': return message.reply({ embeds: [rEmbed.statusEmbed(await rMgr.resume(message.guild.id, { actor: message.author.id }))] });
+                            case 'skip': return message.reply({ embeds: [rEmbed.statusEmbed(await rMgr.skip(message.guild.id, { actor: message.author.id }))] });
+                            case 'station': {
+                                const id = args[1];
+                                if (!id) return message.reply({ embeds: [rEmbed.stationsEmbed(rMgr.stations.listForGuild(message.guild.id).filter(s => s.enabled), rMgr.getSession(message.guild.id)?.stationId)] });
+                                return message.reply({ embeds: [rEmbed.statusEmbed(await rMgr.setStation(message.guild.id, id, { actor: message.author.id }))] });
+                            }
+                            case 'stations': return message.reply({ embeds: [rEmbed.stationsEmbed(rMgr.stations.listForGuild(message.guild.id).filter(s => s.enabled), rMgr.getSession(message.guild.id)?.stationId)] });
+                            case 'volume': {
+                                const lvl = parseInt(args[1], 10);
+                                if (!Number.isFinite(lvl)) return message.reply({ embeds: [rEmbed.errorEmbed('Usage: `$radio volume <0-100>`')] });
+                                return message.reply({ embeds: [rEmbed.statusEmbed(await rMgr.setVolume(message.guild.id, lvl, { actor: message.author.id }))] });
+                            }
+                            case 'channel': {
+                                const ch = message.mentions.channels.first() || message.guild.channels.cache.get(args[1]);
+                                if (!ch) return message.reply({ embeds: [rEmbed.errorEmbed('Usage: `$radio channel #voice-channel`')] });
+                                const rSess = rMgr.getSession(message.guild.id);
+                                if (rSess && rSess.enabled) {
+                                    const rStatus = await rMgr.start(message.guild.id, ch.id, { stationId: rSess.stationId, actor: message.author.id });
+                                    return message.reply({ embeds: [rEmbed.successEmbed('📻 Radio channel updated', `Moved to <#${ch.id}>.`), rEmbed.statusEmbed(rStatus)] });
+                                }
+                                await rMgr.setChannel(message.guild.id, ch.id, { actor: message.author.id });
+                                return message.reply({ embeds: [rEmbed.successEmbed('📻 Radio channel set', `The radio will use <#${ch.id}>.`)] });
+                            }
+                            case 'status':
+                            default:
+                                return message.reply({ embeds: [rEmbed.statusEmbed(rMgr.describe(message.guild.id))] });
+                        }
+                    } catch (err) {
+                        return message.reply({ embeds: [rEmbed.errorEmbed(err.message || 'Something went wrong.')] });
+                    }
+                }
                 case "antinuke":
                 case "an": {
                     const anMgr = client.antiNukeManager;

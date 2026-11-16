@@ -146,6 +146,17 @@ module.exports = {
             }, 6000);
         }
 
+        // Restore 24/7 radio sessions: reconnect to each configured voice
+        // channel and resume (or wait for listeners). The voice connection did
+        // NOT survive the restart, so it is recreated here.
+        if (client.radioManager && typeof client.radioManager.restore === 'function') {
+            setTimeout(() => {
+                client.radioManager.restore().catch(err =>
+                    console.error('[RADIO] Restore failed:', err.message)
+                );
+            }, 7000);
+        }
+
         // Anti-Nuke readiness. The manager loads its own configuration cache in
         // its constructor; here we only log the per-guild permission state so a
         // misconfigured deployment (missing View Audit Log, or the

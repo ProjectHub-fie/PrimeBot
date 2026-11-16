@@ -969,6 +969,41 @@ const youtubeSubscriptionsRelations = relations(youtubeSubscriptions, ({ many })
   announcements: many(youtubeAnnouncements),
 }));
 
+// ── 24/7 Radio (SoundCloud) ──────────────────────────────────────────────────
+// Persistent per-guild radio sessions (RADIO_DATABASE_URL pool). `current_track`
+// stores the resolved track METADATA (id/title/artist/duration/artwork) — never
+// the short-lived stream URL, which is re-resolved on every play.
+const radioSessions = pgTable('radio_sessions', {
+  guildId: varchar('guild_id', { length: 50 }).primaryKey(),
+  channelId: varchar('channel_id', { length: 50 }).notNull(),
+  stationId: varchar('station_id', { length: 80 }),
+  enabled: boolean('enabled').default(false).notNull(),
+  manualPause: boolean('manual_pause').default(false).notNull(),
+  currentTrackId: varchar('current_track_id', { length: 120 }),
+  currentTrack: jsonb('current_track'),
+  positionIndex: integer('position_index').default(0).notNull(),
+  queue: jsonb('queue').default([]).notNull(),
+  state: varchar('state', { length: 32 }).default('stopped').notNull(),
+  volume: integer('volume').default(100).notNull(),
+  ownerNode: varchar('owner_node', { length: 80 }),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+// The station catalog. Global stations have a null guild_id; administrator
+// created stations are scoped to one guild.
+const radioStations = pgTable('radio_stations', {
+  id: varchar('id', { length: 80 }).primaryKey(),
+  guildId: varchar('guild_id', { length: 50 }),
+  name: text('name').notNull(),
+  description: text('description').default(''),
+  source: varchar('source', { length: 32 }).default('soundcloud_playlist').notNull(),
+  reference: text('reference').notNull(),
+  genre: varchar('genre', { length: 80 }),
+  enabled: boolean('enabled').default(true).notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
 const youtubeAnnouncementsRelations = relations(youtubeAnnouncements, ({ one }) => ({
   subscription: one(youtubeSubscriptions, {
     fields: [youtubeAnnouncements.subscriptionId],
@@ -1056,4 +1091,6 @@ module.exports = {
   youtubePollLease,
   youtubeSubscriptionsRelations,
   youtubeAnnouncementsRelations,
+  radioSessions,
+  radioStations,
 };

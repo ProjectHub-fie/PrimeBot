@@ -42,6 +42,10 @@ const client = new Client({
         GatewayIntentBits.GuildMembers,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.GuildMessageReactions,
+        // GuildVoiceStates delivers `voiceStateUpdate` — required by the 24/7
+        // radio to detect when the configured voice channel empties (pause) or a
+        // listener returns (resume). Not privileged.
+        GatewayIntentBits.GuildVoiceStates,
         GatewayIntentBits.DirectMessages,
         GatewayIntentBits.DirectMessageReactions,
         GatewayIntentBits.MessageContent,
@@ -205,6 +209,26 @@ client.betaManager = betaManager;
         sendTestAnnouncement: async () => { throw new Error('YouTube notifications are not available right now.'); },
         stop: noop,
     };
+    // 24/7 Radio — stub keeps the voice-state handler and commands inert until
+    // the real manager is constructed in initializeManagers().
+    client.radioManager = {
+        sessions: new Map(),
+        waitForReady: noopAsync,
+        getSession: () => null,
+        describe: () => null,
+        stations: { get: () => null, listForGuild: () => [] },
+        start: async () => { throw new Error('Radio is not available right now.'); },
+        stop: async () => false,
+        pause: async () => { throw new Error('Radio is not available right now.'); },
+        resume: async () => { throw new Error('Radio is not available right now.'); },
+        skip: async () => { throw new Error('Radio is not available right now.'); },
+        setStation: async () => { throw new Error('Radio is not available right now.'); },
+        setVolume: async () => { throw new Error('Radio is not available right now.'); },
+        setChannel: async () => { throw new Error('Radio is not available right now.'); },
+        handleVoiceStateUpdate: noopAsync,
+        restore: noopAsync,
+        shutdown: noopAsync,
+    };
 }
 
 // ── Real manager boot — runs exactly once when this node connects ─────────
@@ -365,6 +389,16 @@ async function initializeManagers() {
         console.log('[MANAGERS] BirthdayManager loaded.');
     } catch (err) {
         console.error('[MANAGERS] Failed to load BirthdayManager:', err.message);
+    }
+
+    // 24/7 Radio (SoundCloud). The manager owns the voice connection + the
+    // continuous-playback state machine; sessions are restored on ready.
+    try {
+        const { RadioManager } = require('./utils/radioManager');
+        client.radioManager = new RadioManager(client);
+        console.log('[MANAGERS] RadioManager loaded.');
+    } catch (err) {
+        console.error('[MANAGERS] Failed to load RadioManager:', err.message);
     }
 
     // LevelingManager needs the DB fully ready — brief delay is intentional
