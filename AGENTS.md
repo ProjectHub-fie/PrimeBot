@@ -1467,3 +1467,77 @@ per call so it is tunable without a restart.
 - **Tests:** `tests/music.test.js` — a join that never becomes ready destroys its
   connection and frees the guild (a fresh join then creates a new object), and
   `leave(null, guildId)` disconnects a connection we hold no reference to.
+
+## "Voice connection did not become ready: The operation was aborted" — concurrent connect attempts
+
+Two independent causes, both fixed. The message itself is `@discordjs/voice`'s own
+timeout: `entersState(target, Ready, ms)` calls `abortAfter(ms)`, which aborts its
+internal `AbortController` when the window elapses — so an `AbortError` there means
+"never reached Ready in time", not a user cancellation.
+
+**Cause A — concurrent connects destroy the in-flight connection.** `_connect`
+assigned `session.connection` only AFTER the handshake resolved. `/join`,
+`/music 247 enable` (issued twice in the logs) and `/play` each called
+`_ensureConnected` → `_connect`, so the second attempt saw no live connection,
+destroyed the first one while it was still signalling, and the first handshake's
+`entersState` then rejected with `The operation was aborted`. Reproduced with a
+slow-handshake voice double: two `_ensureConnected` calls → `join() attempts: 2`,
+`destroyed: 1`, first caller `FAILED: aborted`.
+
+**Cause B — a join issued while the shard is not Ready is silently dropped.**
+discord.js's `Guild#voiceAdapterCreator` does `if (this.shard.status !==
+Status.Ready) return false`, and `@discordjs/voice` maps a rejected payload to
+`AdapterUnavailable` (`disconnected`) while still tracking the connection. Right
+after a node restart (the logs show sn1 + sn2 restarting) a join can therefore
+never reach Ready and only fails 20s later with the same abort.
+
+### Fix
+
+- **`utils/voiceConnectGate.js`** (`VoiceConnectGate`) — a per-guild single-flight
+  gate. `run(guildId, factory)` returns the existing promise when an attempt is
+  already in flight (so `/join` + `/play` + repeated `247 enable` share ONE
+  handshake), releases the lock in a `finally` only when the owning attempt still
+  holds it (a stale attempt can never clear a newer one's lock), and exposes
+  `isPending`/`pendingId`/`clear`.
+- **Both managers' `_connect`** (`utils/music/musicManager.js`,
+  `utils/radioManager.js`) now wrap the join in `this._connectGate.run(...)`,
+  re-check `isConnectionActive` inside the gate, log
+  `voice connect #<id> node=<n> guild=… channel=… <before> -> <after>`, and apply a
+  **stale-operation guard**: if the session was disabled/stopped while the
+  handshake was in flight, the new connection is destroyed and the attempt throws
+  instead of adopting it (so `/247 disable` during a slow connect cannot leave the
+  bot connected to a session it just deleted).
+- **`enable247` is idempotent** — a repeat for the same channel while already
+  connected or connecting skips the join entirely.
+- **`restore`/`restoreOne` are idempotent** — the reload loop calls them
+  repeatedly; a session that is already live or has an attempt pending is left
+  alone (previously every tick destroyed and recreated a healthy connection).
+- **`utils/voiceReadiness.js`** (`waitForShardReady`, `shardReadyTimeoutMs`) —
+  `join()` waits for the guild's shard to be `Ready` first
+  (`VOICE_SHARD_READY_TIMEOUT_MS`, default 15000, min 1000) and fails fast with
+  "Voice shard is not ready" instead of burning the full 20s voice timeout on a
+  handshake that was silently dropped.
+- **Diagnostics:** both `join()`s log every `stateChange` (`[VOICE] guild=…
+  <from> -> <to>`), and on failure log the real reason — `timed out after Nms
+  (status stayed 'X')` when aborted, else the original `name: message` + stack —
+  plus the connection's state before/after. The thrown error carries
+  `err.voiceState = { guildId, channelId, statusBefore, statusAfter, timeoutMs,
+  aborted }`. No tokens/credentials are logged.
+- **Duplicate `music 247 enable` was NOT a registration bug:** there is exactly one
+  `messageCreate` listener (`index.js` event loader) and one `case 'music'` in
+  `events/messageCreate.js`; the two log lines are two genuine requests (or a
+  retry). Idempotent `enable247` makes a repeat harmless either way.
+
+**Env vars:** `VOICE_READY_TIMEOUT_MS` (default 20000, min 1000),
+`VOICE_SHARD_READY_TIMEOUT_MS` (default 15000, min 1000).
+
+- **Tests:** `tests/voiceConnectionSingleFlight.test.js` (24) — concurrent
+  `_ensureConnected` share one handshake; two simultaneous `247 enable` create one
+  connection; repeated `247 enable`/`/join` don't rejoin; gate releases on success
+  AND failure; a stale attempt can't clear a newer lock; `/247 disable` mid-connect
+  leaves nothing connected; `restore` is idempotent and never reconnects a
+  disabled session; a standby node never connects a guild it doesn't own; two
+  guilds get independent connections; 24/7 stays connected with an empty queue;
+  `waitForShardReady` ready/timeout/recovering/no-shard cases; the wrapper reports
+  a descriptive timeout vs a real error and frees the guild; a shard that isn't
+  Ready aborts fast instead of hanging 20s.

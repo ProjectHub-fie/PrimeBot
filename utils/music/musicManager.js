@@ -57,6 +57,7 @@ class MusicManager {
         this.sessions = new Map(); // guildId -> session
         this._reloadHandle = null;
         this._started = false;
+        this._connectGate = deps.connectGate || new (require('../voiceConnectGate').VoiceConnectGate)();
     }
 
     _resolveNodeId() {
@@ -210,22 +211,33 @@ class MusicManager {
 
     async _connect(session) {
         if (this.voice.isConnectionActive(session.connection)) return session.connection;
-        // Drop any connection we are not tracking (e.g. left behind by a failed
-        // join before the destroy-on-timeout fix) so join() cannot hand back a
-        // wedged, permanently non-Ready object for this guild.
-        if (session.connection) { try { this.voice.leave(session.connection, session.guildId); } catch (_) {} }
-        else if (typeof this.voice.destroyGuildConnection === 'function') {
-            try { this.voice.destroyGuildConnection(session.guildId); } catch (_) {}
-        }
-        session.connection = null;
-        const connection = await this.voice.join({
-            client: this.client,
-            guildId: session.guildId,
-            channelId: session.channelId,
-            onDisconnect: () => this._onConnectionLost(session),
+        // Single-flight: two commands arriving close together (/join then
+        // /247 enable, a repeated 247 enable, or /play mid-handshake) must share
+        // ONE handshake. A second join() destroys the first in-flight
+        // connection, and the first handshake's entersState(Ready) then rejects
+        // with "The operation was aborted" even though nothing was wrong.
+        return this._connectGate.run(session.guildId, async ({ id, reused }) => {
+            // Re-check inside the gate — an attempt may have just completed.
+            if (this.voice.isConnectionActive(session.connection)) return session.connection;
+            const before = this.voice.getConnectionState(session.connection);
+            const connection = await this.voice.join({
+                client: this.client,
+                guildId: session.guildId,
+                channelId: session.channelId,
+                onDisconnect: () => this._onConnectionLost(session),
+            });
+            // Stale-operation guard: if 24/7 was disabled (or the session torn
+            // down) while the handshake was in flight, do NOT adopt the new
+            // connection — otherwise /247 disable during a slow connect leaves
+            // the bot connected to a session it just deleted.
+            if (session.disabledIntentionally) {
+                try { this.voice.leave(connection, session.guildId); } catch (_) {}
+                throw new Error('24/7 was disabled while the connection was being established.');
+            }
+            session.connection = connection;
+            console.log(`[MUSIC] voice connect ${reused ? '(shared attempt)' : `#${id}`} node=${this._nodeId} guild=${session.guildId} channel=${session.channelId} ${before.status} -> ${this.voice.getConnectionState(connection).status}`);
+            return connection;
         });
-        session.connection = connection;
-        return connection;
     }
 
     async _ensureConnected(session) {
@@ -598,11 +610,19 @@ class MusicManager {
 
         const session = this._ensureSession(guildId, channelId, settings);
         if (!session) throw Object.assign(new Error('This node does not own that guild.'), { status: 409 });
+
+        // Idempotent: a repeated `247 enable` for the channel we are already
+        // connected to (or connecting to) must NOT rejoin. Re-joining would
+        // destroy the in-flight/healthy connection and is the exact race that
+        // produced "The operation was aborted" when enable was issued twice.
+        const sameChannel = session.channelId === channelId;
+        const alreadyLive = this.voice.isConnectionActive(session.connection)
+            || this._connectGate.isPending(session.guildId);
         session.channelId = channelId;
         session.twentyFourSeven = true;
         session.disabledIntentionally = false;
         session.ownerNode = this._nodeId;
-        await this._ensureConnected(session);
+        if (!(sameChannel && alreadyLive)) await this._ensureConnected(session);
         await this._persist(session, { twentyFourSevenEnabled: true, channelId, disabledIntentionally: false });
         return this.describe(guildId);
     }
@@ -615,6 +635,8 @@ class MusicManager {
             session.disabledIntentionally = true;
             await this._persist(session, { twentyFourSevenEnabled: false, disabledIntentionally: true });
             this._destroyPlayer(session);
+            // session.connection may still be null if a connect was in flight —
+            // sweep the registry so a half-open handshake is destroyed too.
             try { this.voice.leave(session.connection, session.guildId); } catch (_) {}
             this.sessions.delete(String(guildId));
         } else {
@@ -744,6 +766,12 @@ class MusicManager {
         session.channelId = row.twentyFourSevenChannelId;
         session.twentyFourSeven = true;
         session.disabledIntentionally = false;
+        // Idempotent: the reload loop calls restoreOne repeatedly. If we are
+        // already connected (or connecting) to the right channel, leave it be —
+        // reconnecting here would destroy a healthy connection every tick.
+        const alreadyLive = this.voice.isConnectionActive(session.connection)
+            && session.channelId === row.twentyFourSevenChannelId;
+        if (alreadyLive || this._connectGate.isPending(session.guildId)) return;
         // The voice connection did NOT survive the restart — recreate it.
         session.connection = null;
         session.player = null;

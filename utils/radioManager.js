@@ -58,6 +58,7 @@ class RadioManager {
         this.sessions = new Map();
         this._ready = false;
         this._nodeId = deps.nodeId || this._resolveNodeId();
+        this._connectGate = deps.connectGate || new (require('./voiceConnectGate').VoiceConnectGate)();
         this._initPromise = this.load().catch(err => {
             console.error('[RADIO] Failed to load sessions:', err.message);
         });
@@ -480,22 +481,29 @@ class RadioManager {
 
     async _connect(session) {
         if (this.voice.isConnectionActive(session.connection)) return session.connection;
-        // Drop any connection we are not tracking (e.g. left behind by a failed
-        // join before the destroy-on-timeout fix) so join() cannot hand back a
-        // wedged, permanently non-Ready object for this guild.
-        if (session.connection) { try { this.voice.leave(session.connection, session.guildId); } catch (_) {} }
-        else if (typeof this.voice.destroyGuildConnection === 'function') {
-            try { this.voice.destroyGuildConnection(session.guildId); } catch (_) {}
-        }
-        session.connection = null;
-        const connection = await this.voice.join({
-            client: this.client,
-            guildId: session.guildId,
-            channelId: session.channelId,
-            onDisconnect: () => this._onConnectionLost(session),
+        // Single-flight: concurrent start/voice-state/recovery calls must share
+        // ONE handshake. A second join() destroys the first in-flight connection
+        // and the first entersState(Ready) then rejects with "The operation was
+        // aborted" even though nothing was actually wrong.
+        return this._connectGate.run(session.guildId, async ({ id, reused }) => {
+            if (this.voice.isConnectionActive(session.connection)) return session.connection;
+            const before = this.voice.getConnectionState(session.connection);
+            const connection = await this.voice.join({
+                client: this.client,
+                guildId: session.guildId,
+                channelId: session.channelId,
+                onDisconnect: () => this._onConnectionLost(session),
+            });
+            // Stale-operation guard: if the radio was stopped while the
+            // handshake was in flight, do not adopt the new connection.
+            if (session.enabled === false) {
+                try { this.voice.leave(connection, session.guildId); } catch (_) {}
+                throw new Error('Radio was stopped while the connection was being established.');
+            }
+            session.connection = connection;
+            console.log(`[RADIO] voice connect ${reused ? '(shared attempt)' : `#${id}`} node=${this._nodeId} guild=${session.guildId} channel=${session.channelId} ${before.status} -> ${this.voice.getConnectionState(connection).status}`);
+            return connection;
         });
-        session.connection = connection;
-        return connection;
     }
 
     _ensurePlayer(session) {
@@ -723,6 +731,12 @@ class RadioManager {
             if (!session.enabled) continue;
             if (!this.ownsGuild(session.guildId)) continue; // another node owns it
             try {
+                // Idempotent: the reload loop calls restore() repeatedly. If the
+                // session is already connected (or connecting), leave it alone —
+                // reconnecting every tick would destroy a healthy connection.
+                if (this.voice.isConnectionActive(session.connection) || this._connectGate.isPending(session.guildId)) {
+                    continue;
+                }
                 // Recreate the voice connection (never assume it survived).
                 session.connection = null;
                 session.player = null;
