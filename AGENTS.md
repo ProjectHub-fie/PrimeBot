@@ -1344,12 +1344,23 @@ tab (radio lives inside music). `/guild/:guildId/radio` now 302-redirects to
   remove/clear/shuffle/loop/nowplaying/volume/status/help), `/247`
   (enable/disable/status/channel, Admin) and `/playlist`
   (list/create/rename/delete/view/add/remove/save/play/queue) — all
-  auto-registered by `deploy-commands.js`. Prefix `$music` in
-  `events/messageCreate.js` (there is **no** `m` alias — deliberately, to avoid
-  colliding with `mute`/`move`). Interactive control buttons + the search
-  string-select + the `music_247_channel` channel-select are routed in
-  `events/interactionCreate.js` (module `utils/music/musicButtons.js`, embed
-  helper `utils/music/musicEmbed.js`).
+  auto-registered by `deploy-commands.js`. Prefix: **one fall-through case block
+  in `events/messageCreate.js`** carries `music` *plus every subcommand as a
+  top-level alias* (`play`, `pause`, `resume`, `skip`, `stop`, `join`, `leave`,
+  `queue`, `search`, `shuffle`, `loop`, `seek`, `previous`/`prev`,
+  `nowplaying`, `volume`/`vol`, `playlist`, `247`, `24/7`). The block unshifts
+  `commandName` onto `args` when it is not `music`, so `$play x` and
+  `$music play x` take the identical `args[0]` subcommand path. **This is the
+  fix for "music commands not working":** only `$music` was originally wired, so
+  `$play` / `$join` / `$247` and the bare words typed in **no-prefix mode**
+  (`play`, `join`) fell through to the switch `default` and were silently
+  ignored (`$music` alone worked, which is why it looked half-broken). There is
+  **no** `m` alias — deliberately, to avoid colliding with `mute`/`move`.
+  `tests/music.test.js` drives the real handler for both the prefixed and
+  no-prefix paths so a new subcommand cannot be added without an alias case.
+  Interactive control buttons + the search string-select + the `music_247_channel`
+  channel-select are routed in `events/interactionCreate.js` (module
+  `utils/music/musicButtons.js`, embed helper `utils/music/musicEmbed.js`).
 - **Dashboard:** `dashboard/render/music-page.js` (sections: overview /
   playlists / history + the embedded radio `stations`/`radio` sections from
   `dashboard/render/radio-page.js`, which now exports its section builders) +
