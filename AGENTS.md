@@ -1387,3 +1387,39 @@ tab (radio lives inside music). `/guild/:guildId/radio` now 302-redirects to
   stream-URL persistence stripping, Music page render). `musicPage` is in the
   `redesignSmoke.test.js` guild-page loop.
 
+
+## Voice-state cache: the "bot cannot find me in a voice channel" bug (fixed)
+
+`index.js` configured `makeCache` with **`VoiceStateManager: { maxSize: 0 }`**.
+In discord.js a `maxSize` of 0 makes `LimitedCollection.set()` **drop every
+entry on arrival**, so the guild's voice-state cache was permanently empty. The
+`GuildVoiceStates` *intent* was enabled, so the `voiceStateUpdate` *event* fired
+correctly — but the **cache** is what everything actually reads:
+
+- `GuildMember#voice` → `guild.voiceStates.cache.get(id) ?? new VoiceState(...)` — an empty VoiceState, so `member.voice.channel` is always `null`
+- `Message#member` → `guild.members.resolve(...)`, then `.voice.channel` → `null`
+- `BaseGuildVoiceChannel#members` → iterates `guild.voiceStates.cache` → empty
+- `VoiceState#member` → `guild.members.cache.get(id)`
+
+**Symptom (production, reported live):** `$join` / `$music play` / `$radio start`
+replied *"Join a voice channel first"* **while the user was sitting in the
+voice channel**, and radio/music listener counts were always 0 — so the 24/7
+pause-when-empty / resume-on-join behaviour could never trigger (a bot that
+thinks the channel is always empty pauses immediately; `noSubscriber: Pause`
+also kicks in because there is no visible subscriber).
+
+**Fix:** `VoiceStateManager: { maxSize: Infinity }`. Voice states are one small
+entry per connected member (far smaller than the 200-member cache already kept),
+so caching them is cheap and is required for any voice feature. Do **not**
+reintroduce a finite/zero limit here — the radio and music listener counts, the
+`voiceStateUpdate` pause/resume logic and every `member.voice.channel` lookup
+depend on it.
+
+- **Diagnosis shortcut:** "the bot can't see me in voice" + a `maxSize: 0` voice
+  cache is the signature. The `voiceStateUpdate` event firing in the logs
+  (`[EVENT] Executing event: voiceStateUpdate`) proves the intent is on and is
+  *not* the problem — the event payload is not the cache.
+- **Tests:** `tests/music.test.js` — asserts the config does not zero the voice
+  cache, proves `Options.cacheWithLimits({ VoiceStateManager: { maxSize: 0 } })`
+  discards entries while `Infinity` keeps them, and drives `countListeners` with
+  a populated voice-state cache (bots ignored, uncached members counted).

@@ -64,7 +64,15 @@ const client = new Client({
         ReactionManager:     { maxSize: 0   }, // reactions fetched on-demand
         GuildInviteManager:  { maxSize: 0   },
         StageInstanceManager:{ maxSize: 0   },
-        VoiceStateManager:   { maxSize: 0   },
+        // Voice states MUST be cached. GuildVoiceStates delivers the
+        // voiceStateUpdate event, but the event payload is not the cache — the
+        // cache is what `member.voice.channel`, `channel.members` and
+        // `guild.voiceStates.cache` read. With maxSize 0 every voice state is
+        // dropped on arrival, so the bot can never see anyone in a voice
+        // channel ("join a voice channel first" even while sitting in one) and
+        // the radio/music listener counts are always 0. Voice states are one
+        // small entry per connected member, so caching them is cheap.
+        VoiceStateManager:   { maxSize: Infinity },
     }),
 });
 // Connection enhancer disabled as it may interfere with prefix commands

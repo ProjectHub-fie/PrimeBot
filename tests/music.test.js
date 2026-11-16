@@ -19,6 +19,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const path = require('path');
+const fs = require('fs');
 
 const { MusicManager, dedupeTracks, stripTrackForPersist } = require('../utils/music/musicManager');
 const { PLAYBACK_STATES, REPEAT_MODES } = require('../shared/musicConstants');
@@ -397,4 +398,45 @@ test('the Music dashboard page renders with SVG icons and the radio sections', (
     assert.match(html, /data-section="radio"/);
     assert.match(html, /id="rd-enabled"/);
     assert.doesNotMatch(html, /class="icon">[^$<]/);
+});
+
+// ── voice-state cache (the "cannot find me in a voice channel" regression) ───
+
+test('the client caches voice states, so member.voice.channel resolves', () => {
+    // GuildVoiceStates delivers the voiceStateUpdate EVENT, but the cache is
+    // what `member.voice.channel`, `channel.members` and `guild.voiceStates.cache`
+    // read. `VoiceStateManager: { maxSize: 0 }` made discord.js drop every voice
+    // state on arrival, so the bot could never see anyone in a voice channel —
+    // `$join`/`$music play` replied "Join a voice channel first" while the user
+    // was sitting in one, and the radio/music listener counts were always 0.
+    const src = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
+    const block = src.slice(src.indexOf('makeCache: Options.cacheWithLimits('));
+    const line = block.match(/VoiceStateManager:\s*\{[^}]*maxSize:\s*([^,}]+)/);
+    assert.ok(line, 'VoiceStateManager must be configured explicitly');
+    assert.notEqual(line[1].trim(), '0', 'maxSize 0 discards every voice state');
+    assert.match(line[1], /Infinity|^\d{3,}$/, 'voice states must actually be retained');
+
+    // Prove the behaviour against the real discord.js cache factory.
+    const { Options } = require('discord.js');
+    const make = Options.cacheWithLimits({ VoiceStateManager: { maxSize: Infinity } });
+    const cache = make('VoiceStateManager', null, { name: 'VoiceStateManager' });
+    cache.set('u1', { channelId: 'vc1' });
+    assert.equal(cache.get('u1').channelId, 'vc1', 'a cached voice state must be readable');
+});
+
+test('listener counting reads the voice-state cache and counts humans only', () => {
+    const { MusicManager } = require('../utils/music/musicManager');
+    const voiceStates = new Map([
+        ['u1', { channelId: 'vc1', member: { user: { bot: false } } }],
+        ['u2', { channelId: 'vc1', member: { user: { bot: true } } }],   // bot: ignored
+        ['u3', { channelId: 'vc2', member: { user: { bot: false } } }],  // other channel
+        ['u4', { channelId: 'vc1', member: null }],                       // uncached: counted
+    ]);
+    const client = { guilds: { cache: new Map([['g1', {
+        voiceStates: { cache: { values: () => voiceStates.values() } },
+        channels: { cache: new Map() },
+    }]]) } };
+    const mgr = new MusicManager(client, { voice: {}, providers: {}, store: null });
+    mgr._nodeId = 'n1';
+    assert.equal(mgr.countListeners({ guildId: 'g1', channelId: 'vc1' }), 2);
 });
