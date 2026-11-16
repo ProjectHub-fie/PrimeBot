@@ -440,3 +440,49 @@ test('listener counting reads the voice-state cache and counts humans only', () 
     mgr._nodeId = 'n1';
     assert.equal(mgr.countListeners({ guildId: 'g1', channelId: 'vc1' }), 2);
 });
+
+// ── zombie voice connection (the "leave succeeds but stays connected" bug) ───
+
+test('a join that never becomes ready destroys its connection and frees the guild', async () => {
+    const { getVoiceConnection, joinVoiceChannel } = require('@discordjs/voice');
+    const musicVoice = require('../utils/music/musicVoice');
+    const adapter = () => ({ sendPayload: () => true, destroy: () => {} });
+    const client = { guilds: { cache: new Map([['zg1', {
+        id: 'zg1',
+        channels: { cache: new Map([['vc1', { id: 'vc1', type: 2 }]]) },
+        voiceAdapterCreator: adapter,
+    }]]) } };
+
+    const prev = process.env.VOICE_READY_TIMEOUT_MS;
+    process.env.VOICE_READY_TIMEOUT_MS = '1000';
+    try {
+        await assert.rejects(
+            () => musicVoice.join({ client, guildId: 'zg1', channelId: 'vc1' }),
+            /did not become ready/,
+        );
+        // The half-open connection must NOT be left tracked — otherwise every
+        // later join returns this same wedged object and /leave cannot destroy it.
+        assert.equal(getVoiceConnection('zg1'), undefined, 'failed join must free the guild');
+    } finally {
+        if (prev === undefined) delete process.env.VOICE_READY_TIMEOUT_MS;
+        else process.env.VOICE_READY_TIMEOUT_MS = prev;
+    }
+    // A fresh join after the failure creates a new connection (proves the guild
+    // is not wedged to a dead one).
+    const fresh = joinVoiceChannel({ guildId: 'zg1', channelId: 'vc1', adapterCreator: adapter, selfDeaf: true });
+    assert.equal(fresh.state.status, 'signalling');
+    fresh.destroy();
+});
+
+test('leave(guildId) disconnects a connection we hold no reference to', () => {
+    const { getVoiceConnection, joinVoiceChannel } = require('@discordjs/voice');
+    const musicVoice = require('../utils/music/musicVoice');
+    const adapter = () => ({ sendPayload: () => true, destroy: () => {} });
+    const conn = joinVoiceChannel({ guildId: 'zg2', channelId: 'vc1', adapterCreator: adapter, selfDeaf: true });
+    assert.equal(getVoiceConnection('zg2'), conn);
+    // This is the /leave + /247 disable path when join() threw and the manager
+    // never stored the connection: no reference, so only the registry sweep can
+    // disconnect. Before the fix the bot replied success while still connected.
+    musicVoice.leave(null, 'zg2');
+    assert.equal(getVoiceConnection('zg2'), undefined, 'leave must clear the registry');
+});
