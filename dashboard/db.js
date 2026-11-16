@@ -646,7 +646,136 @@ async function upsertRadioSession(guildId, { channelId, enabled, stationId }) {
     return res.rows[0] ? mapRadioSessionRow(res.rows[0]) : null;
 }
 
-// ── Badges (leveling achievement badges, in the LEVELING_DATABASE_URL pool) ─
+// ── Music (on-demand music + admin 24/7 persistent connection) ──────────────
+// The bot's MusicManager owns the live player; the dashboard reads persisted
+// settings/playlists and can enable/disable 24/7 or edit the DJ role. All reads
+// route through the MUSIC pool so the dashboard and every shard node agree.
+let musicPoolRef = null;
+function getMusicPool() {
+    if (musicPoolRef) return musicPoolRef;
+    try {
+        musicPoolRef = require('../server/musicDb').musicPool;
+    } catch (err) {
+        console.error('[DASHBOARD DB] musicDb unavailable:', err.message);
+        musicPoolRef = { query: async () => { throw new Error('Music database not configured'); } };
+    }
+    return musicPoolRef;
+}
+
+async function ensureMusicTablesDash() {
+    return once('musicTables', async () => {
+        const { ensureMusicTables } = require('../server/musicDb');
+        await ensureMusicTables();
+    });
+}
+
+function mapMusicSettingsRow(r) {
+    if (!r) return null;
+    return {
+        guildId: r.guild_id,
+        enabled: r.enabled === true,
+        djRoleId: r.dj_role_id || null,
+        defaultVolume: r.default_volume != null ? Number(r.default_volume) : 100,
+        maxQueue: r.max_queue != null ? Number(r.max_queue) : 500,
+        twentyFourSevenEnabled: r.twentyfourseven_enabled === true,
+        twentyFourSevenChannelId: r.twentyfourseven_channel_id || null,
+        disabledIntentionally: r.disabled_intentionally === true,
+        lastState: r.last_state || null,
+        ownerNode: r.owner_node || null,
+        updatedAt: r.updated_at || null,
+    };
+}
+
+async function getMusicSettings(guildId) {
+    await ensureMusicTablesDash();
+    const res = await getMusicPool().query('SELECT * FROM music_settings WHERE guild_id = $1', [String(guildId)]);
+    return res.rows[0] ? mapMusicSettingsRow(res.rows[0]) : null;
+}
+
+async function upsertMusicSettings(guildId, patch = {}) {
+    await ensureMusicTablesDash();
+    const cur = await getMusicSettings(guildId) || { guildId: String(guildId) };
+    const next = { ...cur, ...patch };
+    const res = await getMusicPool().query(
+        `INSERT INTO music_settings
+            (guild_id, enabled, dj_role_id, default_volume, max_queue,
+             twentyfourseven_enabled, twentyfourseven_channel_id, disabled_intentionally,
+             last_state, owner_node, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())
+         ON CONFLICT (guild_id) DO UPDATE SET
+            enabled = EXCLUDED.enabled, dj_role_id = EXCLUDED.dj_role_id,
+            default_volume = EXCLUDED.default_volume, max_queue = EXCLUDED.max_queue,
+            twentyfourseven_enabled = EXCLUDED.twentyfourseven_enabled,
+            twentyfourseven_channel_id = EXCLUDED.twentyfourseven_channel_id,
+            disabled_intentionally = EXCLUDED.disabled_intentionally,
+            last_state = EXCLUDED.last_state, owner_node = EXCLUDED.owner_node,
+            updated_at = NOW()
+         RETURNING *`,
+        [String(guildId), next.enabled === true, next.djRoleId || null,
+            next.defaultVolume != null ? next.defaultVolume : 100, next.maxQueue != null ? next.maxQueue : 500,
+            next.twentyFourSevenEnabled === true, next.twentyFourSevenChannelId || null,
+            next.disabledIntentionally === true, next.lastState || null, next.ownerNode || null],
+    );
+    return mapMusicSettingsRow(res.rows[0]);
+}
+
+function mapMusicHistoryRow(r) {
+    return {
+        id: r.id, guildId: r.guild_id, provider: r.provider, trackId: r.track_id,
+        title: r.title, artist: r.artist,
+        durationMs: r.duration_ms != null ? Number(r.duration_ms) : null,
+        requesterId: r.requester_id || null, playedAt: r.played_at || null,
+    };
+}
+
+async function getMusicHistory(guildId, limit = 25) {
+    await ensureMusicTablesDash();
+    const res = await getMusicPool().query(
+        'SELECT * FROM music_history WHERE guild_id = $1 ORDER BY played_at DESC LIMIT $2',
+        [String(guildId), Math.min(Math.max(1, Number(limit) || 25), 100)],
+    );
+    return res.rows.map(mapMusicHistoryRow);
+}
+
+function mapMusicPlaylistRow(r) {
+    return {
+        id: r.id, guildId: r.guild_id, ownerId: r.owner_id || null, name: r.name,
+        description: r.description || '', isPublic: r.is_public === true,
+        trackCount: r.track_count != null ? Number(r.track_count) : undefined,
+        createdAt: r.created_at || null, updatedAt: r.updated_at || null,
+    };
+}
+
+async function getMusicPlaylists(guildId) {
+    await ensureMusicTablesDash();
+    const res = await getMusicPool().query(
+        `SELECT p.*, (SELECT COUNT(*) FROM music_playlist_tracks t WHERE t.playlist_id = p.id) AS track_count
+         FROM music_playlists p WHERE p.guild_id = $1 ORDER BY p.is_public DESC, p.name ASC`,
+        [String(guildId)],
+    );
+    return res.rows.map(mapMusicPlaylistRow);
+}
+
+async function getMusicPlaylistTracks(playlistId) {
+    await ensureMusicTablesDash();
+    const res = await getMusicPool().query(
+        'SELECT * FROM music_playlist_tracks WHERE playlist_id = $1 ORDER BY position ASC, id ASC',
+        [Number(playlistId)],
+    );
+    return res.rows.map(r => ({
+        id: r.id, position: r.position, provider: r.provider, trackId: r.track_id,
+        title: r.title, artist: r.artist, durationMs: r.duration_ms != null ? Number(r.duration_ms) : null,
+        url: r.url, artworkUrl: r.artwork_url,
+    }));
+}
+
+async function deleteMusicPlaylist(guildId, id) {
+    await ensureMusicTablesDash();
+    const res = await getMusicPool().query('DELETE FROM music_playlists WHERE id = $1 AND guild_id = $2 RETURNING id', [Number(id), String(guildId)]);
+    return res.rowCount > 0;
+}
+
+
 //
 // The bot's LevelingManager awards level/achievement/special badges into the
 // user_badges table (created by server/levelingDb.js). The dashboard's Badges
@@ -2469,6 +2598,18 @@ const GUILD_CONFIG_SLICES = {
         console.error('[DASHBOARD DB] radio_stations read failed:', err.message);
         return [];
     }),
+    musicSettings: (guildId) => getMusicSettings(guildId).catch(err => {
+        console.error('[DASHBOARD DB] music_settings read failed:', err.message);
+        return null;
+    }),
+    musicHistory: (guildId) => getMusicHistory(guildId, 25).catch(err => {
+        console.error('[DASHBOARD DB] music_history read failed:', err.message);
+        return [];
+    }),
+    musicPlaylists: (guildId) => getMusicPlaylists(guildId).catch(err => {
+        console.error('[DASHBOARD DB] music_playlists read failed:', err.message);
+        return [];
+    }),
 };
 
 async function getGuildConfig(guildId, { only = null } = {}) {
@@ -2514,6 +2655,9 @@ async function getGuildConfig(guildId, { only = null } = {}) {
         youtubeStats: slice.get('youtubeStats') || defaultYoutubeStats(),
         radioSession: slice.has('radioSession') ? slice.get('radioSession') : null,
         radioStations: slice.get('radioStations') || [],
+        musicSettings: slice.has('musicSettings') ? slice.get('musicSettings') : null,
+        musicHistory: slice.get('musicHistory') || [],
+        musicPlaylists: slice.get('musicPlaylists') || [],
     };
 }
 
@@ -4674,4 +4818,10 @@ module.exports = {
     deleteRadioStation,
     setRadioEnabled,
     upsertRadioSession,
+    getMusicSettings,
+    upsertMusicSettings,
+    getMusicHistory,
+    getMusicPlaylists,
+    getMusicPlaylistTracks,
+    deleteMusicPlaylist,
 };

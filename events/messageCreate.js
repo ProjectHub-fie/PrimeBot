@@ -678,6 +678,193 @@ module.exports = {
                         return message.reply({ embeds: [rEmbed.errorEmbed(err.message || 'Something went wrong.')] });
                     }
                 }
+                case "music": {
+                    const mUi = require('../utils/music/musicEmbed');
+                    const mPerms = require('../utils/music/musicPermissions');
+                    const mStore = require('../utils/music/musicStore');
+                    const mMgr = client.musicManager;
+                    if (!mMgr) return message.reply({ embeds: [mUi.errorEmbed('The music service is not available right now.')] });
+
+                    const mSub = (args[0] || 'status').toLowerCase();
+                    const mArg = args.slice(1).join(' ').trim();
+                    const voiceChannelId = message.member && message.member.voice ? message.member.voice.channelId : null;
+                    const mSession = mMgr.getSession(message.guild.id);
+                    const mChannelId = voiceChannelId || (mSession && mSession.channelId) || null;
+                    const requireControl = () => {
+                        if (!mSession) throw new Error('Nothing is playing in this server.');
+                        if (!mPerms.canControl(message.member, mSession)) {
+                            throw new Error('Join the music voice channel (or hold the DJ role / Manage Server) to control playback.');
+                        }
+                    };
+                    const settings = async () => { try { return await mStore.getSettings(message.guild.id) || {}; } catch (_) { return {}; } };
+
+                    try {
+                        switch (mSub) {
+                            case 'play':
+                            case 'p': {
+                                if (!mArg) return message.reply({ embeds: [mUi.errorEmbed('Usage: `$music play <song or URL>`')] });
+                                if (!mChannelId) return message.reply({ embeds: [mUi.errorEmbed('Join a voice channel first, then run `$music play`.')] });
+                                const status = await message.reply({ embeds: [mUi.successEmbed('🔎 Searching…', `Looking up **${mArg}**`)] });
+                                const res = await mMgr.play(message.guild.id, mArg, { channelId: mChannelId, requesterId: message.author.id, settings: await settings() });
+                                const t = res.track;
+                                return status.edit({ embeds: [mUi.successEmbed(res.queued ? '➕ Queued' : '▶️ Playing', `**${t.title}**${t.artist ? ` — ${t.artist}` : ''}\nSource: ${mUi.sourceLabel(t)}`)] });
+                            }
+                            case 'search': {
+                                if (!mArg) return message.reply({ embeds: [mUi.errorEmbed('Usage: `$music search <query>`')] });
+                                const { searchQuery } = require('../utils/music/providers/registry');
+                                const tracks = await searchQuery(mArg, 10);
+                                if (!tracks.length) return message.reply({ embeds: [mUi.errorEmbed(`No results for **${mArg}**.`)] });
+                                const token = `${message.id}`;
+                                client.musicSearchCache = client.musicSearchCache || new Map();
+                                client.musicSearchCache.set(token, { tracks, userId: message.author.id, guildId: message.guild.id });
+                                setTimeout(() => { try { client.musicSearchCache.delete(token); } catch (_) {} }, 120000).unref?.();
+                                return message.reply({ embeds: [mUi.searchEmbed(mArg, tracks)], components: [mUi.searchSelect(tracks, token)] });
+                            }
+                            case 'pause': requireControl(); { const s = await mMgr.pause(message.guild.id, { actor: message.author.id }); return message.reply({ embeds: [mUi.successEmbed('⏸️ Paused', `Queue: ${s.queueLength} track(s). Still connected.`)] }); }
+                            case 'resume': requireControl(); { const s = await mMgr.resume(message.guild.id); return message.reply({ embeds: [mUi.successEmbed('▶️ Resumed', s.current ? `Playing **${s.current.title}**.` : 'Continuing the queue.')] }); }
+                            case 'skip': requireControl(); { const count = parseInt(args[1], 10) || 1; const s = await mMgr.skip(message.guild.id, { actor: message.author.id, count }); return message.reply({ embeds: [mUi.successEmbed('⏭️ Skipped', s.current ? `Now playing **${s.current.title}**.` : 'The queue is empty — still connected.')] }); }
+                            case 'previous':
+                            case 'prev': requireControl(); { const r = await mMgr.previous(message.guild.id); return message.reply({ embeds: [mUi.successEmbed('⏮️ Previous', `Playing **${r.track.title}**.`)] }); }
+                            case 'stop': requireControl(); { await mMgr.stop(message.guild.id, { actor: message.author.id }); return message.reply({ embeds: [mUi.successEmbed('⏹️ Stopped', 'Playback stopped. PrimeBot stays in the voice channel.')] }); }
+                            case 'seek': requireControl(); { const sec = require('../shared/musicConstants').parseTimestamp(args[1]); if (sec == null) throw new Error('Invalid timestamp. Use e.g. `90`, `1:30` or `1h2m3s`.'); const s = await mMgr.seek(message.guild.id, sec); return message.reply({ embeds: [mUi.successEmbed('⏩ Seeked', `Jumped to ${sec}s in **${s.current ? s.current.title : 'the track'}**.`)] }); }
+                            case 'queue':
+                            case 'q': {
+                                if (!mSession) return message.reply({ embeds: [mUi.errorEmbed('Nothing is playing in this server.')] });
+                                const { embed, components } = mUi.queueEmbed(mMgr.describe(message.guild.id), 0);
+                                return message.reply({ embeds: [embed], components });
+                            }
+                            case 'remove': {
+                                requireControl();
+                                const position = parseInt(args[1], 10);
+                                if (!Number.isFinite(position)) return message.reply({ embeds: [mUi.errorEmbed('Usage: `$music remove <position>`')] });
+                                if (!mPerms.canRemoveTrack(message.member, mSession, position)) return message.reply({ embeds: [mUi.errorEmbed('You can only remove your own queued tracks (or hold the DJ role / Manage Server).')] });
+                                const r = await mMgr.remove(message.guild.id, position);
+                                return message.reply({ embeds: [mUi.successEmbed('🗑️ Removed', `Removed **${r.removed.title}** from the queue.`)] });
+                            }
+                            case 'clear': requireControl(); { const r = await mMgr.clear(message.guild.id); return message.reply({ embeds: [mUi.successEmbed('🧹 Queue cleared', `Removed ${r.removed} track(s).`)] }); }
+                            case 'shuffle': requireControl(); { const s = await mMgr.shuffle(message.guild.id); return message.reply({ embeds: [mUi.successEmbed('🔀 Shuffled', `Shuffled ${s.queueLength} track(s).`)] }); }
+                            case 'loop':
+                            case 'repeat': {
+                                requireControl();
+                                const mode = (args[1] || '').toLowerCase();
+                                if (!require('../shared/musicConstants').VALID_REPEAT_MODES.includes(mode)) return message.reply({ embeds: [mUi.errorEmbed('Usage: `$music loop <off|track|queue>`')] });
+                                const s = await mMgr.setRepeat(message.guild.id, mode);
+                                return message.reply({ embeds: [mUi.successEmbed('🔁 Repeat', `Repeat mode is now **${mUi.repeatLabel(s.repeat)}**.`)] });
+                            }
+                            case 'nowplaying':
+                            case 'np': {
+                                if (!mSession) return message.reply({ embeds: [mUi.errorEmbed('Nothing is playing in this server.')] });
+                                const { embed, components } = mUi.nowPlaying(mMgr.describe(message.guild.id));
+                                return message.reply({ embeds: [embed], components: [components[0], mUi.secondControlRow()] });
+                            }
+                            case 'volume':
+                            case 'vol': {
+                                requireControl();
+                                const lvl = parseInt(args[1], 10);
+                                if (!Number.isFinite(lvl)) return message.reply({ embeds: [mUi.errorEmbed('Usage: `$music volume <1-100>`')] });
+                                const s = await mMgr.setVolume(message.guild.id, lvl);
+                                return message.reply({ embeds: [mUi.successEmbed('🔊 Volume', `Volume set to **${s.volume}%**.`)] });
+                            }
+                            case 'join': {
+                                const ch = message.member.voice && message.member.voice.channel;
+                                if (!ch) return message.reply({ embeds: [mUi.errorEmbed('Join a voice channel first.')] });
+                                const s = await mMgr.join(message.guild.id, ch.id, { settings: await settings() });
+                                return message.reply({ embeds: [mUi.successEmbed('🔊 Joined', `Connected to <#${s.channelId}>.`)] });
+                            }
+                            case 'leave': {
+                                requireControl();
+                                await mMgr.leave(message.guild.id);
+                                return message.reply({ embeds: [mUi.successEmbed('👋 Left', 'Disconnected from the voice channel.')] });
+                            }
+                            case '247':
+                            case '24/7': {
+                                if (!mPerms.canConfigure(message.member)) return message.reply({ embeds: [mUi.errorEmbed('You need **Manage Server** to configure 24/7 mode.')] });
+                                const action = (args[1] || 'status').toLowerCase();
+                                if (action === 'enable') {
+                                    const ch = message.mentions.channels.first() || (message.member.voice && message.member.voice.channel);
+                                    if (!ch) return message.reply({ embeds: [mUi.errorEmbed('Usage: `$music 247 enable [#voice-channel]` (or join a channel first).')] });
+                                    const view = await mMgr.enable247(message.guild.id, ch.id, { settings: await settings() });
+                                    return message.reply({ embeds: [mUi.status247Embed(view)] });
+                                }
+                                if (action === 'disable') {
+                                    await mMgr.disable247(message.guild.id);
+                                    return message.reply({ embeds: [mUi.successEmbed('🕐 24/7 disabled', 'PrimeBot has disconnected and will not reconnect until you enable 24/7 again.')] });
+                                }
+                                if (action === 'channel') {
+                                    const ch = message.mentions.channels.first();
+                                    if (!ch) return message.reply({ embeds: [mUi.errorEmbed('Usage: `$music 247 channel #voice-channel`')] });
+                                    const view = mSession && mSession.twentyFourSeven
+                                        ? await mMgr.set247Channel(message.guild.id, ch.id, { settings: await settings() })
+                                        : await mMgr.enable247(message.guild.id, ch.id, { settings: await settings() });
+                                    return message.reply({ embeds: [mUi.status247Embed(view)] });
+                                }
+                                const snap = mMgr.describe(message.guild.id);
+                                return message.reply({ embeds: [mUi.status247Embed(snap || { twentyFourSeven: false, channelId: null, connected: false, state: 'idle', queueLength: 0 })] });
+                            }
+                            case 'playlist': {
+                                const sub2 = (args[1] || 'list').toLowerCase();
+                                if (sub2 === 'list') {
+                                    const lists = await mStore.listPlaylists(message.guild.id, { ownerId: message.author.id });
+                                    return message.reply({ embeds: [mUi.playlistListEmbed(lists)] });
+                                }
+                                if (sub2 === 'create') {
+                                    const name = args.slice(2).join(' ').trim();
+                                    if (!name) return message.reply({ embeds: [mUi.errorEmbed('Usage: `$music playlist create <name>`')] });
+                                    const pl = await mStore.createPlaylist(message.guild.id, { name, ownerId: message.author.id });
+                                    return message.reply({ embeds: [mUi.successEmbed('🗂️ Playlist created', `**#${pl.id}** ${pl.name}`)] });
+                                }
+                                if (sub2 === 'view') {
+                                    const pl = await mStore.getPlaylist(message.guild.id, parseInt(args[2], 10));
+                                    if (!pl) return message.reply({ embeds: [mUi.errorEmbed('No such playlist.')] });
+                                    const tracks = await mStore.listPlaylistTracks(pl.id);
+                                    return message.reply({ embeds: [mUi.playlistEmbed(pl, tracks)] });
+                                }
+                                if (sub2 === 'add') {
+                                    const pl = await mStore.getPlaylist(message.guild.id, parseInt(args[2], 10));
+                                    if (!pl) return message.reply({ embeds: [mUi.errorEmbed('No such playlist.')] });
+                                    if (pl.ownerId && pl.ownerId !== message.author.id && !mPerms.isAdmin(message.member)) return message.reply({ embeds: [mUi.errorEmbed('You can only manage your own playlists.')] });
+                                    const query = args.slice(3).join(' ').trim();
+                                    if (!query) return message.reply({ embeds: [mUi.errorEmbed('Usage: `$music playlist add <id> <song or URL>`')] });
+                                    const { resolveQuery } = require('../utils/music/providers/registry');
+                                    const track = await resolveQuery(query, { searchLimit: 1 });
+                                    await mStore.addPlaylistTrack(pl.id, track, { addedBy: message.author.id });
+                                    return message.reply({ embeds: [mUi.successEmbed('➕ Added', `**${track.title}** added to “${pl.name}”.`)] });
+                                }
+                                if (sub2 === 'play' || sub2 === 'queue') {
+                                    const pl = await mStore.getPlaylist(message.guild.id, parseInt(args[2], 10));
+                                    if (!pl) return message.reply({ embeds: [mUi.errorEmbed('No such playlist.')] });
+                                    if (!mChannelId) return message.reply({ embeds: [mUi.errorEmbed('Join a voice channel first.')] });
+                                    const rows = await mStore.listPlaylistTracks(pl.id);
+                                    if (!rows.length) return message.reply({ embeds: [mUi.errorEmbed('That playlist is empty.')] });
+                                    const tracks = rows.map(r => ({ provider: r.provider, id: r.trackId, title: r.title, artist: r.artist, durationMs: r.durationMs, url: r.url, artworkUrl: r.artworkUrl }));
+                                    const s = mMgr._ensureSession(message.guild.id, mChannelId, await settings());
+                                    s.channelId = mChannelId;
+                                    await mMgr._ensureConnected(s);
+                                    if (sub2 === 'play') s.queue = tracks.map(t => ({ ...t, _key: `${t.provider}:${t.id}` }));
+                                    else mMgr.enqueue(s, tracks, { requesterId: message.author.id });
+                                    await mMgr._playNext(s);
+                                    return message.reply({ embeds: [mUi.successEmbed('▶️ Playlist', `${sub2 === 'play' ? 'Playing' : 'Queued'} **${pl.name}** (${tracks.length} track(s)).`)] });
+                                }
+                                if (sub2 === 'delete') {
+                                    const pl = await mStore.getPlaylist(message.guild.id, parseInt(args[2], 10));
+                                    if (!pl) return message.reply({ embeds: [mUi.errorEmbed('No such playlist.')] });
+                                    if (pl.ownerId && pl.ownerId !== message.author.id && !mPerms.isAdmin(message.member)) return message.reply({ embeds: [mUi.errorEmbed('You can only manage your own playlists.')] });
+                                    await mStore.deletePlaylist(message.guild.id, pl.id);
+                                    return message.reply({ embeds: [mUi.successEmbed('🗑️ Deleted', `Playlist “${pl.name}” was deleted.`)] });
+                                }
+                                return message.reply({ embeds: [mUi.errorEmbed('Usage: `$music playlist <list|create|view|add|play|queue|delete>`')] });
+                            }
+                            case 'help':
+                            default: {
+                                if (!mSession) return message.reply({ embeds: [mUi.helpEmbed({ prefix: client.serverSettingsManager?.getGuildPrefix?.(message.guild.id) || '$' })] });
+                                const { embed, components } = mUi.nowPlaying(mMgr.describe(message.guild.id));
+                                return message.reply({ embeds: [embed], components: [components[0], mUi.secondControlRow()] });
+                            }
+                        }
+                    } catch (err) {
+                        return message.reply({ embeds: [mUi.errorEmbed(err.message || 'Something went wrong.')] });
+                    }
+                }
                 case "antinuke":
                 case "an": {
                     const anMgr = client.antiNukeManager;

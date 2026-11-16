@@ -5,6 +5,7 @@ const config = require('../config');
 const betaManager = require('../utils/betaManager');
 const { isBetaFeature } = require('../utils/betaFeatureMatcher');
 const { logEvent } = require('../utils/serverLogger');
+const musicUi = require('../utils/music/musicEmbed');
 
 /**
  * Helper function to show main help menu for button interactions
@@ -566,7 +567,21 @@ module.exports = {
                     return;
                 }
 
-                // Handle Event Management buttons (customIds: evjoin:/evleave:/evcheckin:/
+                // Music control buttons (customIds: music_prev, music_pauseresume,
+                // music_skip, music_stop, music_shuffle, music_repeat, music_queue,
+                // music_247status, music_qpage:<n>). Handled here so they never
+                // fall through to the "not functional" default.
+                if (/^music_/.test(customId)) {
+                    const mgr = client.musicManager;
+                    if (!mgr) {
+                        await interaction.reply({ content: 'The music service is not available right now.', ephemeral: true }).catch(() => {});
+                        return;
+                    }
+                    await safeExecute(require('../utils/music/musicButtons').handleButton.bind(null, interaction), [mgr], null, `Music button (${customId})`);
+                    return;
+                }
+
+                // Event Management buttons (customIds: evjoin:/evleave:/evcheckin:/
                 // evparts:/evinfo:/evremind: + <eventId>). The manager rejects any event
                 // that does not belong to the interaction's guild.
                 if (/^ev(join|leave|checkin|parts|info|remind):/.test(customId)) {
@@ -1107,11 +1122,71 @@ module.exports = {
             }
 
             // Handle select menus
+            // Music 24/7 channel selection (channel select menu).
+            if (interaction.isChannelSelectMenu && interaction.isChannelSelectMenu()) {
+                if (interaction.customId === 'music_247_channel') {
+                    const m = interaction.client.musicManager;
+                    const perms = require('../utils/music/musicPermissions');
+                    if (!m) return interaction.reply({ content: 'The music service is not available right now.', ephemeral: true }).catch(() => {});
+                    if (!perms.canConfigure(interaction.member)) {
+                        return interaction.reply({ content: 'You need Manage Server to configure 24/7 mode.', ephemeral: true }).catch(() => {});
+                    }
+                    const channelId = interaction.values && interaction.values[0];
+                    try {
+                        const { getSettings } = require('../utils/music/musicStore');
+                        const settings = await getSettings(interaction.guildId).catch(() => ({}));
+                        const snap = m.getSession(interaction.guildId);
+                        const view = snap && snap.twentyFourSeven
+                            ? await m.set247Channel(interaction.guildId, channelId, { settings: settings || {} })
+                            : await m.enable247(interaction.guildId, channelId, { settings: settings || {} });
+                        return interaction.update({ embeds: [musicUi.status247Embed(view)], components: [] }).catch(() => {});
+                    } catch (err) {
+                        return interaction.reply({ embeds: [musicUi.errorEmbed(err.message)], ephemeral: true }).catch(() => {});
+                    }
+                }
+            }
+
             if (interaction.isStringSelectMenu()) {
                 console.log(`[DEBUG] Select menu interaction with customId: "${interaction.customId}"`);
                 interactionDebugger.logInteraction(interaction, `Select Menu (${interaction.customId})`);
 
                 try {
+                    // Music search select (customId: music_search:<token>).
+                    if (interaction.customId.startsWith('music_search:')) {
+                        const token = interaction.customId.slice('music_search:'.length);
+                        const cache = interaction.client.musicSearchCache;
+                        const entry = cache && cache.get(token);
+                        if (!entry || entry.userId !== interaction.user.id) {
+                            return interaction.reply({ content: 'That search has expired. Run the search again.', ephemeral: true }).catch(() => {});
+                        }
+                        const idx = parseInt(interaction.values[0], 10) || 0;
+                        const track = entry.tracks[idx];
+                        if (!track) return interaction.reply({ content: 'That result is no longer available.', ephemeral: true }).catch(() => {});
+                        const m = interaction.client.musicManager;
+                        if (!m) return interaction.reply({ content: 'The music service is not available right now.', ephemeral: true }).catch(() => {});
+                        await interaction.deferUpdate().catch(() => {});
+                        try {
+                            const { getSettings } = require('../utils/music/musicStore');
+                            const settings = await getSettings(interaction.guildId).catch(() => ({}));
+                            const voiceChannelId = interaction.member && interaction.member.voice ? interaction.member.voice.channelId : null;
+                            const session = m.getSession(interaction.guildId);
+                            const channelId = voiceChannelId || (session && session.channelId) || null;
+                            if (!channelId) return interaction.editReply({ embeds: [musicUi.errorEmbed('Join a voice channel first.')], components: [] }).catch(() => {});
+                            const s = m._ensureSession(interaction.guildId, channelId, settings || {});
+                            s.channelId = channelId;
+                            await m._ensureConnected(s);
+                            if (s.state === 'playing' && s.current) {
+                                m.enqueue(s, [{ ...track, requesterId: interaction.user.id }], { requesterId: interaction.user.id });
+                                return interaction.editReply({ embeds: [musicUi.successEmbed('➕ Queued', `**${track.title}** added to the queue.`)], components: [] }).catch(() => {});
+                            }
+                            s.queue.push({ ...track, _key: `${track.provider}:${track.id}`, requesterId: interaction.user.id });
+                            await m._playNext(s);
+                            return interaction.editReply({ embeds: [musicUi.successEmbed('▶️ Playing', `**${track.title}**${track.artist ? ` — ${track.artist}` : ''}\nSource: ${musicUi.sourceLabel(track)}`)], components: [] }).catch(() => {});
+                        } catch (err) {
+                            return interaction.editReply({ embeds: [musicUi.errorEmbed(err.message)], components: [] }).catch(() => {});
+                        }
+                    }
+
                     // Premium ticket-panel select menus (panel builder): thepper
                     // component id rides in the customId, the selected option id in the value.
                     // The manager loads panel/component/option from the DB-driven cache and

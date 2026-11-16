@@ -1209,6 +1209,19 @@ async function firstGuildVoiceChannel(guildId) {
     return found ? String(found.id) : null;
 }
 
+// Role variant for the music DJ role: the role must belong to the guild.
+async function assertGuildRole(guildId, roleId) {
+    if (!roleId) return null;
+    const roles = await discord.getGuildRoles(guildId).catch(() => []);
+    const found = (roles || []).find(r => String(r.id) === String(roleId));
+    if (!found) {
+        const err = new Error('That role does not belong to this server.');
+        err.status = 400;
+        throw err;
+    }
+    return String(roleId);
+}
+
 app.get('/api/guilds/:guildId/youtube', requireAuth, requireGuildAdmin, async (req, res) => {
     try {
         const [subscriptions, announcements, stats, groups] = await Promise.all([
@@ -1449,6 +1462,91 @@ app.patch('/api/guilds/:guildId/radio', requireAuth, requireGuildAdmin, async (r
 // owns the voice connection. The dashboard can only toggle the persisted
 // session state, so it exposes enable/disable + station/channel — those reach
 // the bot through the shared radio_sessions table and its reload task.
+
+// ── API: music ──────────────────────────────────────────────────────────────
+// The bot's MusicManager owns the live player; the dashboard reads persisted
+// settings / playlists / history and edits the 24/7 configuration + DJ role.
+// All writes require guild admin and validate the voice channel / role.
+app.get('/api/guilds/:guildId/music', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const [settings, playlists, history] = await Promise.all([
+            dashboardDb.getMusicSettings(req.guild.id),
+            dashboardDb.getMusicPlaylists(req.guild.id),
+            dashboardDb.getMusicHistory(req.guild.id, 25),
+        ]);
+        res.json({ settings, playlists, history });
+    } catch (err) {
+        console.error('[API] get music error:', err.message);
+        res.status(500).json({ error: 'Failed to load the music configuration.' });
+    }
+});
+
+app.patch('/api/guilds/:guildId/music', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const body = req.body || {};
+        const patch = {};
+
+        if (body.twentyFourSevenEnabled !== undefined) patch.twentyFourSevenEnabled = body.twentyFourSevenEnabled === true;
+        if (body.twentyFourSevenChannelId !== undefined) {
+            patch.twentyFourSevenChannelId = body.twentyFourSevenChannelId
+                ? await assertGuildVoiceChannel(req.guild.id, body.twentyFourSevenChannelId)
+                : null;
+        }
+        if (body.djRoleId !== undefined) {
+            patch.djRoleId = body.djRoleId ? await assertGuildRole(req.guild.id, body.djRoleId) : null;
+        }
+        if (body.defaultVolume !== undefined) {
+            const v = parseInt(body.defaultVolume, 10);
+            if (!Number.isFinite(v) || v < 1 || v > 100) return res.status(400).json({ error: 'Default volume must be between 1 and 100.' });
+            patch.defaultVolume = v;
+        }
+        if (body.maxQueue !== undefined) {
+            const v = parseInt(body.maxQueue, 10);
+            if (!Number.isFinite(v) || v < 10 || v > 2000) return res.status(400).json({ error: 'Maximum queue size must be between 10 and 2000.' });
+            patch.maxQueue = v;
+        }
+        // Enabling 24/7 requires a channel (existing or supplied).
+        if (patch.twentyFourSevenEnabled === true) {
+            const cur = await dashboardDb.getMusicSettings(req.guild.id);
+            const ch = patch.twentyFourSevenChannelId || (cur && cur.twentyFourSevenChannelId);
+            if (!ch) return res.status(400).json({ error: 'Pick a voice channel before enabling 24/7 mode.' });
+            // Clear the intentional-disable guard so recovery may reconnect.
+            patch.disabledIntentionally = false;
+        }
+        if (patch.twentyFourSevenEnabled === false) patch.disabledIntentionally = true;
+
+        const settings = await dashboardDb.upsertMusicSettings(req.guild.id, patch);
+        recordWebsiteLog(req, 'Updated the music settings');
+        res.json({ ok: true, settings });
+    } catch (err) {
+        console.error('[API] music patch error:', err.message);
+        res.status(err.status || 500).json({ error: err.message || 'Failed to update the music settings.' });
+    }
+});
+
+app.get('/api/guilds/:guildId/music/playlists/:id', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const playlist = await dashboardDb.getMusicPlaylists(req.guild.id).then(list => list.find(p => String(p.id) === String(req.params.id)));
+        if (!playlist) return res.status(404).json({ error: 'Playlist not found.' });
+        const tracks = await dashboardDb.getMusicPlaylistTracks(playlist.id);
+        res.json({ playlist, tracks });
+    } catch (err) {
+        console.error('[API] music playlist read error:', err.message);
+        res.status(500).json({ error: 'Failed to load the playlist.' });
+    }
+});
+
+app.delete('/api/guilds/:guildId/music/playlists/:id', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const ok = await dashboardDb.deleteMusicPlaylist(req.guild.id, req.params.id);
+        if (!ok) return res.status(404).json({ error: 'Playlist not found.' });
+        recordWebsiteLog(req, `Deleted music playlist #${req.params.id}`);
+        res.json({ ok: true });
+    } catch (err) {
+        console.error('[API] music playlist delete error:', err.message);
+        res.status(500).json({ error: 'Failed to delete the playlist.' });
+    }
+});
 
 // ── API: birthdays ──────────────────────────────────────────────────────────
 // Reads/writes the birthdays + birthdays_guilds tables (BIRTHDAY_DATABASE_URL
@@ -3714,11 +3812,15 @@ app.get('/guild/:guildId/birthdays', requireAuth, guildPage({ config: ['birthday
 // YouTube Notifications (Creator Hub) — dashboard-only feature.
 app.get('/guild/:guildId/youtube', requireAuth, guildPage({ config: ['youtubeSubscriptions', 'youtubeAnnouncements', 'youtubeStats'], roles: 'all' }), (req, res) =>
     res.type('html').send(guildPages.youtubePage({ guild: req.guild, user: req.user })));
-// 24/7 Radio — dashboard-only configuration surface (stations + persistent
-// session). The bot owns the live voice session; the page reads the persisted
-// session + station catalog.
-app.get('/guild/:guildId/radio', requireAuth, guildPage({ config: ['radioSession', 'radioStations'] }), (req, res) =>
-    res.type('html').send(guildPages.radioPage({ guild: req.guild, user: req.user })));
+// Music — dashboard-only configuration surface (on-demand settings, playlists,
+// history and the 24/7 radio station/session controls). The bot owns the live
+// player; the page reads the persisted settings + radio session/station catalog.
+app.get('/guild/:guildId/music', requireAuth, guildPage({ config: ['musicSettings', 'musicHistory', 'musicPlaylists', 'radioSession', 'radioStations'], roles: 'all' }), (req, res) =>
+    res.type('html').send(guildPages.musicPage({ guild: req.guild, user: req.user })));
+
+// Back-compat: the Radio tab was merged into Music.
+app.get('/guild/:guildId/radio', requireAuth, guildPage({ config: [] }), (req, res) =>
+    res.redirect(302, `/guild/${encodeURIComponent(req.params.guildId)}/music`));
 app.get('/guild/:guildId/embed', requireAuth, guildPage({ config: [], selectors: false }), (req, res) =>
     res.type('html').send(guildPages.embedPage({ guild: req.guild, user: req.user })));
 app.get('/guild/:guildId/logging', requireAuth, guildPage({ config: ['logging'] }), (req, res) =>
