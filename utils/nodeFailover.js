@@ -271,6 +271,16 @@ async function writeHeartbeatWithLease(role) {
         SET last_seen = NOW(), owner_role = ${role}
         WHERE id = 1 AND owner_node_name = ${NODE_NAME}
     `);
+    // Publish the status pulse on EVERY steady-state tick, not only on the
+    // boot/fallback writeHeartbeat() path. The combined heartbeat+lease
+    // statement above replaced the heartbeat+lease pair on the hot path, but it
+    // never called writePulse() — so the active node wrote its
+    // monitor_node_pulse row once at boot and then went silent. After ~3 missed
+    // beats (90s) the monitoring worker classified the still-running active node
+    // as unavailable, which surfaced as a false "Shard Node 1: OUTAGE" and
+    // "PrimeBot: OUTAGE" on the public Stats page. Failures here must never
+    // break the heartbeat, so writePulse() swallows its own errors.
+    await writePulse();
     return Number(result?.rowCount || 0) > 0;
 }
 

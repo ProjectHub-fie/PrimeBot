@@ -25,7 +25,16 @@ const ENABLED = process.env.STATUS_MONITOR_ENABLED !== 'false';
 const INTERVAL_MS = parseInt(process.env.STATUS_MONITOR_INTERVAL_MS, 10) || 60000;
 const WORKER_TTL_S = parseInt(process.env.STATUS_WORKER_TTL_S, 10) || 90;
 const OBSERVATION_RETENTION_DAYS = parseInt(process.env.STATUS_RETENTION_DAYS, 10) || 31;
-const STALE_FACTOR = 3; // miss up to ~2 beats before a node is "unavailable"
+
+// How many missed beats (multiples of a writer's own published pulse interval)
+// before a node leaves the healthy band. Between STALE_FACTOR and
+// OUTAGE_FACTOR the node is STALE — its monitoring data is outdated and needs
+// verification, but that is NOT a confirmed outage (a single late heartbeat, a
+// brief DB blip or one slow monitoring query must never present as OUTAGE).
+// Only beyond OUTAGE_FACTOR consecutive missed beats is a node declared
+// unavailable. Both are configurable so a deployment can widen the tolerance.
+const STALE_FACTOR = Math.max(2, parseInt(process.env.STATUS_STALE_FACTOR, 10) || 3);
+const OUTAGE_FACTOR = Math.max(STALE_FACTOR + 1, parseInt(process.env.STATUS_OUTAGE_FACTOR, 10) || 6);
 
 const WORKER_ID = 'status-worker:' + (require('./nodeIdentity').resolveNodeIdentity(process.env).nodeId) + ':' + process.pid;
 const BASE_URL = process.env.MONITOR_WEBSITE_URL || process.env.DASHBOARD_BASE_URL || null;
@@ -93,11 +102,21 @@ async function dbCheck() {
 // ── Per-node + derived statuses ──────────────────────────────────────────────
 
 function pulseStaleMs(pulse) {
-    // The node publishes its own cadence; stale threshold scales with it so a
-    // node on a slower cadence is not misjudged as dead. Defaults match the
+    // The node publishes its own cadence; the stale threshold scales with it so
+    // a node on a slower cadence is not misjudged as dead. Defaults match the
     // 30s steady pulse.
     const interval = Number(pulse?.resource?.pulseIntervalMs || 30000);
     return interval * STALE_FACTOR;
+}
+
+/**
+ * Beyond this age a node's missed beats are enough to call it a CONFIRMED
+ * outage. Between `pulseStaleMs` and this the node is STALE — outdated
+ * monitoring data that needs verification, never an outage.
+ */
+function pulseOutageMs(pulse) {
+    const interval = Number(pulse?.resource?.pulseIntervalMs || 30000);
+    return interval * OUTAGE_FACTOR;
 }
 
 const NODE_ROLES = ['sn1', 'sn2', 'sn3'];
@@ -149,8 +168,15 @@ function classifyNode(pulse, { isActive = false } = {}) {
 
     const intervalMs = Number(pulse.resource?.pulseIntervalMs || 30000);
     const staleMs = pulseStaleMs(pulse);
+    const outageMs = pulseOutageMs(pulse);
     const ageMs = pulse.ageMs == null ? null : Number(pulse.ageMs);
     const fresh = ageMs != null && ageMs <= staleMs;
+    // A heartbeat that has stopped but is still within the outage window is
+    // STALE: the data is outdated, so we must not keep asserting the node is
+    // healthy, but we equally must not claim a confirmed outage. The node is
+    // still assumed online (it very likely is — the pulse is just late) and the
+    // dashboard surfaces STALE rather than OUTAGE.
+    const stale = !fresh && ageMs != null && ageMs <= outageMs;
 
     const processHealth = pulse.processHealth || 'unknown';
     const processDead = processHealth === 'dead' || processHealth === 'stopped';
@@ -166,28 +192,43 @@ function classifyNode(pulse, { isActive = false } = {}) {
         isActive,
         ageMs,
         process: { health: processHealth, uptimeSeconds: pulse.resource?.uptimeSeconds ?? null },
-        heartbeat: { fresh, ageMs, intervalMs },
+        heartbeat: { fresh, stale, ageMs, intervalMs },
         gateway: { connected: !!pulse.gatewayConnected, ready: !!pulse.gatewayReady },
         shards: { assigned, ready, active, status: shardStatus },
     };
 
-    // 1. Stale heartbeat — the process genuinely stopped reporting.
+    // 1. STALE — the heartbeat is late but the node has not yet missed enough
+    //    beats to be considered down. Reported as STALE (needs verification),
+    //    online, and NOT an outage. A single late beat, a brief DB blip or one
+    //    slow monitoring query lands here instead of producing a false OUTAGE.
+    if (stale) {
+        return {
+            ...base,
+            online: true,
+            healthy: false,
+            status: 'stale',
+            statusReason: 'heartbeat_stale',
+        };
+    }
+
+    // 2. OUTAGE — the heartbeat has been missing long enough to confirm the
+    //    process genuinely stopped reporting.
     if (!fresh) {
         return {
             ...base,
             online: false,
             healthy: false,
             status: 'unavailable',
-            statusReason: ageMs == null ? 'stale' : 'stale',
+            statusReason: 'stale',
         };
     }
 
-    // 2. Fresh heartbeat but the process itself reported dead.
+    // 3. Fresh heartbeat but the process itself reported dead.
     if (processDead) {
         return { ...base, online: false, healthy: false, status: 'unavailable', statusReason: 'process_' + processHealth };
     }
 
-    // 3. Fresh, live process. The only gateway expectation is on the ACTIVE
+    // 4. Fresh, live process. The only gateway expectation is on the ACTIVE
     //    node: a standby legitimately has no gateway connection because it is
     //    assigned no shards. Judging a standby by the gateway is the bug that
     //    showed healthy standbys as OFFLINE/DEGRADED.
@@ -211,12 +252,16 @@ function classifyNode(pulse, { isActive = false } = {}) {
  */
 function summarizeFleet(nodes) {
     const list = NODE_ROLES.map(r => nodes[r]).filter(Boolean);
+    // A STALE node is still considered ONLINE (it is almost certainly running —
+    // its pulse is merely late). It is not counted as healthy, and it is not an
+    // outage. Counting it offline is what produced the false "Nodes offline: 1".
     const online = list.filter(n => n.online).length;
     const healthy = list.filter(n => n.healthy).length;
     const active = list.filter(n => n.isActive && n.online).length;
     const standby = list.filter(n => n.online && !n.isActive).length;
     const offline = list.filter(n => !n.online && n.status !== 'never').length;
     const unknown = list.filter(n => n.status === 'never').length;
+    const stale = list.filter(n => n.status === 'stale').length;
     return {
         total: list.length,
         online,
@@ -225,6 +270,7 @@ function summarizeFleet(nodes) {
         standby,
         offline,
         unknown,
+        stale,
         // Redundancy is intact only when every node is online AND at least one
         // node is serving Discord.
         redundancyIntact: online === list.length && active >= 1,
@@ -278,12 +324,19 @@ function evaluateState(pulses, lease) {
 
     // ── gateway (from the active node's pulse) ───────────────────────────
     const activePulse = pulsesArr.find(p => isNodeActive(p)) || null;
+    const activeIsStale = !!activePulse && nodes[activePulse.role] && nodes[activePulse.role].status === 'stale';
     let gateway;
     if (!activePulse) {
-        const anyFreshStandby = NODE_ROLES.some(r => nodes[r].online);
-        gateway = anyFreshStandby
+        // No node holds the failover lease. If any node is still online this is
+        // a missing active node (degraded), not a confirmed gateway outage.
+        const anyNodeOnline = NODE_ROLES.some(r => nodes[r].online);
+        gateway = anyNodeOnline
             ? { status: 'unavailable', detail: { reason: 'no_active_node' } }
             : { status: 'never', detail: { reason: 'no_active_node' } };
+    } else if (activeIsStale) {
+        // The active node's heartbeat is late — its last gateway reading is
+        // outdated, so report STALE rather than asserting a gateway outage.
+        gateway = { status: 'stale', detail: { reason: 'active_node_pulse_stale' } };
     } else if (activePulse.gatewayReady) {
         gateway = { status: 'operational', detail: { shardsReady: activePulse.shardsReady } };
     } else if (activePulse.gatewayConnected) {
@@ -298,9 +351,11 @@ function evaluateState(pulses, lease) {
     // The bot is available when the ACTIVE node's own CLASSIFICATION is
     // operational — i.e. it is online AND serving a ready gateway. Using the
     // classification (not the raw pulse) means a stale active node counts as
-    // down even though its last pulse claimed a ready gateway. Standbys alone
-    // (no active node) cannot serve, so the bot is degraded — but the nodes
-    // themselves stay ONLINE/HEALTHY.
+    // outdated rather than down. Standbys alone (no active node) cannot serve,
+    // so the bot is degraded — but the nodes themselves stay ONLINE/HEALTHY.
+    //
+    // Crucially the bot is NEVER declared unavailable from stale/unknown data:
+    // only a CONFIRMED active-node outage (or every node down) is an outage.
     const activeNodeState = activePulse ? nodes[activePulse.role] : null;
     let bot;
     if (fleet.online === 0 && fleet.unknown === fleet.total) {
@@ -311,6 +366,9 @@ function evaluateState(pulses, lease) {
         bot = { status: 'degraded', detail: { reason: 'no_active_node' } };
     } else if (activeNodeState.status === 'operational') {
         bot = { status: 'operational', detail: {} };
+    } else if (activeNodeState.status === 'stale') {
+        // Outdated monitoring data for the active node — NOT a confirmed outage.
+        bot = { status: 'stale', detail: { reason: 'active_node_pulse_stale' } };
     } else if (activeNodeState.status === 'unavailable') {
         // The node holding the lease is down: a real service outage.
         bot = { status: 'unavailable', detail: { reason: 'active_node_down' } };
@@ -396,7 +454,16 @@ async function apply(components, monitor = monitorDb, snapshot = null) {
 
     for (const [key, val] of Object.entries(components)) {
         const status = val.status;
-        if (status === 'never') continue; // never fabricate data for unknown state
+        // Never fabricate data for a component that has not reported at all.
+        if (status === 'never') continue;
+        // STALE means "the monitoring data is outdated and needs verification",
+        // not a confirmed failure. Record the observation (so the timeline shows
+        // it) but never open or resolve an incident from it: a single late
+        // heartbeat must not page anyone or show as an OUTAGE.
+        if (status === 'stale') {
+            await monitor.insertObservation(key, status, val.detail || null);
+            continue;
+        }
         await monitor.insertObservation(key, status, val.detail || null);
 
         const open = openByComponent.get(key);
@@ -569,7 +636,7 @@ function stopWorker() {
 
 module.exports = {
     startWorker, stopWorker, evaluate, evaluateState, apply, applyRestartDetection,
-    pulseStaleMs, detectRestart, incidentTitle, incidentDescription,
+    pulseStaleMs, pulseOutageMs, detectRestart, incidentTitle, incidentDescription,
     classifyNode, summarizeFleet, normalizeLease, WORKER_ID,
-    RECOVERY_CONFIRMATIONS,
+    RECOVERY_CONFIRMATIONS, STALE_FACTOR, OUTAGE_FACTOR,
 };

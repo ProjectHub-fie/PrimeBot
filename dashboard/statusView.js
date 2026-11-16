@@ -29,8 +29,11 @@ function cached(key, fn) {
     });
 }
 
-// Visual states for a component's CURRENT status.
-const STATUS_RANK = { operational: 0, degraded: 1, unavailable: 2 };
+// Visual states for a component's CURRENT status. `stale` is deliberately
+// ranked with `operational` (rank 0): outdated monitoring data is NOT a
+// confirmed failure and must never push the overall banner into an outage.
+// It is tracked separately so the banner can say "status needs verification".
+const STATUS_RANK = { operational: 0, stale: 0, degraded: 1, unavailable: 2 };
 
 // Components whose status is derived from the node fleet (not an observation).
 const NODE_DERIVED = new Set(['bot', 'gateway', 'sn1', 'sn2', 'sn3']);
@@ -71,29 +74,54 @@ async function computeFleetState() {
     return { state, pulseByRole };
 }
 
+// Service-level components. A node failure (shard node 1/2/3) is deliberately
+// NOT part of this set: a standby node going down reduces redundancy but does
+// not make the PrimeBot SERVICE unavailable. The `bot` component already
+// encodes "the active node is down" as an outage, so a genuine active-node
+// failure still surfaces here — while a standby failure cannot.
+const SERVICE_COMPONENTS = ['bot', 'website', 'api', 'db', 'gateway'];
+
 function summarize(components, incidents) {
-    // Overall: derived from the monitored components' actual statuses, never
-    // from "no incidents recorded".
     const openIncidents = incidents.length;
-    const ranks = Object.values(components)
-        .map(c => STATUS_RANK[c.status])
-        .filter(r => r !== undefined);
-    const unknown = Object.values(components).some(c => c.status === 'unknown' || c.status === 'never');
+    const service = SERVICE_COMPONENTS
+        .map(k => components[k])
+        .filter(Boolean);
+
+    // A component is "unknown" when it has no data at all (never reported).
+    const unknown = service.filter(c => c.status === 'unknown' || c.status === 'never').length;
+    const known = service.filter(c => c.status !== 'unknown' && c.status !== 'never');
+
+    const unavailable = known.filter(c => c.status === 'unavailable').length;
+    const degraded = known.filter(c => c.status === 'degraded').length;
+
+    // Node fleet: an offline node (never a stale one) reduces redundancy.
+    const nodes = ['sn1', 'sn2', 'sn3'].map(k => components[k]).filter(Boolean);
+    const nodeOffline = nodes.filter(n => n.status === 'unavailable').length;
+    const nodeStale = nodes.filter(n => n.status === 'stale').length;
+
     let overall;
-    if (unknown && ranks.length === 0) {
+    if (known.length === 0) {
+        // Nothing usable was measured — insufficient monitoring information.
+        // Never reported as an outage.
         overall = { key: 'no_data', label: 'Monitoring Data Unavailable' };
-    } else if (ranks.some(r => r === 2)) {
-        overall = (ranks.filter(r => r === 2).length >= 2)
-            ? { key: 'critical', label: 'Critical System Outage' }
-            : { key: 'major', label: 'Major Service Outage' };
-    } else if (ranks.some(r => r === 1)) {
+    } else if (unavailable >= 2) {
+        overall = { key: 'critical', label: 'Critical System Outage' };
+    } else if (unavailable === 1) {
+        overall = { key: 'major', label: 'Major Service Outage' };
+    } else if (degraded >= 1) {
         overall = { key: 'degraded', label: 'Partial System Degradation' };
-    } else if (ranks.length > 0) {
+    } else if (nodeOffline >= 1) {
+        // The service is serving but redundancy is reduced — a genuine partial
+        // failure, NOT an outage.
+        overall = { key: 'degraded', label: 'Redundancy Reduced' };
+    } else if (unknown > 0 || nodeStale > 0) {
+        // Some monitoring data is missing/outdated — the service is presumed
+        // operational but the status needs verification. Never an outage.
         overall = { key: 'operational', label: 'All Systems Operational' };
     } else {
-        overall = { key: 'no_data', label: 'Monitoring Data Unavailable' };
+        overall = { key: 'operational', label: 'All Systems Operational' };
     }
-    return { overall, openIncidents, unknown };
+    return { overall, openIncidents, unknown: unknown > 0 };
 }
 
 /**
@@ -244,4 +272,4 @@ async function getComponentDetail(component, { days = 30, heartbeatLimit = 200 }
     };
 }
 
-module.exports = { getStatusSummary, getComponentDetail, computeUptime30, latestObservation, computeFleetState };
+module.exports = { getStatusSummary, getComponentDetail, computeUptime30, latestObservation, computeFleetState, summarize };

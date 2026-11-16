@@ -552,6 +552,17 @@ function youtubePage({ guild, user }) {
     return render({ title, body, active: 'servers', scripts, user });
 }
 
+// ── Radio (24/7 SoundCloud radio) ───────────────────────────────────────────
+// Dashboard-only configuration surface: the bot's RadioManager owns the live
+// voice session; this page reads the persisted session + station catalog and
+// lets admins toggle the persistent session / pick a channel / manage stations.
+// Heavy markup lives in render/radio-page.js.
+
+function radioPage({ guild, user }) {
+    const { body, scripts, title } = require('./radio-page').radioPageHTML({ guild, user });
+    return render({ title, body, active: 'servers', scripts, user });
+}
+
 // ── Logging ─────────────────────────────────────────────────────────────────
 
 function loggingPanelHTML(logging, channels) {
@@ -1833,6 +1844,7 @@ module.exports = {
     welcomePage, levelingPage, badgesPage, prefixPage, roleRewardsPage, autoResponderPage, reactionsPage, broadcastPage,
     birthdaysPage, embedPage, loggingPage, reactionRolesPage, ticketsPage, ticketEditPage, automodPage, antiNukePage, eventsPage,
     youtubePage,
+    radioPage,
     eventWizardPage, eventManagePage,
     livePollsPage, liveGiveawaysPage,
     ticketEmbedBuilderHTML,

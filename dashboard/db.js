@@ -520,6 +520,132 @@ async function getYoutubeStats(guildId) {
     };
 }
 
+// ── Radio (RADIO_DATABASE_URL pool) ─────────────────────────────────────────
+//
+// The bot's RadioManager owns the live voice session; the dashboard reads the
+// persisted session + station catalog for the Radio tab, and can enable/disable
+// a session and edit stations. Everything routes through the shared radioPool so
+// the dashboard and every shard node agree on state.
+let radioPool = null;
+function getRadioPool() {
+    if (radioPool) return radioPool;
+    try {
+        radioPool = require('../server/radioDb').radioPool;
+    } catch (err) {
+        console.error('[DASHBOARD DB] radioDb unavailable:', err.message);
+        radioPool = { query: async () => { throw new Error('Radio database not configured'); } };
+    }
+    return radioPool;
+}
+
+async function ensureRadioTables() {
+    return once('radioTables', async () => {
+        const { ensureRadioTables: ensure } = require('../server/radioDb');
+        await ensure();
+    });
+}
+
+function mapRadioSessionRow(r) {
+    return {
+        guildId: r.guild_id,
+        channelId: r.channel_id,
+        stationId: r.station_id || null,
+        enabled: r.enabled === true,
+        manualPause: r.manual_pause === true,
+        currentTrack: r.current_track || null,
+        positionIndex: Number(r.position_index) || 0,
+        queueLength: Array.isArray(r.queue) ? r.queue.length : 0,
+        state: r.state || 'stopped',
+        volume: r.volume != null ? Number(r.volume) : 100,
+        ownerNode: r.owner_node || null,
+        updatedAt: r.updated_at || null,
+    };
+}
+
+function mapRadioStationRow(r) {
+    return {
+        id: r.id,
+        guildId: r.guild_id || null,
+        name: r.name,
+        description: r.description || '',
+        source: r.source,
+        reference: r.reference,
+        genre: r.genre || null,
+        enabled: r.enabled !== false,
+        createdAt: r.created_at || null,
+        updatedAt: r.updated_at || null,
+    };
+}
+
+async function getRadioSession(guildId) {
+    await ensureRadioTables();
+    const res = await getRadioPool().query('SELECT * FROM radio_sessions WHERE guild_id = $1', [String(guildId)]);
+    return res.rows[0] ? mapRadioSessionRow(res.rows[0]) : null;
+}
+
+async function getRadioStations(guildId) {
+    await ensureRadioTables();
+    const res = await getRadioPool().query(
+        'SELECT * FROM radio_stations WHERE guild_id IS NULL OR guild_id = $1 ORDER BY name ASC',
+        [String(guildId)]
+    );
+    return res.rows.map(mapRadioStationRow);
+}
+
+async function upsertRadioStation(guildId, station) {
+    await ensureRadioTables();
+    await getRadioPool().query(
+        `INSERT INTO radio_stations (id, guild_id, name, description, source, reference, genre, enabled, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8, NOW())
+         ON CONFLICT (id) DO UPDATE SET
+           guild_id = EXCLUDED.guild_id, name = EXCLUDED.name, description = EXCLUDED.description,
+           source = EXCLUDED.source, reference = EXCLUDED.reference, genre = EXCLUDED.genre,
+           enabled = EXCLUDED.enabled, updated_at = NOW()`,
+        [station.id, guildId, station.name, station.description || '', station.source, station.reference, station.genre || null, station.enabled !== false]
+    );
+    return { ...station, guildId };
+}
+
+async function deleteRadioStation(guildId, id) {
+    await ensureRadioTables();
+    // Only guild-scoped stations can be deleted (never a global built-in).
+    const res = await getRadioPool().query(
+        'DELETE FROM radio_stations WHERE id = $1 AND guild_id = $2 RETURNING id',
+        [String(id), String(guildId)]
+    );
+    return res.rowCount > 0;
+}
+
+async function setRadioEnabled(guildId, enabled) {
+    await ensureRadioTables();
+    const res = await getRadioPool().query(
+        `UPDATE radio_sessions SET enabled = $2, state = $3, updated_at = NOW()
+         WHERE guild_id = $1 RETURNING *`,
+        [String(guildId), enabled === true, enabled === true ? 'connecting' : 'stopped']
+    );
+    return res.rows[0] ? mapRadioSessionRow(res.rows[0]) : null;
+}
+
+// Create-or-update the persisted session (channel / enabled / station). The bot
+// picks this up through its reload task and starts/stops/reconfigures the voice
+// connection; the dashboard never touches the voice layer itself.
+async function upsertRadioSession(guildId, { channelId, enabled, stationId }) {
+    await ensureRadioTables();
+    const res = await getRadioPool().query(
+        `INSERT INTO radio_sessions (guild_id, channel_id, station_id, enabled, state, updated_at)
+         VALUES ($1, $2, $3, $4, $5, NOW())
+         ON CONFLICT (guild_id) DO UPDATE SET
+           channel_id = EXCLUDED.channel_id,
+           station_id = EXCLUDED.station_id,
+           enabled = EXCLUDED.enabled,
+           state = CASE WHEN EXCLUDED.enabled = false THEN 'stopped' ELSE radio_sessions.state END,
+           updated_at = NOW()
+         RETURNING *`,
+        [String(guildId), channelId, stationId || null, enabled === true, enabled === true ? 'connecting' : 'stopped']
+    );
+    return res.rows[0] ? mapRadioSessionRow(res.rows[0]) : null;
+}
+
 // ── Badges (leveling achievement badges, in the LEVELING_DATABASE_URL pool) ─
 //
 // The bot's LevelingManager awards level/achievement/special badges into the
@@ -2335,6 +2461,14 @@ const GUILD_CONFIG_SLICES = {
         console.error('[DASHBOARD DB] youtube stats read failed:', err.message);
         return defaultYoutubeStats();
     }),
+    radioSession: (guildId) => getRadioSession(guildId).catch(err => {
+        console.error('[DASHBOARD DB] radio_sessions read failed:', err.message);
+        return null;
+    }),
+    radioStations: (guildId) => getRadioStations(guildId).catch(err => {
+        console.error('[DASHBOARD DB] radio_stations read failed:', err.message);
+        return [];
+    }),
 };
 
 async function getGuildConfig(guildId, { only = null } = {}) {
@@ -2378,6 +2512,8 @@ async function getGuildConfig(guildId, { only = null } = {}) {
         youtubeSubscriptions: slice.get('youtubeSubscriptions') || [],
         youtubeAnnouncements: slice.get('youtubeAnnouncements') || [],
         youtubeStats: slice.get('youtubeStats') || defaultYoutubeStats(),
+        radioSession: slice.has('radioSession') ? slice.get('radioSession') : null,
+        radioStations: slice.get('radioStations') || [],
     };
 }
 
@@ -4532,4 +4668,10 @@ module.exports = {
     getYoutubeGroups,
     getYoutubeAnnouncements,
     getYoutubeStats,
+    getRadioSession,
+    getRadioStations,
+    upsertRadioStation,
+    deleteRadioStation,
+    setRadioEnabled,
+    upsertRadioSession,
 };

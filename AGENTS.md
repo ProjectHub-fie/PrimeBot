@@ -1189,3 +1189,114 @@ recurred.
   both root causes), `tests/statusMonitor.test.js`.
 - Env: `MONITOR_DATABASE_URL` (optional; else SEASON → FALLBACK → DATABASE_URL),
   `MONITOR_PULSE_INTERVAL_MS`, `STATUS_RECOVERY_CONFIRMATIONS`.
+
+## 24/7 Radio (SoundCloud, via soundcloud-core) — dashboard + /radio
+
+A continuous 24/7 SoundCloud radio. The bot stays CONNECTED to a configured
+voice channel but only plays while at least one human listener is in it: the
+channel emptying PAUSES the player (never stops, never disconnects), a listener
+joining RESUMES it, and an administrator's manual pause is tracked separately so
+a join never overrides it. Configured from the dashboard's **📻 Radio** tab or
+the `/radio` + `$radio` commands.
+
+- **Package:** `soundcloud-core` (^2.0.0, added to `package.json`). The adapter
+  `utils/soundcloudSource.js` is the ONLY place that touches it. **Verified
+  API (do not invent methods):** `new SoundCloudClient({ userAgent?, clientId? })`
+  → `.search({ query, limit })`, `.getMetaData({ url })`, `.getPlaylist({ url, limit })`,
+  `.getProfile({ username })`, `.getClientId({})`. **`getPlaylist` resolves to a
+  SINGLE playlist OBJECT at runtime** (the `.d.ts` wrongly says `Playlist[]`) — read
+  `raw.tracks`, not the return value as an array. `.getMetaData().streamUrl` is a
+  SHORT-LIVED signed URL (usually an HLS `.m3u8` with `expires=`/`Signature=`), so
+  it is NEVER persisted and `resolveStreamUrl()` re-resolves on every play (an
+  expired URL is always replaced). ffmpeg reads the URL directly, so HLS is fine.
+  No raw-byte/stream API and no genre primitive exist — genre stations are built
+  by searching and collecting tracks.
+- **Manager:** `utils/radioManager.js` (`RadioManager`) — the state machine
+  (`stopped / connecting / playing / paused_empty / paused_manual / idle`).
+  `handleVoiceStateUpdate` only reacts to the CONFIGURED channel, pauses on empty
+  (`_pausePlayer` keeps the player + connection), resumes on join unless
+  `manualPause`. Track end advances the queue with duplicate-end guarding
+  (`trackEndHandled`), bounded retries (`RADIO_MAX_TRACK_RETRIES`, default 2) skip
+  an unplayable track safely (never an infinite loop), and an empty queue reloads
+  the station so playback continues. Voice layer (`utils/radioVoice.js`) is
+  injected (`deps.voice`) so the whole machine is unit-testable with a mock.
+- **Stations:** `utils/radioStations.js` — a station is a SoundCloud playlist URL,
+  a single track URL, or a genre search (no fake/hardcoded tracks; built-ins are
+  real SoundCloud sources). `shared/radioConstants.js` holds the source catalog +
+  `normalizeStation()` (the security boundary: URL sources must be
+  `soundcloud.com`, genre sources must be a search term, ids slugged, lengths capped).
+- **Persistence:** `radio_sessions` (guild/channel/station/enabled/manualPause/
+  current track metadata/position/queue/state/volume/owner_node) + `radio_stations`
+  in the dedicated `RADIO_DATABASE_URL` pool (`server/radioDb.js`; falls back to
+  `FALLBACK_DATABASE_URL` then `DATABASE_URL`). **Stream URLs are never persisted.**
+  Migration `migrations/0032_add_radio.sql` + `shared/schema.js` mirror the shape;
+  `ensureRadioTables()` self-creates + additively ALTERs the `volume` column.
+- **Dashboard-driven reload:** the bot re-reads `radio_sessions` on the shared
+  `cacheScheduler` (`RadioManager._refreshFromDatabase`) so a dashboard
+  enable/disable/channel/station change takes effect without a restart — an
+  enabled row it does not hold is claimed + connected, a disabled row is torn
+  down + disconnected, a channel change reconnects. `deps.autoReload: false`
+  disables it in unit tests.
+- **Sharding:** only the node that has the guild cached (`ownsGuild`) drives its
+  session; `owner_node` is written on claim and a node never takes over another
+  live node's session, so two nodes cannot stream the same guild. All nodes share
+  `RADIO_DATABASE_URL`.
+- **Commands:** `/radio` (`commands/radio.js`): `start / stop / pause / resume /
+  skip / station / stations / status / volume / channel`. `stop` + `channel` require
+  Manage Guild; the rest require Move Members/Manage Channels. Prefix `$radio`
+  lives in `events/messageCreate.js`; the Sash/`$help` catalog entry is in
+  `utils/prefixHelp.js` (`radio` category).
+- **Dashboard:** `/guild/:id/radio` (`dashboard/render/radio-page.js` +
+  `dashboard/public/js/radio.js`, IIFE-wrapped) — Overview / Stations / Session
+  sections; the page reads `getGuildConfig({ only: ['radioSession','radioStations'] })`.
+  API (all `requireAuth + requireGuildAdmin`): `GET /api/guilds/:guildId/radio`,
+  `PATCH /api/guilds/:guildId/radio` (enable/channel/station; the channel must
+  belong to the guild AND be voice/stage), `POST/DELETE .../radio/station[/:id]`.
+- **Env vars:** `RADIO_DATABASE_URL` (optional), `RADIO_RESOLVE_CONCURRENCY`
+  (default 3), `RADIO_MAX_TRACK_RETRIES` (2), `RADIO_RECONNECT_DELAY_MS` (5000),
+  `RADIO_MAX_QUEUE` (500), `SOUNDCLOUD_CLIENT_ID`, `SOUNDCLOUD_USER_AGENT`.
+- **Tests:** `tests/radio.test.js` (33) — the full numbered scenario list
+  (pause-on-empty + stay-connected, resume-on-join, manual pause survives a join,
+  duplicate track-end, bounded retries, expired-URL re-resolution, restart restore,
+  multi-guild, cross-node ownership) + the dashboard reload cases.
+
+## Monitoring false-OUTAGE + 30-day graph (the two production bugs)
+
+The Stats page is driven by `node process → pulse → monitorDb (Postgres) →
+statusWorker → statusView → /api/status* → public/js/status.js`. Two long-standing
+bugs were fixed at the SOURCE (never by relabelling the frontend).
+
+- **BUG 1 — standby nodes shown OFFLINE/DEGRADED / false OUTAGE.** Node health
+  was judged by the wrong lease (the monitoring-worker lease instead of the
+  shardnode FAILOVER lease) and required a ready gateway of every node — a standby
+  has no gateway (no shards), so it read as degraded/offline. Fixes:
+  `utils/nodeIdentity.js` gives every node a DISTINCT id (production had one
+  `node_name='local'` row all three nodes overwrote); `statusWorker.classifyNode()`
+  keeps every signal INDEPENDENT (process / role / heartbeat freshness / gateway /
+  shards) and only judges the ACTIVE node by the gateway;
+  `monitorDb.getFailoverLease()` reads the lease from the SEASON pool (where
+  `bot_failover_lock` actually lives), not the monitor pool.
+- **STALE is not OUTAGE.** `classifyNode` now has a middle band:
+  `pulseStaleMs = interval * STATUS_STALE_FACTOR (default 3)` and
+  `pulseOutageMs = interval * STATUS_OUTAGE_FACTOR (default 6)`. Between the two a
+  node is `stale` — ONLINE, not healthy, and NOT an outage (a single late
+  heartbeat, a brief DB blip or one slow query lands here). `summarizeFleet()`
+  counts stale nodes as online and reports a `stale` count; `evaluateState()` maps
+  a stale active node to `stale` for the gateway + bot (never `unavailable`); and
+  `apply()` records a `stale` observation but NEVER opens/resolves an incident
+  from it. `evaluateState()` only declares the bot `unavailable` for a CONFIRMED
+  active-node outage (or every node down).
+- **BUG 2 — the 30-day graph showed ONE bar.** `monitorDb.rollDaily()`'s INSERT
+  had a SQL precedence bug: `LEAST(next_ts, date_trunc('day', NOW())::timestamp +
+  interval '1 day' - ts)` parsed as `(a + b) - ts` (an interval) and Postgres
+  rejects `LEAST(timestamptz, interval)`. The `.catch()` swallowed it but the
+  UNCONDITIONAL `DELETE FROM monitor_observations WHERE ts < date_trunc('day',
+  NOW())` still ran, destroying every prior day's raw rows with NO aggregate
+  written. The clamp is now parenthesised (`LEAST(next_ts, date_trunc('day',
+  NOW()) + interval '1 day') - ts`) and the INSERT + DELETE run in ONE
+  transaction, so a failed aggregate ROLLBACKs and preserves the raw rows.
+  `getDailySeries()` always returns exactly N consecutive UTC positions; a missing
+  day stays NO DATA (grey), never fabricated to 100%.
+- **Tests:** `tests/monitoringFalseOutage.test.js` (the 11 required regression
+  scenarios) + `tests/monitoringPipeline.test.js` + `tests/statusMonitor.test.js`.
+  Env: `STATUS_STALE_FACTOR` (3), `STATUS_OUTAGE_FACTOR` (6).

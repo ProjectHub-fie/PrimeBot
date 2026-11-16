@@ -186,6 +186,27 @@ const CATALOG = {
         ],
     },
 
+    radio: {
+        icon: '📻',
+        label: 'Radio',
+        title: '📻 24/7 Radio',
+        color: config.colors.primary,
+        description: 'Continuous SoundCloud radio that pauses when the channel is empty and resumes when listeners return:',
+        selectDesc: '24/7 SoundCloud radio',
+        commands: [
+            { names: ['radio'], args: 'start [#channel]', desc: 'Start the radio in a voice channel (Admin)' },
+            { names: ['radio'], args: 'stop', desc: 'Stop the radio and disconnect (Admin)' },
+            { names: ['radio'], args: 'pause', desc: 'Pause playback (a listener joining will not resume it)' },
+            { names: ['radio'], args: 'resume', desc: 'Resume playback after a pause' },
+            { names: ['radio'], args: 'skip', desc: 'Skip the current track' },
+            { names: ['radio'], args: 'stations', desc: 'List available radio stations' },
+            { names: ['radio'], args: 'station <id>', desc: 'Select a station (Admin)' },
+            { names: ['radio'], args: 'status', desc: 'Show the current radio status' },
+            { names: ['radio'], args: 'volume <0-100>', desc: 'Set the radio volume' },
+            { names: ['radio'], args: 'channel #voice-channel', desc: 'Set the permanent radio voice channel (Admin)' },
+        ],
+    },
+
     welcome: {
         icon: '👋',
         label: 'Welcome',
@@ -201,7 +222,7 @@ const CATALOG = {
     },
 };
 
-const CATEGORY_ORDER = ['general', 'leveling', 'games', 'community', 'tickets', 'youtube', 'welcome', 'moderation', 'admin'];
+const CATEGORY_ORDER = ['general', 'leveling', 'games', 'community', 'radio', 'tickets', 'youtube', 'welcome', 'moderation', 'admin'];
 
 const BETA_TAG = '🧪';
 

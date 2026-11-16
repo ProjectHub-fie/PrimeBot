@@ -786,7 +786,7 @@ function sanitizeNode(node) {
         healthy: !!node.healthy,
         statusReason: node.statusReason,
         process: node.process ? { health: node.process.health, uptimeSeconds: node.process.uptimeSeconds } : null,
-        heartbeat: node.heartbeat ? { fresh: !!node.heartbeat.fresh, ageMs: node.heartbeat.ageMs, intervalMs: node.heartbeat.intervalMs } : null,
+        heartbeat: node.heartbeat ? { fresh: !!node.heartbeat.fresh, stale: !!node.heartbeat.stale, ageMs: node.heartbeat.ageMs, intervalMs: node.heartbeat.intervalMs } : null,
         gateway: node.gateway ? { connected: !!node.gateway.connected, ready: !!node.gateway.ready } : null,
         shards: node.shards ? { assigned: node.shards.assigned, ready: node.shards.ready, active: node.shards.active, status: node.shards.status } : null,
     };
@@ -1182,6 +1182,33 @@ async function assertGuildChannel(guildId, channelId) {
     return String(channelId);
 }
 
+// Voice-channel variants for the radio: the channel must belong to the guild
+// AND be an actual voice/stage channel.
+function isVoiceChannelType(type) {
+    return type === 2 || type === 13; // GuildVoice | GuildStageVoice
+}
+async function assertGuildVoiceChannel(guildId, channelId) {
+    if (!channelId) return null;
+    const channels = await discord.getGuildChannels(guildId).catch(() => []);
+    const found = channels.find(c => String(c.id) === String(channelId));
+    if (!found) {
+        const err = new Error('That channel does not belong to this server.');
+        err.status = 400;
+        throw err;
+    }
+    if (!isVoiceChannelType(found.type)) {
+        const err = new Error('The radio channel must be a voice channel.');
+        err.status = 400;
+        throw err;
+    }
+    return String(channelId);
+}
+async function firstGuildVoiceChannel(guildId) {
+    const channels = await discord.getGuildChannels(guildId).catch(() => []);
+    const found = channels.find(c => isVoiceChannelType(c.type));
+    return found ? String(found.id) : null;
+}
+
 app.get('/api/guilds/:guildId/youtube', requireAuth, requireGuildAdmin, async (req, res) => {
     try {
         const [subscriptions, announcements, stats, groups] = await Promise.all([
@@ -1337,6 +1364,91 @@ app.post('/api/guilds/:guildId/youtube/:id/test', requireAuth, requireGuildAdmin
         res.status(502).json({ error: 'Failed to send the test announcement. Check the bot has permission to post in that channel.' });
     }
 });
+
+// ── API: radio ──────────────────────────────────────────────────────────────
+// The bot's RadioManager owns the live voice session; the dashboard reads the
+// persisted session + station catalog, toggles the persistent session, and
+// manages stations. All writes require guild admin; every value is validated
+// (channel belongs to the guild, station normalized via shared/radioConstants).
+app.get('/api/guilds/:guildId/radio', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const [session, stations] = await Promise.all([
+            dashboardDb.getRadioSession(req.guild.id),
+            dashboardDb.getRadioStations(req.guild.id),
+        ]);
+        res.json({ session, stations });
+    } catch (err) {
+        console.error('[API] get radio error:', err.message);
+        res.status(500).json({ error: 'Failed to load the radio configuration.' });
+    }
+});
+
+app.post('/api/guilds/:guildId/radio/station', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const { normalizeStation } = require('../shared/radioConstants');
+        const normalized = normalizeStation({ ...(req.body || {}), guildId: req.guild.id });
+        if (!normalized.ok) return res.status(400).json({ error: normalized.error });
+        const station = await dashboardDb.upsertRadioStation(req.guild.id, normalized.station);
+        recordWebsiteLog(req, `Added radio station "${station.name}"`);
+        res.json({ ok: true, station });
+    } catch (err) {
+        console.error('[API] radio station upsert error:', err.message);
+        res.status(500).json({ error: 'Failed to save the station.' });
+    }
+});
+
+app.delete('/api/guilds/:guildId/radio/station/:id', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const ok = await dashboardDb.deleteRadioStation(req.guild.id, req.params.id);
+        if (!ok) return res.status(404).json({ error: 'Station not found (built-in stations cannot be deleted).' });
+        recordWebsiteLog(req, `Deleted radio station "${req.params.id}"`);
+        res.json({ ok: true });
+    } catch (err) {
+        console.error('[API] radio station delete error:', err.message);
+        res.status(500).json({ error: 'Failed to delete the station.' });
+    }
+});
+
+// Toggle the persistent radio session. Enabling requires a valid voice channel
+// that belongs to this guild (never a client-supplied channel from elsewhere).
+app.patch('/api/guilds/:guildId/radio', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const body = req.body || {};
+        const channelId = body.channelId !== undefined ? await assertGuildVoiceChannel(req.guild.id, body.channelId) : undefined;
+        const enabled = body.enabled !== undefined ? body.enabled === true : undefined;
+        const stationId = body.stationId !== undefined ? String(body.stationId || '') : undefined;
+
+        // Ensure a session row exists so enable/channel/station edits persist.
+        let session = await dashboardDb.getRadioSession(req.guild.id);
+        if (!session && (enabled !== undefined || channelId || stationId)) {
+            const ch = channelId || (await firstGuildVoiceChannel(req.guild.id));
+            if (!ch) return res.status(400).json({ error: 'Pick a voice channel for the radio first.' });
+            session = { channelId: ch, enabled: false };
+        }
+        if (session) {
+            const next = {
+                channelId: channelId || session.channelId,
+                enabled: enabled !== undefined ? enabled : session.enabled,
+                stationId: stationId !== undefined ? (stationId || null) : session.stationId,
+            };
+            if (next.enabled && !next.channelId) {
+                return res.status(400).json({ error: 'Set a voice channel before enabling the radio.' });
+            }
+            const saved = await dashboardDb.upsertRadioSession(req.guild.id, next);
+            recordWebsiteLog(req, `${next.enabled ? 'Enabled' : 'Updated'} the 24/7 radio`);
+            return res.json({ ok: true, session: saved });
+        }
+        res.status(404).json({ error: 'Radio is not configured for this server yet.' });
+    } catch (err) {
+        console.error('[API] radio patch error:', err.message);
+        res.status(err.status || 500).json({ error: err.message || 'Failed to update the radio.' });
+    }
+});
+
+// Live controls (start/pause/resume/skip/stop) are performed by the BOT, which
+// owns the voice connection. The dashboard can only toggle the persisted
+// session state, so it exposes enable/disable + station/channel — those reach
+// the bot through the shared radio_sessions table and its reload task.
 
 // ── API: birthdays ──────────────────────────────────────────────────────────
 // Reads/writes the birthdays + birthdays_guilds tables (BIRTHDAY_DATABASE_URL
@@ -3602,6 +3714,11 @@ app.get('/guild/:guildId/birthdays', requireAuth, guildPage({ config: ['birthday
 // YouTube Notifications (Creator Hub) — dashboard-only feature.
 app.get('/guild/:guildId/youtube', requireAuth, guildPage({ config: ['youtubeSubscriptions', 'youtubeAnnouncements', 'youtubeStats'], roles: 'all' }), (req, res) =>
     res.type('html').send(guildPages.youtubePage({ guild: req.guild, user: req.user })));
+// 24/7 Radio — dashboard-only configuration surface (stations + persistent
+// session). The bot owns the live voice session; the page reads the persisted
+// session + station catalog.
+app.get('/guild/:guildId/radio', requireAuth, guildPage({ config: ['radioSession', 'radioStations'] }), (req, res) =>
+    res.type('html').send(guildPages.radioPage({ guild: req.guild, user: req.user })));
 app.get('/guild/:guildId/embed', requireAuth, guildPage({ config: [], selectors: false }), (req, res) =>
     res.type('html').send(guildPages.embedPage({ guild: req.guild, user: req.user })));
 app.get('/guild/:guildId/logging', requireAuth, guildPage({ config: ['logging'] }), (req, res) =>
