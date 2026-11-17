@@ -1205,11 +1205,15 @@ module.exports = {
                             await m._ensureConnected(s);
                             if (s.state === 'playing' && s.current) {
                                 m.enqueue(s, [{ ...track, requesterId: interaction.user.id }], { requesterId: interaction.user.id });
-                                return interaction.editReply({ embeds: [musicUi.successEmbed('➕ Queued', `**${track.title}** added to the queue.`)], components: [] }).catch(() => {});
+                                const p = musicUi.nowPlayingPayload(m.describe(interaction.guildId));
+                                p.embeds = [musicUi.successEmbed('➕ Queued', `**${track.title}** added to the queue.`)];
+                                return interaction.editReply(p).catch(() => {});
                             }
                             s.queue.push({ ...track, _key: `${track.provider}:${track.id}`, requesterId: interaction.user.id });
                             await m._playNext(s);
-                            return interaction.editReply({ embeds: [musicUi.successEmbed('▶️ Playing', `**${track.title}**${track.artist ? ` — ${track.artist}` : ''}\nSource: ${musicUi.sourceLabel(track)}`)], components: [] }).catch(() => {});
+                            const p = musicUi.nowPlayingPayload(m.describe(interaction.guildId));
+                            p.embeds = [musicUi.successEmbed('▶️ Playing', `**${track.title}**${track.artist ? ` — ${track.artist}` : ''}\nSource: ${musicUi.sourceLabel(track)}`)];
+                            return interaction.editReply(p).catch(() => {});
                         } catch (err) {
                             return interaction.editReply({ embeds: [musicUi.errorEmbed(err.message)], components: [] }).catch(() => {});
                         }

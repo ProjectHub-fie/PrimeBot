@@ -107,7 +107,9 @@ module.exports = {
                     const res = await m.play(guildId, query, { channelId, textChannelId: interaction.channelId, requesterId: interaction.user.id, settings });
                     const t = res.track;
                     const desc = `${res.queued ? '➕ Queued' : '▶️ Playing'} **${t.title}**${t.artist ? ` — ${t.artist}` : ''}\nSource: ${ui.sourceLabel(t)}`;
-                    return interaction.editReply({ embeds: [ui.successEmbed('🎵 Music', desc)] });
+                    const payload = ui.nowPlayingPayload(m.describe(guildId));
+                    payload.embeds = [ui.successEmbed('🎵 Music', desc)];
+                    return interaction.editReply(payload);
                 }
                 case 'search': {
                     const query = interaction.options.getString('query');

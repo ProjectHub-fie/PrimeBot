@@ -1670,7 +1670,8 @@ filterArgs })` (pure + exported), `transcodeStream`, and `getPlaybackPosition(pl
   queue views pass 100 so pagination works).
 
 ### Premium UI (`utils/music/musicEmbed.js` — rewritten)
-Artwork-first **Now Playing** (thumbnail + `[title](url)` + progress bar + Duration /
+Artwork-first **Now Playing** (artwork in the large `setImage` field + `[title](url)`
++ progress bar + Duration /
 Requester / Source / Volume / Repeat / Autoplay / Filter / Queue / State fields),
 `controlRow` + `secondControlRow` (≤5 buttons each; repeat/autoplay/queue/lyrics/24-7),
 a **paginated queue** (10/page, absolute numbers, total duration, prev/close/next),
@@ -1779,3 +1780,39 @@ Fixed in PR #128.
   resolved by a Lavalink node with a current YouTube source plugin, or by updating
   `@distube/ytdl-core`.
 - **Tests:** `tests/radioVoiceJoin.test.js` (3) + `tests/musicVoiceFixes.test.js` (5).
+
+## Music control buttons — attach to every playback reply
+
+The music control rows (`controlRow` + `secondControlRow` in
+`utils/music/musicEmbed.js` — `music_prev/pauseresume/skip/stop/shuffle` and
+`music_repeat/autoplay/queue/lyrics/247status`) were fully built and routed in
+`events/interactionCreate.js`, but the **play** handlers replied with a bare
+success embed and **no components** — the controls were only ever attached to
+`nowplaying` / `help` / the button-refresh path. Symptom: "no control buttons are
+showing" right after `$play`.
+
+- **Fix:** `utils/music/musicEmbed.js` exports **`nowPlayingPayload(snapshot)`** —
+  the Now Playing embed plus BOTH control rows. Use it for every reply that
+  announces playback: prefix `$play` (`events/messageCreate.js`), slash
+  `/music play` (`commands/music.js`), and the search-select handler
+  (`events/interactionCreate.js`, which previously sent `components: []`).
+- **Gotcha:** `nowPlaying()` returns only the FIRST row in `components`, so
+  `components: [components[0]]` silently drops repeat/autoplay/queue/lyrics/24-7.
+  Prefer `nowPlayingPayload()` — it cannot drop a row.
+- **Tests:** `tests/musicVoiceFixes.test.js` asserts `nowPlayingPayload()` exposes
+  all 10 control customIds and drives the REAL `$play` handler to confirm the reply
+  carries both action rows (verified failing without the fix).
+
+## Music artwork: shown in the large image field, not the corner thumbnail
+
+The Now Playing (`nowPlaying()`/`nowPlayingPayload()`) and track-info
+(`trackInfoEmbed()`) embeds render the track artwork with **`embed.setImage(...)`**
+(the large bottom image) rather than `setThumbnail(...)` (the small top-right
+corner). Both are driven by the track's `artworkUrl`, which every provider
+populates (`youtube.js` reads `v.thumbnail.url || v.thumbnail`, `soundcloud.js`
+`raw.artworkUrl`, `spotify.js` `oembed.thumbnail_url`, `lavalinkProviders.js`
+`kt.thumbnail`). A track with no `artworkUrl` simply renders no image — never a
+broken one. **Radio** (`utils/radioEmbed.js` `statusEmbed`) still uses
+`setThumbnail` and was intentionally left unchanged. Tests:
+`tests/musicPremium.test.js` asserts `json.image.url` is set and `json.thumbnail`
+is absent for both embeds.
