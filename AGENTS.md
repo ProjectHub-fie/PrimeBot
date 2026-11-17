@@ -1811,8 +1811,32 @@ The Now Playing (`nowPlaying()`/`nowPlayingPayload()`) and track-info
 corner). Both are driven by the track's `artworkUrl`, which every provider
 populates (`youtube.js` reads `v.thumbnail.url || v.thumbnail`, `soundcloud.js`
 `raw.artworkUrl`, `spotify.js` `oembed.thumbnail_url`, `lavalinkProviders.js`
-`kt.thumbnail`). A track with no `artworkUrl` simply renders no image — never a
-broken one. **Radio** (`utils/radioEmbed.js` `statusEmbed`) still uses
+`kt.thumbnail`). **Radio** (`utils/radioEmbed.js` `statusEmbed`) still uses
 `setThumbnail` and was intentionally left unchanged. Tests:
-`tests/musicPremium.test.js` asserts `json.image.url` is set and `json.thumbnail`
-is absent for both embeds.
+`tests/musicPremium.test.js` + `tests/musicVoiceFixes.test.js` assert
+`json.image.url` is set and `json.thumbnail` is absent for both embeds.
+
+### `applyArtwork()` — never let a bad artwork value break an embed (or a button)
+
+`EmbedBuilder.setImage()`/`setThumbnail()` **validate their argument and THROW**
+on anything that is not a valid URL (a bare identifier, a relative path, an
+empty string). `musicEmbed.js` therefore applies artwork through a guarded
+**`applyArtwork(embed, url)`** (`isImageUrl()` = `^https?://\S+$`), which
+silently skips a non-URL value so the embed simply carries no image. This is not
+cosmetic: every control button calls `refreshNowPlaying()` → `nowPlaying()`, so a
+single bad `artworkUrl` used to make **every** music button reply "This
+interaction failed" (the throw was swallowed by `safeExecute` and the
+interaction was never acknowledged). Never call `setImage`/`setThumbnail`
+directly on a provider-supplied URL — always go through `applyArtwork()`.
+
+### Play announcements must not replace the embed
+
+The play replies (`$play` in `events/messageCreate.js`, `/music play` in
+`commands/music.js`, and the `music_search:` select in
+`events/interactionCreate.js`) build the Now Playing payload and then override
+**only the headline** via `nowPlayingPayload(snapshot, { title })`. They used to
+do `payload.embeds = [successEmbed(...)]`, which discarded the Now Playing embed —
+including its artwork — so the image field was always empty. `nowPlayingPayload`
+also accepts `{ track }` to render a *different* track as the embed subject (used
+for the "➕ Queued" announcement, where the queued track is not the one playing)
+while the control rows still reflect the live session.

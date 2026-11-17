@@ -11,6 +11,20 @@
  *      the binary was never downloaded, so the old try/catch fell through to a
  *      non-existent path and every play failed. This file pins the existence
  *      check + system-ffmpeg fallback.
+ *
+ * A follow-up round of bugs (after the control-button fix) is pinned at the
+ * bottom of this file:
+ *
+ *   4. "the music control buttons are not working" — every control button calls
+ *      `refreshNowPlaying()` -> `nowPlaying()`, which called
+ *      `embed.setImage(artworkUrl)`. discord.js validates that argument and
+ *      THROWS on a non-URL value (a bare id, an empty string, a relative path),
+ *      so a single bad artwork value made EVERY button fail ("This interaction
+ *      failed"). Artwork is now applied through a guarded `applyArtwork()`.
+ *   5. "no thumbnail is showing in the image field" — the play replies built the
+ *      Now Playing payload (artwork + controls) and then REPLACED `payload.embeds`
+ *      with a bare `successEmbed`, which has no image. They now override only the
+ *      headline so the artwork survives.
  */
 
 const { test } = require('node:test');
@@ -116,4 +130,71 @@ test('the real $play handler replies WITH the control buttons (regression: butto
     assert.ok(edited, 'the play reply was edited');
     assert.ok(Array.isArray(edited.components) && edited.components.length === 2,
         'the play reply carries both control rows (was a bare embed with no buttons)');
+});
+
+// ── 5. artwork in the large image field, and never able to break a button ────
+
+test('nowPlaying()/trackInfoEmbed() put the artwork in the IMAGE field', () => {
+    const ui = require(path.join(REPO, 'utils/music/musicEmbed'));
+    const track = { provider: 'youtube', id: '1', title: 'T', durationMs: 1000, artworkUrl: 'https://i.ytimg.com/vi/1/hqdefault.jpg' };
+    const np = ui.nowPlaying({ state: 'playing', current: track, queue: [], queueLength: 0, volume: 100, repeat: 'off' }).embed.toJSON();
+    assert.equal(np.image && np.image.url, track.artworkUrl, 'nowPlaying shows the artwork as the large image');
+    assert.ok(!np.thumbnail, 'nowPlaying no longer uses the corner thumbnail');
+    const ti = ui.trackInfoEmbed(track).toJSON();
+    assert.equal(ti.image && ti.image.url, track.artworkUrl, 'trackInfoEmbed shows the artwork as the large image');
+});
+
+test('a NON-URL artwork value never throws (regression: it broke every control button)', () => {
+    const ui = require(path.join(REPO, 'utils/music/musicEmbed'));
+    // These are the shapes a misbehaving provider can return. `setImage()` throws
+    // on each of them; `applyArtwork()` must swallow that.
+    for (const bad of ['', 'not-a-url', 'vid123', '/relative/path.jpg', null, undefined, 42]) {
+        const track = { provider: 'youtube', id: '1', title: 'T', durationMs: 1000, artworkUrl: bad };
+        assert.doesNotThrow(() => ui.nowPlaying({ state: 'playing', current: track, queue: [], queueLength: 0, volume: 100, repeat: 'off' }),
+            `nowPlaying must not throw for artworkUrl=${JSON.stringify(bad)}`);
+        assert.doesNotThrow(() => ui.trackInfoEmbed(track),
+            `trackInfoEmbed must not throw for artworkUrl=${JSON.stringify(bad)}`);
+        // And the embed simply carries no image rather than a broken one.
+        const json = ui.nowPlaying({ state: 'playing', current: track, queue: [], queueLength: 0, volume: 100, repeat: 'off' }).embed.toJSON();
+        assert.equal(json.image, undefined, `no image is set for artworkUrl=${JSON.stringify(bad)}`);
+    }
+});
+
+test('nowPlayingPayload keeps the artwork on a play announcement (regression: bare successEmbed dropped it)', async () => {
+    global.botActive = true;
+    const handler = require(path.join(REPO, 'events/messageCreate.js'));
+
+    const artwork = 'https://i.ytimg.com/vi/vid1/hqdefault.jpg';
+    const track = { title: 'Song', artist: 'A', provider: 'youtube', id: 'vid1', durationMs: 1000, artworkUrl: artwork };
+    const manager = new Proxy({}, {
+        get(_t, prop) {
+            if (prop === 'getSession') return () => ({ channelId: 'vc1', twentyFourSeven: false, queue: [], djRoleId: null });
+            if (prop === 'describe') return () => ({ state: 'playing', queue: [], queueLength: 0, current: track, connected: true, volume: 100, repeat: 'off', twentyFourSeven: false, listeners: 1 });
+            return () => Promise.resolve({ track, queued: false });
+        },
+    });
+    const client = {
+        user: { id: 'bot' }, musicManager: manager, radioManager: null,
+        countingManager: { isCountingChannel: () => false, processCountingMessage: async () => false },
+        levelingManager: { processMessage: async () => {} },
+        serverSettingsManager: { hasNoPrefixMode: () => false, getGuildPrefix: () => '$', getTriggeredReactions: () => [], getTriggeredResponses: () => [] },
+        commands: new Map(),
+    };
+
+    let edited = null;
+    const message = {
+        content: '$play some song',
+        author: { id: 'u1', tag: 'u#1', bot: false },
+        member: { id: 'u1', permissions: { has: () => true }, voice: { channelId: 'vc1', channel: { id: 'vc1', type: 2 } }, roles: { cache: new Map() } },
+        guild: { id: 'g1', name: 'G' },
+        channel: { id: 'ch1', type: 0, send: async () => ({}) },
+        mentions: { channels: { first: () => null }, users: { first: () => null } },
+        reply: async () => ({ edit: async (p) => { edited = p; return {}; } }),
+    };
+
+    await handler.execute(message, client);
+    assert.ok(edited, 'the play reply was edited');
+    const json = edited.embeds[0].toJSON();
+    assert.equal(json.image && json.image.url, artwork, 'the play reply shows the artwork in the image field');
+    assert.ok(Array.isArray(edited.components) && edited.components.length === 2, 'and still carries both control rows');
 });
