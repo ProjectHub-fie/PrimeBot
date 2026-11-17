@@ -257,7 +257,8 @@ test('the Now Playing embed shows artwork, progress, requester, filter and contr
     };
     const { embed, components } = ui.nowPlaying(snap);
     const json = embed.toJSON();
-    assert.ok(json.thumbnail && json.thumbnail.url === 'https://img/x.jpg', 'artwork thumbnail');
+    assert.ok(json.image && json.image.url === 'https://img/x.jpg', 'artwork is shown in the large image field');
+    assert.ok(!json.thumbnail, 'artwork is not duplicated as a corner thumbnail');
     assert.ok(json.description.includes('▬'), 'a progress bar is rendered');
     assert.ok(json.description.includes('1:00 / 3:20'), 'current / total time');
     const fieldNames = json.fields.map(f => f.name);
@@ -309,11 +310,12 @@ test('the filter picker exposes every preset (≤25 options) and the active one'
 });
 
 test('the track-info embed carries the detailed fields', () => {
-    const json = ui.trackInfoEmbed(makeTrack('x', 'youtube', { requesterId: 'u9' })).toJSON();
+    const json = ui.trackInfoEmbed(makeTrack('x', 'youtube', { requesterId: 'u9', artworkUrl: 'https://img/t.jpg' })).toJSON();
     const names = json.fields.map(f => f.name);
     for (const n of ['Artist', 'Duration', 'Source', 'Provider ID', 'Requester', 'URL']) {
         assert.ok(names.includes(n), `track info has "${n}"`);
     }
+    assert.ok(json.image && json.image.url === 'https://img/t.jpg', 'track info shows the artwork in the image field');
 });
 
 // ── 5. progress bar + lyrics helpers ────────────────────────────────────────

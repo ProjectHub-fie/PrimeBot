@@ -101,7 +101,7 @@ function nowPlaying(snapshot, { prefix = '/' } = {}) {
         )
         .setFooter({ text: `${s.twentyFourSeven ? '🕐 24/7' : '🎧 On demand'} • ${s.listeners != null ? s.listeners : 0} listener(s) • ${prefix}music help` })
         .setTimestamp();
-    if (t && t.artworkUrl) embed.setThumbnail(t.artworkUrl);
+    if (t && t.artworkUrl) embed.setImage(t.artworkUrl);
     return { embed, components: [controlRow(s)] };
 }
 
@@ -245,7 +245,7 @@ function trackInfoEmbed(track) {
             { name: 'URL', value: track.url ? String(track.url).slice(0, 200) : '—', inline: false },
         )
         .setTimestamp();
-    if (track.artworkUrl) embed.setThumbnail(track.artworkUrl);
+    if (track.artworkUrl) embed.setImage(track.artworkUrl);
     return embed;
 }
 
