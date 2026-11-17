@@ -1474,7 +1474,17 @@ app.get('/api/guilds/:guildId/music', requireAuth, requireGuildAdmin, async (req
             dashboardDb.getMusicPlaylists(req.guild.id),
             dashboardDb.getMusicHistory(req.guild.id, 25),
         ]);
-        res.json({ settings, playlists, history });
+        // Credential-free playback-engine info. The dashboard runs as a separate
+        // process and holds no live player, so node health/player counts are NOT
+        // available here — only the configured engine name (both deployments
+        // should set MUSIC_ENGINE identically). Live node health is logged by the
+        // bot and exposed on its own process (MusicManager#engineStatus()).
+        let engine = null;
+        try {
+            const { resolveEngineName } = require('../utils/music/engines');
+            engine = { name: resolveEngineName(), source: 'MUSIC_ENGINE' };
+        } catch (_) { /* engine info is optional */ }
+        res.json({ settings, playlists, history, engine });
     } catch (err) {
         console.error('[API] get music error:', err.message);
         res.status(500).json({ error: 'Failed to load the music configuration.' });

@@ -1388,6 +1388,84 @@ tab (radio lives inside music). `/guild/:guildId/radio` now 302-redirects to
   `redesignSmoke.test.js` guild-page loop.
 
 
+## Lavalink playback engine (MUSIC_ENGINE) — optional, direct stays default
+
+PrimeBot can play on-demand music through **either** its original in-process
+engine or a **Lavalink** node. The engine is chosen by `MUSIC_ENGINE` and
+`direct` is the default, so an unset/unknown value changes nothing.
+
+- **Resolver:** `utils/music/engines/index.js` — `resolveEngineName()` (env →
+  `direct` unless exactly `lavalink`) and `createEngine(client, deps)`. An
+  explicit `deps.voice`/`deps.providers` injection **forces `direct`**, so the
+  existing test doubles keep working. Selecting `lavalink` with no usable node
+  (or missing packages) logs the reason and **falls back to `direct`** — music
+  never breaks, and rollback is one env var.
+- **Engines:** `utils/music/engines/direct.js` (thin delegate wrapping the
+  original `musicVoice` + provider registry — behaviour unchanged) and
+  `utils/music/engines/lavalink.js` (same interface, audio decoded by the node).
+  `MusicManager` talks only to `this.engine`.
+- **Lavalink subsystem:** `utils/music/lavalink/manager.js` (Kazagumo + Shoukaku
+  lifecycle: one instance per client via a `WeakMap`, node/player listeners
+  registered once, health-based node selection, bounded backoff), `nodeConfig.js`
+  (env parsing + validation + **redaction**), `nodeHealth.js` (per-node state,
+  exponential backoff with jitter, cooldown, `selectNode()` picks a HEALTHY node
+  — never the first blindly), `lavalinkProviders.js` (Lavalink → PrimeBot track
+  shape; honest Spotify metadata fallback), `lavalinkFilters.js` (PrimeBot filter
+  ids → real Lavalink filter objects).
+- **Provider routing:** commands must resolve through `utils/music/resolve.js`
+  (`resolveQuery(client, …)` / `searchQuery` / `resolveCollection`) rather than
+  requiring `providers/registry` directly — the registry bypasses the node.
+  `MusicManager.providers` is a **lazy getter** (the Lavalink adapter only exists
+  after `start()`; a pre-start caller must not silently get the direct registry).
+- **Voice updates:** Shoukaku's `Connectors.DiscordJS` subscribes to the gateway
+  `raw` stream itself and forwards `VOICE_STATE_UPDATE` / `VOICE_SERVER_UPDATE`.
+  Do **not** add a second `raw` listener — it would forward every update twice.
+- **Node registration gotcha:** the connector adds nodes on `clientReady`. If the
+  manager starts when the client is **already ready** (reconnect/hot-reload/test),
+  that event has fired and no node is ever registered —
+  `LavalinkManager._ensureNodesAdded()` covers that case and is the only place
+  `shoukaku.addNode` is called (adding in both paths would open two WebSockets).
+- **Player/queue separation:** a node death does not clear the queue.
+  `MusicManager._recoverLavalinkSession()` re-creates the player on a healthy node
+  and re-plays the current track — **audio restarts, the queue does not**. The
+  encoded Lavalink track lives only in memory (`manager.rememberEncoded` caches
+  the resolved `KazagumoTrack` OBJECT, not a bare string: `KazagumoPlayer#play()`
+  rejects a non-instance) and is never persisted.
+- **Config:** `LAVALINK_NODES` (JSON array) or `LAVALINK_HOST`/`_PORT`/
+  `_PASSWORD`/`_SECURE`/`_NAME`. Passwords are never logged or returned —
+  `describeNodes()` exposes only `hasPassword`. See `docs/lavalink-setup.md`.
+- **Env vars:** `MUSIC_ENGINE` (`direct`|`lavalink`), `LAVALINK_NODES` /
+  `LAVALINK_HOST`…, `LAVALINK_SEARCH_ENGINE` (`ytsearch`), `LAVALINK_RECONNECT_TRIES`,
+  `LAVALINK_RECONNECT_INTERVAL_MS`, `LAVALINK_REST_TIMEOUT_MS`,
+  `LAVALINK_VOICE_TIMEOUT_S`, `LAVALINK_MAX_RECONNECT_ATTEMPTS`,
+  `LAVALINK_NODE_COOLDOWN_MS`, `LAVALINK_BACKOFF_BASE_MS`/`_MAX_MS`.
+- **Dependencies:** `shoukaku ^4.3.0`, `kazagumo ^3.4.3` (Lavalink clients) and
+  `@discordjs/voice ^0.19.2` + `@snazzah/davey` (the voice-reliability fix below).
+- **Tests:** `tests/lavalink.test.js` (51) — config parsing/redaction, node
+  health/selection/backoff, player lifecycle, queue preservation across node loss,
+  lazy provider resolution, the `playerEmpty` guard, node registration when the
+  client is already ready, and that node status never leaks a password.
+
+## Voice connection failure — `timed out after 20000ms (status stayed 'signalling')` (fixed)
+
+The direct engine's voice handshake stalled forever in `signalling`. **Root
+cause:** Discord's voice gateway performs **DAVE** (E2EE) negotiation; a client
+that does not advertise `max_dave_protocol_version` in its IDENTIFY payload never
+receives the session-description frame that advances the handshake past
+`signalling`. `@discordjs/voice@0.18.x` shipped **zero** occurrences of that field
+(verified: `npm pack @discordjs/voice@0.18.0` → `grep -c
+max_dave_protocol_version` = 0); `0.19.x` advertises it via `@snazzah/davey`.
+Bumping `@discordjs/voice` to `^0.19.2` and installing `@snazzah/davey` fixes the
+stall for the direct engine, and Lavalink's own node↔Discord voice connection is
+unaffected by the bot's voice library.
+
+- **Do not downgrade `@discordjs/voice` below 0.19.0** and do not remove
+  `@snazzah/davey` — the handshake stalls again.
+- **Tests:** `tests/voiceDaveSupport.test.js` pins the dependency, asserts the
+  installed dist actually contains `max_dave_protocol_version`, and asserts
+  `musicVoice` joins via `joinVoiceChannel` (never a hand-rolled OP4 join).
+
+
 ## Voice-state cache: the "bot cannot find me in a voice channel" bug (fixed)
 
 `index.js` configured `makeCache` with **`VoiceStateManager: { maxSize: 0 }`**.
