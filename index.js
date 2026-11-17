@@ -433,17 +433,12 @@ async function initializeManagers() {
     // On-demand Music. Owns one authoritative player per guild, the queue and
     // the admin-controlled 24/7 persistent voice connection. 24/7 sessions are
     // restored on ready. Separate from the radio feature.
-    //
-    // The playback engine is selected with MUSIC_ENGINE (default `direct`, the
-    // original ffmpeg pipeline). `MUSIC_ENGINE=lavalink` routes playback through
-    // a Lavalink node instead; an unconfigured/unknown value falls back to
-    // direct so music never breaks. See utils/music/engines/index.js.
     try {
         const { MusicManager } = require('./utils/music/musicManager');
         const musicStore = require('./utils/music/musicStore');
         client.musicManager = new MusicManager(client, { store: musicStore });
-        console.log(`[MANAGERS] MusicManager loaded (engine: ${client.musicManager.engineName}${client.musicManager.engineFallbackReason ? ` — ${client.musicManager.engineFallbackReason}` : ''}).`);
         client.musicManager.start().catch(err => console.error('[MUSIC] start failed:', err.message));
+        console.log('[MANAGERS] MusicManager loaded.');
     } catch (err) {
         console.error('[MANAGERS] Failed to load MusicManager:', err.message);
     }

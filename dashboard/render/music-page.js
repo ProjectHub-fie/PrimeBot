@@ -51,14 +51,6 @@ function roleOptions(roles, selected) {
 
 function overviewSection(settings, history) {
     const st = settings || {};
-    // Which playback engine this deployment uses (env-derived; the dashboard
-    // holds no live player). Labelled honestly so an operator can see at a
-    // glance whether Lavalink is active.
-    let engineLabel = 'Direct (local ffmpeg)';
-    try {
-        const { resolveEngineName } = require('../../utils/music/engines');
-        engineLabel = resolveEngineName() === 'lavalink' ? 'Lavalink' : 'Direct (local ffmpeg)';
-    } catch (_) { /* keep the default label */ }
     const last = history && history[0];
     const lastLine = last ? `${esc(last.title || 'Unknown')}${last.artist ? ` — ${esc(last.artist)}` : ''}` : '—';
     return `<section class="rd-section" data-section="overview">
@@ -81,7 +73,6 @@ function overviewSection(settings, history) {
           <span>Channel: <strong id="mu-channel-label">${st.twentyFourSevenChannelId ? `<#${st.twentyFourSevenChannelId}>` : '—'}</strong></span>
           <span>DJ role: <strong id="mu-dj-label">${st.djRoleId ? `<@&${st.djRoleId}>` : '—'}</strong></span>
           <span>Node: <strong id="mu-node-label">${esc(st.ownerNode || '—')}</strong></span>
-          <span>Engine: <strong id="mu-engine-label">${esc(engineLabel)}</strong></span>
         </div>
       </div>
       <p class="card-desc">PrimeBot plays on demand from YouTube, SoundCloud, Spotify (matched to a streamable source) and direct audio URLs. With 24/7 enabled it stays connected to the voice channel with an empty queue and nobody listening — playback state is independent of the connection, so pausing, stopping or an empty queue never disconnects. Requesters control their own tracks; DJ role holders and admins manage the whole queue.</p>

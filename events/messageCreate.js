@@ -749,14 +749,14 @@ module.exports = {
                                 if (!mArg) return message.reply({ embeds: [mUi.errorEmbed('Usage: `$music play <song or URL>`')] });
                                 if (!mChannelId) return message.reply({ embeds: [mUi.errorEmbed('Join a voice channel first, then run `$music play`.')] });
                                 const status = await message.reply({ embeds: [mUi.successEmbed('🔎 Searching…', `Looking up **${mArg}**`)] });
-                                const res = await mMgr.play(message.guild.id, mArg, { channelId: mChannelId, textChannelId: message.channel.id, requesterId: message.author.id, settings: await settings() });
+                                const res = await mMgr.play(message.guild.id, mArg, { channelId: mChannelId, requesterId: message.author.id, settings: await settings() });
                                 const t = res.track;
                                 return status.edit({ embeds: [mUi.successEmbed(res.queued ? '➕ Queued' : '▶️ Playing', `**${t.title}**${t.artist ? ` — ${t.artist}` : ''}\nSource: ${mUi.sourceLabel(t)}`)] });
                             }
                             case 'search': {
                                 if (!mArg) return message.reply({ embeds: [mUi.errorEmbed('Usage: `$music search <query>`')] });
-                                const { searchQuery } = require('../utils/music/resolve');
-                                const tracks = await searchQuery(client, mArg, 10);
+                                const { searchQuery } = require('../utils/music/providers/registry');
+                                const tracks = await searchQuery(mArg, 10);
                                 if (!tracks.length) return message.reply({ embeds: [mUi.errorEmbed(`No results for **${mArg}**.`)] });
                                 const token = `${message.id}`;
                                 client.musicSearchCache = client.musicSearchCache || new Map();
@@ -924,8 +924,8 @@ module.exports = {
                                     if (pl.ownerId && pl.ownerId !== message.author.id && !mPerms.isAdmin(message.member)) return message.reply({ embeds: [mUi.errorEmbed('You can only manage your own playlists.')] });
                                     const query = args.slice(3).join(' ').trim();
                                     if (!query) return message.reply({ embeds: [mUi.errorEmbed('Usage: `$music playlist add <id> <song or URL>`')] });
-                                    const { resolveQuery } = require('../utils/music/resolve');
-                                    const track = await resolveQuery(client, query, { searchLimit: 1 });
+                                    const { resolveQuery } = require('../utils/music/providers/registry');
+                                    const track = await resolveQuery(query, { searchLimit: 1 });
                                     await mStore.addPlaylistTrack(pl.id, track, { addedBy: message.author.id });
                                     return message.reply({ embeds: [mUi.successEmbed('➕ Added', `**${track.title}** added to “${pl.name}”.`)] });
                                 }

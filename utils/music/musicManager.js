@@ -75,24 +75,8 @@ function titleSimilarity(a, b) {
 class MusicManager {
     constructor(client, deps = {}) {
         this.client = client;
-        // The playback engine owns voice + audio transport. It defaults to the
-        // direct pipeline (unchanged behaviour) unless MUSIC_ENGINE=lavalink.
-        // Injecting `voice`/`providers` (as the tests do) always selects direct.
-        const { createEngine } = require('./engines');
-        const built = createEngine(client, {
-            engineName: deps.engineName,
-            voice: deps.voice,
-            providers: deps.providers,
-            filters: deps.filters,
-            managerOptions: deps.managerOptions,
-        });
-        this.engine = deps.engine || built.engine;
-        this.engineName = deps.engine ? (this.engine.name || built.name) : built.name;
-        this.engineFallbackReason = built.fallbackReason || null;
-        // Compatibility shims: the engine exposes the same surface the manager
-        // used to get from `musicVoice` / the provider registry.
-        this.voice = this.engine;
-        this._providers = deps.providers || null;
+        this.voice = deps.voice || require('./musicVoice');
+        this.providers = deps.providers || require('./providers/registry');
         this.store = deps.store || null; // { getSettings, saveSettings, addHistory }
         this._nodeId = deps.nodeId || this._resolveNodeId();
         this.sessions = new Map(); // guildId -> session
@@ -109,45 +93,11 @@ class MusicManager {
         return process.env.NODE_ID || process.env.NODE_NAME || 'local';
     }
 
-    /**
-     * The active provider adapter (resolveQuery / searchQuery / …).
-     *
-     * Resolved lazily on EVERY access: the Lavalink engine builds its adapter
-     * during start(), and a caller that reaches here before start() completes
-     * must still get the right adapter once it exists. The direct engine's
-     * adapter is stable, so this is a cheap property read for it.
-     */
-    get providers() {
-        if (this._providers) return this._providers;
-        const adapter = this.engine.providerAdapter || this.engine.providers;
-        if (adapter) return adapter;
-        return require('./providers/registry');
-    }
-
-    set providers(adapter) { this._providers = adapter || null; }
-
     // ── lifecycle ───────────────────────────────────────────────────────────
 
     async start() {
         if (this._started) return;
         this._started = true;
-        // Bring up the playback engine (Lavalink connects its nodes; direct is a
-        // no-op). Never let an engine boot failure take the manager down — the
-        // direct engine stays usable as the fallback.
-        try {
-            if (this.engine && typeof this.engine.start === 'function') {
-                await this.engine.start();
-            }
-        } catch (err) {
-            console.error(`[MUSIC] ${this.engineName} engine start failed:`, err.message);
-        }
-        // The Lavalink engine only builds its provider adapter during start(),
-        // so refresh the cached reference now (the direct engine's adapter is
-        // available at construction time and this is a no-op for it).
-        this.providers = this.engine.providerAdapter || this.engine.providers || this.providers;
-        if (this.engineName === 'lavalink') {
-            this._wireEngineRecovery();
-        }
         this._startReload();
     }
 
@@ -198,9 +148,6 @@ class MusicManager {
         return {
             guildId: String(guildId),
             channelId: channelId || null,
-            // Lavalink needs a text channel id for the player; the engine ignores
-            // it on the direct path.
-            textChannelId: settings.textChannelId || null,
             connection: null,
             player: null,
             queue: [],            // upcoming tracks (does NOT include current)
@@ -270,7 +217,7 @@ class MusicManager {
     describe(guildId, { queueLimit = 25 } = {}) {
         const s = this.sessions.get(String(guildId));
         if (!s) return null;
-        const voiceState = this.voice.getConnectionState(s);
+        const voiceState = this.voice.getConnectionState(s.connection);
         const positionMs = this.positionMs(s);
         return {
             guildId: s.guildId,
@@ -306,7 +253,7 @@ class MusicManager {
     positionMs(session) {
         try {
             if (this.voice.getPlaybackPosition && session.player) {
-                const p = this.voice.getPlaybackPosition(session);
+                const p = this.voice.getPlaybackPosition(session.player);
                 if (Number.isFinite(p) && p > 0) return p;
             }
         } catch (_) {}
@@ -320,7 +267,7 @@ class MusicManager {
     // ── connection ──────────────────────────────────────────────────────────
 
     async _connect(session) {
-        if (this.voice.isConnectionActive(session)) return session.connection;
+        if (this.voice.isConnectionActive(session.connection)) return session.connection;
         // Single-flight: two commands arriving close together (/join then
         // /247 enable, a repeated 247 enable, or /play mid-handshake) must share
         // ONE handshake. A second join() destroys the first in-flight
@@ -328,11 +275,12 @@ class MusicManager {
         // with "The operation was aborted" even though nothing was wrong.
         return this._connectGate.run(session.guildId, async ({ id, reused }) => {
             // Re-check inside the gate — an attempt may have just completed.
-            if (this.voice.isConnectionActive(session)) return session.connection;
-            const before = this.voice.getConnectionState(session);
+            if (this.voice.isConnectionActive(session.connection)) return session.connection;
+            const before = this.voice.getConnectionState(session.connection);
             const connection = await this.voice.join({
                 client: this.client,
-                session,
+                guildId: session.guildId,
+                channelId: session.channelId,
                 onDisconnect: () => this._onConnectionLost(session),
             });
             // Stale-operation guard: if 24/7 was disabled (or the session torn
@@ -340,17 +288,11 @@ class MusicManager {
             // connection — otherwise /247 disable during a slow connect leaves
             // the bot connected to a session it just deleted.
             if (session.disabledIntentionally) {
-                try {
-                    if (typeof this.voice.abortConnection === 'function') {
-                        this.voice.abortConnection(connection, session.guildId);
-                    } else {
-                        this.voice.leave(session);
-                    }
-                } catch (_) {}
+                try { this.voice.leave(connection, session.guildId); } catch (_) {}
                 throw new Error('24/7 was disabled while the connection was being established.');
             }
             session.connection = connection;
-            console.log(`[MUSIC] voice connect ${reused ? '(shared attempt)' : `#${id}`} engine=${this.engineName} node=${this._nodeId} guild=${session.guildId} channel=${session.channelId} ${before.status} -> ${this.voice.getConnectionState(session).status}`);
+            console.log(`[MUSIC] voice connect ${reused ? '(shared attempt)' : `#${id}`} node=${this._nodeId} guild=${session.guildId} channel=${session.channelId} ${before.status} -> ${this.voice.getConnectionState(connection).status}`);
             return connection;
         });
     }
@@ -364,32 +306,24 @@ class MusicManager {
 
     _ensurePlayer(session) {
         if (session.player) return session.player;
-        session.player = this.voice.ensurePlayer
-            ? this.voice.ensurePlayer(session, {
-                onError: (err) => this._onStreamError(session, err),
-                onIdle: () => this._onPlayerIdle(session),
-                onStateChange: (oldState, newState) => this._onPlayerStateChange(session, oldState, newState),
-            })
-            : this.voice.createPlayer({
-                onError: (err) => this._onStreamError(session, err),
-                onIdle: () => this._onPlayerIdle(session),
-                onStateChange: (oldState, newState) => this._onPlayerStateChange(session, oldState, newState),
-            });
-        if (session.player && !this.voice.ensurePlayer) {
-            try { this.voice.subscribe(session); } catch (_) {}
-        }
+        session.player = this.voice.createPlayer({
+            onError: (err) => this._onStreamError(session, err),
+            onIdle: () => this._onPlayerIdle(session),
+            onStateChange: (oldState, newState) => this._onPlayerStateChange(session, oldState, newState),
+        });
+        try { this.voice.subscribe(session.connection, session.player); } catch (_) {}
         return session.player;
     }
 
     _destroyPlayer(session) {
         if (!session.player) return;
-        try { this.voice.destroyPlayer(session); } catch (_) {}
+        try { this.voice.stopPlayer(session.player); } catch (_) {}
+        try { this.voice.destroyPlayer(session.player); } catch (_) {}
         session.player = null;
-        session.connection = null;
     }
 
     _pausePlayer(session) {
-        try { this.voice.pausePlayer(session); } catch (_) {}
+        if (session.player) { try { this.voice.pausePlayer(session.player); } catch (_) {} }
     }
 
     // ── queue + playback ────────────────────────────────────────────────────
@@ -411,11 +345,8 @@ class MusicManager {
     }
 
     /**
-     * Play the given track immediately (or the queue head if omitted).
-     *
-     * The direct engine resolves a FRESH stream URL (short-lived provider URLs)
-     * and feeds ffmpeg; the Lavalink engine asks the node to play the encoded
-     * track. Both paths apply bounded retries and the active audio filter.
+     * Play the given track immediately (or the queue head if omitted). Always
+     * resolves a FRESH stream URL and applies bounded retries.
      */
     async _playTrack(session, track) {
         const token = ++session._playToken;
@@ -426,20 +357,14 @@ class MusicManager {
         // always knows which track is in flight.
         session.current = track;
         try {
-            if (this.engineName === 'lavalink') {
-                // Resolve/connect the Lavalink player, then hand it the track.
-                await this._ensureConnected(session);
-                await this.engine.playTrack(session, track, { seekSeconds, filter: session.filter });
-            } else {
-                const { streamUrl, durationMs } = await this.providers.resolveStream(track);
-                if (token !== session._playToken) return false; // superseded by a newer play
-                if (durationMs && !track.durationMs) track.durationMs = durationMs;
-                const resource = this.voice.createResource(streamUrl, { track, seekSeconds, filter: session.filter });
-                await this._ensureConnected(session);
-                this._ensurePlayer(session);
-                this.voice.playResource(session, resource);
-                this.voice.setVolume(session, session.volume);
-            }
+            const { streamUrl, durationMs } = await this.providers.resolveStream(track);
+            if (token !== session._playToken) return false; // superseded by a newer play
+            if (durationMs && !track.durationMs) track.durationMs = durationMs;
+            const resource = this.voice.createResource(streamUrl, { track, seekSeconds, filter: session.filter });
+            await this._ensureConnected(session);
+            this._ensurePlayer(session);
+            this.voice.playResource(session.player, resource);
+            this.voice.setVolume(session.player, session.volume);
             session.state = PLAYBACK_STATES.PLAYING;
             session.manualPause = false;
             session.retries = 0;
@@ -535,7 +460,7 @@ class MusicManager {
 
     _stopPlayerSoft(session) {
         // Stop the audio but KEEP the voice connection alive (24/7 requirement).
-        if (session.player) { try { this.voice.stopPlayer(session); } catch (_) {} }
+        if (session.player) { try { this.voice.stopPlayer(session.player); } catch (_) {} }
     }
 
     async _onStreamError(session, err) {
@@ -620,15 +545,7 @@ class MusicManager {
         setTimeout(async () => {
             try {
                 if (!session.twentyFourSeven || session.disabledIntentionally) { session.reconnecting = false; return; }
-                // The player is gone (voice closed / node died). Drop the stale
-                // handles so _connect re-creates them, then resume the current
-                // track. Queue + track metadata are untouched — only the audio
-                // stream restarts.
                 session.connection = null;
-                session.player = null;
-                if (this.engineName === 'lavalink' && this.engine.manager) {
-                    try { await this.engine.manager.destroyPlayer(session.guildId); } catch (_) {}
-                }
                 await this._connect(session);
                 session.reconnecting = false;
                 if (session.current && !session.manualPause) await this._playTrack(session, session.current);
@@ -639,146 +556,13 @@ class MusicManager {
         }, RECONNECT_DELAY_MS).unref?.();
     }
 
-    /**
-     * Bridge Lavalink node/player lifecycle into the manager.
-     *
-     * Node death is treated as a transport failure, never as a queue loss:
-     *   • the queue + current track are preserved in the session,
-     *   • the player is re-created on a healthy node,
-     *   • the current track restarts (a Lavalink node cannot hand a live stream
-     *     to another node — we never claim otherwise),
-     *   • `playerException` / `playerStuck` / `playerClosed` are routed through
-     *     the SAME bounded-retry path the direct engine uses.
-     */
-    _wireEngineRecovery() {
-        const mgr = this.engine.manager;
-        if (!mgr || typeof mgr.onPlayer !== 'function') return;
-
-        mgr.onNode('ready', () => {
-            console.log(`[MUSIC] Lavalink node ready — ${mgr.health.healthyNames().length} healthy node(s).`);
-        });
-        mgr.onNode('close', (name) => {
-            console.warn(`[MUSIC] Lavalink node "${name}" closed — queues are preserved; playback will resume on a healthy node.`);
-        });
-        // A node died and took its players with it. The manager only knows voice
-        // / text ids; WE hold the queue + current track, so recovery is ours:
-        // re-create the player on a healthy node and restart the current track
-        // from its last position. Audio always restarts (a Lavalink node cannot
-        // hand a live stream to another node) — the queue is never lost.
-        mgr.onNode('playersLost', (name, guildIds) => {
-            for (const guildId of guildIds || []) {
-                const session = this.sessions.get(String(guildId));
-                if (!session) continue;
-                this._recoverLavalinkSession(session, name).catch(err =>
-                    console.error(`[MUSIC] Lavalink recovery for ${guildId} failed:`, err.message));
-            }
-        });
-
-        mgr.onPlayer('exception', (player, data) => {
-            const session = this.sessions.get(String(player.guildId));
-            if (!session) return;
-            const msg = data && data.exception ? data.exception.message : 'unknown';
-            this._onStreamError(session, new Error(`Lavalink exception: ${msg}`));
-        });
-        mgr.onPlayer('stuck', (player, data) => {
-            const session = this.sessions.get(String(player.guildId));
-            if (!session) return;
-            this._onStreamError(session, new Error(`Lavalink track stuck (${data && data.thresholdMs}ms)`));
-        });
-        mgr.onPlayer('closed', (player, data) => {
-            const session = this.sessions.get(String(player.guildId));
-            if (!session) return;
-            // The voice websocket closed — reconnect and resume (24/7 aware).
-            this._onConnectionLost(session);
-        });
-        mgr.onPlayer('end', (player) => {
-            const session = this.sessions.get(String(player.guildId));
-            if (!session) return;
-            if (session.trackEndHandled) return;
-            session.trackEndHandled = true;
-            this._playNext(session).catch(err => console.error('[MUSIC] advance after Lavalink end failed:', err.message));
-        });
-        mgr.onPlayer('empty', (player) => {
-            const session = this.sessions.get(String(player.guildId));
-            if (!session) return;
-            // Kazagumo emits `empty` synchronously right after `end`, before our
-            // async advance has re-filled the player. Only go idle when OUR queue
-            // is also empty and nothing is in flight — otherwise the advance we
-            // just kicked off would be reported as idle.
-            if (session._advancing) return;
-            if (session.queue.length && !session.manualPause) return;
-            if (session.current && session.state === PLAYBACK_STATES.PLAYING) return;
-            session.state = PLAYBACK_STATES.IDLE;
-        });
-        mgr.onPlayer('resolveError', (player, track, message) => {
-            const session = this.sessions.get(String(player.guildId));
-            if (!session) return;
-            console.warn(`[MUSIC] Lavalink resolve error in ${player.guildId}: ${message}`);
-        });
-    }
-
-    /**
-     * Recover a session whose Lavalink node died.
-     *
-     * The queue, history and current track live on the SESSION, so they survive
-     * the node loss untouched. Only the transport is rebuilt: the dead player is
-     * dropped, a fresh player is created on a healthy node (the manager's
-     * `_recoverPlayer` picks one), and the current track restarts from the last
-     * known position. Audio always restarts — a Lavalink node cannot migrate a
-     * live stream — and the position is approximated from the engine's last
-     * reading, so we never claim a seamless migration.
-     */
-    async _recoverLavalinkSession(session, nodeName) {
-        if (session.disabledIntentionally) return;
-        if (session.reconnecting) return;
-        session.reconnecting = true;
-        const resumeAt = this.positionMs(session) / 1000;
-        try {
-            // Drop the dead transport handles; the queue is NOT touched.
-            session.connection = null;
-            session.player = null;
-            if (session.twentyFourSeven || session.current) {
-                console.warn(`[MUSIC] Recovering guild ${session.guildId} after Lavalink node "${nodeName}" died — restarting “${session.current ? session.current.title : 'idle session'}”${session.twentyFourSeven ? ' (24/7)' : ''}.`);
-            }
-            await this.engine.manager._recoverPlayer(session.guildId, {
-                voiceId: session.channelId,
-                textId: session.textChannelId,
-            });
-            session.player = this.engine.manager.getPlayer(session.guildId) || null;
-            session.connection = session.player;
-            if (session.current && !session.manualPause) {
-                session._seekSeconds = Math.max(0, Math.floor(resumeAt));
-                await this._playTrack(session, session.current);
-            } else if (session.twentyFourSeven) {
-                session.state = PLAYBACK_STATES.IDLE;
-            }
-        } finally {
-            session.reconnecting = false;
-        }
-    }
-
-    /** Credential-free engine/node status for the dashboard + logs. */
-    engineStatus() {
-        const status = {
-            engine: this.engineName,
-            fallbackReason: this.engineFallbackReason,
-            capabilities: this.engine.capabilities || {},
-        };
-        try {
-            if (typeof this.engine.nodeStatus === 'function') status.nodes = this.engine.nodeStatus();
-        } catch (_) {}
-        return status;
-    }
-
     // ── public playback API ─────────────────────────────────────────────────
 
     /** Resolve a query and start playing it (immediately, if idle). */
-    async play(guildId, query, { channelId = null, textChannelId = null, requesterId = null, settings = {} } = {}) {
+    async play(guildId, query, { channelId = null, requesterId = null, settings = {} } = {}) {
         const session = this._ensureSession(guildId, channelId, settings);
         if (!session) throw Object.assign(new Error('This node does not own that guild.'), { status: 409 });
         if (channelId) session.channelId = channelId;
-        // Lavalink players carry a text channel id; the direct engine ignores it.
-        if (textChannelId) session.textChannelId = textChannelId;
         await this._ensureConnected(session);
 
         const track = await this.providers.resolveQuery(query, { searchLimit: 1 });
@@ -830,7 +614,7 @@ class MusicManager {
         if (!s) throw new Error('Nothing is playing.');
         s.manualPause = false;
         if (s.current) {
-            this.voice.resumePlayer(s);
+            this.voice.resumePlayer(s.player);
             s.startedAt = Date.now();
             s.state = PLAYBACK_STATES.PLAYING;
         } else await this._playNext(s);
@@ -919,7 +703,7 @@ class MusicManager {
         const v = Math.max(1, Math.min(100, Math.round(Number(volume))));
         if (!Number.isFinite(v)) throw new Error('Volume must be a number between 1 and 100.');
         s.volume = v;
-        this.voice.setVolume(s, v);
+        this.voice.setVolume(s.player, v);
         return this.describe(guildId);
     }
 
@@ -1012,7 +796,7 @@ class MusicManager {
         // destroy the in-flight/healthy connection and is the exact race that
         // produced "The operation was aborted" when enable was issued twice.
         const sameChannel = session.channelId === channelId;
-        const alreadyLive = this.voice.isConnectionActive(session)
+        const alreadyLive = this.voice.isConnectionActive(session.connection)
             || this._connectGate.isPending(session.guildId);
         session.channelId = channelId;
         session.twentyFourSeven = true;
@@ -1033,7 +817,7 @@ class MusicManager {
             this._destroyPlayer(session);
             // session.connection may still be null if a connect was in flight —
             // sweep the registry so a half-open handshake is destroyed too.
-            try { this.voice.leave(session); } catch (_) {}
+            try { this.voice.leave(session.connection, session.guildId); } catch (_) {}
             this.sessions.delete(String(guildId));
         } else {
             // Persist the disable even if this node never held the session.
@@ -1049,7 +833,7 @@ class MusicManager {
         if (!channel || !this.voice.isVoiceChannel(channel)) throw new Error('That is not a valid voice channel in this server.');
         const session = this.getSession(guildId);
         if (session && session.twentyFourSeven) {
-            try { this.voice.leave(session); } catch (_) {}
+            try { this.voice.leave(session.connection, session.guildId); } catch (_) {}
             session.connection = null;
             session.channelId = channelId;
             await this._ensureConnected(session);
@@ -1065,7 +849,7 @@ class MusicManager {
         const session = this.getSession(guildId);
         if (!session) return { guildId: String(guildId), left: false };
         this._destroyPlayer(session);
-        try { this.voice.leave(session); } catch (_) {}
+        try { this.voice.leave(session.connection, session.guildId); } catch (_) {}
         session.connection = null;
         session.state = PLAYBACK_STATES.IDLE;
         if (session.twentyFourSeven) {
@@ -1165,7 +949,7 @@ class MusicManager {
         // Idempotent: the reload loop calls restoreOne repeatedly. If we are
         // already connected (or connecting) to the right channel, leave it be —
         // reconnecting here would destroy a healthy connection every tick.
-        const alreadyLive = this.voice.isConnectionActive(session)
+        const alreadyLive = this.voice.isConnectionActive(session.connection)
             && session.channelId === row.twentyFourSevenChannelId;
         if (alreadyLive || this._connectGate.isPending(session.guildId)) return;
         // The voice connection did NOT survive the restart — recreate it.
@@ -1194,12 +978,8 @@ class MusicManager {
         for (const session of this.sessions.values()) {
             try { await this._persist(session); } catch (_) {}
             this._destroyPlayer(session);
-            try { this.voice.leave(session); } catch (_) {}
+            try { this.voice.leave(session.connection, session.guildId); } catch (_) {}
         }
-        // Tear the engine down last so every player is released before the
-        // Shoukaku socket closes (Lavalink is a no-op on the direct path).
-        try { if (this.engine && typeof this.engine.shutdown === 'function') await this.engine.shutdown(); } catch (_) {}
-        this.sessions.clear();
     }
 }
 

@@ -104,7 +104,7 @@ module.exports = {
                     if (!channelId) {
                         return interaction.editReply({ embeds: [ui.errorEmbed('Join a voice channel first, then run `/music play`.')] });
                     }
-                    const res = await m.play(guildId, query, { channelId, textChannelId: interaction.channelId, requesterId: interaction.user.id, settings });
+                    const res = await m.play(guildId, query, { channelId, requesterId: interaction.user.id, settings });
                     const t = res.track;
                     const desc = `${res.queued ? '➕ Queued' : '▶️ Playing'} **${t.title}**${t.artist ? ` — ${t.artist}` : ''}\nSource: ${ui.sourceLabel(t)}`;
                     return interaction.editReply({ embeds: [ui.successEmbed('🎵 Music', desc)] });
@@ -112,8 +112,8 @@ module.exports = {
                 case 'search': {
                     const query = interaction.options.getString('query');
                     await interaction.deferReply();
-                    const { searchQuery } = require('../utils/music/resolve');
-                    const tracks = await searchQuery(interaction.client, query, 10).catch(err => { throw err; });
+                    const { searchQuery } = require('../utils/music/providers/registry');
+                    const tracks = await searchQuery(query, 10).catch(err => { throw err; });
                     if (!tracks.length) return interaction.editReply({ embeds: [ui.errorEmbed(`No results for **${query}**.`)] });
                     // Stash the candidates for the select-menu handler.
                     const token = `${interaction.id}`;
