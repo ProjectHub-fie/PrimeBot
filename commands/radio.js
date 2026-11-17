@@ -1,5 +1,5 @@
 const { SlashCommandBuilder, PermissionFlagsBits, ChannelType, MessageFlags } = require('discord.js');
-const { statusEmbed, stationsEmbed, successEmbed, errorEmbed } = require('../utils/radioEmbed');
+const { statusEmbed, stationsEmbed, stationsView, successEmbed, errorEmbed } = require('../utils/radioEmbed');
 const { VALID_SOURCES } = require('../shared/radioConstants');
 
 /**
@@ -121,7 +121,8 @@ module.exports = {
                 case 'stations': {
                     const session = manager.getSession(guildId);
                     const stations = manager.stations.listForGuild(guildId).filter(s => s.enabled);
-                    return interaction.editReply({ embeds: [stationsEmbed(stations, session && session.stationId)] });
+                    const view = stationsView(stations, session && session.stationId);
+                    return interaction.editReply({ embeds: view.embeds, components: view.components });
                 }
                 case 'status': {
                     return interaction.editReply({ embeds: [statusEmbed(manager.describe(guildId))] });

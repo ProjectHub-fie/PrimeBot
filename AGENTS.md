@@ -1541,3 +1541,125 @@ never reach Ready and only fails 20s later with the same abort.
   `waitForShardReady` ready/timeout/recovering/no-shard cases; the wrapper reports
   a descriptive timeout vs a real error and frees the guild; a shard that isn't
   Ready aborts fast instead of hanging 20s.
+
+## Music presentation upgrade (Linix port) — filters, autoplay, lyrics, premium embeds
+
+PrimeBot's music UI was upgraded with the presentation and feature set from the
+reference bot **Linix**. Linix runs on **kazagumo/shoukaku (Lavalink)**; PrimeBot
+plays through **`@discordjs/voice` + ffmpeg** directly, so **only the features and
+presentation were adapted — the playback engine is unchanged** and no new
+dependency (Lavalink, musicard, mongoose) was added.
+
+### New files
+- **`utils/music/musicFilters.js`** — the audio-filter catalog: `FILTERS`,
+  `FILTER_LIST`, `VALID_FILTER_IDS`, `filterArgs(id)`, `isFilter(id)`,
+  `filterLabel(id)`. Every preset is a **real ffmpeg `-af` chain** (bassboost,
+  nightcore, vaporwave, 8d, karaoke, equalizer, treble, soft, plus a few more) —
+  `filterArgs` returns `['-af', '<chain>']` and `[]` for an unknown/clear id, so a
+  filter can never be an embed-text-only fake. `tests/musicPremium.test.js` asserts
+  every entry carries `-af` + a non-empty chain.
+- **`utils/music/lyricsService.js`** — `fetchLyrics({ track|query })` +
+  `splitQuery()` (splits `"Artist - Title"`). Uses **no new dependency**: it hits a
+  public lyrics API over `globalThis.fetch` with a bounded timeout
+  (`LYRICS_TIMEOUT_MS`, default 8000) and **degrades to `{ lyrics: null, reason }`**
+  — it never throws. `http()` resolves `globalThis.fetch` **per call** (never
+  cached) so a test/override is always honoured.
+
+### Filter pipeline (real audio)
+`utils/music/musicVoice.js` gained `buildTranscodeArgs(sourceUrl, { seekSeconds,
+filterArgs })` (pure + exported), `transcodeStream`, and `getPlaybackPosition(player)`.
+`createResource(url, { track, seekSeconds, filter })` builds the ffmpeg args with
+`filterArgs(filter)` so the session's filter is applied to the live stream.
+**Gotcha:** the PCM tail is `-f s16le -ar 48000 -ac 2 pipe:1` (6 items) but when a
+`-af` chain is present the `-af`/chain pair precedes it — slice the last 7.
+
+### Manager (`utils/music/musicManager.js`)
+- Session fields: `filter`, `autoplay`, `autoplaySeen` (Set of `provider:id`),
+  `positionMs`, `startedAt`.
+- **`positionMs(session)`** prefers the live voice player position; otherwise the
+  seek baseline + wall-clock since `startedAt`. `pause()` freezes the baseline and
+  `resume()` restarts it, so the progress bar never advances while paused.
+- **`setFilter(id|null)`** validates against the catalog (rejects unknown ids),
+  and re-applies to the live track so the change is audible immediately.
+- **`setAutoplay(bool)`** + `_expandAutoplay()`: when the queue empties and autoplay
+  is on (and repeat is off), it searches related tracks, rejects the seed and any
+  title whose `titleSimilarity >= 0.75` (a re-upload of the same song), and dedupes
+  via `autoplaySeen` so it can never loop.
+- **`skipTo(position)`** (1-based, discards everything before it), **`rewind(sec)`**
+  (clamps at 0), and `stop()` now clears `positionMs`/`startedAt`.
+- **`describe(guildId, { queueLimit })`** now returns `filter`, `autoplay`,
+  `positionMs`, `durationMs` and a configurable `queue` window (default 25; the
+  queue views pass 100 so pagination works).
+
+### Premium UI (`utils/music/musicEmbed.js` — rewritten)
+Artwork-first **Now Playing** (thumbnail + `[title](url)` + progress bar + Duration /
+Requester / Source / Volume / Repeat / Autoplay / Filter / Queue / State fields),
+`controlRow` + `secondControlRow` (≤5 buttons each; repeat/autoplay/queue/lyrics/24-7),
+a **paginated queue** (10/page, absolute numbers, total duration, prev/close/next),
+a **search select menu** (≤25 options), a **filter picker** (`filterEmbed`/`filterRow`),
+`trackInfoEmbed`, playlist embeds, `status247Embed`, `loadingEmbed`/`successEmbed`/
+`errorEmbed` and `helpEmbed`. **All Discord component limits are enforced** (≤5
+buttons/row, ≤25 select options) and asserted by tests.
+
+### Commands
+- **`commands/music.js`** gained `rewind`, `skipto`, `autoplay`, `filter`, `track`,
+  `lyrics`, `grab` (and `nowplaying` now renders the full premium embed).
+- **`events/messageCreate.js`** prefix aliases: `autoplay`/`ap`, `filter`/`filters`/`eq`,
+  `lyrics`, `grab`/`save`, `skipto`/`jump`, `rewind`, `track`.
+- **`utils/music/musicButtons.js`** routes the new buttons (`music_autoplay`,
+  `music_repeat`, `music_lyrics`, `music_queue`, `music_qpage:<n>`, `music_qclose`)
+  and the **`music_filter`** select menu; every control re-checks requester
+  protection server-side.
+- **`events/interactionCreate.js`** routes `music_filter` and `radio_station_select`.
+- Help/docs updated in `utils/prefixHelp.js`, `commands/help.js` and
+  `dashboard/commandDocs.js`; the Sash drift test's `SUBS` list in
+  `tests/sashMenu.test.js` must include any new prefix alias.
+
+### Radio (styling only — engine + station DB untouched)
+`utils/radioEmbed.js` `statusEmbed` reuses the music presentation language
+(author line, artwork thumbnail, colour-coded state, field grid); added
+`stationSelectRow` + `stationsView` (a ≤25-option station dropdown) wired into
+`/radio stations` and `$radio stations`/`$radio station` and routed by the
+`radio_station_select` customId. `stationsEmbed` keeps its old (embed-only) return
+shape for backward compatibility.
+
+### Tests
+`tests/musicPremium.test.js` (23) covers real filter chains, the transcode args,
+autoplay (refill / no-loop / dedupe), skipto/rewind, the premium embeds + component
+limits, progressBar, the lyrics service (success/404/network-failure), and the
+prefix routing of every new alias (driving the real `messageCreate` handler).
+
+## Voice defense — the bot is always self-deafened (default)
+
+The bot is **defended in voice by default**: its own voice state is always
+**deafened** (`selfDeaf`), and it is **never self-muted** (it must still transmit
+playback). A music/radio bot never needs to hear anyone, and a deafened member
+cannot be pulled into voice interaction — so "defended" is the safe default.
+
+- **Module:** `utils/voiceDefense.js` — `JOIN_OPTIONS` (`{ selfDeaf: true,
+  selfMute: false }`), `isDefended(state)` (true when `selfDeaf` OR `deaf` is set,
+  since Discord applies `deaf = self_deaf || server_deaf`), `defendVoiceState()`,
+  `defendGuild(client, guildId)`, `handleVoiceStateUpdate(oldState, newState)`,
+  `isEnabled()`, `resetCooldowns()`.
+- **Why runtime enforcement:** the `joinVoiceChannel()` calls already pass
+  `selfDeaf: true`, but nothing re-asserted it. An admin toggling the bot's state
+  in the Discord UI, a server undeafen, or a fresh connection could leave the bot
+  undeafened. The defense closes that gap.
+- **Two layers:** (1) `events/voiceStateUpdate.js` calls
+  `voiceDefense.handleVoiceStateUpdate` **first** (before the radio/music
+  forwarders) — it only polices the BOT's own, connected state and re-asserts the
+  deafen when lost; (2) both voice layers (`utils/music/musicVoice.js`,
+  `utils/radioVoice.js`) re-assert it via `defendGuild(client, guildId)` right
+  after a successful join, and build the join from `voiceDefense.JOIN_OPTIONS` so
+  the option can never drift.
+- **Safety:** every call is fire-and-forget and throttled per guild
+  (`VOICE_DEFEND_COOLDOWN_MS`, default 30000); `setDeaf` uses discord.js
+  `VoiceState#setDeaf` (which sets **server**-deafen via
+  `guild.members.edit(id, { deaf })`, the only runtime API available) and can
+  never throw into an event handler. Rejoins reset `selfDeaf` to true anyway.
+- **Env vars:** `VOICE_DEFEND_ENABLED` (default `true`), `VOICE_DEFEND_COOLDOWN_MS`
+  (default `30000`). Set `VOICE_DEFEND_ENABLED=false` to opt out (not recommended).
+- **Tests:** `tests/voiceDefense.test.js` (12) — join-option defaults, no hardcoded
+  `selfDeaf:false` drift in either voice layer, post-join re-assertion, the
+  throttle/force path, only-the-bot policing, the disable switch, and the event
+  wiring order (defense before radio/music).

@@ -13,6 +13,15 @@ const { Events } = require('discord.js');
 module.exports = {
     name: Events.VoiceStateUpdate,
     async execute(oldState, newState) {
+        // Voice defense: the bot is always self-deafened. If the deafen is ever
+        // lost (admin toggled it in the UI, a server undeafen, a fresh connect)
+        // it is re-asserted here. Runs first and is fully fire-and-forget so it
+        // can never delay or break the radio/music forwarding below.
+        try {
+            require('../utils/voiceDefense').handleVoiceStateUpdate(oldState, newState);
+        } catch (err) {
+            console.error('[VOICE] defense handler failed:', err.message);
+        }
         try {
             const manager = newState.client.radioManager || (oldState.client && oldState.client.radioManager);
             if (manager && typeof manager.handleVoiceStateUpdate === 'function') {

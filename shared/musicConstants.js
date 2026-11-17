@@ -160,6 +160,41 @@ function parseTimestamp(input) {
     return null;
 }
 
+const PROGRESS_BAR_SIZE = 14;
+const PROGRESS_LINE = '▬';
+const PROGRESS_SLIDER = '🔘';
+
+/**
+ * Render a Discord-style playback progress bar, e.g.
+ *   `▬▬▬▬▬🔘▬▬▬▬▬▬▬▬`
+ * Returns an empty-position bar when nothing is playing / the duration is
+ * unknown (never fabricates progress).
+ */
+function progressBar(positionMs, durationMs, { size = PROGRESS_BAR_SIZE, line = PROGRESS_LINE, slider = PROGRESS_SLIDER } = {}) {
+    const total = Number(durationMs);
+    const current = Number(positionMs);
+    const width = Math.max(1, size | 0);
+    if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(current)) {
+        return `${slider}${line.repeat(width)}`;
+    }
+    const ratio = Math.min(1, Math.max(0, current / total));
+    const filled = Math.round(ratio * width);
+    const head = Math.min(width, Math.max(0, filled));
+    return `${line.repeat(head)}${slider}${line.repeat(Math.max(0, width - head))}`;
+}
+
+/**
+ * Track a repeating-queue playlist / artist name for autoplay queries.
+ * (Kept here so the manager and the tests share one implementation.)
+ */
+function autoplayQuery(track) {
+    if (!track) return null;
+    const artist = track.artist || '';
+    const title = track.title || '';
+    const q = `${artist} ${title}`.trim();
+    return q || null;
+}
+
 module.exports = {
     PROVIDERS,
     PROVIDER_LABELS,
@@ -182,4 +217,7 @@ module.exports = {
     looksLikeAudioUrl,
     formatDuration,
     parseTimestamp,
+    progressBar,
+    autoplayQuery,
+    PROGRESS_BAR_SIZE,
 };

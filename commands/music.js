@@ -12,9 +12,10 @@
 const { SlashCommandBuilder, MessageFlags } = require('discord.js');
 const ui = require('../utils/music/musicEmbed');
 const perms = require('../utils/music/musicPermissions');
+const musicFilters = require('../utils/music/musicFilters');
 const { REPEAT_MODES, parseTimestamp, VALID_REPEAT_MODES } = require('../shared/musicConstants');
 
-const PLAY_CONTROL = new Set(['pause', 'resume', 'skip', 'previous', 'stop', 'clear', 'shuffle', 'loop', 'remove', 'seek', 'volume']);
+const PLAY_CONTROL = new Set(['pause', 'resume', 'skip', 'previous', 'stop', 'clear', 'shuffle', 'loop', 'remove', 'seek', 'volume', 'autoplay', 'filter', 'skipto', 'rewind']);
 
 function manager(interaction) {
     const m = interaction.client.musicManager;
@@ -55,6 +56,10 @@ module.exports = {
         .addSubcommand(sub => sub.setName('stop').setDescription('Stop playback and clear the queue (stays connected)'))
         .addSubcommand(sub => sub.setName('seek').setDescription('Jump to a position in the current track')
             .addStringOption(o => o.setName('timestamp').setDescription('e.g. 90, 1:30, or 1h2m3s').setRequired(true)))
+        .addSubcommand(sub => sub.setName('rewind').setDescription('Rewind the current track a few seconds')
+            .addIntegerOption(o => o.setName('seconds').setDescription('Seconds to rewind (default 10)').setMinValue(1).setMaxValue(600)))
+        .addSubcommand(sub => sub.setName('skipto').setDescription('Skip directly to a position in the queue')
+            .addIntegerOption(o => o.setName('position').setDescription('Queue position (1 = next)').setRequired(true).setMinValue(1)))
         .addSubcommand(sub => sub.setName('queue').setDescription('Show the queue'))
         .addSubcommand(sub => sub.setName('remove').setDescription('Remove a track from the queue')
             .addIntegerOption(o => o.setName('position').setDescription('Queue position (1 = next)').setRequired(true).setMinValue(1)))
@@ -63,7 +68,16 @@ module.exports = {
         .addSubcommand(sub => sub.setName('loop').setDescription('Set the repeat mode')
             .addStringOption(o => o.setName('mode').setDescription('Repeat mode').setRequired(true)
                 .addChoices({ name: 'Off', value: 'off' }, { name: 'Track', value: 'track' }, { name: 'Queue', value: 'queue' })))
+        .addSubcommand(sub => sub.setName('autoplay').setDescription('Toggle autoplay — keep music playing when the queue ends')
+            .addBooleanOption(o => o.setName('enabled').setDescription('Force on/off (omit to toggle)')))
+        .addSubcommand(sub => sub.setName('filter').setDescription('Apply an audio filter preset')
+            .addStringOption(o => o.setName('preset').setDescription('Filter preset (omit to pick from a menu)')
+                .addChoices(...musicFilters.FILTER_LIST.slice(0, 25).map(f => ({ name: f.label, value: f.id })), { name: 'Clear', value: 'clear' })))
         .addSubcommand(sub => sub.setName('nowplaying').setDescription('Show what is playing'))
+        .addSubcommand(sub => sub.setName('track').setDescription('Show detailed information about the current track'))
+        .addSubcommand(sub => sub.setName('lyrics').setDescription('Show the lyrics of the current (or a named) song')
+            .addStringOption(o => o.setName('song').setDescription('Song name (defaults to the current track)')))
+        .addSubcommand(sub => sub.setName('grab').setDescription('DM yourself the track that is currently playing'))
         .addSubcommand(sub => sub.setName('volume').setDescription('Set the volume')
             .addIntegerOption(o => o.setName('level').setDescription('Volume 1-100').setRequired(true).setMinValue(1).setMaxValue(100)))
         .addSubcommand(sub => sub.setName('status').setDescription('Show the music and connection status'))
@@ -114,18 +128,60 @@ module.exports = {
                 case 'previous': { await requireControl(interaction, m); const r = await m.previous(guildId); return interaction.reply({ embeds: [ui.successEmbed('⏮️ Previous', `Playing **${r.track.title}**.`)] }); }
                 case 'stop': { await requireControl(interaction, m); await m.stop(guildId, { actor: interaction.user.id }); return interaction.reply({ embeds: [ui.successEmbed('⏹️ Stopped', 'Playback stopped. PrimeBot stays in the voice channel.')] }); }
                 case 'seek': { await requireControl(interaction, m); const sec = parseTimestamp(interaction.options.getString('timestamp')); if (sec == null) throw new Error('Invalid timestamp. Use e.g. `90`, `1:30` or `1h2m3s`.'); const s = await m.seek(guildId, sec); return interaction.reply({ embeds: [ui.successEmbed('⏩ Seeked', `Jumped to ${sec}s in **${s.current ? s.current.title : 'the track'}**.`)] }); }
-                case 'queue': { const s = m.getSession(guildId); if (!s) throw new Error('Nothing is playing in this server.'); const { embed, components } = ui.queueEmbed(m.describe(guildId), 0); return interaction.reply({ embeds: [embed], components }); }
+                case 'rewind': { await requireControl(interaction, m); const secs = interaction.options.getInteger('seconds') || 10; const s = await m.rewind(guildId, secs); return interaction.reply({ embeds: [ui.successEmbed('⏪ Rewound', `Rewound ${secs}s in **${s.current ? s.current.title : 'the track'}**.`)] }); }
+                case 'skipto': { await requireControl(interaction, m); const pos = interaction.options.getInteger('position'); const s = await m.skipTo(guildId, pos); return interaction.reply({ embeds: [ui.successEmbed('⏭️ Skipped', s.current ? `Now playing **${s.current.title}**.` : 'The queue is empty — still connected.')] }); }
+                case 'queue': { const s = m.getSession(guildId); if (!s) throw new Error('Nothing is playing in this server.'); const { embed, components } = ui.queueEmbed(m.describe(guildId, { queueLimit: 100 }), 0); return interaction.reply({ embeds: [embed], components }); }
                 case 'remove': { const session = await requireControl(interaction, m); const position = interaction.options.getInteger('position'); if (!perms.canRemoveTrack(interaction.member, session, position)) throw new Error('You can only remove your own queued tracks (or hold the DJ role / Manage Server).'); const r = await m.remove(guildId, position); return interaction.reply({ embeds: [ui.successEmbed('🗑️ Removed', `Removed **${r.removed.title}** from the queue.`)] }); }
                 case 'clear': { await requireControl(interaction, m); const r = await m.clear(guildId); return interaction.reply({ embeds: [ui.successEmbed('🧹 Queue cleared', `Removed ${r.removed} track(s).`)] }); }
                 case 'shuffle': { await requireControl(interaction, m); const s = await m.shuffle(guildId); return interaction.reply({ embeds: [ui.successEmbed('🔀 Shuffled', `Shuffled ${s.queueLength} track(s).`)] }); }
                 case 'loop': { await requireControl(interaction, m); const mode = interaction.options.getString('mode'); if (!VALID_REPEAT_MODES.includes(mode)) throw new Error('Repeat mode must be off, track or queue.'); const s = await m.setRepeat(guildId, mode); return interaction.reply({ embeds: [ui.successEmbed('🔁 Repeat', `Repeat mode is now **${ui.repeatLabel(s.repeat)}**.`)] }); }
-                case 'nowplaying': { const s = m.getSession(guildId); if (!s) throw new Error('Nothing is playing in this server.'); const { embed, components } = ui.nowPlaying(m.describe(guildId)); return interaction.reply({ embeds: [embed], components: [components[0], ui.secondControlRow()] }); }
+                case 'autoplay': {
+                    await requireControl(interaction, m);
+                    const forced = interaction.options.getBoolean('enabled');
+                    const session = m.getSession(guildId);
+                    const next = forced == null ? !session.autoplay : forced;
+                    const s = await m.setAutoplay(guildId, next);
+                    return interaction.reply({ embeds: [ui.successEmbed('♾️ Autoplay', s.autoplay ? 'Autoplay is now **enabled** — related tracks will keep playing.' : 'Autoplay is now **disabled**.')] });
+                }
+                case 'filter': {
+                    await requireControl(interaction, m);
+                    const preset = interaction.options.getString('preset');
+                    if (!preset) {
+                        const session = m.getSession(guildId);
+                        const { embed, components } = ui.filterEmbed(session ? session.filter : null);
+                        return interaction.reply({ embeds: [embed], components });
+                    }
+                    const s = await m.setFilter(guildId, preset === 'clear' ? null : preset);
+                    const label = preset === 'clear' ? 'Filters cleared' : `Filter set to **${musicFilters.filterLabel(preset)}**`;
+                    return interaction.reply({ embeds: [ui.successEmbed('🎛️ Filter', label)] });
+                }
+                case 'nowplaying': { const s = m.getSession(guildId); if (!s) throw new Error('Nothing is playing in this server.'); const snap = m.describe(guildId); const { embed, components } = ui.nowPlaying(snap); return interaction.reply({ embeds: [embed], components: [components[0], ui.secondControlRow(snap)] }); }
+                case 'track': { const snap = m.describe(guildId); if (!snap || !snap.current) throw new Error('Nothing is playing in this server.'); return interaction.reply({ embeds: [ui.trackInfoEmbed(snap.current)] }); }
+                case 'lyrics': {
+                    const song = interaction.options.getString('song');
+                    const snap = m.describe(guildId);
+                    if (!song && (!snap || !snap.current)) throw new Error('Nothing is playing — provide a song name.');
+                    await interaction.deferReply();
+                    const { fetchLyrics } = require('../utils/music/lyricsService');
+                    const res = await fetchLyrics(song ? { query: song } : { track: snap.current });
+                    if (!res.lyrics) return interaction.editReply({ embeds: [ui.errorEmbed(res.reason || 'No lyrics found.')] });
+                    const text = res.lyrics.length > 4000 ? res.lyrics.slice(0, 3980) + '\n…' : res.lyrics;
+                    const embed = song ? ui.trackInfoEmbed({ title: song }).setDescription(text) : ui.trackInfoEmbed(snap.current).setDescription(text);
+                    return interaction.editReply({ embeds: [embed] });
+                }
+                case 'grab': {
+                    const snap = m.describe(guildId);
+                    if (!snap || !snap.current) throw new Error('Nothing is playing in this server.');
+                    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+                    const dm = await interaction.user.send({ embeds: [ui.trackInfoEmbed(snap.current)] }).catch(() => null);
+                    return interaction.editReply({ embeds: [dm ? ui.successEmbed('📬 Sent', 'Check your DMs for the track details.') : ui.errorEmbed('I could not DM you — enable direct messages from this server.')] });
+                }
                 case 'volume': { await requireControl(interaction, m); const level = interaction.options.getInteger('level'); const s = await m.setVolume(guildId, level); return interaction.reply({ embeds: [ui.successEmbed('🔊 Volume', `Volume set to **${s.volume}%**.`)] }); }
                 case 'status': {
                     const snap = m.describe(guildId);
                     if (!snap) return interaction.reply({ embeds: [ui.successEmbed('🎵 Music', 'No active session. Use `/music play` to start.')] });
                     const { embed, components } = ui.nowPlaying(snap);
-                    return interaction.reply({ embeds: [embed], components: [components[0], ui.secondControlRow()] });
+                    return interaction.reply({ embeds: [embed], components: [components[0], ui.secondControlRow(snap)] });
                 }
                 case 'help':
                 default:

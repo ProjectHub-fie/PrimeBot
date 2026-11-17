@@ -1,6 +1,12 @@
 /**
  * Music UI — embeds, buttons and select menus.
  *
+ * Presentation is recreated from the Linix music system (artwork-first Now
+ * Playing, an author line, a progress bar, requester/source/duration fields,
+ * filter + autoplay status, a numbered paginated queue, a search select menu)
+ * but rendered with PrimeBot's own embed theme and discord.js 14 components —
+ * Linix's Lavalink/musicard image cards are NOT used (no new dependencies).
+ *
  * All Discord component limits are respected: ≤5 buttons per row, ≤5 rows per
  * message, ≤25 options per select menu. Callers pass a prefix ('/' or the guild
  * prefix) so the same embed renders correctly for slash and sash commands.
@@ -11,10 +17,12 @@ const {
     StringSelectMenuBuilder, StringSelectMenuOptionBuilder,
 } = require('discord.js');
 const config = require('../../config');
-const { formatDuration, PLAYBACK_STATES, REPEAT_MODES, PROVIDER_LABELS } = require('../../shared/musicConstants');
+const { formatDuration, progressBar, PLAYBACK_STATES, REPEAT_MODES, PROVIDER_LABELS } = require('../../shared/musicConstants');
+const musicFilters = require('./musicFilters');
 
 const BRAND = config.colors.primary;
 const MAX_SELECT_OPTIONS = 25;
+const QUEUE_PER_PAGE = 10;
 
 function stateLabel(state) {
     switch (state) {
@@ -35,6 +43,14 @@ function trackLine(track) {
     return `**${track.title}**${artist}`;
 }
 
+/** A clickable `[title](url)` line (falls back to bold text without a URL). */
+function trackLink(track) {
+    if (!track) return 'Unknown track';
+    const artist = track.artist ? ` — ${track.artist}` : '';
+    const title = String(track.title || 'Unknown title');
+    return track.url ? `**[${title}](${track.url})**${artist}` : `**${title}**${artist}`;
+}
+
 function sourceLabel(track) {
     if (!track) return null;
     const src = track.source || PROVIDER_LABELS[track.provider] || track.provider;
@@ -44,69 +60,133 @@ function sourceLabel(track) {
     return src;
 }
 
+function requesterLabel(track) {
+    if (!track) return null;
+    if (track.requesterId) return `<@${track.requesterId}>`;
+    return null;
+}
+
+/** The Linix-style playback progress line: bar + `current / total`. */
+function progressLine(snapshot) {
+    const s = snapshot || {};
+    const t = s.current;
+    if (!t) return null;
+    const bar = progressBar(s.positionMs || 0, t.durationMs);
+    const cur = formatDuration(s.positionMs || 0);
+    const total = t.durationMs ? formatDuration(t.durationMs) : '🔴 LIVE';
+    return `${bar}\n\`${cur} / ${total}\``;
+}
+
 /** The Now Playing embed + the interactive control row. */
 function nowPlaying(snapshot, { prefix = '/' } = {}) {
     const s = snapshot || {};
     const t = s.current;
     const embed = new EmbedBuilder()
         .setColor(BRAND)
-        .setTitle('🎶 Now Playing')
-        .setDescription(t ? trackLine(t) : 'Nothing is playing right now.')
+        .setAuthor({ name: '🎶 Now Playing' })
+        .setDescription(
+            (t ? trackLink(t) : 'Nothing is playing right now.') +
+            (t ? `\n\n${progressLine(s)}` : ''),
+        )
         .addFields(
-            { name: 'State', value: stateLabel(s.state), inline: true },
+            { name: 'Duration', value: t && t.durationMs ? formatDuration(t.durationMs) : '—', inline: true },
+            { name: 'Requester', value: (t && requesterLabel(t)) || '—', inline: true },
+            { name: 'Source', value: sourceLabel(t) || '—', inline: true },
             { name: 'Volume', value: `${s.volume != null ? s.volume : 100}%`, inline: true },
             { name: 'Repeat', value: repeatLabel(s.repeat), inline: true },
-            { name: 'Shuffle', value: s.shuffle ? '🔀 On' : 'Off', inline: true },
+            { name: 'Autoplay', value: s.autoplay ? '♾️ On' : 'Off', inline: true },
+            { name: 'Filter', value: s.filter ? musicFilters.filterLabel(s.filter) : 'None', inline: true },
             { name: 'Queue', value: `${s.queueLength != null ? s.queueLength : 0} track(s)`, inline: true },
-            { name: 'Listeners', value: `${s.listeners != null ? s.listeners : 0}`, inline: true },
+            { name: 'State', value: stateLabel(s.state), inline: true },
         )
-        .setFooter({ text: `Source: ${sourceLabel(t) || '—'} • ${s.twentyFourSeven ? '24/7' : 'On demand'} • ${prefix}musichelp` })
+        .setFooter({ text: `${s.twentyFourSeven ? '🕐 24/7' : '🎧 On demand'} • ${s.listeners != null ? s.listeners : 0} listener(s) • ${prefix}music help` })
         .setTimestamp();
-    if (t && t.durationMs) embed.addFields({ name: 'Duration', value: formatDuration(t.durationMs), inline: true });
-    if (t && t.requesterId) embed.addFields({ name: 'Requested by', value: `<@${t.requesterId}>`, inline: true });
     if (t && t.artworkUrl) embed.setThumbnail(t.artworkUrl);
-    return { embed, components: [controlRow()] };
+    return { embed, components: [controlRow(s)] };
 }
 
-/** Pause/Resume, Skip, Previous, Stop, Shuffle, Repeat (≤5 per row). */
-function controlRow() {
+/** Pause/Resume, Skip, Previous, Stop, Shuffle (≤5 per row). */
+function controlRow(snapshot = {}) {
+    const paused = snapshot.state === PLAYBACK_STATES.PAUSED || snapshot.manualPause;
     return new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('music_prev').setEmoji('⏮️').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('music_pauseresume').setEmoji('⏯️').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('music_pauseresume').setEmoji(paused ? '▶️' : '⏸️').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('music_skip').setEmoji('⏭️').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('music_stop').setEmoji('⏹️').setStyle(ButtonStyle.Danger),
         new ButtonBuilder().setCustomId('music_shuffle').setEmoji('🔀').setStyle(ButtonStyle.Secondary),
     );
 }
 
-function secondControlRow() {
+function secondControlRow(snapshot = {}) {
     return new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('music_repeat').setEmoji('🔁').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('music_autoplay').setEmoji('♾️').setStyle(snapshot.autoplay ? ButtonStyle.Success : ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('music_queue').setEmoji('📜').setLabel('Queue').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('music_lyrics').setEmoji('📝').setLabel('Lyrics').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('music_247status').setEmoji('🕐').setLabel('24/7').setStyle(ButtonStyle.Secondary),
     );
+}
+
+/** The audio-filter select menu (Linix filter list, real ffmpeg presets). */
+function filterRow(currentFilter = null) {
+    const options = [
+        new StringSelectMenuOptionBuilder().setLabel('Reset Filters').setValue('clear').setEmoji('🚫'),
+    ].concat(musicFilters.FILTER_LIST.map(f =>
+        new StringSelectMenuOptionBuilder()
+            .setLabel(f.label)
+            .setDescription(f.description)
+            .setValue(f.id)
+            .setEmoji(f.emoji)
+            .setDefault(f.id === currentFilter),
+    ));
+    const menu = new StringSelectMenuBuilder()
+        .setCustomId('music_filter')
+        .setPlaceholder(currentFilter ? `Filter: ${musicFilters.filterLabel(currentFilter)}` : '🎛️ Select an audio filter')
+        .addOptions(options.slice(0, MAX_SELECT_OPTIONS));
+    return new ActionRowBuilder().addComponents(menu);
+}
+
+/** A standalone filter-picker embed (the `/music filter` command). */
+function filterEmbed(currentFilter = null) {
+    const lines = musicFilters.FILTER_LIST.map(f => `${f.emoji} **${f.label}** — ${f.description}`);
+    return {
+        embed: new EmbedBuilder()
+            .setColor(BRAND)
+            .setTitle('🎛️ Audio Filters')
+            .setDescription(lines.join('\n'))
+            .setFooter({ text: currentFilter ? `Active: ${musicFilters.filterLabel(currentFilter)}` : 'No filter active' }),
+        components: [filterRow(currentFilter)],
+    };
 }
 
 /** Queue embed with pagination (10 per page) and prev/next buttons. */
 function queueEmbed(snapshot, page = 0, { prefix = '/' } = {}) {
     const s = snapshot || {};
     const all = s.queue || [];
-    const perPage = 10;
+    const perPage = QUEUE_PER_PAGE;
     const pages = Math.max(1, Math.ceil(all.length / perPage));
     const p = Math.min(Math.max(0, page), pages - 1);
     const slice = all.slice(p * perPage, p * perPage + perPage);
-    const lines = slice.map((t, i) => `**${p * perPage + i + 1}.** ${trackLine(t)} \`${formatDuration(t.durationMs)}\``);
+    const lines = slice.map((t, i) => {
+        const num = p * perPage + i + 1;
+        const req = t.requesterId ? ` • <@${t.requesterId}>` : '';
+        return `\`${String(num).padStart(2, '0')}.\` ${trackLink(t)} \`${formatDuration(t.durationMs)}\`${req}`;
+    });
     const totalMs = all.reduce((n, t) => n + (t.durationMs || 0), 0);
+    const nowBlock = s.current
+        ? `**▶️ Now playing**\n${trackLink(s.current)} \`${formatDuration(s.current.durationMs)}\`\n\n`
+        : '';
     const embed = new EmbedBuilder()
         .setColor(BRAND)
-        .setTitle('📜 Queue')
+        .setAuthor({ name: '📜 Queue For Current Player' })
         .setDescription(
-            (s.current ? `**Now:** ${trackLine(s.current)}\n\n` : '') +
-            (lines.length ? lines.join('\n') : 'The queue is empty.'),
+            nowBlock +
+            (lines.length ? lines.join('\n') : 'The queue is empty — add songs with `/music play`.'),
         )
-        .setFooter({ text: `Page ${p + 1}/${pages} • ${all.length} track(s) • ${formatDuration(totalMs)} total • ${prefix}musichelp` });
+        .setFooter({ text: `Page ${p + 1}/${pages} • ${all.length} track(s) • ${formatDuration(totalMs)} total • ${prefix}music help` });
     const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`music_qpage:${p - 1}`).setEmoji('◀️').setStyle(ButtonStyle.Secondary).setDisabled(p <= 0),
+        new ButtonBuilder().setCustomId('music_qclose').setEmoji('✖️').setStyle(ButtonStyle.Danger),
         new ButtonBuilder().setCustomId(`music_qpage:${p + 1}`).setEmoji('▶️').setStyle(ButtonStyle.Secondary).setDisabled(p >= pages - 1),
     );
     return { embed, components: [row] };
@@ -116,42 +196,66 @@ function queueEmbed(snapshot, page = 0, { prefix = '/' } = {}) {
 function searchSelect(tracks, token) {
     const options = tracks.slice(0, MAX_SELECT_OPTIONS).map((t, i) =>
         new StringSelectMenuOptionBuilder()
-            .setLabel(`${t.title}`.slice(0, 95))
+            .setLabel(`${i + 1}. ${t.title}`.slice(0, 95))
             .setDescription(`${t.artist ? t.artist + ' • ' : ''}${formatDuration(t.durationMs)} • ${t.source || PROVIDER_LABELS[t.provider] || t.provider}`.slice(0, 95))
             .setValue(String(i)),
     );
     const menu = new StringSelectMenuBuilder()
         .setCustomId(`music_search:${token}`)
-        .setPlaceholder('Choose a track to play')
+        .setPlaceholder('❯ Select a song to play')
         .addOptions(options);
     return new ActionRowBuilder().addComponents(menu);
 }
 
 function searchEmbed(query, tracks) {
+    const lines = (tracks || []).slice(0, 10).map((t, i) =>
+        `\`${String(i + 1).padStart(2, '0')}.\` **${t.title}**${t.artist ? ` — ${t.artist}` : ''} \`${formatDuration(t.durationMs)}\` • ${t.source || PROVIDER_LABELS[t.provider] || t.provider}`,
+    );
     return new EmbedBuilder()
         .setColor(BRAND)
-        .setTitle(`🔎 Search: ${String(query).slice(0, 200)}`)
-        .setDescription(tracks.length
-            ? 'Pick a result below to play it.'
-            : 'No results found.')
-        .setFooter({ text: `${tracks.length} result(s)` });
+        .setAuthor({ name: `🔎 Search: ${String(query).slice(0, 200)}` })
+        .setDescription(lines.length ? lines.join('\n') : 'No results found.')
+        .setFooter({ text: `${tracks.length} result(s) • pick one below` });
+}
+
+/** A detailed single-track card (the `/music track` information command). */
+function trackInfoEmbed(track) {
+    const embed = new EmbedBuilder()
+        .setColor(BRAND)
+        .setAuthor({ name: '🎵 Track Information' })
+        .setTitle(String(track.title || 'Unknown title').slice(0, 256))
+        .addFields(
+            { name: 'Artist', value: track.artist || '—', inline: true },
+            { name: 'Duration', value: track.durationMs ? formatDuration(track.durationMs) : '—', inline: true },
+            { name: 'Source', value: sourceLabel(track) || '—', inline: true },
+            { name: 'Provider ID', value: track.id ? String(track.id).slice(0, 100) : '—', inline: true },
+            { name: 'Requester', value: requesterLabel(track) || '—', inline: true },
+            { name: 'URL', value: track.url ? String(track.url).slice(0, 200) : '—', inline: false },
+        )
+        .setTimestamp();
+    if (track.artworkUrl) embed.setThumbnail(track.artworkUrl);
+    return embed;
 }
 
 function playlistListEmbed(playlists) {
-    const lines = playlists.map(p => `**#${p.id}** ${p.name} ${p.isPublic ? '🌐' : '🔒'}${p.ownerId ? ` — <@${p.ownerId}>` : ''}`);
+    const lines = (playlists || []).map(p => `**#${p.id}** ${p.name} ${p.isPublic ? '🌐' : '🔒'}${p.ownerId ? ` — <@${p.ownerId}>` : ''}`);
     return new EmbedBuilder()
         .setColor(BRAND)
-        .setTitle('🗂️ Playlists')
-        .setDescription(lines.length ? lines.join('\n') : 'No playlists yet. Create one with `/playlist create`.');
+        .setAuthor({ name: '🗂️ Playlists' })
+        .setDescription(lines.length ? lines.join('\n') : 'No playlists yet. Create one with `/playlist create`.')
+        .setFooter({ text: `${(playlists || []).length} playlist(s)` });
 }
 
 function playlistEmbed(playlist, tracks) {
-    const lines = tracks.slice(0, 25).map((t, i) => `**${i + 1}.** ${t.title}${t.artist ? ` — ${t.artist}` : ''} \`${formatDuration(t.durationMs)}\``);
+    const totalMs = (tracks || []).reduce((n, t) => n + (t.durationMs || 0), 0);
+    const lines = (tracks || []).slice(0, 25).map((t, i) =>
+        `\`${String(i + 1).padStart(2, '0')}.\` **${t.title}**${t.artist ? ` — ${t.artist}` : ''} \`${formatDuration(t.durationMs)}\``,
+    );
     return new EmbedBuilder()
         .setColor(BRAND)
-        .setTitle(`🗂️ ${playlist.name} ${playlist.isPublic ? '🌐 Public' : '🔒 Personal'}`)
+        .setAuthor({ name: `🗂️ ${playlist.name} ${playlist.isPublic ? '🌐 Public' : '🔒 Personal'}` })
         .setDescription((playlist.description ? `${playlist.description}\n\n` : '') + (lines.length ? lines.join('\n') : 'This playlist is empty.'))
-        .setFooter({ text: `${tracks.length} track(s)${tracks.length > 25 ? ' (showing first 25)' : ''}` });
+        .setFooter({ text: `${(tracks || []).length} track(s) • ${formatDuration(totalMs)} total${(tracks || []).length > 25 ? ' (showing first 25)' : ''}` });
 }
 
 function status247Embed(snapshot) {
@@ -172,6 +276,11 @@ function status247Embed(snapshot) {
 
 function successEmbed(title, description) {
     return new EmbedBuilder().setColor(config.colors.success).setTitle(title).setDescription(description || null).setTimestamp();
+}
+
+/** A consistent "working on it" state (searching / connecting / loading). */
+function loadingEmbed(title = '⏳ Loading…', description = null) {
+    return new EmbedBuilder().setColor(BRAND).setTitle(title).setDescription(description || null).setTimestamp();
 }
 
 function errorEmbed(description) {
@@ -195,12 +304,19 @@ function helpEmbed({ prefix = '/', slash = false } = {}) {
             cmd('previous', '', 'Play the previous track'),
             cmd('stop', '', 'Stop playback (stays connected)'),
             cmd('seek', '<timestamp>', 'Jump to a position in the track'),
+            cmd('rewind', '[seconds]', 'Rewind a few seconds'),
+            cmd('skipto', '<position>', 'Skip directly to a queue position'),
             cmd('queue', '', 'Show the queue'),
             cmd('remove', '<position>', 'Remove a track from the queue'),
             cmd('clear', '', 'Clear the queue'),
             cmd('shuffle', '', 'Shuffle the queue'),
             cmd('loop', '<off|track|queue>', 'Set the repeat mode'),
+            cmd('autoplay', '', 'Toggle autoplay (keeps music going)'),
+            cmd('filter', '[preset]', 'Apply an audio filter'),
             cmd('nowplaying', '', 'Show what is playing'),
+            cmd('track', '', 'Show details for the current track'),
+            cmd('lyrics', '[song]', 'Show the lyrics of the current song'),
+            cmd('grab', '', 'DM yourself the current track'),
             cmd('volume', '<1-100>', 'Set the volume'),
             cmd('musicstatus', '', 'Music + connection status'),
             cmd('247 enable', '', 'Enable the persistent connection (Admin)'),
@@ -214,7 +330,7 @@ function helpEmbed({ prefix = '/', slash = false } = {}) {
 }
 
 module.exports = {
-    nowPlaying, controlRow, secondControlRow, queueEmbed, searchSelect, searchEmbed,
-    playlistListEmbed, playlistEmbed, status247Embed, successEmbed, errorEmbed, helpEmbed,
-    stateLabel, repeatLabel, sourceLabel, trackLine,
+    nowPlaying, controlRow, secondControlRow, filterRow, filterEmbed, queueEmbed, searchSelect, searchEmbed,
+    trackInfoEmbed, playlistListEmbed, playlistEmbed, status247Embed, successEmbed, loadingEmbed, errorEmbed, helpEmbed,
+    stateLabel, repeatLabel, sourceLabel, trackLine, trackLink, requesterLabel, progressLine, QUEUE_PER_PAGE,
 };
