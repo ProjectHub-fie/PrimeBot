@@ -1628,3 +1628,38 @@ shape for backward compatibility.
 autoplay (refill / no-loop / dedupe), skipto/rewind, the premium embeds + component
 limits, progressBar, the lyrics service (success/404/network-failure), and the
 prefix routing of every new alias (driving the real `messageCreate` handler).
+
+## Voice defense — the bot is always self-deafened (default)
+
+The bot is **defended in voice by default**: its own voice state is always
+**deafened** (`selfDeaf`), and it is **never self-muted** (it must still transmit
+playback). A music/radio bot never needs to hear anyone, and a deafened member
+cannot be pulled into voice interaction — so "defended" is the safe default.
+
+- **Module:** `utils/voiceDefense.js` — `JOIN_OPTIONS` (`{ selfDeaf: true,
+  selfMute: false }`), `isDefended(state)` (true when `selfDeaf` OR `deaf` is set,
+  since Discord applies `deaf = self_deaf || server_deaf`), `defendVoiceState()`,
+  `defendGuild(client, guildId)`, `handleVoiceStateUpdate(oldState, newState)`,
+  `isEnabled()`, `resetCooldowns()`.
+- **Why runtime enforcement:** the `joinVoiceChannel()` calls already pass
+  `selfDeaf: true`, but nothing re-asserted it. An admin toggling the bot's state
+  in the Discord UI, a server undeafen, or a fresh connection could leave the bot
+  undeafened. The defense closes that gap.
+- **Two layers:** (1) `events/voiceStateUpdate.js` calls
+  `voiceDefense.handleVoiceStateUpdate` **first** (before the radio/music
+  forwarders) — it only polices the BOT's own, connected state and re-asserts the
+  deafen when lost; (2) both voice layers (`utils/music/musicVoice.js`,
+  `utils/radioVoice.js`) re-assert it via `defendGuild(client, guildId)` right
+  after a successful join, and build the join from `voiceDefense.JOIN_OPTIONS` so
+  the option can never drift.
+- **Safety:** every call is fire-and-forget and throttled per guild
+  (`VOICE_DEFEND_COOLDOWN_MS`, default 30000); `setDeaf` uses discord.js
+  `VoiceState#setDeaf` (which sets **server**-deafen via
+  `guild.members.edit(id, { deaf })`, the only runtime API available) and can
+  never throw into an event handler. Rejoins reset `selfDeaf` to true anyway.
+- **Env vars:** `VOICE_DEFEND_ENABLED` (default `true`), `VOICE_DEFEND_COOLDOWN_MS`
+  (default `30000`). Set `VOICE_DEFEND_ENABLED=false` to opt out (not recommended).
+- **Tests:** `tests/voiceDefense.test.js` (12) — join-option defaults, no hardcoded
+  `selfDeaf:false` drift in either voice layer, post-join re-assertion, the
+  throttle/force path, only-the-bot policing, the disable switch, and the event
+  wiring order (defense before radio/music).

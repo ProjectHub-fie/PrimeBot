@@ -94,8 +94,7 @@ async function join({ client, guildId, channelId, onDisconnect }) {
         channelId,
         guildId,
         adapterCreator: guild.voiceAdapterCreator,
-        selfDeaf: true,
-        selfMute: false,
+        ...require('./voiceDefense').JOIN_OPTIONS,
     });
 
     if (typeof connection.on === 'function') {
@@ -127,6 +126,10 @@ async function join({ client, guildId, channelId, onDisconnect }) {
         out.voiceState = { guildId, channelId, statusBefore, statusAfter, timeoutMs, aborted };
         throw out;
     }
+    // Voice defense: the bot is always self-deafened. `selfDeaf: true` above
+    // already requests it; this re-asserts it right after the handshake so the
+    // defended state holds even if the join request was adjusted server-side.
+    require('./voiceDefense').defendGuild(client, guildId).catch(() => {});
     return connection;
 }
 
