@@ -82,7 +82,7 @@ async function join({ client, guildId, channelId, onDisconnect }) {
     // A join issued while the shard is not Ready is silently dropped by
     // discord.js (AdapterUnavailable) and can only ever fail — wait for the
     // shard first, e.g. right after a node restart.
-    const { waitForShardReady } = require('../voiceReadiness');
+    const { waitForShardReady } = require('./voiceReadiness');
     if (!(await waitForShardReady(client, guildId))) {
         const shardStatus = guild && guild.shard && guild.shard.status;
         console.error(`[VOICE] guild=${guildId} channel=${channelId} aborted before join — shard not Ready (status=${shardStatus})`);

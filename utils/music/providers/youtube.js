@@ -56,7 +56,10 @@ async function search(query, limit = 10) {
 async function resolve(url) {
     const { YouTube: YT } = libs();
     const id = youTubeId(url) || url;
-    const video = await YT.getVideo(id);
+    // youtube-sr's getVideo() validates its argument as a VIDEO URL — a bare
+    // id fails `YT.validate(id, 'VIDEO')` and throws "Invalid video url". Always
+    // hand it the canonical watch URL.
+    const video = await YT.getVideo(`https://www.youtube.com/watch?v=${id}`);
     const track = toTrack(video);
     if (!track) throw new Error('YouTube video could not be resolved.');
     return track;
