@@ -1779,3 +1779,25 @@ Fixed in PR #128.
   resolved by a Lavalink node with a current YouTube source plugin, or by updating
   `@distube/ytdl-core`.
 - **Tests:** `tests/radioVoiceJoin.test.js` (3) + `tests/musicVoiceFixes.test.js` (5).
+
+## Music control buttons — attach to every playback reply
+
+The music control rows (`controlRow` + `secondControlRow` in
+`utils/music/musicEmbed.js` — `music_prev/pauseresume/skip/stop/shuffle` and
+`music_repeat/autoplay/queue/lyrics/247status`) were fully built and routed in
+`events/interactionCreate.js`, but the **play** handlers replied with a bare
+success embed and **no components** — the controls were only ever attached to
+`nowplaying` / `help` / the button-refresh path. Symptom: "no control buttons are
+showing" right after `$play`.
+
+- **Fix:** `utils/music/musicEmbed.js` exports **`nowPlayingPayload(snapshot)`** —
+  the Now Playing embed plus BOTH control rows. Use it for every reply that
+  announces playback: prefix `$play` (`events/messageCreate.js`), slash
+  `/music play` (`commands/music.js`), and the search-select handler
+  (`events/interactionCreate.js`, which previously sent `components: []`).
+- **Gotcha:** `nowPlaying()` returns only the FIRST row in `components`, so
+  `components: [components[0]]` silently drops repeat/autoplay/queue/lyrics/24-7.
+  Prefer `nowPlayingPayload()` — it cannot drop a row.
+- **Tests:** `tests/musicVoiceFixes.test.js` asserts `nowPlayingPayload()` exposes
+  all 10 control customIds and drives the REAL `$play` handler to confirm the reply
+  carries both action rows (verified failing without the fix).
