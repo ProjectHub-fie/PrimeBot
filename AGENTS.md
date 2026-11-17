@@ -1741,3 +1741,41 @@ cannot be pulled into voice interaction — so "defended" is the safe default.
   `selfDeaf:false` drift in either voice layer, post-join re-assertion, the
   throttle/force path, only-the-bot policing, the disable switch, and the event
   wiring order (defense before radio/music).
+
+## Post-#127 music playback bugs (fixed) — radio require, YouTube URL, ffmpeg
+
+Three **pre-existing** bugs surfaced in production right after the Lavalink engine
+(#127) landed. None were in the Lavalink code — all three lived on `main` since
+PR #125, and the mocked test suites never exercised the real paths that break.
+Fixed in PR #128.
+
+- **`[RADIO] Restore failed … Cannot find module '../voiceReadiness'`.**
+  `utils/radioVoice.js` lives in `utils/`, so its sibling is `./voiceReadiness`
+  — **not** `../voiceReadiness`, which resolves to `<repo-root>/voiceReadiness.js`
+  (missing). `utils/music/musicVoice.js` correctly uses `../` because it sits one
+  level deeper in `utils/music/`. **Lesson:** a relative sibling require must be
+  checked against the file's own directory. `tests/radioVoiceJoin.test.js` drives
+  the REAL `radioVoice.join()` (the radio suite mocks the whole voice layer, which
+  is exactly why this shipped) and statically audits every sibling require.
+- **"Invalid video url" on a VALID YouTube URL.** `youtube.resolve()`
+  (`utils/music/providers/youtube.js`) passed a **bare video id** to youtube-sr's
+  `getVideo()`, which validates its argument as a VIDEO URL
+  (`YT.validate(id,'VIDEO') === false`) and throws `Invalid video url` **before
+  any fetch**. Fix: send the canonical `https://www.youtube.com/watch?v=<id>`.
+  Symptom that distinguishes it from a real network failure: the error is
+  `Invalid video url`, not `fetch failed`/`Failed to find any playable formats`.
+- **"song plays but no sound" (direct engine).** `musicVoice.ffmpeg()` trusted
+  `require('ffmpeg-static')` to **throw** when the binary is absent; it instead
+  returns a **path string** that does not exist, so
+  `try { ffmpegPath = require('ffmpeg-static') } catch { ffmpegPath = 'ffmpeg' }`
+  never hit the `catch` and ffmpeg was spawned at a missing path. Now it
+  `existsSync`-checks the resolved binary and falls back to the system `ffmpeg`
+  (with a one-time `[MUSIC] ffmpeg-static binary not found` warning). **Prerequisite
+  for any direct-engine sound on hosts that block npm install scripts.** The
+  Lavalink engine needs no local ffmpeg (it offloads to the node), which is one of
+  its advantages.
+- **Not fixed here:** `@distube/ytdl-core is out of date! … Failed to find any
+  playable formats` is YouTube **format extraction**, orthogonal to the above —
+  resolved by a Lavalink node with a current YouTube source plugin, or by updating
+  `@distube/ytdl-core`.
+- **Tests:** `tests/radioVoiceJoin.test.js` (3) + `tests/musicVoiceFixes.test.js` (5).
