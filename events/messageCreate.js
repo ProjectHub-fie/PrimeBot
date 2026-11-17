@@ -650,10 +650,16 @@ module.exports = {
                             case 'skip': return message.reply({ embeds: [rEmbed.statusEmbed(await rMgr.skip(message.guild.id, { actor: message.author.id }))] });
                             case 'station': {
                                 const id = args[1];
-                                if (!id) return message.reply({ embeds: [rEmbed.stationsEmbed(rMgr.stations.listForGuild(message.guild.id).filter(s => s.enabled), rMgr.getSession(message.guild.id)?.stationId)] });
+                                if (!id) {
+                                    const view = rEmbed.stationsView(rMgr.stations.listForGuild(message.guild.id).filter(s => s.enabled), rMgr.getSession(message.guild.id)?.stationId);
+                                    return message.reply({ embeds: view.embeds, components: view.components });
+                                }
                                 return message.reply({ embeds: [rEmbed.statusEmbed(await rMgr.setStation(message.guild.id, id, { actor: message.author.id }))] });
                             }
-                            case 'stations': return message.reply({ embeds: [rEmbed.stationsEmbed(rMgr.stations.listForGuild(message.guild.id).filter(s => s.enabled), rMgr.getSession(message.guild.id)?.stationId)] });
+                            case 'stations': {
+                                const view = rEmbed.stationsView(rMgr.stations.listForGuild(message.guild.id).filter(s => s.enabled), rMgr.getSession(message.guild.id)?.stationId);
+                                return message.reply({ embeds: view.embeds, components: view.components });
+                            }
                             case 'volume': {
                                 const lvl = parseInt(args[1], 10);
                                 if (!Number.isFinite(lvl)) return message.reply({ embeds: [rEmbed.errorEmbed('Usage: `$radio volume <0-100>`')] });
@@ -700,6 +706,18 @@ module.exports = {
                 case "volume":
                 case "vol":
                 case "playlist":
+                case "autoplay":
+                case "ap":
+                case "filter":
+                case "filters":
+                case "eq":
+                case "lyrics":
+                case "grab":
+                case "save":
+                case "skipto":
+                case "jump":
+                case "rewind":
+                case "track":
                 case "247":
                 case "24/7":
                 case "music": {
@@ -753,10 +771,13 @@ module.exports = {
                             case 'prev': requireControl(); { const r = await mMgr.previous(message.guild.id); return message.reply({ embeds: [mUi.successEmbed('⏮️ Previous', `Playing **${r.track.title}**.`)] }); }
                             case 'stop': requireControl(); { await mMgr.stop(message.guild.id, { actor: message.author.id }); return message.reply({ embeds: [mUi.successEmbed('⏹️ Stopped', 'Playback stopped. PrimeBot stays in the voice channel.')] }); }
                             case 'seek': requireControl(); { const sec = require('../shared/musicConstants').parseTimestamp(args[1]); if (sec == null) throw new Error('Invalid timestamp. Use e.g. `90`, `1:30` or `1h2m3s`.'); const s = await mMgr.seek(message.guild.id, sec); return message.reply({ embeds: [mUi.successEmbed('⏩ Seeked', `Jumped to ${sec}s in **${s.current ? s.current.title : 'the track'}**.`)] }); }
+                            case 'rewind': requireControl(); { const secs = parseInt(args[1], 10) || 10; const s = await mMgr.rewind(message.guild.id, secs); return message.reply({ embeds: [mUi.successEmbed('⏪ Rewound', `Rewound ${secs}s in **${s.current ? s.current.title : 'the track'}**.`)] }); }
+                            case 'skipto':
+                            case 'jump': requireControl(); { const pos = parseInt(args[1], 10); if (!Number.isFinite(pos)) return message.reply({ embeds: [mUi.errorEmbed('Usage: `$music skipto <position>`')] }); const s = await mMgr.skipTo(message.guild.id, pos); return message.reply({ embeds: [mUi.successEmbed('⏭️ Skipped', s.current ? `Now playing **${s.current.title}**.` : 'The queue is empty — still connected.')] }); }
                             case 'queue':
                             case 'q': {
                                 if (!mSession) return message.reply({ embeds: [mUi.errorEmbed('Nothing is playing in this server.')] });
-                                const { embed, components } = mUi.queueEmbed(mMgr.describe(message.guild.id), 0);
+                                const { embed, components } = mUi.queueEmbed(mMgr.describe(message.guild.id, { queueLimit: 100 }), 0);
                                 return message.reply({ embeds: [embed], components });
                             }
                             case 'remove': {
@@ -777,11 +798,63 @@ module.exports = {
                                 const s = await mMgr.setRepeat(message.guild.id, mode);
                                 return message.reply({ embeds: [mUi.successEmbed('🔁 Repeat', `Repeat mode is now **${mUi.repeatLabel(s.repeat)}**.`)] });
                             }
+                            case 'autoplay':
+                            case 'ap': {
+                                requireControl();
+                                const forced = args[1] == null ? null : ['on', 'enable', 'true', 'yes'].includes(String(args[1]).toLowerCase()) ? true
+                                    : ['off', 'disable', 'false', 'no'].includes(String(args[1]).toLowerCase()) ? false : null;
+                                const next = forced == null ? !(mSession && mSession.autoplay) : forced;
+                                const s = await mMgr.setAutoplay(message.guild.id, next);
+                                return message.reply({ embeds: [mUi.successEmbed('♾️ Autoplay', s.autoplay ? 'Autoplay is now **enabled** — related tracks will keep playing.' : 'Autoplay is now **disabled**.')] });
+                            }
+                            case 'filter':
+                            case 'filters':
+                            case 'eq': {
+                                requireControl();
+                                const preset = (args[1] || '').toLowerCase();
+                                const mFilters = require('../utils/music/musicFilters');
+                                if (!preset) {
+                                    const { embed, components } = mUi.filterEmbed(mSession ? mSession.filter : null);
+                                    return message.reply({ embeds: [embed], components });
+                                }
+                                if (preset === 'clear' || preset === 'reset') {
+                                    await mMgr.setFilter(message.guild.id, null);
+                                    return message.reply({ embeds: [mUi.successEmbed('🎛️ Filter', 'Filters cleared.')] });
+                                }
+                                if (!mFilters.isFilter(preset)) return message.reply({ embeds: [mUi.errorEmbed(`Unknown filter. Choose from: ${mFilters.VALID_FILTER_IDS.join(', ')}, clear.`)] });
+                                await mMgr.setFilter(message.guild.id, preset);
+                                return message.reply({ embeds: [mUi.successEmbed('🎛️ Filter', `Filter set to **${mFilters.filterLabel(preset)}**.`)] });
+                            }
+                            case 'lyrics': {
+                                const song = args.slice(1).join(' ').trim();
+                                const snap = mMgr.describe(message.guild.id);
+                                if (!song && (!snap || !snap.current)) return message.reply({ embeds: [mUi.errorEmbed('Nothing is playing — provide a song name: `$lyrics <song>`')] });
+                                const loading = await message.reply({ embeds: [mUi.loadingEmbed('🔎 Searching lyrics…')] });
+                                const { fetchLyrics } = require('../utils/music/lyricsService');
+                                const res = await fetchLyrics(song ? { query: song } : { track: snap.current });
+                                if (!res.lyrics) return loading.edit({ embeds: [mUi.errorEmbed(res.reason || 'No lyrics found.')] });
+                                const text = res.lyrics.length > 4000 ? res.lyrics.slice(0, 3980) + '\n…' : res.lyrics;
+                                const embed = song ? mUi.trackInfoEmbed({ title: song }).setDescription(text) : mUi.trackInfoEmbed(snap.current).setDescription(text);
+                                return loading.edit({ embeds: [embed] });
+                            }
+                            case 'grab':
+                            case 'save': {
+                                const snap = mMgr.describe(message.guild.id);
+                                if (!snap || !snap.current) return message.reply({ embeds: [mUi.errorEmbed('Nothing is playing in this server.')] });
+                                const dm = await message.author.send({ embeds: [mUi.trackInfoEmbed(snap.current)] }).catch(() => null);
+                                return message.reply({ embeds: [dm ? mUi.successEmbed('📬 Sent', 'Check your DMs for the track details.') : mUi.errorEmbed('I could not DM you — enable direct messages from this server.')] });
+                            }
+                            case 'track': {
+                                const snap = mMgr.describe(message.guild.id);
+                                if (!snap || !snap.current) return message.reply({ embeds: [mUi.errorEmbed('Nothing is playing in this server.')] });
+                                return message.reply({ embeds: [mUi.trackInfoEmbed(snap.current)] });
+                            }
                             case 'nowplaying':
                             case 'np': {
                                 if (!mSession) return message.reply({ embeds: [mUi.errorEmbed('Nothing is playing in this server.')] });
-                                const { embed, components } = mUi.nowPlaying(mMgr.describe(message.guild.id));
-                                return message.reply({ embeds: [embed], components: [components[0], mUi.secondControlRow()] });
+                                const snap = mMgr.describe(message.guild.id);
+                                const { embed, components } = mUi.nowPlaying(snap);
+                                return message.reply({ embeds: [embed], components: [components[0], mUi.secondControlRow(snap)] });
                             }
                             case 'volume':
                             case 'vol': {

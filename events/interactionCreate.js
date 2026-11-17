@@ -1151,6 +1151,34 @@ module.exports = {
                 interactionDebugger.logInteraction(interaction, `Select Menu (${interaction.customId})`);
 
                 try {
+                    // Radio station dropdown (customId: radio_station_select).
+                    if (interaction.customId === 'radio_station_select') {
+                        const manager = interaction.client.radioManager;
+                        if (!manager) return interaction.reply({ content: 'The radio service is not available right now.', ephemeral: true }).catch(() => {});
+                        const stationId = (interaction.values && interaction.values[0]) || null;
+                        try {
+                            const { isAdmin } = require('../utils/music/musicPermissions');
+                            const session = manager.getSession(interaction.guildId);
+                            const inRadio = session && interaction.member && interaction.member.voice && interaction.member.voice.channelId === session.channelId;
+                            if (!isAdmin(interaction.member) && !inRadio) {
+                                return interaction.reply({ content: 'Join the radio voice channel (or have Manage Server) to switch stations.', ephemeral: true }).catch(() => {});
+                            }
+                            const status = await manager.setStation(interaction.guildId, stationId, { actor: interaction.user.id });
+                            const { statusEmbed } = require('../utils/radioEmbed');
+                            return interaction.update({ embeds: [statusEmbed(status)], components: [] }).catch(() => {});
+                        } catch (err) {
+                            return interaction.reply({ content: err.message || 'Could not switch stations.', ephemeral: true }).catch(() => {});
+                        }
+                    }
+
+                    // Music audio-filter select (customId: music_filter).
+                    if (interaction.customId === 'music_filter') {
+                        const m = interaction.client.musicManager;
+                        if (!m) return interaction.reply({ content: 'The music service is not available right now.', ephemeral: true }).catch(() => {});
+                        await safeExecute(require('../utils/music/musicButtons').handleSelect.bind(null, interaction), [m], null, `Music filter (${interaction.customId})`);
+                        return;
+                    }
+
                     // Music search select (customId: music_search:<token>).
                     if (interaction.customId.startsWith('music_search:')) {
                         const token = interaction.customId.slice('music_search:'.length);

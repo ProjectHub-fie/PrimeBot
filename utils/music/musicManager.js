@@ -18,13 +18,19 @@
  * and to `utils/music/musicVoice` (both injectable for tests).
  */
 
-const { REPEAT_MODES, PLAYBACK_STATES, formatDuration } = require('../../shared/musicConstants');
+const { REPEAT_MODES, PLAYBACK_STATES, formatDuration, autoplayQuery } = require('../../shared/musicConstants');
+const musicFilters = require('./musicFilters');
 
 const MAX_TRACK_RETRIES = Math.max(0, parseInt(process.env.MUSIC_MAX_TRACK_RETRIES, 10) || 2);
 const RECONNECT_DELAY_MS = Math.max(1000, parseInt(process.env.MUSIC_RECONNECT_DELAY_MS, 10) || 5000);
 const DEFAULT_MAX_QUEUE = Math.max(10, parseInt(process.env.MUSIC_MAX_QUEUE, 10) || 500);
 const RELOAD_INTERVAL_MS = Math.max(5000, parseInt(process.env.MUSIC_RELOAD_INTERVAL_MS, 10) || 30000);
 const HISTORY_LIMIT = 50;
+// Autoplay: how many candidates to consider and how similar a candidate may be
+// to the track that just finished before it is rejected (avoids replaying the
+// same song / a re-upload of it).
+const AUTOPLAY_CANDIDATES = Math.max(3, parseInt(process.env.MUSIC_AUTOPLAY_CANDIDATES, 10) || 10);
+const AUTOPLAY_MAX_SIMILARITY = 0.75;
 
 /** Strip volatile fields (stream URLs) before a track is persisted. */
 function stripTrackForPersist(track) {
@@ -45,6 +51,25 @@ function dedupeTracks(tracks) {
         out.push(t);
     }
     return out;
+}
+
+function normalizeTitle(s) {
+    return String(s || '')
+        .toLowerCase()
+        .replace(/\([^)]*\)|\[[^\]]*\]/g, ' ')
+        .replace(/\b(official|lyrics?|audio|video|hd|hq|mv|4k|8k|full)\b/g, ' ')
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim();
+}
+
+/** Token-overlap similarity (0..1) between two titles. */
+function titleSimilarity(a, b) {
+    const ta = new Set(normalizeTitle(a).split(' ').filter(Boolean));
+    const tb = new Set(normalizeTitle(b).split(' ').filter(Boolean));
+    if (!ta.size || !tb.size) return 0;
+    let overlap = 0;
+    for (const t of ta) if (tb.has(t)) overlap++;
+    return overlap / Math.max(ta.size, tb.size);
 }
 
 class MusicManager {
@@ -145,6 +170,13 @@ class MusicManager {
             reconnecting: false,
             ownerNode: this._nodeId,
             _seekSeconds: 0,
+            // ── Linix-style additions ───────────────────────────────────────
+            filter: null,          // active filter id (null = none)
+            autoplay: false,       // keep the music going when the queue empties
+            autoplaySeed: null,    // the track autoplay expands from
+            autoplaySeen: new Set(), // provider:id keys autoplay already queued
+            positionMs: 0,         // playback position (from the voice player)
+            startedAt: null,       // wall-clock when the current track started
         };
     }
 
@@ -182,10 +214,11 @@ class MusicManager {
     }
 
     /** Snapshot for commands / dashboard / status. */
-    describe(guildId) {
+    describe(guildId, { queueLimit = 25 } = {}) {
         const s = this.sessions.get(String(guildId));
         if (!s) return null;
         const voiceState = this.voice.getConnectionState(s.connection);
+        const positionMs = this.positionMs(s);
         return {
             guildId: s.guildId,
             channelId: s.channelId,
@@ -194,7 +227,8 @@ class MusicManager {
             state: s.state,
             current: s.current,
             queueLength: s.queue.length,
-            queue: s.queue.slice(0, 25),
+            queue: s.queue.slice(0, Math.max(1, queueLimit)),
+            history: s.history.slice(0, 25),
             repeat: s.repeat,
             shuffle: s.shuffle,
             volume: s.volume,
@@ -204,7 +238,30 @@ class MusicManager {
             ownerNode: s.ownerNode,
             ownsHere: s.ownerNode === this._nodeId,
             djRoleId: s.djRoleId,
+            filter: s.filter,
+            autoplay: s.autoplay,
+            positionMs,
+            durationMs: s.current ? s.current.durationMs || null : null,
         };
+    }
+
+    /**
+     * The current track's playback position in ms. Prefers the live voice player
+     * position (exact); otherwise the seek baseline plus wall-clock elapsed since
+     * playback started.
+     */
+    positionMs(session) {
+        try {
+            if (this.voice.getPlaybackPosition && session.player) {
+                const p = this.voice.getPlaybackPosition(session.player);
+                if (Number.isFinite(p) && p > 0) return p;
+            }
+        } catch (_) {}
+        const base = session.positionMs || 0;
+        if (session.startedAt && session.state === PLAYBACK_STATES.PLAYING) {
+            return base + Math.max(0, Date.now() - session.startedAt);
+        }
+        return base;
     }
 
     // ── connection ──────────────────────────────────────────────────────────
@@ -303,7 +360,7 @@ class MusicManager {
             const { streamUrl, durationMs } = await this.providers.resolveStream(track);
             if (token !== session._playToken) return false; // superseded by a newer play
             if (durationMs && !track.durationMs) track.durationMs = durationMs;
-            const resource = this.voice.createResource(streamUrl, { track, seekSeconds });
+            const resource = this.voice.createResource(streamUrl, { track, seekSeconds, filter: session.filter });
             await this._ensureConnected(session);
             this._ensurePlayer(session);
             this.voice.playResource(session.player, resource);
@@ -311,6 +368,8 @@ class MusicManager {
             session.state = PLAYBACK_STATES.PLAYING;
             session.manualPause = false;
             session.retries = 0;
+            session.startedAt = Date.now();
+            session.positionMs = seekSeconds * 1000;
             session.failedTracks.delete(track._key || `${track.provider}:${track.id}`);
             await this._recordHistory(session, track);
             return true;
@@ -341,12 +400,24 @@ class MusicManager {
             }
 
             if (!session.queue.length) {
+                // Autoplay: the queue ran dry — expand from the last track
+                // (if enabled) BEFORE going idle. Never overrides repeat-queue.
+                if (session.autoplay && session.repeat === REPEAT_MODES.OFF && session.current) {
+                    const added = await this._expandAutoplay(session).catch(() => 0);
+                    if (added > 0) {
+                        // fall through to the play loop below with the new queue
+                    }
+                }
+            }
+
+            if (!session.queue.length) {
                 // Empty queue → keep the connection, go idle (never disconnect).
                 if (session.repeat === REPEAT_MODES.QUEUE && session.current) {
                     session.queue.push(session.current);
                 } else {
                     session.current = null;
                     session.state = PLAYBACK_STATES.IDLE;
+                    session.startedAt = null;
                     this._stopPlayerSoft(session);
                     return;
                 }
@@ -422,7 +493,47 @@ class MusicManager {
     }
 
     _onPlayerStateChange(session, oldState, newState) {
-        if (newState === 'playing') session.state = PLAYBACK_STATES.PLAYING;
+        if (newState === 'playing') {
+            session.state = PLAYBACK_STATES.PLAYING;
+            if (!session.startedAt) session.startedAt = Date.now();
+        }
+    }
+
+    /**
+     * Expand autoplay: search for a track related to the current one and queue
+     * it. Returns the number of tracks added (0 when nothing suitable was found
+     * or the provider failed). Bounded and deduped so it can never loop.
+     */
+    async _expandAutoplay(session) {
+        const seed = session.current || session.autoplaySeed;
+        if (!seed) return 0;
+        const query = autoplayQuery(seed);
+        if (!query) return 0;
+        let candidates = [];
+        try {
+            if (typeof this.providers.searchQuery === 'function') {
+                candidates = await this.providers.searchQuery(query, AUTOPLAY_CANDIDATES);
+            } else {
+                const one = await this.providers.resolveQuery(query, { searchLimit: AUTOPLAY_CANDIDATES });
+                candidates = one ? [one] : [];
+            }
+        } catch (_) { return 0; }
+
+        const seedKey = seed._key || `${seed.provider}:${seed.id}`;
+        const next = (candidates || []).find(c => {
+            if (!c || c.id == null) return false;
+            const key = `${c.provider}:${c.id}`;
+            if (key === seedKey) return false;
+            if (session.autoplaySeen.has(key)) return false;
+            if (session.failedTracks.has(key)) return false;
+            // Reject the same song / an obvious re-upload.
+            if (titleSimilarity(c.title, seed.title) >= AUTOPLAY_MAX_SIMILARITY) return false;
+            return true;
+        });
+        if (!next) return 0;
+        session.autoplaySeen.add(`${next.provider}:${next.id}`);
+        const added = this.enqueue(session, [{ ...next, requesterId: null }], { requesterId: null });
+        return added;
     }
 
     _onConnectionLost(session) {
@@ -489,6 +600,9 @@ class MusicManager {
     async pause(guildId, { actor = null } = {}) {
         const s = this.getSession(guildId);
         if (!s || !s.current) throw new Error('Nothing is playing.');
+        // Freeze the progress baseline so the bar stops advancing while paused.
+        s.positionMs = this.positionMs(s);
+        s.startedAt = null;
         s.manualPause = true;
         this._pausePlayer(s);
         s.state = PLAYBACK_STATES.PAUSED;
@@ -499,8 +613,11 @@ class MusicManager {
         const s = this.getSession(guildId);
         if (!s) throw new Error('Nothing is playing.');
         s.manualPause = false;
-        if (s.current) { this.voice.resumePlayer(s.player); s.state = PLAYBACK_STATES.PLAYING; }
-        else await this._playNext(s);
+        if (s.current) {
+            this.voice.resumePlayer(s.player);
+            s.startedAt = Date.now();
+            s.state = PLAYBACK_STATES.PLAYING;
+        } else await this._playNext(s);
         return this.describe(guildId);
     }
 
@@ -534,7 +651,9 @@ class MusicManager {
         this._stopPlayerSoft(s);
         s.current = null;
         s.manualPause = false;
-        if (clearQueue) { s.queue = []; s.history = []; }
+        s.startedAt = null;
+        s.positionMs = 0;
+        if (clearQueue) { s.queue = []; s.history = []; s.autoplaySeen = new Set(); }
         s.state = PLAYBACK_STATES.STOPPED;
         // Stop playback but KEEP the connection (24/7). The connection is only
         // destroyed by /247 disable or /leave.
@@ -596,6 +715,67 @@ class MusicManager {
         if (s.current.durationMs && sec * 1000 > s.current.durationMs) throw new Error('That timestamp is past the end of the track.');
         s._seekSeconds = sec;
         await this._playTrack(s, s.current);
+        return this.describe(guildId);
+    }
+
+    /** Rewind by `seconds` from the current position (never below 0). */
+    async rewind(guildId, seconds = 10) {
+        const s = this.getSession(guildId);
+        if (!s || !s.current) throw new Error('Nothing is playing to rewind.');
+        const back = Math.max(1, Math.floor(Number(seconds) || 10));
+        const target = Math.max(0, Math.floor(this.positionMs(s) / 1000) - back);
+        return this.seek(guildId, target);
+    }
+
+    /**
+     * Skip directly to the queue position `position` (1-based, 1 = the next
+     * track). Everything before it is discarded. Returns the new snapshot.
+     */
+    async skipTo(guildId, position) {
+        const s = this.getSession(guildId);
+        if (!s) throw new Error('Nothing is playing.');
+        const pos = Math.floor(Number(position));
+        if (!Number.isFinite(pos) || pos < 1 || pos > s.queue.length) {
+            throw new Error(`Position must be between 1 and ${s.queue.length}.`);
+        }
+        // Drop every track before the requested one.
+        s.queue.splice(0, pos - 1);
+        if (s.current) { s.history.push(stripTrackForPersist(s.current)); if (s.history.length > HISTORY_LIMIT) s.history.shift(); }
+        s.current = null;
+        s.startedAt = null;
+        s.positionMs = 0;
+        this._stopPlayerSoft(s);
+        await this._playNext(s);
+        return this.describe(guildId);
+    }
+
+    /** Apply an audio filter preset (or clear it with null/'clear'). */
+    async setFilter(guildId, filter) {
+        const s = this.getSession(guildId);
+        if (!s) throw new Error('There is no active session.');
+        const id = filter == null ? '' : String(filter).toLowerCase().trim();
+        if (id === '' || id === 'clear' || id === 'none' || id === 'off') {
+            s.filter = null;
+        } else if (musicFilters.isFilter(id)) {
+            s.filter = id;
+        } else {
+            throw new Error(`Unknown filter "${filter}".`);
+        }
+        // Re-apply to the live track so the change is audible immediately.
+        if (s.current && s.state !== PLAYBACK_STATES.IDLE) {
+            s._seekSeconds = Math.floor(this.positionMs(s) / 1000);
+            await this._playTrack(s, s.current);
+        }
+        return this.describe(guildId);
+    }
+
+    /** Enable/disable autoplay (continues music when the queue empties). */
+    async setAutoplay(guildId, enabled) {
+        const s = this.getSession(guildId);
+        if (!s) throw new Error('There is no active session.');
+        s.autoplay = !!enabled;
+        if (s.autoplay && s.current) s.autoplaySeed = s.current;
+        if (!s.autoplay) s.autoplaySeen = new Set();
         return this.describe(guildId);
     }
 
@@ -803,4 +983,4 @@ class MusicManager {
     }
 }
 
-module.exports = { MusicManager, dedupeTracks, stripTrackForPersist, MAX_TRACK_RETRIES, DEFAULT_MAX_QUEUE, HISTORY_LIMIT, formatDuration };
+module.exports = { MusicManager, dedupeTracks, stripTrackForPersist, titleSimilarity, MAX_TRACK_RETRIES, DEFAULT_MAX_QUEUE, HISTORY_LIMIT, formatDuration };
