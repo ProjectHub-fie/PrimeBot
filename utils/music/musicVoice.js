@@ -36,7 +36,22 @@ function voice() {
 let ffmpegPath = null;
 function ffmpeg() {
     if (ffmpegPath === null) {
-        try { ffmpegPath = require('ffmpeg-static'); } catch (_) { ffmpegPath = 'ffmpeg'; }
+        // `require('ffmpeg-static')` returns a PATH STRING and does not throw
+        // when the binary was never downloaded (npm blocks its install script,
+        // e.g. on hosts that disable lifecycle scripts) — so the try/catch alone
+        // silently yields a non-existent path and every play fails with no sound.
+        // Verify the file exists and fall back to a system ffmpeg otherwise.
+        let candidate = null;
+        try { candidate = require('ffmpeg-static'); } catch (_) { candidate = null; }
+        try {
+            if (candidate && require('fs').existsSync(candidate)) ffmpegPath = candidate;
+            else ffmpegPath = 'ffmpeg';
+        } catch (_) {
+            ffmpegPath = 'ffmpeg';
+        }
+        if (ffmpegPath === 'ffmpeg') {
+            console.warn('[MUSIC] ffmpeg-static binary not found — falling back to the system `ffmpeg` on PATH. Install ffmpeg or allow ffmpeg-static\'s install script, or playback will fail with no sound.');
+        }
     }
     return ffmpegPath;
 }
