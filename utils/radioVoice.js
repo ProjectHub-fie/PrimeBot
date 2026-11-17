@@ -79,6 +79,17 @@ async function join({ client, guildId, channelId, onDisconnect }) {
     const channel = guild && guild.channels.cache.get(channelId);
     if (!channel) throw new Error(`Voice channel ${channelId} not found in guild ${guildId}`);
 
+    // A join issued while the shard is not Ready is silently dropped by
+    // discord.js (AdapterUnavailable) and can only ever fail — wait for the
+    // shard first, e.g. right after a node restart.
+    const { waitForShardReady } = require('../voiceReadiness');
+    if (!(await waitForShardReady(client, guildId))) {
+        const shardStatus = guild && guild.shard && guild.shard.status;
+        console.error(`[VOICE] guild=${guildId} channel=${channelId} aborted before join — shard not Ready (status=${shardStatus})`);
+        throw new Error(`Voice shard is not ready (status=${shardStatus}) — the connection was not attempted.`);
+    }
+
+    const timeoutMs = readyTimeoutMs();
     const connection = joinVoiceChannel({
         channelId,
         guildId,
@@ -87,19 +98,34 @@ async function join({ client, guildId, channelId, onDisconnect }) {
         selfMute: false,
     });
 
+    if (typeof connection.on === 'function') {
+        connection.on('stateChange', (oldState, newState) => {
+            console.log(`[VOICE] guild=${guildId} channel=${channelId} ${oldState.status} -> ${newState.status}`);
+        });
+    }
     if (typeof onDisconnect === 'function') {
         connection.on(VoiceConnectionStatus.Disconnected, () => onDisconnect());
     }
 
+    const statusBefore = connection.state && connection.state.status;
     try {
-        await entersState(connection, VoiceConnectionStatus.Ready, readyTimeoutMs());
+        await entersState(connection, VoiceConnectionStatus.Ready, timeoutMs);
     } catch (err) {
-        // A failed ready handshake is recoverable — but destroy the half-open
-        // connection first. Leaving it tracked wedges the guild: every later
-        // join returns this same non-Ready object and any /stop or /leave with
-        // no session reference silently fails while the bot stays connected.
+        // A failed ready handshake is recoverable — but report the real reason
+        // (timeout vs cancellation) and destroy the half-open connection first
+        // so it cannot wedge the guild for every later join.
+        const statusAfter = connection.state && connection.state.status;
+        const aborted = err && (err.name === 'AbortError' || err.code === 'ABORT_ERR');
+        const reason = aborted
+            ? `timed out after ${timeoutMs}ms (status stayed '${statusAfter}')`
+            : `${err && err.name}: ${err && err.message}`;
+        console.error(`[VOICE] guild=${guildId} channel=${channelId} connect FAILED — ${reason} [${statusBefore} -> ${statusAfter}]`);
+        if (!aborted && err && err.stack) console.error(`[VOICE] original error:\n${err.stack}`);
         try { connection.destroy(); } catch (_) {}
-        throw new Error(`Voice connection did not become ready: ${err.message}`);
+        const out = new Error(`Voice connection did not become ready: ${reason}`);
+        out.cause = err;
+        out.voiceState = { guildId, channelId, statusBefore, statusAfter, timeoutMs, aborted };
+        throw out;
     }
     return connection;
 }
