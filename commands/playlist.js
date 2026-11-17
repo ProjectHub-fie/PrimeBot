@@ -88,8 +88,8 @@ module.exports = {
                 case 'add': {
                     const pl = await loadOwned(interaction, interaction.options.getInteger('id'));
                     await interaction.deferReply();
-                    const { resolveQuery } = require('../utils/music/providers/registry');
-                    const track = await resolveQuery(interaction.options.getString('query'), { searchLimit: 1 });
+                    const { resolveQuery } = require('../utils/music/resolve');
+                    const track = await resolveQuery(interaction.client, interaction.options.getString('query'), { searchLimit: 1 });
                     await store().addPlaylistTrack(pl.id, track, { addedBy: interaction.user.id });
                     return interaction.editReply({ embeds: [ui.successEmbed('➕ Added', `**${track.title}** added to “${pl.name}”.`)] });
                 }
