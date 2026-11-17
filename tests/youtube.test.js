@@ -575,10 +575,17 @@ test('withDeadline resolves when the promise beats the deadline', async () => {
 
 test('withDeadline rejects with status 504 when the promise never settles', async () => {
     const never = () => new Promise(() => {});
+    // withDeadline's deadline timer is unref'd (correct for serverless), so a
+    // ref'd keep-alive must hold the event loop open for the 30ms deadline —
+    // otherwise a Node 20 test runner drains the loop and cancels the test.
+    let keepAlive;
+    const hold = new Promise((r) => { keepAlive = setTimeout(r, 200); });
     const err = await withDeadline(never(), 30).then(
         () => { throw new Error('should have timed out'); },
         (e) => e
     );
+    clearTimeout(keepAlive);
+    void hold;
     assert.equal(err.status, 504);
     assert.match(err.message, /timed out/i);
 });

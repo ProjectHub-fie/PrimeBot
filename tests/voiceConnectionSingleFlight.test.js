@@ -65,7 +65,6 @@ function makeSlowVoice({ handshakeMs = 60, failWith = null } = {}) {
                     conn.status = 'ready';
                     resolve(conn);
                 }, handshakeMs);
-                t.unref?.();
             });
         },
         destroyGuildConnection: () => { if (live && !live.destroyed) { live.destroy(); return true; } return false; },
@@ -128,7 +127,7 @@ function makeManager(opts = {}) {
     return { mgr, voice };
 }
 
-const settle = (ms = 120) => new Promise(r => { const t = setTimeout(r, ms); t.unref?.(); });
+const settle = (ms = 120) => new Promise(r => setTimeout(r, ms));
 
 // ── 1. the core race ────────────────────────────────────────────────────────
 
@@ -138,7 +137,7 @@ test('concurrent _ensureConnected calls share ONE handshake (join then play)', a
 
     // /join and /play arrive back to back.
     const a = mgr._ensureConnected(s);
-    await new Promise(r => { const t = setTimeout(r, 10); t.unref?.(); });
+    await new Promise(r => setTimeout(r, 10));
     const b = mgr._ensureConnected(s);
 
     const [ca, cb] = await Promise.all([a, b]);
@@ -224,7 +223,7 @@ test('a stale attempt cannot clear a newer attempt lock', async () => {
 test('/247 disable during connection establishment prevents reconnection', async () => {
     const { mgr, voice } = makeManager({ handshakeMs: 40 });
     const enabling = mgr.enable247('g1', 'vc1', { settings: {} });
-    await new Promise(r => { const t = setTimeout(r, 10); t.unref?.(); });
+    await new Promise(r => setTimeout(r, 10));
     await mgr.disable247('g1');
     await enabling.catch(() => {});
     assert.equal(mgr.getSession('g1'), null, 'disable clears the session');
@@ -304,8 +303,7 @@ test('waitForShardReady waits until a reconnecting shard becomes Ready', async (
     const { Status } = require('discord.js');
     const shard = { status: Status.Reconnecting };
     const client = { guilds: { cache: new Map([['g1', { id: 'g1', shard }]]) } };
-    const t = setTimeout(() => { shard.status = Status.Ready; }, 300);
-    t.unref?.();
+    setTimeout(() => { shard.status = Status.Ready; }, 300);
     assert.equal(await waitForShardReady(client, 'g1'), true);
 });
 
@@ -374,7 +372,7 @@ test('/play while the connection is CONNECTING awaits the same attempt', async (
     const { mgr, voice } = makeManager({ handshakeMs: 60 });
     const s = mgr._ensureSession('g1', 'vc1', {});
     const connecting = mgr._ensureConnected(s); // /join
-    await new Promise(r => { const t = setTimeout(r, 10); t.unref?.(); });
+    await new Promise(r => setTimeout(r, 10));
     const playing = mgr._ensureConnected(s); // /play mid-handshake
     await Promise.all([connecting, playing]);
     assert.equal(voice.calls.join, 1);
@@ -384,7 +382,7 @@ test('/play while the connection is CONNECTING awaits the same attempt', async (
 test('an intentional stop during a slow connect does not leave the bot connected', async () => {
     const { mgr, voice } = makeManager({ handshakeMs: 60 });
     const enabling = mgr.enable247('g1', 'vc1', { settings: {} }).catch(e => e);
-    await new Promise(r => { const t = setTimeout(r, 10); t.unref?.(); });
+    await new Promise(r => setTimeout(r, 10));
     await mgr.disable247('g1');
     await enabling;
     assert.equal(mgr.getSession('g1'), null);
