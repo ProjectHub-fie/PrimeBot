@@ -106,9 +106,12 @@ module.exports = {
                     }
                     const res = await m.play(guildId, query, { channelId, textChannelId: interaction.channelId, requesterId: interaction.user.id, settings });
                     const t = res.track;
-                    const desc = `${res.queued ? '➕ Queued' : '▶️ Playing'} **${t.title}**${t.artist ? ` — ${t.artist}` : ''}\nSource: ${ui.sourceLabel(t)}`;
-                    const payload = ui.nowPlayingPayload(m.describe(guildId));
-                    payload.embeds = [ui.successEmbed('🎵 Music', desc)];
+                    // Keep the Now Playing embed (artwork + controls) and only
+                    // change the headline so the thumbnail/image still renders.
+                    const payload = ui.nowPlayingPayload(m.describe(guildId), {
+                        title: res.queued ? '➕ Queued' : '▶️ Playing',
+                        track: res.queued ? t : undefined,
+                    });
                     return interaction.editReply(payload);
                 }
                 case 'search': {

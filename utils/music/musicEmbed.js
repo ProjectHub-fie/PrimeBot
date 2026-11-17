@@ -24,6 +24,26 @@ const BRAND = config.colors.primary;
 const MAX_SELECT_OPTIONS = 25;
 const QUEUE_PER_PAGE = 10;
 
+/**
+ * Apply a track's artwork to the large embed image, tolerating a non-URL value.
+ *
+ * `EmbedBuilder.setImage()`/`setThumbnail()` validate their argument and THROW
+ * on anything that is not a valid URL (a bare identifier, a relative path, an
+ * empty string). A provider that returns such a value would otherwise blow up
+ * the whole embed build — and because `nowPlaying()` is rebuilt on every control
+ * button press, one bad track would make every button fail. Only apply a value
+ * that looks like an http(s) URL.
+ */
+function isImageUrl(url) {
+    return typeof url === 'string' && /^https?:\/\/\S+$/i.test(url.trim());
+}
+
+function applyArtwork(embed, url) {
+    if (!isImageUrl(url)) return embed;
+    try { embed.setImage(url.trim()); } catch (_) { /* never let artwork break an embed */ }
+    return embed;
+}
+
 function stateLabel(state) {
     switch (state) {
         case PLAYBACK_STATES.PLAYING: return '▶️ Playing';
@@ -101,7 +121,7 @@ function nowPlaying(snapshot, { prefix = '/' } = {}) {
         )
         .setFooter({ text: `${s.twentyFourSeven ? '🕐 24/7' : '🎧 On demand'} • ${s.listeners != null ? s.listeners : 0} listener(s) • ${prefix}music help` })
         .setTimestamp();
-    if (t && t.artworkUrl) embed.setImage(t.artworkUrl);
+    if (t) applyArtwork(embed, t.artworkUrl);
     return { embed, components: [controlRow(s)] };
 }
 
@@ -111,10 +131,23 @@ function nowPlaying(snapshot, { prefix = '/' } = {}) {
  * next/previous, 24/7 enable, search-select). `nowPlaying()` alone only returns
  * the first row, so a bare `components: [components[0]]` silently drops the
  * repeat/autoplay/queue/lyrics/24-7 controls.
+ *
+ * `opts.title` overrides the embed headline (e.g. "▶️ Playing" / "➕ Queued")
+ * while keeping the SAME embed — artwork, progress bar, fields and controls all
+ * survive. Do NOT swap in a bare success embed for a play announcement: that
+ * drops the artwork the user expects to see.
+ *
+ * `opts.track` renders THAT track as the embed subject while the control rows
+ * still reflect the live session — use it for a "queued" announcement, where
+ * the just-queued track is not the one currently playing.
  */
 function nowPlayingPayload(snapshot, opts = {}) {
-    const { embed, components } = nowPlaying(snapshot, opts);
-    return { embeds: [embed], components: [components[0], secondControlRow(snapshot)] };
+    const subject = opts.track ? { ...(snapshot || {}), current: opts.track } : snapshot;
+    const { embed } = nowPlaying(subject, opts);
+    if (opts.title) embed.setTitle(opts.title);
+    if (opts.description != null) embed.setDescription(opts.description);
+    const s = snapshot || {};
+    return { embeds: [embed], components: [controlRow(s), secondControlRow(s)] };
 }
 
 /** Pause/Resume, Skip, Previous, Stop, Shuffle (≤5 per row). */
@@ -245,7 +278,7 @@ function trackInfoEmbed(track) {
             { name: 'URL', value: track.url ? String(track.url).slice(0, 200) : '—', inline: false },
         )
         .setTimestamp();
-    if (track.artworkUrl) embed.setImage(track.artworkUrl);
+    applyArtwork(embed, track.artworkUrl);
     return embed;
 }
 

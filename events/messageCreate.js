@@ -751,11 +751,13 @@ module.exports = {
                                 const status = await message.reply({ embeds: [mUi.successEmbed('🔎 Searching…', `Looking up **${mArg}**`)] });
                                 const res = await mMgr.play(message.guild.id, mArg, { channelId: mChannelId, textChannelId: message.channel.id, requesterId: message.author.id, settings: await settings() });
                                 const t = res.track;
-                                // Announce with the full control rows so the user can
-                                // pause/skip/etc. from the message — the same payload
-                                // `$nowplaying` renders.
-                                const payload = mUi.nowPlayingPayload(mMgr.describe(message.guild.id));
-                                payload.embeds = [mUi.successEmbed(res.queued ? '➕ Queued' : '▶️ Playing', `**${t.title}**${t.artist ? ` — ${t.artist}` : ''}\nSource: ${mUi.sourceLabel(t)}`)];
+                                // Announce with the Now Playing embed (artwork + controls)
+                                // and only override the headline — swapping in a bare
+                                // success embed would drop the artwork image.
+                                const payload = mUi.nowPlayingPayload(mMgr.describe(message.guild.id), {
+                                    title: res.queued ? '➕ Queued' : '▶️ Playing',
+                                    track: res.queued ? t : undefined,
+                                });
                                 return status.edit(payload);
                             }
                             case 'search': {
