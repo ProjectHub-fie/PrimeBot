@@ -1388,18 +1388,24 @@ tab (radio lives inside music). `/guild/:guildId/radio` now 302-redirects to
   `redesignSmoke.test.js` guild-page loop.
 
 
-## Lavalink playback engine (MUSIC_ENGINE) — optional, direct stays default
+## Lavalink playback engine (MUSIC_ENGINE) — primary once a node is configured
 
-PrimeBot can play on-demand music through **either** its original in-process
-engine or a **Lavalink** node. The engine is chosen by `MUSIC_ENGINE` and
-`direct` is the default, so an unset/unknown value changes nothing.
+PrimeBot plays on-demand music through **either** its original in-process engine
+or a **Lavalink** node. The engine is chosen by `MUSIC_ENGINE`:
 
-- **Resolver:** `utils/music/engines/index.js` — `resolveEngineName()` (env →
-  `direct` unless exactly `lavalink`) and `createEngine(client, deps)`. An
-  explicit `deps.voice`/`deps.providers` injection **forces `direct`**, so the
-  existing test doubles keep working. Selecting `lavalink` with no usable node
-  (or missing packages) logs the reason and **falls back to `direct`** — music
-  never breaks, and rollback is one env var.
+- `MUSIC_ENGINE=direct` → direct (explicit rollback).
+- `MUSIC_ENGINE=lavalink` → lavalink (falls back to direct with a loud reason if
+  the node config or the packages are unusable).
+- **unset / unknown / `auto`** → **lavalink when a node is configured**
+  (`LAVALINK_*` or the `NODE_*` aliases), otherwise direct. So an unconfigured
+  deployment is never broken and a configured one migrates automatically.
+
+- **Resolver:** `utils/music/engines/index.js` — `resolveEngineName(env)` and
+  `createEngine(client, deps)`. An explicit `deps.voice`/`deps.providers`
+  injection **forces `direct`**, so the existing test doubles keep working.
+  Selecting `lavalink` with no usable node (or missing packages) logs the reason
+  and **falls back to `direct`** — music never breaks, and rollback is one env
+  var.
 - **Engines:** `utils/music/engines/direct.js` (thin delegate wrapping the
   original `musicVoice` + provider registry — behaviour unchanged) and
   `utils/music/engines/lavalink.js` (same interface, audio decoded by the node).
@@ -1412,6 +1418,14 @@ engine or a **Lavalink** node. The engine is chosen by `MUSIC_ENGINE` and
   — never the first blindly), `lavalinkProviders.js` (Lavalink → PrimeBot track
   shape; honest Spotify metadata fallback), `lavalinkFilters.js` (PrimeBot filter
   ids → real Lavalink filter objects).
+- **Provider-adapter parity:** `LavalinkProviders` is a drop-in for
+  `providers/registry`, so it must expose the SAME surface. It reads
+  `manager.streamableProviders()` — `LavalinkManager` MUST define it (it did not,
+  so `providers.streamable` threw `TypeError: this.manager.streamableProviders is
+  not a function`). `streamableProviders()` returns the node-advertised providers
+  (`supportsSource`) with `direct` always present, and a YouTube/SoundCloud/direct
+  baseline before any node connects. When adding a registry method, add it here
+  too.
 - **Provider routing:** commands must resolve through `utils/music/resolve.js`
   (`resolveQuery(client, …)` / `searchQuery` / `resolveCollection`) rather than
   requiring `providers/registry` directly — the registry bypasses the node.
@@ -1432,19 +1446,32 @@ engine or a **Lavalink** node. The engine is chosen by `MUSIC_ENGINE` and
   the resolved `KazagumoTrack` OBJECT, not a bare string: `KazagumoPlayer#play()`
   rejects a non-instance) and is never persisted.
 - **Config:** `LAVALINK_NODES` (JSON array) or `LAVALINK_HOST`/`_PORT`/
-  `_PASSWORD`/`_SECURE`/`_NAME`. Passwords are never logged or returned —
-  `describeNodes()` exposes only `hasPassword`. See `docs/lavalink-setup.md`.
-- **Env vars:** `MUSIC_ENGINE` (`direct`|`lavalink`), `LAVALINK_NODES` /
-  `LAVALINK_HOST`…, `LAVALINK_SEARCH_ENGINE` (`ytsearch`), `LAVALINK_RECONNECT_TRIES`,
+  `_PASSWORD`/`_SECURE`/`_NAME`. **Linix-compatible aliases** `NODE_URL` /
+  `NODE_AUTH` / `NODE_NAME` / `NODE_SECURE` are also accepted (`NODE_URL` is
+  `host:port`, parsed via `normalizeNode`'s `url` path so it does not become
+  `host:port:port`); the `LAVALINK_*` names always win and the two sources are
+  never merged. Passwords are never logged or returned — `describeNodes()`
+  exposes only `hasPassword`. See `docs/lavalink-setup.md`.
+- **Env vars:** `MUSIC_ENGINE` (`direct`|`lavalink`|unset), `LAVALINK_NODES` /
+  `LAVALINK_HOST`… (or `NODE_URL`/`NODE_AUTH`/`NODE_NAME`/`NODE_SECURE`),
+  `LAVALINK_SEARCH_ENGINE` (`ytsearch`), `LAVALINK_RECONNECT_TRIES`,
   `LAVALINK_RECONNECT_INTERVAL_MS`, `LAVALINK_REST_TIMEOUT_MS`,
   `LAVALINK_VOICE_TIMEOUT_S`, `LAVALINK_MAX_RECONNECT_ATTEMPTS`,
   `LAVALINK_NODE_COOLDOWN_MS`, `LAVALINK_BACKOFF_BASE_MS`/`_MAX_MS`.
 - **Dependencies:** `shoukaku ^4.3.0`, `kazagumo ^3.4.3` (Lavalink clients) and
   `@discordjs/voice ^0.19.2` + `@snazzah/davey` (the voice-reliability fix below).
-- **Tests:** `tests/lavalink.test.js` (51) — config parsing/redaction, node
+- **Tests:** `tests/lavalink.test.js` (57) — config parsing/redaction, node
   health/selection/backoff, player lifecycle, queue preservation across node loss,
   lazy provider resolution, the `playerEmpty` guard, node registration when the
-  client is already ready, and that node status never leaks a password.
+  client is already ready, that node status never leaks a password,
+  `streamableProviders()` parity, the `NODE_*` aliases, and the
+  default-engine/fallback selection.
+- **UNVERIFIED:** real audio playback through a live Lavalink node (a real
+  Discord voice handshake + a real YouTube/SoundCloud stream) is **not** covered
+  by the suite — it needs a reachable node with valid credentials, which is not
+  available in CI. The Linix reference node's TLS certificate has expired and its
+  credentials are public, so it was deliberately NOT used. See the migration
+  report on the PR.
 
 ## Voice connection failure — `timed out after 20000ms (status stayed 'signalling')` (fixed)
 

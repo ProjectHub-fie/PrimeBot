@@ -118,15 +118,33 @@ function parseNodesJson(raw) {
 
 /** Build a single node from the individual LAVALINK_* variables (or null). */
 function nodeFromIndividualEnv(env) {
-    const host = env.LAVALINK_HOST;
-    if (!host) return null;
-    return {
-        name: env.LAVALINK_NAME || 'main',
-        host,
-        port: env.LAVALINK_PORT,
-        password: env.LAVALINK_PASSWORD,
-        secure: env.LAVALINK_SECURE,
-    };
+    // Linix-compatible aliases (NODE_URL / NODE_AUTH / NODE_NAME / NODE_SECURE)
+    // are accepted so an existing Linix-style deployment can point PrimeBot at
+    // its OWN node without renaming variables. The PrimeBot-native LAVALINK_*
+    // names always win when both are set, and the aliases are only consulted
+    // when the LAVALINK_* name is absent — never merged from two sources (which
+    // could pair a host from one node with the password from another).
+    if (env.LAVALINK_HOST) {
+        return {
+            name: env.LAVALINK_NAME || env.NODE_NAME || 'main',
+            host: env.LAVALINK_HOST,
+            port: env.LAVALINK_PORT,
+            password: env.LAVALINK_PASSWORD || env.NODE_AUTH,
+            secure: env.LAVALINK_SECURE != null ? env.LAVALINK_SECURE : env.NODE_SECURE,
+        };
+    }
+    if (env.NODE_URL) {
+        // Linix's NODE_URL is `host:port` (or a full URL). Pass it as `url` so
+        // normalizeNode derives host/port/secure instead of treating the whole
+        // "host:port" string as a host (which would yield "host:port:2333").
+        return {
+            name: env.LAVALINK_NAME || env.NODE_NAME || 'main',
+            url: env.NODE_URL,
+            password: env.LAVALINK_PASSWORD || env.NODE_AUTH,
+            secure: env.LAVALINK_SECURE != null ? env.LAVALINK_SECURE : env.NODE_SECURE,
+        };
+    }
+    return null;
 }
 
 /**
