@@ -105,6 +105,18 @@ function nowPlaying(snapshot, { prefix = '/' } = {}) {
     return { embed, components: [controlRow(s)] };
 }
 
+/**
+ * The full "now playing" message payload — the Now Playing embed plus BOTH
+ * control rows. Use this for every reply that announces playback (play, resume,
+ * next/previous, 24/7 enable, search-select). `nowPlaying()` alone only returns
+ * the first row, so a bare `components: [components[0]]` silently drops the
+ * repeat/autoplay/queue/lyrics/24-7 controls.
+ */
+function nowPlayingPayload(snapshot, opts = {}) {
+    const { embed, components } = nowPlaying(snapshot, opts);
+    return { embeds: [embed], components: [components[0], secondControlRow(snapshot)] };
+}
+
 /** Pause/Resume, Skip, Previous, Stop, Shuffle (≤5 per row). */
 function controlRow(snapshot = {}) {
     const paused = snapshot.state === PLAYBACK_STATES.PAUSED || snapshot.manualPause;
@@ -330,7 +342,7 @@ function helpEmbed({ prefix = '/', slash = false } = {}) {
 }
 
 module.exports = {
-    nowPlaying, controlRow, secondControlRow, filterRow, filterEmbed, queueEmbed, searchSelect, searchEmbed,
+    nowPlaying, nowPlayingPayload, controlRow, secondControlRow, filterRow, filterEmbed, queueEmbed, searchSelect, searchEmbed,
     trackInfoEmbed, playlistListEmbed, playlistEmbed, status247Embed, successEmbed, loadingEmbed, errorEmbed, helpEmbed,
     stateLabel, repeatLabel, sourceLabel, trackLine, trackLink, requesterLabel, progressLine, QUEUE_PER_PAGE,
 };

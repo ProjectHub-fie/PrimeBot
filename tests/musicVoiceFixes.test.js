@@ -68,3 +68,52 @@ test('radioVoice.js resolves its voiceReadiness sibling (utils/, not the repo ro
     assert.match(src, /require\('\.\/voiceReadiness'\)/, 'must require ./voiceReadiness');
     assert.doesNotMatch(src, /require\('\.\.\/voiceReadiness'\)/, 'must not require ../voiceReadiness');
 });
+
+// ── 4. control buttons on the play reply ─────────────────────────────────────
+
+test('nowPlayingPayload() returns the embed plus BOTH control rows', () => {
+    const ui = require(path.join(REPO, 'utils/music/musicEmbed'));
+    const payload = ui.nowPlayingPayload({ state: 'playing', current: null, queue: [], queueLength: 0, volume: 100, repeat: 'off' });
+    assert.equal(payload.components.length, 2, 'two action rows (control + second control)');
+    const ids = payload.components.flatMap(r => r.toJSON().components.map(c => c.custom_id));
+    for (const id of ['music_prev', 'music_pauseresume', 'music_skip', 'music_stop', 'music_shuffle',
+        'music_repeat', 'music_autoplay', 'music_queue', 'music_lyrics', 'music_247status']) {
+        assert.ok(ids.includes(id), `control row exposes ${id}`);
+    }
+});
+
+test('the real $play handler replies WITH the control buttons (regression: buttons were missing)', async () => {
+    global.botActive = true;
+    const handler = require(path.join(REPO, 'events/messageCreate.js'));
+
+    const manager = new Proxy({}, {
+        get(_t, prop) {
+            if (prop === 'getSession') return () => ({ channelId: 'vc1', twentyFourSeven: false, queue: [], djRoleId: null });
+            if (prop === 'describe') return () => ({ state: 'playing', queue: [], queueLength: 0, current: { title: 'T', provider: 'youtube', id: '1' }, connected: true, volume: 100, repeat: 'off', twentyFourSeven: false, listeners: 1 });
+            return () => Promise.resolve({ track: { title: 'T', provider: 'youtube', id: '1' }, queued: false });
+        },
+    });
+    const client = {
+        user: { id: 'bot' }, musicManager: manager, radioManager: null,
+        countingManager: { isCountingChannel: () => false, processCountingMessage: async () => false },
+        levelingManager: { processMessage: async () => {} },
+        serverSettingsManager: { hasNoPrefixMode: () => false, getGuildPrefix: () => '$', getTriggeredReactions: () => [], getTriggeredResponses: () => [] },
+        commands: new Map(),
+    };
+
+    let edited = null;
+    const message = {
+        content: '$play some song',
+        author: { id: 'u1', tag: 'u#1', bot: false },
+        member: { id: 'u1', permissions: { has: () => true }, voice: { channelId: 'vc1', channel: { id: 'vc1', type: 2 } }, roles: { cache: new Map() } },
+        guild: { id: 'g1', name: 'G' },
+        channel: { id: 'ch1', type: 0, send: async () => ({}) },
+        mentions: { channels: { first: () => null }, users: { first: () => null } },
+        reply: async () => ({ edit: async (p) => { edited = p; return {}; } }),
+    };
+
+    await handler.execute(message, client);
+    assert.ok(edited, 'the play reply was edited');
+    assert.ok(Array.isArray(edited.components) && edited.components.length === 2,
+        'the play reply carries both control rows (was a bare embed with no buttons)');
+});
