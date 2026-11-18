@@ -1867,3 +1867,53 @@ including its artwork — so the image field was always empty. `nowPlayingPayloa
 also accepts `{ track }` to render a *different* track as the embed subject (used
 for the "➕ Queued" announcement, where the queued track is not the one playing)
 while the control rows still reflect the live session.
+
+## Lavalink playback lifecycle — "embed says Playing but no audio" (fixed)
+
+Three independent defects made PrimeBot show **Playing** while nothing was heard
+and the progress timer sat frozen. All three are fixed and covered by
+`tests/musicPlaybackLifecycle.test.js`.
+
+1. **Shoukaku connector identity (`shoukaku.id`) was never set when the client was
+   already ready.** Shoukaku's `Connectors.DiscordJS` sets `manager.id` **only
+   inside its `client.once('clientReady')` hook**, and `Connector.raw()` **drops
+   every `VOICE_STATE_UPDATE` whose `user_id !== manager.id`**. When the manager
+   starts after login (a reconnect, a hot reload, a failover takeover), that hook
+   never fires, `id` stays `null`, the voice `sessionId` is never captured, and
+   Lavalink can never complete the voice handshake → **no audio**. Fix:
+   `LavalinkManager._ensureNodesAdded()` restores the identity (and registers the
+   nodes) when the client is already ready — this is the ONLY place `addNode` is
+   called, so a node is never registered twice.
+2. **`KazagumoPlayer.state` never leaves CONNECTING** (Kazagumo never calls
+   `player.connect()`), so "connected" must be read from the **Shoukaku
+   Connection** — `connectionState(guildId)` requires `state === CONNECTED` **and**
+   a `sessionId` **and** a voice-server endpoint. `LavalinkEngine.isConnectionActive`
+   / `getConnectionState` now read that, not `player.state`. A track is reported
+   PLAYING only when the transport is genuinely up; otherwise **Buffering**.
+3. **Nothing refreshed the Now Playing embed**, and the position fell back to a
+   wall-clock counter that advanced even when no audio flowed. `MusicManager` now
+   has a **bounded per-session refresh timer** (`_startRefreshTimer`/`_stopRefreshTimer`,
+   one per session) driven by the **real** `voice.getPlaybackPosition()`, plus
+   **stalled-playback detection** (`_checkStalled`): while we claim PLAYING the
+   position must advance, or after `MUSIC_STALL_TICKS` (default 3) ticks the
+   session is downgraded to **Buffering** and a credential-free diagnostic line is
+   logged (`connected`, `status`, `ping`, `node`, `frameStats`).
+
+- **Honest states:** `shared/musicConstants.js` `PLAYBACK_STATES` gained
+  `buffering` / `reconnecting`; `deriveState()` returns Buffering when the
+  transport is down or the position is frozen, Reconnecting while a node/voice
+  loss is being recovered. `describe()` reports the **derived** state, never a
+  stale `session.state`. `musicEmbed.js` `stateLabel()` renders both.
+- **Recovery:** `playersLost` now marks the session Reconnecting + stops the stale
+  timer before re-creating the player on a healthy node; a guild with no healthy
+  node is left `_recoveryPending` and retried on the next node `ready`
+  (`_retryPendingRecovery`). **Audio always restarts** — a Lavalink node cannot
+  hand a live stream to another node — but the **queue and track metadata are
+  never lost**. `diagnostics(guildId)` exposes a credential-free per-guild snapshot.
+- **Playback modes (music ↔ radio mutual exclusion):** a guild has exactly ONE
+  voice connection, so `utils/playbackMode.js` `PlaybackModeRegistry` tracks the
+  active mode (`idle`/`music`/`radio`) and serialises transitions via a per-guild
+  `runExclusive` lock. `MusicManager.play()` stops the radio FIRST if it owns the
+  guild; `RadioManager.start()` stops music FIRST. `index.js` cross-links the two
+  managers. Both default to the shared registry. Only the ENTRY points take the
+  lock (the stop side is a plain internal call, so a transition can't deadlock).

@@ -758,6 +758,9 @@ module.exports = {
                                     title: res.queued ? '➕ Queued' : '▶️ Playing',
                                     track: res.queued ? t : undefined,
                                 });
+                                // Track this message so the bounded refresh timer can
+                                // keep the position bar live from real playback state.
+                                try { mMgr.trackNowPlaying(message.guild.id, { channelId: status.channel.id, messageId: status.id }); } catch (_) {}
                                 return status.edit(payload);
                             }
                             case 'search': {

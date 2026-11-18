@@ -70,20 +70,51 @@ class LavalinkEngine {
             || (typeof channel.isVoiceBased === 'function' && channel.isVoiceBased()));
     }
 
+    /**
+     * Is the guild's voice connection REALLY up?
+     *
+     * Read from the Shoukaku Connection — never from `KazagumoPlayer.state`,
+     * which Kazagumo never advances past CONNECTING (it never calls
+     * `player.connect()`), so it is always false. A "connected" guild must have
+     * a live connection state, a captured voice `sessionId` and a server
+     * endpoint; otherwise Lavalink has nothing to send audio to.
+     */
     isConnectionActive(session) {
+        if (!session) return false;
+        try {
+            const state = this.manager.connectionState
+                ? this.manager.connectionState(session.guildId)
+                : null;
+            if (state) return !!state.connected;
+        } catch (_) {}
+        // Fallback for a manager double that lacks connectionState().
         const player = this.manager.getPlayer(session.guildId);
-        if (!player) return false;
-        // Kazagumo PlayerState: CONNECTED === 1
-        return player.state === 1;
+        return !!(player && player.state === 1);
     }
 
     getConnectionState(session) {
+        if (!session) return { connected: false, status: 'destroyed' };
+        try {
+            if (this.manager.connectionState) {
+                const st = this.manager.connectionState(session.guildId);
+                return { connected: !!st.connected, status: st.status, ping: st.ping, position: st.position };
+            }
+        } catch (_) {}
         const player = this.manager.getPlayer(session.guildId);
         if (!player) return { connected: false, status: 'destroyed' };
-        // Kazagumo PlayerState enum → a readable status string.
         const map = ['connecting', 'ready', 'disconnecting', 'disconnected', 'destroying', 'destroyed'];
-        const status = map[player.state] || 'unknown';
-        return { connected: player.state === 1, status };
+        return { connected: player.state === 1, status: map[player.state] || 'unknown' };
+    }
+
+    /** Credential-free diagnostics for a guild (connection, ping, frame stats). */
+    diagnostics(session) {
+        if (!session) return null;
+        try {
+            if (typeof this.manager.playerDiagnostics === 'function') {
+                return this.manager.playerDiagnostics(session.guildId);
+            }
+        } catch (_) {}
+        return null;
     }
 
     /**

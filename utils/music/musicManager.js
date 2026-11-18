@@ -18,7 +18,7 @@
  * and to `utils/music/musicVoice` (both injectable for tests).
  */
 
-const { REPEAT_MODES, PLAYBACK_STATES, formatDuration, autoplayQuery } = require('../../shared/musicConstants');
+const { REPEAT_MODES, PLAYBACK_STATES, PLAYBACK_MODES, formatDuration, autoplayQuery } = require('../../shared/musicConstants');
 const musicFilters = require('./musicFilters');
 
 const MAX_TRACK_RETRIES = Math.max(0, parseInt(process.env.MUSIC_MAX_TRACK_RETRIES, 10) || 2);
@@ -99,6 +99,10 @@ class MusicManager {
         this._reloadHandle = null;
         this._started = false;
         this._connectGate = deps.connectGate || new (require('../voiceConnectGate').VoiceConnectGate)();
+        // Per-guild playback mode (music vs radio) + transition lock. Shared with
+        // RadioManager by default so a guild can never run both at once.
+        this.playbackModes = deps.playbackModes || require('../playbackMode').getPlaybackModeRegistry();
+        this.radioManager = deps.radioManager || null; // set by index.js once radio exists
     }
 
     _resolveNodeId() {
@@ -230,6 +234,14 @@ class MusicManager {
             autoplaySeen: new Set(), // provider:id keys autoplay already queued
             positionMs: 0,         // playback position (from the voice player)
             startedAt: null,       // wall-clock when the current track started
+            // ── playback mode + now-playing tracking ────────────────────────
+            mode: PLAYBACK_MODES.MUSIC, // this session owns MUSIC when active
+            _nowPlaying: null,     // { channelId, messageId } of the NP embed
+            _refreshTimer: null,   // the bounded NP refresh interval
+            _lastKnownPosition: 0, // last position reported by the transport
+            _posProbe: null,       // stalled-playback probe { pos, at, stalls }
+            _stalled: false,       // true while the transport position is frozen
+            _stallLogged: false,   // whether a stall has already been logged
         };
     }
 
@@ -272,12 +284,15 @@ class MusicManager {
         if (!s) return null;
         const voiceState = this.voice.getConnectionState(s);
         const positionMs = this.positionMs(s);
+        // Report the DERIVED state (never a stale "playing"): a resolved track on
+        // a dead transport reads Buffering, a lost connection reads Reconnecting.
+        const derived = this.deriveState(s);
         return {
             guildId: s.guildId,
             channelId: s.channelId,
             connected: voiceState.connected,
             connectionStatus: voiceState.status,
-            state: s.state,
+            state: derived,
             current: s.current,
             queueLength: s.queue.length,
             queue: s.queue.slice(0, Math.max(1, queueLimit)),
@@ -299,22 +314,199 @@ class MusicManager {
     }
 
     /**
-     * The current track's playback position in ms. Prefers the live voice player
-     * position (exact); otherwise the seek baseline plus wall-clock elapsed since
-     * playback started.
+     * The current track's playback position in ms.
+     *
+     * The Lavalink/voice player position is the SOURCE OF TRUTH. When it is
+     * advancing we use it verbatim. We only fall back to a seek baseline plus
+     * wall-clock elapsed while the player has not yet reported a position AND we
+     * have positive evidence that audio is actually flowing (state PLAYING and a
+     * connected transport) — never to fabricate progress on a frozen/stalled
+     * player (that is exactly the "timer keeps moving but nothing is heard" bug).
      */
     positionMs(session) {
         try {
             if (this.voice.getPlaybackPosition && session.player) {
                 const p = this.voice.getPlaybackPosition(session);
-                if (Number.isFinite(p) && p > 0) return p;
+                if (Number.isFinite(p) && p > 0) {
+                    session._lastKnownPosition = p;
+                    return p;
+                }
             }
         } catch (_) {}
         const base = session.positionMs || 0;
-        if (session.startedAt && session.state === PLAYBACK_STATES.PLAYING) {
+        // Only extrapolate when we are genuinely PLAYING and connected; a
+        // buffering/reconnecting/paused player must NOT advance.
+        const connected = this._transportConnected(session);
+        if (session.startedAt && session.state === PLAYBACK_STATES.PLAYING && connected) {
             return base + Math.max(0, Date.now() - session.startedAt);
         }
         return base;
+    }
+
+    /**
+     * Is the guild's transport (voice connection) actually up right now?
+     *
+     * Returns `true` when the voice layer cannot report a state (a minimal test
+     * double) so we never falsely downgrade to Buffering; only a layer that
+     * positively reports "not connected" yields `false`.
+     */
+    _transportConnected(session) {
+        try {
+            if (!this.voice.getConnectionState) return true;
+            const st = this.voice.getConnectionState(session);
+            if (!st) return true;
+            return !!st.connected;
+        } catch (_) { return true; }
+    }
+
+    /**
+     * The playback state the embed should show, derived from REAL player state.
+     *
+     * Never reports PLAYING unless: a track exists, the player is not paused,
+     * the transport is connected and playback has genuinely started. Otherwise
+     * it reports a truthful buffering / reconnecting / idle state.
+     */
+    deriveState(session) {
+        if (!session) return PLAYBACK_STATES.IDLE;
+        if (session.manualPause) return PLAYBACK_STATES.PAUSED;
+        if (session.reconnecting) return PLAYBACK_STATES.RECONNECTING;
+        if (!session.current) {
+            return session.state === PLAYBACK_STATES.STOPPED
+                ? PLAYBACK_STATES.STOPPED : PLAYBACK_STATES.IDLE;
+        }
+        if (!this._transportConnected(session)) return PLAYBACK_STATES.BUFFERING;
+        // A track whose transport position has stopped advancing is NOT playing
+        // (the "embed says Playing but nothing is heard" bug) — report Buffering
+        // until the position moves again.
+        if (session._stalled) return PLAYBACK_STATES.BUFFERING;
+        // `startedAt` is only set once _playTrack has handed the track to the
+        // node; the position may legitimately be 0 for the first frames.
+        if (session.startedAt) return PLAYBACK_STATES.PLAYING;
+        return PLAYBACK_STATES.BUFFERING;
+    }
+
+    /** Reconcile session.state with the derived truth (call on every refresh). */
+    _syncState(session) {
+        const derived = this.deriveState(session);
+        // Never downgrade an explicit STOPPED while nothing else is happening.
+        if (derived === PLAYBACK_STATES.BUFFERING && session.state === PLAYBACK_STATES.STOPPED && !session.current) {
+            return session.state;
+        }
+        if (derived !== session.state) session.state = derived;
+        return session.state;
+    }
+
+    // ── now-playing refresh timer ───────────────────────────────────────────
+
+    /**
+     * Start (or restart) the bounded per-session Now Playing refresh timer.
+     *
+     * The embed is edited from the REAL playback position, at a fixed cadence
+     * (~5s, far below Discord's rate limits), and ONLY while something is
+     * actually playing. Exactly ONE timer exists per session: a new track
+     * restarts it rather than creating a second one (a duplicate timer would
+     * double the edit rate and leak). The timer stops itself when playback
+     * pauses / ends / the player is destroyed.
+     */
+    _startRefreshTimer(session) {
+        if (!session || session._refreshTimer) return;
+        const ms = parseInt(process.env.MUSIC_NOWPLAYING_REFRESH_MS, 10) || 5000;
+        const timer = setInterval(() => {
+            this._refreshTick(session).catch(() => {});
+        }, ms);
+        timer.unref?.();
+        session._refreshTimer = timer;
+    }
+
+    /** Stop the refresh timer (idempotent). */
+    _stopRefreshTimer(session) {
+        if (session && session._refreshTimer) {
+            clearInterval(session._refreshTimer);
+            session._refreshTimer = null;
+        }
+    }
+
+    /**
+     * One refresh tick: reconcile the derived state and re-render the tracked
+     * Now Playing message from the real position. Stops the timer once playback
+     * is no longer active so we never edit a dead embed forever.
+     */
+    async _refreshTick(session) {
+        if (!session) { return; }
+        if (session.mode === PLAYBACK_MODES.RADIO) { this._stopRefreshTimer(session); return; }
+        // Stalled-playback detection runs BEFORE the state is derived so a
+        // frozen position is reflected as Buffering in the same tick: while we
+        // believe we are PLAYING the transport position must advance. If it has
+        // not moved for several ticks, audio is not actually flowing (the exact
+        // "Playing but silent / frozen timer" symptom) — downgrade and log
+        // credential-free diagnostics so the cause is visible.
+        if (session.state === PLAYBACK_STATES.PLAYING && session.current && !session.manualPause) {
+            this._checkStalled(session);
+        }
+        const state = this._syncState(session);
+        const active = !!session.current && (state === PLAYBACK_STATES.PLAYING || state === PLAYBACK_STATES.BUFFERING);
+        if (!active) { this._stopRefreshTimer(session); }
+        await this._renderNowPlaying(session, state);
+    }
+
+    /** Detect a PLAYING session whose transport position is not advancing. */
+    _checkStalled(session) {
+        let pos = 0;
+        try {
+            pos = this.voice.getPlaybackPosition && session.player
+                ? Number(this.voice.getPlaybackPosition(session)) || 0 : 0;
+        } catch (_) { pos = 0; }
+        const prev = session._posProbe;
+        if (!prev || pos > prev.pos) {
+            // Position advanced (or first sample) → healthy again.
+            session._posProbe = { pos, at: Date.now(), stalls: 0 };
+            session._stalled = false;
+            session._stallLogged = false;
+            return;
+        }
+        const stalls = (prev.stalls || 0) + 1;
+        session._posProbe = { pos, at: prev.at, stalls };
+        const threshold = Math.max(2, parseInt(process.env.MUSIC_STALL_TICKS, 10) || 3);
+        if (stalls >= threshold) {
+            session._stalled = true;
+            session.state = PLAYBACK_STATES.BUFFERING;
+            if (!session._stallLogged) {
+                session._stallLogged = true;
+                let diag = null;
+                try { diag = this.voice.diagnostics ? this.voice.diagnostics(session) : null; } catch (_) {}
+                console.warn(`[MUSIC] Playback appears STALLED in guild ${session.guildId} — position has not advanced for ${stalls} tick(s).`,
+                    diag ? `connected=${diag.connected} status=${diag.connectionStatus} ping=${diag.ping} node=${diag.node} frameStats=${JSON.stringify(diag.frameStats)}` : '(no diagnostics available)');
+            }
+        }
+    }
+
+    /**
+     * Edit the session's tracked Now Playing message (if any) from the current
+     * snapshot. Fully guarded: a missing message, a deleted channel or a failed
+     * edit can never throw into the timer.
+     */
+    async _renderNowPlaying(session, state = null) {
+        const ref = session && session._nowPlaying;
+        if (!ref || !ref.channelId || !ref.messageId) return;
+        try {
+            const channel = this.client.channels && this.client.channels.cache
+                ? this.client.channels.cache.get(ref.channelId)
+                : null;
+            if (!channel) return;
+            const message = await channel.messages.fetch(ref.messageId).catch(() => null);
+            if (!message) { session._nowPlaying = null; return; }
+            const ui = require('./musicEmbed');
+            const payload = ui.nowPlayingPayload(this.describe(session.guildId));
+            await message.edit(payload).catch(() => {});
+        } catch (_) { /* never let an embed refresh throw */ }
+    }
+
+    /** Remember which message carries the Now Playing embed for this session. */
+    trackNowPlaying(guildId, { channelId, messageId } = {}) {
+        const s = this.getSession(guildId);
+        if (!s) return;
+        s._nowPlaying = channelId && messageId ? { channelId: String(channelId), messageId: String(messageId) } : null;
+        if (s._nowPlaying) this._startRefreshTimer(s);
     }
 
     // ── connection ──────────────────────────────────────────────────────────
@@ -440,12 +632,23 @@ class MusicManager {
                 this.voice.playResource(session, resource);
                 this.voice.setVolume(session, session.volume);
             }
-            session.state = PLAYBACK_STATES.PLAYING;
+            // Do NOT mark PLAYING merely because the play command was accepted.
+            // The state is DERIVED from real transport state: PLAYING only when
+            // the voice connection is genuinely up; otherwise Buffering. A
+            // resolved-but-silent track (the reported bug) therefore reports
+            // Buffering, never a false Playing.
             session.manualPause = false;
             session.retries = 0;
             session.startedAt = Date.now();
             session.positionMs = seekSeconds * 1000;
+            session.state = this.deriveState(session);
+            // Fresh track: reset the stall probe so a new track is never judged
+            // by the previous track's (frozen) position samples.
+            session._posProbe = null;
+            session._stalled = false;
+            session._stallLogged = false;
             session.failedTracks.delete(track._key || `${track.provider}:${track.id}`);
+            this._startRefreshTimer(session);
             await this._recordHistory(session, track);
             return true;
         } catch (err) {
@@ -493,6 +696,8 @@ class MusicManager {
                     session.current = null;
                     session.state = PLAYBACK_STATES.IDLE;
                     session.startedAt = null;
+                    this._stopRefreshTimer(session);
+                    this._releaseMusicMode(session.guildId);
                     this._stopPlayerSoft(session);
                     return;
                 }
@@ -517,6 +722,8 @@ class MusicManager {
             if (!played) {
                 session.current = null;
                 session.state = PLAYBACK_STATES.IDLE;
+                this._stopRefreshTimer(session);
+                this._releaseMusicMode(session.guildId);
                 this._stopPlayerSoft(session);
                 return;
             }
@@ -564,13 +771,21 @@ class MusicManager {
         // advance path so a duplicate idle cannot double-advance.
         if (session.trackEndHandled) return;
         session.trackEndHandled = true;
+        this._stopRefreshTimer(session);
         this._playNext(session).catch(err => console.error('[MUSIC] advance failed:', err.message));
     }
 
     _onPlayerStateChange(session, oldState, newState) {
+        // Direct engine: the voice player reports its own state changes.
         if (newState === 'playing') {
-            session.state = PLAYBACK_STATES.PLAYING;
             if (!session.startedAt) session.startedAt = Date.now();
+            session.state = PLAYBACK_STATES.PLAYING;
+            this._startRefreshTimer(session);
+        } else if (newState === 'idle') {
+            session.state = PLAYBACK_STATES.IDLE;
+            this._stopRefreshTimer(session);
+        } else if (newState === 'paused' || newState === 'buffering') {
+            session.state = newState === 'paused' ? PLAYBACK_STATES.PAUSED : PLAYBACK_STATES.BUFFERING;
         }
     }
 
@@ -617,6 +832,8 @@ class MusicManager {
         if (!session.twentyFourSeven || session.disabledIntentionally) return;
         if (session.reconnecting) return;
         session.reconnecting = true;
+        session.state = PLAYBACK_STATES.RECONNECTING;
+        this._stopRefreshTimer(session);
         setTimeout(async () => {
             try {
                 if (!session.twentyFourSeven || session.disabledIntentionally) { session.reconnecting = false; return; }
@@ -634,6 +851,7 @@ class MusicManager {
                 if (session.current && !session.manualPause) await this._playTrack(session, session.current);
             } catch (err) {
                 session.reconnecting = false;
+                session.state = PLAYBACK_STATES.BUFFERING;
                 console.error('[MUSIC] Reconnect failed:', err.message);
             }
         }, RECONNECT_DELAY_MS).unref?.();
@@ -656,6 +874,10 @@ class MusicManager {
 
         mgr.onNode('ready', () => {
             console.log(`[MUSIC] Lavalink node ready — ${mgr.health.healthyNames().length} healthy node(s).`);
+            // A node came back: retry every guild that is still awaiting a
+            // recovery slot (its previous node died and no healthy node existed
+            // at the time). Never stack: _recoverLavalinkSession is guarded.
+            this._retryPendingRecovery();
         });
         mgr.onNode('close', (name) => {
             console.warn(`[MUSIC] Lavalink node "${name}" closed — queues are preserved; playback will resume on a healthy node.`);
@@ -669,11 +891,39 @@ class MusicManager {
             for (const guildId of guildIds || []) {
                 const session = this.sessions.get(String(guildId));
                 if (!session) continue;
+                // Reflect the loss immediately (Reconnecting) and stop the stale
+                // timer so it does not keep editing a dead embed.
+                session.state = PLAYBACK_STATES.RECONNECTING;
+                this._stopRefreshTimer(session);
                 this._recoverLavalinkSession(session, name).catch(err =>
                     console.error(`[MUSIC] Lavalink recovery for ${guildId} failed:`, err.message));
             }
         });
 
+        mgr.onPlayer('start', (player) => {
+            const session = this.sessions.get(String(player.guildId));
+            if (!session) return;
+            // The node confirmed the track started — now (and only now) is it
+            // truthful to show Playing.
+            if (!session.startedAt) session.startedAt = Date.now();
+            session.state = PLAYBACK_STATES.PLAYING;
+            this._startRefreshTimer(session);
+        });
+        // A real position update means audio is flowing; this both promotes a
+        // buffering track to Playing and keeps the timer honest.
+        mgr.onPlayer('update', (player, data) => {
+            const session = this.sessions.get(String(player.guildId));
+            if (!session || !session.current) return;
+            const pos = data && data.state ? Number(data.state.position) : NaN;
+            if (Number.isFinite(pos) && pos > 0) {
+                session._lastKnownPosition = pos;
+                if (!session.manualPause && session.state !== PLAYBACK_STATES.PLAYING) {
+                    if (!session.startedAt) session.startedAt = Date.now();
+                    session.state = PLAYBACK_STATES.PLAYING;
+                    this._startRefreshTimer(session);
+                }
+            }
+        });
         mgr.onPlayer('exception', (player, data) => {
             const session = this.sessions.get(String(player.guildId));
             if (!session) return;
@@ -730,7 +980,7 @@ class MusicManager {
      */
     async _recoverLavalinkSession(session, nodeName) {
         if (session.disabledIntentionally) return;
-        if (session.reconnecting) return;
+        if (session.reconnecting) { session._recoveryPending = true; return; }
         session.reconnecting = true;
         const resumeAt = this.positionMs(session) / 1000;
         try {
@@ -746,14 +996,29 @@ class MusicManager {
             });
             session.player = this.engine.manager.getPlayer(session.guildId) || null;
             session.connection = session.player;
+            session._recoveryPending = false;
             if (session.current && !session.manualPause) {
                 session._seekSeconds = Math.max(0, Math.floor(resumeAt));
                 await this._playTrack(session, session.current);
             } else if (session.twentyFourSeven) {
                 session.state = PLAYBACK_STATES.IDLE;
             }
+        } catch (err) {
+            // No healthy node yet — leave the guild pending so a later node
+            // `ready` retries it, and keep the queue intact.
+            session._recoveryPending = true;
+            throw err;
         } finally {
             session.reconnecting = false;
+        }
+    }
+
+    /** Retry every guild still awaiting a Lavalink recovery slot. */
+    _retryPendingRecovery() {
+        for (const session of this.sessions.values()) {
+            if (!session._recoveryPending) continue;
+            if (session.disabledIntentionally || session.reconnecting) continue;
+            this._recoverLavalinkSession(session, 'retry').catch(() => {});
         }
     }
 
@@ -770,15 +1035,96 @@ class MusicManager {
         return status;
     }
 
-    // ── public playback API ─────────────────────────────────────────────────
+    /**
+     * Credential-free per-guild playback diagnostics (connection state, real
+     * position, node players / frame stats). Never includes a token, password,
+     * voice session id or endpoint value.
+     */
+    diagnostics(guildId) {
+        const s = this.getSession(guildId);
+        if (!s) return null;
+        const out = {
+            guildId: String(guildId),
+            engine: this.engineName,
+            state: this.deriveState(s),
+            mode: this.playbackModes.getMode(guildId),
+            connected: this._transportConnected(s),
+            positionMs: this.positionMs(s),
+            paused: s.manualPause,
+            reconnecting: !!s.reconnecting,
+            queueLength: s.queue.length,
+            node: this._nodeId,
+        };
+        try {
+            if (this.voice.diagnostics) out.voice = this.voice.diagnostics(s);
+        } catch (_) {}
+        return out;
+    }
 
-    /** Resolve a query and start playing it (immediately, if idle). */
+    // ── playback mode switching (music ↔ radio) ──────────────────────────────
+
+    /** The committed playback mode for a guild. */
+    playbackMode(guildId) { return this.playbackModes.getMode(guildId); }
+
+    /**
+     * Ensure MUSIC may take over the guild's single voice connection. If Radio
+     * currently owns it, Radio is stopped FIRST and only then does music begin —
+     * we never start music while a radio stream is still live. Returns true when
+     * music may proceed, false when the handover failed (the caller must not
+     * start music, and an error is surfaced instead of a silent double-source).
+     */
+    async _takeOverForMusic(guildId) {
+        const key = String(guildId);
+        if (this.playbackModes.getMode(key) !== PLAYBACK_MODES.RADIO) {
+            this.playbackModes.setMode(key, PLAYBACK_MODES.MUSIC);
+            return true;
+        }
+        const radio = this.radioManager;
+        if (!radio || typeof radio.stop !== 'function') {
+            // Radio owns the guild but we cannot reach its manager — refuse
+            // rather than start a competing source.
+            console.warn(`[MUSIC] Guild ${key} is in RADIO mode but RadioManager is unavailable — cannot switch.`);
+            return false;
+        }
+        try {
+            await radio.stop(key, { actor: 'music-switch' });
+            this.playbackModes.setMode(key, PLAYBACK_MODES.MUSIC);
+            console.log(`[MUSIC] Guild ${key}: switched RADIO → MUSIC (radio stopped).`);
+            return true;
+        } catch (err) {
+            console.error(`[MUSIC] Guild ${key}: failed to stop radio for the music switch:`, err.message);
+            return false;
+        }
+    }
+
+    /** Release the guild's music mode when the session ends (idle/leave). */
+    _releaseMusicMode(guildId) {
+        const key = String(guildId);
+        if (this.playbackModes.getMode(key) === PLAYBACK_MODES.MUSIC) {
+            this.playbackModes.setMode(key, PLAYBACK_MODES.IDLE);
+        }
+    }
+
     async play(guildId, query, { channelId = null, textChannelId = null, requesterId = null, settings = {} } = {}) {
+        // Serialize the mode transition per guild: a rapid second command waits
+        // for the first to commit its mode instead of racing the teardown.
+        return this.playbackModes.runExclusive(guildId, () => this._playLocked(guildId, query, { channelId, textChannelId, requesterId, settings }));
+    }
+
+    async _playLocked(guildId, query, { channelId = null, textChannelId = null, requesterId = null, settings = {} } = {}) {
         const session = this._ensureSession(guildId, channelId, settings);
         if (!session) throw Object.assign(new Error('This node does not own that guild.'), { status: 409 });
         if (channelId) session.channelId = channelId;
         // Lavalink players carry a text channel id; the direct engine ignores it.
         if (textChannelId) session.textChannelId = textChannelId;
+
+        // Mutual exclusion: stop radio first if it owns the guild.
+        const ok = await this._takeOverForMusic(guildId);
+        if (!ok) {
+            throw Object.assign(new Error('Could not stop the radio to start music — try again in a moment.'), { status: 409 });
+        }
+        session.mode = PLAYBACK_MODES.MUSIC;
+
         await this._ensureConnected(session);
 
         const track = await this.providers.resolveQuery(query, { searchLimit: 1 });
@@ -822,6 +1168,7 @@ class MusicManager {
         s.manualPause = true;
         this._pausePlayer(s);
         s.state = PLAYBACK_STATES.PAUSED;
+        this._stopRefreshTimer(s);
         return this.describe(guildId);
     }
 
@@ -832,7 +1179,8 @@ class MusicManager {
         if (s.current) {
             this.voice.resumePlayer(s);
             s.startedAt = Date.now();
-            s.state = PLAYBACK_STATES.PLAYING;
+            s.state = this.deriveState(s);
+            this._startRefreshTimer(s);
         } else await this._playNext(s);
         return this.describe(guildId);
     }
@@ -864,6 +1212,7 @@ class MusicManager {
     async stop(guildId, { actor = null, clearQueue = true } = {}) {
         const s = this.getSession(guildId);
         if (!s) throw new Error('Nothing is playing.');
+        this._stopRefreshTimer(s);
         this._stopPlayerSoft(s);
         s.current = null;
         s.manualPause = false;
@@ -1064,10 +1413,13 @@ class MusicManager {
     async leave(guildId) {
         const session = this.getSession(guildId);
         if (!session) return { guildId: String(guildId), left: false };
+        this._stopRefreshTimer(session);
         this._destroyPlayer(session);
         try { this.voice.leave(session); } catch (_) {}
         session.connection = null;
         session.state = PLAYBACK_STATES.IDLE;
+        session._nowPlaying = null;
+        this._releaseMusicMode(guildId);
         if (session.twentyFourSeven) {
             // Keep 24/7 config but do not reconnect until /247 enable again.
             session.disabledIntentionally = true;
@@ -1192,6 +1544,7 @@ class MusicManager {
     async shutdown() {
         try { this._reloadHandle && this._reloadHandle.stop(); } catch (_) {}
         for (const session of this.sessions.values()) {
+            try { this._stopRefreshTimer(session); } catch (_) {}
             try { await this._persist(session); } catch (_) {}
             this._destroyPlayer(session);
             try { this.voice.leave(session); } catch (_) {}

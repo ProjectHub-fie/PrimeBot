@@ -112,7 +112,14 @@ module.exports = {
                         title: res.queued ? '➕ Queued' : '▶️ Playing',
                         track: res.queued ? t : undefined,
                     });
-                    return interaction.editReply(payload);
+                    await interaction.editReply(payload);
+                    // Track the reply message so the bounded refresh timer keeps
+                    // its position bar live from real playback state.
+                    try {
+                        const sent = await interaction.fetchReply();
+                        if (sent && sent.id) m.trackNowPlaying(guildId, { channelId: sent.channelId || interaction.channelId, messageId: sent.id });
+                    } catch (_) {}
+                    return undefined;
                 }
                 case 'search': {
                     const query = interaction.options.getString('query');

@@ -441,7 +441,16 @@ async function initializeManagers() {
     try {
         const { MusicManager } = require('./utils/music/musicManager');
         const musicStore = require('./utils/music/musicStore');
-        client.musicManager = new MusicManager(client, { store: musicStore });
+        client.musicManager = new MusicManager(client, {
+            store: musicStore,
+            // Cross-link the two playback features so a guild can never run the
+            // 24/7 radio and on-demand music on the same voice connection.
+            radioManager: client.radioManager || null,
+        });
+        // Back-reference from radio → music (radio is constructed first).
+        if (client.radioManager && !client.radioManager.musicManager) {
+            client.radioManager.musicManager = client.musicManager;
+        }
         console.log(`[MANAGERS] MusicManager loaded (engine: ${client.musicManager.engineName}${client.musicManager.engineFallbackReason ? ` — ${client.musicManager.engineFallbackReason}` : ''}).`);
         client.musicManager.start().catch(err => console.error('[MUSIC] start failed:', err.message));
     } catch (err) {
