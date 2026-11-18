@@ -105,14 +105,31 @@ class LavalinkManager {
      * the ONLY place we call `shoukaku.addNode` — the normal path is the
      * connector's `ready(nodes)` on login, and calling both would create a
      * duplicate node per entry (two WebSockets to the same Lavalink server).
+     *
+     * CRITICAL: it also restores the connector identity (`shoukaku.id`).
+     * Shoukaku's DiscordJS connector sets `manager.id` ONLY inside its
+     * `client.once('clientReady')` hook, and `Connector.raw()` DROPS every
+     * `VOICE_STATE_UPDATE` whose `user_id` !== `manager.id`. When the manager
+     * starts AFTER the client is already ready (a reconnect, a hot reload, a
+     * failover takeover, or a test harness) that hook never fires again — so
+     * `id` stays null, every voice-state packet is discarded, the voice
+     * `sessionId` is never captured, and Lavalink can never complete the voice
+     * handshake. The result is exactly the reported symptom: the player is
+     * created and the embed says Playing, but no audio is transmitted (the
+     * voice server update alone is not enough — Lavalink needs the session id).
      */
     _ensureNodesAdded() {
         try {
             const sk = this._kazagumo && this._kazagumo.shoukaku;
             if (!sk) return;
-            if (sk.nodes && sk.nodes.size > 0) return; // connector already added them
             const ready = typeof this.client.isReady === 'function' ? this.client.isReady() : true;
             if (!ready) return; // the connector's clientReady hook will add them
+            // Restore the identity the connector would have set on clientReady.
+            if (sk.id == null && this.client.user && this.client.user.id) {
+                sk.id = this.client.user.id;
+                console.log(`[LAVALINK] Restored connector identity (client was already ready) — voice updates will now be forwarded.`);
+            }
+            if (sk.nodes && sk.nodes.size > 0) return; // connector already added them
             for (const opt of this.nodeOptions) {
                 try { sk.addNode(opt); }
                 catch (err) { console.warn(`[LAVALINK] Could not add node ${opt.name}: ${err.message}`); }
@@ -296,6 +313,78 @@ class LavalinkManager {
     /** A healthy node name for a new player (or null). */
     selectNode() { return this.health.selectNode(); }
 
+    /**
+     * The REAL voice connection state for a guild, read from the Shoukaku
+     * Connection (the authoritative source).
+     *
+     * `KazagumoPlayer.state` is NOT usable for this: Kazagumo never calls
+     * `player.connect()`, so its state stays `CONNECTING` (0) for the life of
+     * the player. The truth lives on the Shoukaku Connection: `state === 1`
+     * (CONNECTED) plus a captured `sessionId` + `serverUpdate.endpoint`.
+     */
+    connectionState(guildId) {
+        const sk = this._kazagumo && this._kazagumo.shoukaku;
+        const connection = sk && sk.connections ? sk.connections.get(String(guildId)) : null;
+        const player = this.getPlayer(guildId);
+        const position = player && player.shoukaku ? Number(player.shoukaku.position) || 0 : 0;
+        const ping = player && player.shoukaku ? Number(player.shoukaku.ping) : -1;
+        if (!connection) {
+            return { exists: false, connected: false, status: 'destroyed', sessionId: null, endpoint: null, position, ping, paused: !!(player && player.paused) };
+        }
+        // Shoukaku Connection.state: 0 CONNECTING, 1 CONNECTED, 3 DISCONNECTED.
+        const hasSession = !!connection.sessionId;
+        const hasEndpoint = !!(connection.serverUpdate && connection.serverUpdate.endpoint);
+        const connected = connection.state === 1 && hasSession && hasEndpoint;
+        let status = 'connecting';
+        if (connection.state === 3) status = 'disconnected';
+        else if (connected) status = 'ready';
+        else if (connection.state === 1 && !hasSession) status = 'awaiting_session';
+        else if (connection.state === 1 && !hasEndpoint) status = 'awaiting_endpoint';
+        return {
+            exists: true,
+            connected,
+            status,
+            channelId: connection.channelId || null,
+            sessionId: hasSession ? 'set' : null, // never expose the raw id
+            endpoint: hasEndpoint ? 'set' : null, // never expose the raw endpoint
+            position,
+            ping,
+            paused: !!(player && player.paused),
+        };
+    }
+
+    /**
+     * Credential-free player/node diagnostics for logs and the dashboard.
+     * Never includes a password, token, session id or voice endpoint value.
+     */
+    playerDiagnostics(guildId) {
+        const conn = this.connectionState(guildId);
+        const player = this.getPlayer(guildId);
+        const nodeName = player && player.shoukaku && player.shoukaku.node ? player.shoukaku.node.name : null;
+        const node = nodeName && this._kazagumo ? this._kazagumo.shoukaku.nodes.get(nodeName) : null;
+        const stats = node && node.stats ? node.stats : null;
+        return {
+            guildId: String(guildId),
+            connected: conn.connected,
+            connectionStatus: conn.status,
+            sessionId: conn.sessionId,
+            endpoint: conn.endpoint,
+            ping: conn.ping,
+            positionMs: conn.position,
+            paused: conn.paused,
+            volume: player ? player.volume : null,
+            track: player && player.queue && player.queue.current
+                ? { title: player.queue.current.title, identifier: player.queue.current.identifier }
+                : null,
+            node: nodeName,
+            nodePlayers: stats && typeof stats.players === 'number' ? stats.players : null,
+            nodePlayingPlayers: stats && typeof stats.playingPlayers === 'number' ? stats.playingPlayers : null,
+            frameStats: stats && stats.frameStats
+                ? { sent: stats.frameStats.sent, nulled: stats.frameStats.nulled, deficit: stats.frameStats.deficit }
+                : null,
+        };
+    }
+
     /** Does a connected node advertise the source needed for `provider`? */
     supportsSource(provider) {
         const hints = SOURCE_HINTS[provider];
@@ -340,7 +429,11 @@ class LavalinkManager {
             sessionId: node.sessionId ? 'set' : null,
             sourceManagers: (node.info && node.info.sourceManagers) || [],
             plugins: (node.info && node.info.plugins) ? node.info.plugins.map(p => p.name) : [],
-            players: node.stats && typeof node.stats.playingPlayers === 'number' ? node.stats.playingPlayers : null,
+            players: node.stats && typeof node.stats.players === 'number' ? node.stats.players : null,
+            playingPlayers: node.stats && typeof node.stats.playingPlayers === 'number' ? node.stats.playingPlayers : null,
+            frameStats: node.stats && node.stats.frameStats
+                ? { sent: node.stats.frameStats.sent, nulled: node.stats.frameStats.nulled, deficit: node.stats.frameStats.deficit }
+                : null,
         }));
     }
 

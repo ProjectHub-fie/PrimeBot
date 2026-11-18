@@ -59,6 +59,11 @@ class RadioManager {
         this._ready = false;
         this._nodeId = deps.nodeId || this._resolveNodeId();
         this._connectGate = deps.connectGate || new (require('./voiceConnectGate').VoiceConnectGate)();
+        // Per-guild playback mode + transition lock, shared with MusicManager by
+        // default so radio and on-demand music can never own the same guild's
+        // single voice connection at the same time.
+        this.playbackModes = deps.playbackModes || require('./playbackMode').getPlaybackModeRegistry();
+        this.musicManager = deps.musicManager || null; // set by index.js once music exists
         this._initPromise = this.load().catch(err => {
             console.error('[RADIO] Failed to load sessions:', err.message);
         });
@@ -105,6 +110,7 @@ class RadioManager {
                     if (!existing) {
                         const session = this._rowToSession(row);
                         this.sessions.set(row.guild_id, session);
+                        this.playbackModes.setMode(row.guild_id, 'radio');
                         changed = true;
                         this._bringUp(session).catch(err =>
                             console.error(`[RADIO] Auto-start failed for guild ${row.guild_id}:`, err.message));
@@ -152,6 +158,9 @@ class RadioManager {
     async _teardown(session) {
         session.enabled = false;
         session.state = RADIO_STATES.STOPPED;
+        if (this.playbackModes.getMode(session.guildId) === 'radio') {
+            this.playbackModes.setMode(session.guildId, 'idle');
+        }
         this._destroyPlayer(session);
         try { this.voice.leave(session.connection, session.guildId); } catch (_) {}
         session.connection = null;
@@ -174,6 +183,10 @@ class RadioManager {
             const res = await radioPool.query('SELECT * FROM radio_sessions WHERE enabled = true');
             for (const row of res.rows || []) {
                 this.sessions.set(row.guild_id, this._rowToSession(row));
+                // An enabled radio session owns the guild's voice connection, so
+                // claim RADIO mode immediately — otherwise a $play before the
+                // first reload could start music alongside it.
+                this.playbackModes.setMode(row.guild_id, 'radio');
             }
             this._ready = true;
         } catch (err) {
@@ -322,6 +335,40 @@ class RadioManager {
      * begins playback if listeners are present.
      */
     async start(guildId, channelId, { stationId = null, actor = null } = {}) {
+        // Serialize the mode transition per guild with music (shared lock) so a
+        // simultaneous $play + $radio start cannot both win the voice channel.
+        return this.playbackModes.runExclusive(guildId, () => this._startLocked(guildId, channelId, { stationId, actor }));
+    }
+
+    /**
+     * Ensure RADIO may take over the guild's single voice connection. If
+     * on-demand MUSIC owns it, music is stopped FIRST (player destroyed, timer
+     * cleared, queue preserved in the session) so the radio stream never
+     * competes with a Lavalink player. Returns true when radio may proceed.
+     */
+    async _takeOverForRadio(guildId) {
+        const key = String(guildId);
+        if (this.playbackModes.getMode(key) !== 'music') {
+            this.playbackModes.setMode(key, 'radio');
+            return true;
+        }
+        const music = this.musicManager;
+        if (!music || typeof music.stop !== 'function') {
+            console.warn(`[RADIO] Guild ${key} is in MUSIC mode but MusicManager is unavailable — cannot switch.`);
+            return false;
+        }
+        try {
+            await music.stop(key, { actor: 'radio-switch' });
+            this.playbackModes.setMode(key, 'radio');
+            console.log(`[RADIO] Guild ${key}: switched MUSIC → RADIO (music stopped).`);
+            return true;
+        } catch (err) {
+            console.error(`[RADIO] Guild ${key}: failed to stop music for the radio switch:`, err.message);
+            return false;
+        }
+    }
+
+    async _startLocked(guildId, channelId, { stationId = null, actor = null } = {}) {
         if (!this.ownsGuild(guildId)) {
             throw Object.assign(new Error('This node does not own that guild.'), { status: 409 });
         }
@@ -329,6 +376,12 @@ class RadioManager {
         const channel = guild && guild.channels.cache.get(channelId);
         if (!channel || !this.voice.isVoiceChannel(channel)) {
             throw Object.assign(new Error('That is not a valid voice channel in this server.'), { status: 400 });
+        }
+
+        // Mutual exclusion: stop on-demand music first if it owns the guild.
+        const ok = await this._takeOverForRadio(guildId);
+        if (!ok) {
+            throw Object.assign(new Error('Could not stop music to start the radio — try again in a moment.'), { status: 409 });
         }
 
         let session = this.sessions.get(guildId);
@@ -373,6 +426,11 @@ class RadioManager {
     /** Stop radio and disconnect, cleaning up all resources. */
     async stop(guildId, { actor = null } = {}) {
         const session = this.sessions.get(guildId);
+        // Release the guild's playback mode even if there is no live session row
+        // (a partially-torn-down radio must never wedge the guild in RADIO mode).
+        if (this.playbackModes.getMode(guildId) === 'radio') {
+            this.playbackModes.setMode(guildId, 'idle');
+        }
         if (!session) return false;
         session.enabled = false;
         session.state = RADIO_STATES.STOPPED;

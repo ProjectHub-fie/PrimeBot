@@ -30,6 +30,21 @@ const PLAYBACK_STATES = {
     PLAYING: 'playing',
     PAUSED: 'paused',
     STOPPED: 'stopped',
+    // A track was accepted but audio is not flowing yet: the voice connection is
+    // still establishing (no session id / endpoint) or Lavalink has not reported
+    // a position. Never shown as "Playing".
+    BUFFERING: 'buffering',
+    // The voice connection was lost (or a node died) and is being re-established.
+    RECONNECTING: 'reconnecting',
+};
+
+// Playback MODES — one per guild, mutually exclusive. Radio (24/7 station) and
+// on-demand Music share the guild's single voice connection, so exactly one may
+// own it at a time.
+const PLAYBACK_MODES = {
+    IDLE: 'idle',
+    MUSIC: 'music',
+    RADIO: 'radio',
 };
 
 // Supported direct-audio container/stream extensions and content types.
@@ -198,6 +213,7 @@ function autoplayQuery(track) {
 module.exports = {
     PROVIDERS,
     PROVIDER_LABELS,
+    PLAYBACK_MODES,
     STREAMABLE_PROVIDERS,
     REPEAT_MODES,
     VALID_REPEAT_MODES,

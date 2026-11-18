@@ -49,6 +49,8 @@ function stateLabel(state) {
         case PLAYBACK_STATES.PLAYING: return '▶️ Playing';
         case PLAYBACK_STATES.PAUSED: return '⏸️ Paused';
         case PLAYBACK_STATES.STOPPED: return '⏹️ Stopped';
+        case PLAYBACK_STATES.BUFFERING: return '⏳ Buffering…';
+        case PLAYBACK_STATES.RECONNECTING: return '🔄 Reconnecting…';
         default: return '💤 Idle';
     }
 }
