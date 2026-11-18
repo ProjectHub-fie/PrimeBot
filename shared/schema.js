@@ -509,6 +509,49 @@ const antinukeLockdowns = pgTable('antinuke_lockdowns', {
   updatedAt: timestamp('updated_at').defaultNow(),
 });
 
+// Anti-Nuke configuration snapshots (own ANUKE_DATABASE_URL pool). `status` is
+// the honest lifecycle (PENDING/IN_PROGRESS/SUCCESS/PARTIAL/FAILED) — a row is
+// never SUCCESS while it is still being captured, and never SUCCESS when its
+// data could not be fetched or persisted. `resources` records per-resource-type
+// success/failure; `verification` records the post-write read-back check.
+const antinukeBackups = pgTable('antinuke_backups', {
+  id: serial('id').primaryKey(),
+  guildId: varchar('guild_id', { length: 50 }).notNull(),
+  name: varchar('name', { length: 120 }).default('').notNull(),
+  createdBy: varchar('created_by', { length: 50 }),
+  createdAt: timestamp('created_at').defaultNow(),
+  roles: jsonb('roles').default([]).notNull(),
+  channels: jsonb('channels').default([]).notNull(),
+  settings: jsonb('settings'),
+  guildSettings: jsonb('guild_settings'),
+  counts: jsonb('counts').default({}).notNull(),
+  notes: text('notes').default('').notNull(),
+  status: varchar('status', { length: 16 }).default('PENDING').notNull(),
+  operation: varchar('operation', { length: 16 }).default('create').notNull(),
+  startedAt: timestamp('started_at'),
+  completedAt: timestamp('completed_at'),
+  resources: jsonb('resources').default({}).notNull(),
+  errors: jsonb('errors').default([]).notNull(),
+  verification: jsonb('verification').default({}).notNull(),
+});
+
+// Append-only log of every backup operation (create/restore) so the dashboard
+// shows real start/finish times, counts, failures and verification state.
+const antinukeBackupOperations = pgTable('antinuke_backup_operations', {
+  id: serial('id').primaryKey(),
+  backupId: integer('backup_id'),
+  guildId: varchar('guild_id', { length: 50 }).notNull(),
+  operation: varchar('operation', { length: 16 }).notNull(),
+  status: varchar('status', { length: 16 }).notNull(),
+  actorId: varchar('actor_id', { length: 50 }),
+  startedAt: timestamp('started_at').defaultNow(),
+  completedAt: timestamp('completed_at'),
+  counts: jsonb('counts').default({}).notNull(),
+  errors: jsonb('errors').default([]).notNull(),
+  verification: jsonb('verification').default({}).notNull(),
+  details: text('details').default('').notNull(),
+});
+
 // Bot-defined Anti-Nuke management access (Co-Owners + Trusted Admins). The
 // ACTUAL Discord guild owner is never stored — ownership is resolved from
 // Discord at authorization time, so the owner has implicit full access and
@@ -1057,6 +1100,8 @@ module.exports = {
   antinukeSettings,
   antinukeIncidents,
   antinukeLockdowns,
+  antinukeBackups,
+  antinukeBackupOperations,
   antinukeAccess,
   antinukeAccessHistory,
   automodWarnings,

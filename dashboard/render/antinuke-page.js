@@ -583,7 +583,7 @@ function backupsSectionHTML() {
       <section class="an-section" data-section="backups" hidden>
         <div class="card">
           <div class="card-title"><span><span class="icon">${svgIcon('archive')}</span> Server structure backups</span></div>
-          <p class="card-desc">Snapshots capture roles (with permission bitfields), channel/category structure, positions and permission overwrites, plus the guild security settings a bot can read. Restoration recreates structure — <strong>recreated roles and channels receive new IDs</strong>, and deleted messages cannot be restored through Discord's API.</p>
+          <p class="card-desc">Snapshots capture roles (with permission bitfields), channel/category structure, positions and permission overwrites, per-channel settings and the guild security settings a bot can read. A snapshot is only marked <strong>SUCCESS</strong> once its data has been fetched, saved and verified — a failed fetch is reported as PARTIAL or FAILED with the reason. Restoration recreates structure — <strong>recreated roles and channels receive new IDs</strong>, and deleted messages cannot be restored through Discord's API. Existing channels and roles are never deleted.</p>
           <div class="an-setup-actions">
             <input type="text" id="an-backup-name" placeholder="Backup name (optional)" class="an-backup-name"/>
             <button class="btn btn-primary btn-mini" id="an-backup-create">${svgIcon('archive')} Create snapshot</button>
@@ -593,6 +593,13 @@ function backupsSectionHTML() {
         <div class="card">
           <div class="card-title"><span><span class="icon">${svgIcon('list')}</span> Snapshots</span></div>
           <div id="an-backup-list" class="an-backup-list"><div class="an-empty">Loading…</div></div>
+        </div>
+        <div class="card">
+          <div class="card-title"><span><span class="icon">${svgIcon('list')}</span> Operation log</span>
+            <button class="btn btn-mini" id="an-backup-ops-refresh">${svgIcon('refresh')} Refresh</button>
+          </div>
+          <p class="card-desc">Every capture and restore, with its real start/finish times, resource counts, failures and verification state.</p>
+          <div id="an-backup-ops" class="an-backup-ops"><div class="an-empty">Loading…</div></div>
         </div>
       </section>`;
 }

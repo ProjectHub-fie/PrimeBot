@@ -333,37 +333,184 @@ function buildDashboardManagerShim(guildId) {
 // ── Backups (capture / compare / restore) ───────────────────────────────────
 //
 // A snapshot is captured from live REST reads and stored in `antinuke_backups`.
-// Restore is a real operation: missing roles/channels are re-created and role
-// permission bits re-applied through the Discord REST API. Discord assigns NEW
-// ids to recreated roles/channels, so the report labels every recreated
-// resource with its new id and never claims in-place restoration.
+// Restore is a real operation: missing roles/channels are re-created, changed
+// permission overwrites + channel settings are re-applied and role permission
+// bits are restored through the Discord REST API. Discord assigns NEW ids to
+// recreated roles/channels, so the report labels every recreated resource with
+// its new id and never claims in-place restoration.
+//
+// Every step reports the truth:
+//   • a fetch failure is recorded per resource type, never swallowed into an
+//     empty list that would look like "an empty server";
+//   • the row is written IN_PROGRESS first and only becomes SUCCESS after the
+//     data has been persisted AND re-read back AND verified;
+//   • an operation log row records the real start/finish times, counts,
+//     failures and verification state for the dashboard.
 
 const {
-    buildSnapshot, compareSnapshot, planRestore, serializeRole, serializeChannel,
+    buildSnapshot, compareSnapshot, planRestore, verifySnapshot,
+    serializeRole, serializeChannel, serializeGuildSettings,
+    computeBackupStatus, computeRestoreStatus,
+    BACKUP_STATUS,
 } = require('../utils/antiNukeBackup');
 const { DANGEROUS_PERMISSION_BY_KEY } = require('../utils/antiNukeRules');
 
 const MAX_BACKUP_CHANNELS = 400;
 
-/** Capture a snapshot of the live guild structure via REST and persist it. */
+// Discord permission bits used for the pre-flight capability check.
+const PERM_MANAGE_ROLES = 1n << 28n;
+const PERM_MANAGE_CHANNELS = 1n << 4n;
+const PERM_VIEW_CHANNEL = 1n << 10n;
+const PERM_MANAGE_GUILD = 1n << 5n;
+
+/**
+ * Verify the bot can actually perform a backup/restore in this guild. Returns
+ * `{ ok, missing: string[], bitfield }`. Missing permissions are a real failure
+ * reason — the operation must not be reported successful when Discord would
+ * reject it. Never bypasses Discord's hierarchy: role position is checked too.
+ */
+async function validateBackupPermissions(guildId) {
+    const bits = await discord.computeBotPermissions(guildId, process.env.DISCORD_CLIENT_ID).catch(() => null);
+    const missing = [];
+    if (bits == null) {
+        return { ok: false, missing: ['bot permissions could not be determined'], bitfield: null };
+    }
+    const has = (flag) => (bits & flag) === flag;
+    if (!has(PERM_MANAGE_ROLES)) missing.push('Manage Roles');
+    if (!has(PERM_MANAGE_CHANNELS)) missing.push('Manage Channels');
+    if (!has(PERM_VIEW_CHANNEL)) missing.push('View Channels');
+    if (!has(PERM_MANAGE_GUILD)) missing.push('Manage Server');
+    return { ok: missing.length === 0, missing, bitfield: bits.toString() };
+}
+
+/** Fetch the live structure via REST, recording a real error per resource. */
+async function readLiveStructure(guildId) {
+    const errors = {};
+    const [roles, rawChannels, rawGuild] = await Promise.all([
+        discord.getGuildRoles(guildId, { excludeUnassignable: false })
+            .catch(err => { errors.roles = err.message || String(err); return null; }),
+        discord.getGuildChannelsRaw(guildId)
+            .catch(err => { errors.channels = err.message || String(err); return null; }),
+        discord.getGuildRaw(guildId)
+            .catch(err => { errors.guildSettings = err.message || String(err); return null; }),
+    ]);
+    const channels = Array.isArray(rawChannels)
+        ? rawChannels.slice(0, MAX_BACKUP_CHANNELS).map(c => ({
+            id: c.id, name: c.name, type: c.type, parent_id: c.parent_id || null,
+            position: c.position,
+            topic: c.topic, nsfw: c.nsfw, rate_limit_per_user: c.rate_limit_per_user,
+            bitrate: c.bitrate, user_limit: c.user_limit, rtc_region: c.rtc_region,
+            video_quality_mode: c.video_quality_mode,
+            default_auto_archive_duration: c.default_auto_archive_duration,
+            default_thread_rate_limit_per_user: c.default_thread_rate_limit_per_user,
+            permission_overwrites: c.permission_overwrites || [],
+        }))
+        : [];
+    return {
+        roles: Array.isArray(roles) ? roles : [],
+        channels,
+        guildSettings: rawGuild || null,
+        errors,
+    };
+}
+
+/**
+ * Capture a snapshot of the live guild structure via REST, persist it, re-read
+ * it back and verify it — then set the honest terminal status. Never reports
+ * SUCCESS when the reads failed, when nothing was captured, or when the stored
+ * row cannot be verified.
+ */
 async function captureBackup({ guildId, name, createdBy, settings = null, notes = '' }) {
     const db = require('./db');
-    const [roles, rawChannels] = await Promise.all([
-        discord.getGuildRoles(guildId, { excludeUnassignable: false }).catch(() => []),
-        discord.getGuildChannelsRaw(guildId).catch(() => []),
-    ]);
-    const channels = (rawChannels || []).slice(0, MAX_BACKUP_CHANNELS).map(c => ({
-        id: c.id, name: c.name, type: c.type, parentId: c.parent_id || null,
-        rawPosition: c.position, permissionOverwrites: (c.permission_overwrites || []).map(ow => ({
-            id: ow.id, type: ow.type, allow: String(ow.allow || 0), deny: String(ow.deny || 0),
-        })),
-    }));
-    const snapshot = buildSnapshot({ guildId, name, createdBy, reader: { roles, channels, settings } });
-    const saved = await db.createAntiNukeBackup({
-        guildId, name, createdBy,
-        roles: snapshot.roles, channels: snapshot.channels, settings, notes,
+    const startedAt = new Date();
+
+    // Refuse a duplicate concurrent capture (a double-click / retry storm).
+    const inFlight = await db.countInFlightBackups(guildId).catch(() => 0);
+    if (inFlight > 0) {
+        const err = new Error('A backup is already in progress for this server.');
+        err.status = 409;
+        err.reason = 'backup_in_progress';
+        throw err;
+    }
+
+    // Create the row up-front as IN_PROGRESS so a crash leaves a truthful
+    // (reconcilable) record rather than a phantom success.
+    const pending = await db.createAntiNukeBackup({
+        guildId, name, createdBy, roles: [], channels: [], settings, notes,
+        status: BACKUP_STATUS.IN_PROGRESS, operation: 'create', startedAt,
     });
-    return { backup: saved, counts: snapshot.counts };
+
+    let finalStatus = BACKUP_STATUS.FAILED;
+    let snapshot = null;
+    let errors = [];
+    try {
+        const live = await readLiveStructure(guildId);
+        snapshot = buildSnapshot({
+            guildId, name, createdBy,
+            reader: {
+                roles: live.roles, channels: live.channels,
+                guildSettings: live.guildSettings, settings,
+                errors: live.errors,
+            },
+        });
+        const decision = computeBackupStatus(snapshot);
+        finalStatus = decision.status;
+        errors = decision.errors;
+    } catch (err) {
+        errors = [err.message || String(err)];
+        finalStatus = BACKUP_STATUS.FAILED;
+        snapshot = buildSnapshot({ guildId, name, createdBy, reader: { errors: { roles: errors[0] } } });
+    }
+
+    // Persist the payload + terminal status, then re-read to verify it landed.
+    let saved = null;
+    let verification = { ok: false, errors: ['not persisted'] };
+    try {
+        saved = await db.completeAntiNukeBackup(guildId, pending.id, {
+            roles: snapshot.roles, channels: snapshot.channels,
+            guildSettings: snapshot.guildSettings, settings,
+            status: finalStatus, resources: snapshot.resources,
+            errors, verification: {},
+        });
+        const stored = await db.getAntiNukeBackup(guildId, pending.id);
+        verification = verifySnapshot(stored || {}, { guildId });
+        // A stored row that fails verification is never SUCCESS.
+        if (!verification.ok && finalStatus === BACKUP_STATUS.SUCCESS) {
+            finalStatus = BACKUP_STATUS.PARTIAL;
+        }
+        // Record the verification result + the final status on the row.
+        await db.updateAntiNukeBackupStatus(guildId, pending.id, {
+            status: finalStatus, verification,
+            errors: errors.concat(verification.ok ? [] : verification.errors),
+        });
+        if (saved) { saved.status = finalStatus; saved.verification = verification; }
+    } catch (err) {
+        finalStatus = BACKUP_STATUS.FAILED;
+        errors = errors.concat([`persist/verify failed: ${err.message || err}`]);
+        verification = { ok: false, errors: [String(err.message || err)] };
+        try {
+            await db.updateAntiNukeBackupStatus(guildId, pending.id, {
+                status: BACKUP_STATUS.FAILED, verification, errors,
+            });
+        } catch (_) { /* the row stays IN_PROGRESS and reconcileStaleBackups fixes it */ }
+    }
+
+    // Operation log — always written, whatever the outcome.
+    await db.addAntiNukeBackupOperation({
+        backupId: pending.id, guildId, operation: 'create', status: finalStatus, actorId: createdBy,
+        startedAt, counts: snapshot ? snapshot.counts : {}, errors, verification,
+        details: `capture ${finalStatus}`,
+    }).catch(() => {});
+
+    const finished = await db.getAntiNukeBackup(guildId, pending.id).catch(() => null);
+    return {
+        backup: finished || saved || pending,
+        status: finalStatus,
+        counts: snapshot ? snapshot.counts : { roles: 0, channels: 0 },
+        resources: snapshot ? snapshot.resources : {},
+        errors,
+        verification,
+    };
 }
 
 /** Compare a stored snapshot against the live guild. */
@@ -371,18 +518,39 @@ async function compareBackup(guildId, id) {
     const db = require('./db');
     const snapshot = await db.getAntiNukeBackup(guildId, id);
     if (!snapshot) return null;
-    const [roles, rawChannels] = await Promise.all([
-        discord.getGuildRoles(guildId, { excludeUnassignable: false }).catch(() => []),
-        discord.getGuildChannelsRaw(guildId).catch(() => []),
-    ]);
-    const live = {
-        roles: (roles || []).map(serializeRole).filter(Boolean),
-        channels: (rawChannels || []).map(c => serializeChannel({
-            id: c.id, name: c.name, type: c.type, parentId: c.parent_id || null,
-            rawPosition: c.position, permissionOverwrites: c.permission_overwrites || [],
-        })).filter(Boolean),
+    const live = await readLiveStructure(guildId);
+    const liveShape = {
+        roles: live.roles.map(serializeRole).filter(Boolean),
+        channels: live.channels.map(serializeChannel).filter(Boolean),
+        guildSettings: serializeGuildSettings(live.guildSettings),
     };
-    return { diff: compareSnapshot({ roles: snapshot.roles, channels: snapshot.channels }, live), counts: snapshot.counts };
+    return {
+        diff: compareSnapshot({ roles: snapshot.roles, channels: snapshot.channels, guildSettings: snapshot.guildSettings }, liveShape),
+        counts: snapshot.counts,
+        status: snapshot.status,
+        readErrors: live.errors,
+    };
+}
+
+/** Build the live-shape + plan a restore. Shared by preview + restore. */
+async function buildRestorePlan(guildId, snapshot) {
+    const db = require('./db');
+    const live = await readLiveStructure(guildId);
+    const liveShape = {
+        roles: live.roles.map(serializeRole).filter(Boolean),
+        channels: live.channels.map(serializeChannel).filter(Boolean),
+        guildSettings: serializeGuildSettings(live.guildSettings),
+    };
+    const settings = await db.getAntiNukeSettings(guildId).catch(() => null);
+    const trustedRoles = (settings && settings.trustedRoleIds) || [];
+    const safeRoleIds = [guildId, ...trustedRoles];
+    const botHighest = await botHighestRolePosition(guildId);
+    const plan = planRestore(
+        { roles: snapshot.roles, channels: snapshot.channels, guildSettings: snapshot.guildSettings },
+        liveShape,
+        { safeRoleIds, botHighestPosition: botHighest == null ? Infinity : botHighest },
+    );
+    return { plan, readErrors: live.errors, botHighest };
 }
 
 /** Preview the restore operations for a snapshot (no writes). */
@@ -390,70 +558,276 @@ async function previewBackupRestore(guildId, id) {
     const db = require('./db');
     const snapshot = await db.getAntiNukeBackup(guildId, id);
     if (!snapshot) return null;
-    const [roles, rawChannels] = await Promise.all([
-        discord.getGuildRoles(guildId, { excludeUnassignable: false }).catch(() => []),
-        discord.getGuildChannelsRaw(guildId).catch(() => []),
-    ]);
-    const live = {
-        roles: (roles || []).map(serializeRole).filter(Boolean),
-        channels: (rawChannels || []).map(c => serializeChannel({
-            id: c.id, name: c.name, type: c.type, parentId: c.parent_id || null,
-            rawPosition: c.position, permissionOverwrites: c.permission_overwrites || [],
-        })).filter(Boolean),
+    const { plan, readErrors } = await buildRestorePlan(guildId, snapshot);
+    const permissions = await validateBackupPermissions(guildId);
+    return {
+        plan, counts: snapshot.counts, status: snapshot.status,
+        readErrors, permissions,
+        skipped: plan.skipped || [],
+        destructive: false,
+        note: 'Recreated roles/channels receive NEW ids. Existing channels and roles are never deleted.',
     };
-    const settings = await db.getAntiNukeSettings(guildId);
-    const trustedRoles = (settings && settings.trustedRoleIds) || [];
-    const safeRoleIds = [guildId, ...trustedRoles];
-    const botHighest = await botHighestRolePosition(guildId);
-    const plan = planRestore({ roles: snapshot.roles, channels: snapshot.channels }, live, {
-        safeRoleIds, botHighestPosition: botHighest == null ? Infinity : botHighest,
-    });
-    return { plan, counts: snapshot.counts };
 }
 
-/** Execute a restore. Returns a report of what really happened. */
-async function restoreBackup(guildId, id, { actorId = null } = {}) {
+/** Map a planned op onto the REST call that applies it. */
+async function applyRestoreOp(guildId, op) {
+    if (op.kind === 'roleCreate') {
+        const role = await discord.createGuildRole(guildId, {
+            name: op.payload.name,
+            permissions: op.payload.permissions,
+            color: op.payload.color,
+            hoist: op.payload.hoist,
+            mentionable: op.payload.mentionable,
+        });
+        // Discord ignores `position` on create; set it afterwards (best-effort,
+        // and only ever below the bot's own highest role).
+        if (role && role.id && op.payload.position != null) {
+            await discord.modifyGuildRole(guildId, role.id, { position: op.payload.position }).catch(() => {});
+        }
+        return { kind: op.kind, oldId: op.target, newId: role && role.id, name: op.payload.name };
+    }
+    if (op.kind === 'roleUpdate') {
+        await discord.modifyGuildRole(guildId, op.target, { permissions: op.payload.permissions });
+        return { kind: op.kind, id: op.target };
+    }
+    if (op.kind === 'channelCreate') {
+        const body = {
+            name: op.payload.name, type: op.payload.type,
+            permission_overwrites: (op.payload.permissionOverwrites || []).map(ow => ({
+                id: ow.id, type: ow.type, allow: ow.allow, deny: ow.deny,
+            })),
+        };
+        if (op.payload.parentId) body.parent_id = op.payload.parentId;
+        const settings = op.payload.settings || {};
+        if (settings.topic !== undefined) body.topic = settings.topic;
+        if (settings.nsfw !== undefined) body.nsfw = settings.nsfw;
+        if (settings.rateLimitPerUser !== undefined) body.rate_limit_per_user = settings.rateLimitPerUser;
+        if (settings.bitrate !== undefined) body.bitrate = settings.bitrate;
+        if (settings.userLimit !== undefined) body.user_limit = settings.userLimit;
+        if (settings.rtcRegion !== undefined) body.rtc_region = settings.rtcRegion;
+        if (settings.videoQualityMode !== undefined) body.video_quality_mode = settings.videoQualityMode;
+        if (settings.defaultAutoArchiveDuration !== undefined) body.default_auto_archive_duration = settings.defaultAutoArchiveDuration;
+        if (settings.defaultThreadRateLimitPerUser !== undefined) body.default_thread_rate_limit_per_user = settings.defaultThreadRateLimitPerUser;
+        const ch = await discord.createGuildChannel(guildId, body);
+        return { kind: op.kind, oldId: op.target, newId: ch && ch.id, name: op.payload.name };
+    }
+    if (op.kind === 'overwriteApply') {
+        const ow = op.payload.overwrite || {};
+        await discord.putChannelOverwrite(op.payload.channelId, ow.id, {
+            allow: String(ow.allow || 0), deny: String(ow.deny || 0), type: Number(ow.type || 0),
+        });
+        return { kind: op.kind, channelId: op.payload.channelId, overwriteId: ow.id };
+    }
+    if (op.kind === 'channelUpdate') {
+        const s = op.payload.settings || {};
+        const body = {};
+        if (s.topic !== undefined) body.topic = s.topic;
+        if (s.nsfw !== undefined) body.nsfw = s.nsfw;
+        if (s.rateLimitPerUser !== undefined) body.rate_limit_per_user = s.rateLimitPerUser;
+        if (s.bitrate !== undefined) body.bitrate = s.bitrate;
+        if (s.userLimit !== undefined) body.user_limit = s.userLimit;
+        if (s.rtcRegion !== undefined) body.rtc_region = s.rtcRegion;
+        if (s.videoQualityMode !== undefined) body.video_quality_mode = s.videoQualityMode;
+        if (s.defaultAutoArchiveDuration !== undefined) body.default_auto_archive_duration = s.defaultAutoArchiveDuration;
+        if (s.defaultThreadRateLimitPerUser !== undefined) body.default_thread_rate_limit_per_user = s.defaultThreadRateLimitPerUser;
+        if (Object.keys(body).length === 0) return { kind: op.kind, channelId: op.payload.channelId, skipped: true };
+        await discord.patchChannel(op.payload.channelId, body);
+        return { kind: op.kind, channelId: op.payload.channelId };
+    }
+    if (op.kind === 'settingUpdate') {
+        const body = guildSettingBody(op.payload.key, op.payload.value);
+        if (!body) return { kind: op.kind, key: op.payload.key, skipped: true };
+        await discord.patchGuild(guildId, body);
+        return { kind: op.kind, key: op.payload.key };
+    }
+    return { kind: op.kind, skipped: true };
+}
+
+/** Map a stored guild-setting key to the Discord PATCH body (snake_case). */
+function guildSettingBody(key, value) {
+    switch (key) {
+        case 'name': return { name: String(value) };
+        case 'verificationLevel': return { verification_level: Number(value) };
+        case 'explicitContentFilter': return { explicit_content_filter: Number(value) };
+        case 'defaultNotifications': return { default_message_notifications: Number(value) };
+        case 'afkChannelId': return value ? { afk_channel_id: String(value) } : null;
+        case 'afkTimeout': return { afk_timeout: Number(value) };
+        case 'systemChannelId': return value ? { system_channel_id: String(value) } : null;
+        case 'systemChannelFlags': return { system_channel_flags: Number(value) };
+        default: return null;
+    }
+}
+
+/**
+ * Execute a restore for a snapshot, then re-fetch the affected resources and
+ * verify the intended state was applied. Returns a report whose `status` is
+ * SUCCESS only when the changes were applied AND verified.
+ */
+async function restoreBackup(guildId, id, { actorId = null, dryRun = false } = {}) {
+    const db = require('./db');
+    const startedAt = new Date();
     const preview = await previewBackupRestore(guildId, id);
     if (!preview) return null;
-    const report = { created: { roles: [], channels: [] }, updated: { roles: [] }, failed: [], newIds: [] };
+
+    if (dryRun) {
+        return {
+            dryRun: true, status: BACKUP_STATUS.PENDING,
+            plan: preview.plan, counts: preview.counts, permissions: preview.permissions,
+            attempted: 0, applied: 0, failedCount: 0, errors: [],
+            note: 'Dry run — nothing was changed.',
+        };
+    }
+
+    const report = {
+        created: { roles: [], channels: [] },
+        updated: { roles: [], channels: [], overwrites: [], settings: [] },
+        skipped: (preview.skipped || []).slice(),
+        failed: [],
+        newIds: [],
+        errors: [],
+    };
+
+    // Refuse to run without the permissions the operations need — an attempt
+    // that Discord would reject must fail loudly, not report success.
+    if (!preview.permissions.ok) {
+        report.errors.push(`missing permissions: ${preview.permissions.missing.join(', ')}`);
+        report.status = BACKUP_STATUS.FAILED;
+        report.attempted = 0; report.applied = 0; report.failedCount = preview.plan.ops.length;
+        report.verified = false;
+        await db.addAntiNukeBackupOperation({
+            backupId: Number(id), guildId, operation: 'restore', status: report.status, actorId,
+            startedAt, counts: { attempted: report.attempted, applied: 0, failed: report.failedCount },
+            errors: report.errors, verification: { ok: false, errors: report.errors },
+            details: 'restore refused — missing permissions',
+        }).catch(() => {});
+        report.summary = { attempted: 0, applied: 0, failed: report.failedCount, verified: false };
+        return report;
+    }
+
     for (const op of preview.plan.ops) {
         try {
+            const result = await applyRestoreOp(guildId, op);
+            if (result && result.skipped) { report.skipped.push({ kind: op.kind, target: op.target }); continue; }
             if (op.kind === 'roleCreate') {
-                const role = await discord.createGuildRole(guildId, {
-                    name: op.payload.name,
-                    permissions: op.payload.permissions,
-                    color: op.payload.color,
-                    hoist: op.payload.hoist,
-                    mentionable: op.payload.mentionable,
-                });
-                report.created.roles.push({ oldId: op.target, newId: role && role.id, name: op.payload.name });
-                if (role && role.id) report.newIds.push({ kind: 'role', oldId: op.target, newId: role.id, name: op.payload.name });
-            } else if (op.kind === 'roleUpdate') {
-                await discord.modifyGuildRole(guildId, op.target, { permissions: op.payload.permissions });
-                report.updated.roles.push({ id: op.target });
+                report.created.roles.push({ oldId: op.target, newId: result.newId, name: op.payload.name });
+                if (result.newId) report.newIds.push({ kind: 'role', oldId: op.target, newId: result.newId, name: op.payload.name });
             } else if (op.kind === 'channelCreate') {
-                const ch = await discord.createGuildChannel(guildId, {
-                    name: op.payload.name, type: op.payload.type,
-                    parent_id: op.payload.parentId || undefined,
-                    permission_overwrites: (op.payload.permissionOverwrites || []).map(ow => ({
-                        id: ow.id, type: ow.type, allow: ow.allow, deny: ow.deny,
-                    })),
-                });
-                report.created.channels.push({ oldId: op.target, newId: ch && ch.id, name: op.payload.name });
-                if (ch && ch.id) report.newIds.push({ kind: 'channel', oldId: op.target, newId: ch.id, name: op.payload.name });
+                report.created.channels.push({ oldId: op.target, newId: result.newId, name: op.payload.name });
+                if (result.newId) report.newIds.push({ kind: 'channel', oldId: op.target, newId: result.newId, name: op.payload.name });
+            } else if (op.kind === 'roleUpdate') {
+                report.updated.roles.push({ id: op.target });
+            } else if (op.kind === 'channelUpdate') {
+                report.updated.channels.push({ id: op.payload.channelId });
+            } else if (op.kind === 'overwriteApply') {
+                report.updated.overwrites.push({ channelId: op.payload.channelId, overwriteId: op.payload.overwrite && op.payload.overwrite.id });
+            } else if (op.kind === 'settingUpdate') {
+                report.updated.settings.push({ key: op.payload.key });
             }
         } catch (err) {
-            report.failed.push({ kind: op.kind, target: op.target, error: err.message });
+            report.failed.push({ kind: op.kind, target: op.target, error: err.message || String(err) });
+            report.errors.push(`${op.kind}:${op.target}: ${err.message || err}`);
         }
     }
+
+    const applied = report.created.roles.length + report.created.channels.length
+        + report.updated.roles.length + report.updated.channels.length
+        + report.updated.overwrites.length + report.updated.settings.length;
+    report.attempted = preview.plan.ops.length;
+    report.applied = applied;
+    report.failedCount = report.failed.length;
+
+    // Verify: re-fetch and confirm the intended state. Recreated resources get
+    // NEW ids, so they are verified by name+type presence, not by old id.
+    let verification = { ok: false, errors: ['not verified'] };
+    try {
+        verification = await verifyRestore(guildId, id, report);
+    } catch (err) {
+        verification = { ok: false, errors: [err.message || String(err)] };
+    }
+    report.verified = verification.ok;
+    report.verification = verification;
+
+    const decision = computeRestoreStatus(report);
+    report.status = decision.status;
+    report.errors = report.errors.concat(decision.errors.filter(e => !report.errors.includes(e)));
+    report.note = 'Recreated roles and channels receive NEW ids — Discord never reuses ids, and deleted messages cannot be restored.';
+
+    await db.addAntiNukeBackupOperation({
+        backupId: Number(id), guildId, operation: 'restore', status: report.status, actorId,
+        startedAt,
+        counts: { attempted: report.attempted, applied, failed: report.failedCount },
+        errors: report.errors, verification,
+        details: `restore ${report.status}: +${report.created.roles.length} roles, +${report.created.channels.length} channels, ${report.failedCount} failed`,
+    }).catch(() => {});
+
     report.summary = {
         rolesCreated: report.created.roles.length,
         rolesUpdated: report.updated.roles.length,
         channelsCreated: report.created.channels.length,
-        failed: report.failed.length,
+        channelsUpdated: report.updated.channels.length,
+        overwritesApplied: report.updated.overwrites.length,
+        settingsUpdated: report.updated.settings.length,
+        attempted: report.attempted,
+        applied,
+        failed: report.failedCount,
+        skipped: report.skipped.length,
+        verified: verification.ok,
     };
-    report.note = 'Recreated roles and channels receive NEW ids — Discord never reuses ids, and deleted messages cannot be restored.';
     return report;
+}
+
+/**
+ * Re-fetch the guild and confirm the restored state. Verifies:
+ *   • every recreated role/channel now exists (by name + type);
+ *   • every role whose permissions we set now carries them;
+ *   • every overwrite we applied is present with the intended bits.
+ * Returns `{ ok, errors, checked, mismatches }`.
+ */
+async function verifyRestore(guildId, id, report) {
+    const db = require('./db');
+    const snapshot = await db.getAntiNukeBackup(guildId, id);
+    const errors = [];
+    let checked = 0;
+    const mismatches = [];
+
+    const live = await readLiveStructure(guildId);
+    if (live.errors.roles || live.errors.channels) {
+        return { ok: false, errors: ['could not re-read guild for verification'], checked: 0, mismatches: [] };
+    }
+    const liveRoles = live.roles.map(serializeRole).filter(Boolean);
+    const liveChannels = live.channels.map(serializeChannel).filter(Boolean);
+    const rolesByName = new Map(liveRoles.map(r => [r.name, r]));
+    const channelsByKey = new Map(liveChannels.map(c => [`${c.name}|${c.type}`, c]));
+
+    for (const r of report.created.roles) {
+        checked++;
+        if (!rolesByName.has(r.name)) mismatches.push(`role ${r.name} missing after restore`);
+    }
+    for (const c of report.created.channels) {
+        checked++;
+        const snapChannel = (snapshot.channels || []).find(x => String(x.id) === String(c.oldId));
+        const key = `${c.name}|${snapChannel ? snapChannel.type : 0}`;
+        if (!channelsByKey.has(key)) mismatches.push(`channel ${c.name} missing after restore`);
+    }
+    for (const u of report.updated.roles) {
+        checked++;
+        const wanted = (snapshot.roles || []).find(x => String(x.id) === String(u.id));
+        const liveRole = liveRoles.find(x => String(x.id) === String(u.id));
+        if (!liveRole) { mismatches.push(`role ${u.id} missing during verify`); continue; }
+        if (wanted && String(liveRole.permissions) !== String(wanted.permissions)) {
+            mismatches.push(`role ${wanted.name} permissions not applied`);
+        }
+    }
+    for (const ow of report.updated.overwrites) {
+        checked++;
+        const ch = liveChannels.find(c => String(c.id) === String(ow.channelId));
+        if (!ch) { mismatches.push(`channel ${ow.channelId} missing during verify`); continue; }
+        const applied = (ch.permissionOverwrites || []).find(o => String(o.id) === String(ow.overwriteId));
+        if (!applied) mismatches.push(`overwrite ${ow.overwriteId} not applied on ${ow.channelId}`);
+    }
+
+    if (mismatches.length) errors.push(...mismatches.slice(0, 20));
+    return { ok: mismatches.length === 0, errors, checked, mismatches: mismatches.slice(0, 20) };
 }
 
 async function botHighestRolePosition(guildId) {
@@ -750,6 +1124,7 @@ module.exports = {
     compareBackup,
     previewBackupRestore,
     restoreBackup,
+    validateBackupPermissions,
     botHighestRolePosition,
     // Lockdown profiles
     LOCKDOWN_PROFILE_LABELS,

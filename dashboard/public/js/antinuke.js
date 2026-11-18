@@ -1171,7 +1171,7 @@
   function onSectionShown(key) {
     if (key === 'overview') refreshOverview();
     if (key === 'antiraid') refreshRaid();
-    if (key === 'backups') refreshBackups();
+    if (key === 'backups') { refreshBackups(); refreshBackupOperations(); }
     if (key === 'health') refreshHealth();
     if (key === 'incidents') refreshIncidents();
   }
@@ -1264,6 +1264,24 @@
   }
 
   // ── Backups ───────────────────────────────────────────────────────────────
+//
+// Every indicator is driven by the operation's real status. A green toast is
+// only shown for a verified SUCCESS; PARTIAL/FAILED are shown as such with the
+// real error reasons, and the operation log surfaces start/finish times,
+// counts, failures and verification for each run.
+
+  var BACKUP_STATUS_CLASS = { SUCCESS: 'ok', PARTIAL: 'warn', FAILED: 'fail', IN_PROGRESS: 'run', PENDING: 'run' };
+
+  function statusChip(status) {
+    var s = String(status || 'PENDING').toUpperCase();
+    var cls = BACKUP_STATUS_CLASS[s] || 'run';
+    return '<span class="an-status an-status-' + cls + '">' + esc(s) + '</span>';
+  }
+
+  function fmtCounts(c) {
+    c = c || {};
+    return (c.roles || 0) + ' roles · ' + (c.channels || 0) + ' channels' + (c.overwrites ? ' · ' + c.overwrites + ' overwrites' : '');
+  }
 
   function initBackups() {
     var create = $('#an-backup-create');
@@ -1271,12 +1289,30 @@
       create.disabled = true;
       var nameEl = $('#an-backup-name');
       api('/api/guilds/' + GUILD_ID + '/antinuke/backups', { method: 'POST', body: JSON.stringify({ name: nameEl ? nameEl.value : '' }) })
-        .then(function () { toast('Snapshot created', 'success'); if (nameEl) nameEl.value = ''; refreshBackups(); })
-        .catch(function (err) { toast('Backup failed: ' + err.message, 'error'); })
+        .then(function (data) {
+          // The response carries the real status — never assume success.
+          var st = (data && data.status) || 'FAILED';
+          if (st === 'SUCCESS') {
+            toast('Snapshot created (' + fmtCounts(data.counts) + ')', 'success');
+            if (nameEl) nameEl.value = '';
+          } else {
+            toast('Backup ' + st + ': ' + ((data.errors || []).join('; ') || 'no data captured'), 'error');
+          }
+          refreshBackups();
+        })
+        .catch(function (err) {
+          // A 502 carries the record; surface the honest reason.
+          var body = err && err.body;
+          var detail = body && body.errors && body.errors.length ? body.errors.join('; ') : err.message;
+          toast('Backup failed: ' + detail, 'error');
+          refreshBackups();
+        })
         .then(function () { create.disabled = false; });
     });
     var refresh = $('#an-backup-refresh');
     if (refresh) refresh.addEventListener('click', refreshBackups);
+    var opsRefresh = $('#an-backup-ops-refresh');
+    if (opsRefresh) opsRefresh.addEventListener('click', refreshBackupOperations);
   }
 
   function refreshBackups() {
@@ -1288,9 +1324,13 @@
         var rows = data.backups || [];
         if (!rows.length) { list.innerHTML = '<div class="an-empty">No snapshots yet.</div>'; return; }
         list.innerHTML = rows.map(function (b) {
+          var errs = (b.errors || []);
           return '<div class="an-backup-row" data-id="' + esc(b.id) + '">' +
-            '<div class="an-backup-main"><div class="an-backup-name">' + esc(b.name || ('Backup #' + b.id)) + '</div>' +
-            '<div class="an-backup-meta">' + esc(fmtTs(b.createdAt)) + ' · ' + esc((b.counts && b.counts.roles) || 0) + ' roles · ' + esc((b.counts && b.counts.channels) || 0) + ' channels</div></div>' +
+            '<div class="an-backup-main"><div class="an-backup-name">' + esc(b.name || ('Backup #' + b.id)) + ' ' + statusChip(b.status) + '</div>' +
+            '<div class="an-backup-meta">#' + esc(b.id) + ' · ' + esc(fmtTs(b.createdAt)) + ' · ' + esc(fmtCounts(b.counts)) +
+            (b.verification && b.verification.ok === false ? ' · <span class="an-status an-status-warn">unverified</span>' : '') + '</div>' +
+            (errs.length ? '<div class="an-backup-errors">' + esc(errs.slice(0, 3).join('; ')) + '</div>' : '') +
+            '</div>' +
             '<div class="an-backup-actions">' +
             '<button class="btn btn-mini an-backup-compare" data-id="' + esc(b.id) + '">Compare</button>' +
             '<button class="btn btn-mini an-backup-preview" data-id="' + esc(b.id) + '">Restore preview</button>' +
@@ -1306,6 +1346,33 @@
       .catch(function (err) { list.innerHTML = '<div class="an-empty">Could not load backups: ' + esc(err.message) + '</div>'; });
   }
 
+  function refreshBackupOperations() {
+    var out = $('#an-backup-ops');
+    if (!out) return;
+    out.innerHTML = '<div class="an-empty">Loading…</div>';
+    api('/api/guilds/' + GUILD_ID + '/antinuke/backup-operations')
+      .then(function (data) {
+        var rows = data.operations || [];
+        if (!rows.length) { out.innerHTML = '<div class="an-empty">No operations recorded yet.</div>'; return; }
+        out.innerHTML = '<table class="an-ops-table"><thead><tr>' +
+          '<th>#</th><th>Operation</th><th>Status</th><th>Started</th><th>Completed</th><th>Counts</th><th>Verification</th><th>Details</th>' +
+          '</tr></thead><tbody>' + rows.map(function (o) {
+            var c = o.counts || {};
+            var counts = (c.applied != null)
+              ? (c.applied + '/' + (c.attempted || 0) + ' applied' + (c.failed ? ', ' + c.failed + ' failed' : ''))
+              : fmtCounts(c);
+            var ver = o.verification && o.verification.ok === true ? 'verified'
+              : (o.verification && o.verification.ok === false ? 'unverified' : '—');
+            var errs = (o.errors || []);
+            return '<tr><td>' + esc(o.id) + '</td><td>' + esc(o.operation) + '</td><td>' + statusChip(o.status) + '</td>' +
+              '<td>' + esc(fmtTs(o.startedAt)) + '</td><td>' + esc(o.completedAt ? fmtTs(o.completedAt) : '—') + '</td>' +
+              '<td>' + esc(counts) + '</td><td>' + esc(ver) + '</td>' +
+              '<td>' + esc(o.details || '') + (errs.length ? '<div class="an-backup-errors">' + esc(errs.slice(0, 2).join('; ')) + '</div>' : '') + '</td></tr>';
+          }).join('') + '</tbody></table>';
+      })
+      .catch(function (err) { out.innerHTML = '<div class="an-empty">Could not load operations: ' + esc(err.message) + '</div>'; });
+  }
+
   function backupReport(html) {
     var list = $('#an-backup-list');
     if (list) list.insertAdjacentHTML('afterbegin', '<div class="an-backup-report card">' + html + '</div>');
@@ -1315,11 +1382,13 @@
     api('/api/guilds/' + GUILD_ID + '/antinuke/backups/' + id + '/compare')
       .then(function (data) {
         var d = data.diff || {};
-        backupReport('<div class="card-title"><span>Comparison for #' + esc(id) + '</span></div>' +
+        backupReport('<div class="card-title"><span>Comparison for #' + esc(id) + '</span> ' + statusChip(data.status) + '</div>' +
           '<ul class="an-diff-list">' +
           '<li>' + esc((d.missingRoles || []).length) + ' role(s) missing</li>' +
           '<li>' + esc((d.modifiedRoles || []).length) + ' role(s) modified</li>' +
           '<li>' + esc((d.missingChannels || []).length) + ' channel(s) missing</li>' +
+          '<li>' + esc((d.modifiedChannels || []).length) + ' channel(s) modified</li>' +
+          '<li>' + esc((d.settingsChanged || []).length) + ' server setting(s) changed</li>' +
           '</ul>');
       })
       .catch(function (err) { toast('Compare failed: ' + err.message, 'error'); });
@@ -1329,11 +1398,16 @@
     api('/api/guilds/' + GUILD_ID + '/antinuke/backups/' + id + '/restore-preview')
       .then(function (data) {
         var ops = (data.plan && data.plan.ops) || [];
+        var perms = data.permissions || {};
+        var skipped = data.skipped || [];
         backupReport('<div class="card-title"><span>Restore preview for #' + esc(id) + '</span></div>' +
+          (!perms.ok ? '<div class="an-backup-errors">Missing permissions: ' + esc((perms.missing || []).join(', ')) + '</div>' : '') +
           (ops.length ? '<ul class="an-diff-list">' + ops.slice(0, 50).map(function (op) {
-            return '<li>' + esc(op.kind) + ' → ' + esc(op.payload && (op.payload.name || op.target) || op.target) + '</li>';
+            return '<li>' + esc(op.kind) + ' → ' + esc((op.payload && (op.payload.name || op.payload.key)) || op.target) + '</li>';
           }).join('') + '</ul>' : '<div class="an-empty">Nothing to restore — structure matches the snapshot.</div>') +
-          '<div class="field-hint">Recreated roles/channels receive NEW ids.</div>');
+          (skipped.length ? '<div class="an-backup-errors">Skipped (Discord restrictions): ' +
+            esc(skipped.slice(0, 10).map(function (s) { return (s.name || s.target) + ' — ' + s.reason; }).join('; ')) + '</div>' : '') +
+          '<div class="field-hint">Recreated roles/channels receive NEW ids. Existing channels and roles are never deleted.</div>');
       })
       .catch(function (err) { toast('Preview failed: ' + err.message, 'error'); });
   }
@@ -1341,15 +1415,36 @@
   function backupRestore(id) {
     if (!window.confirm('Restore snapshot #' + id + '? Missing roles/channels will be recreated with NEW ids. This is a bulk operation.')) return;
     api('/api/guilds/' + GUILD_ID + '/antinuke/backups/' + id + '/restore', { method: 'POST', body: JSON.stringify({ confirm: true }) })
-      .then(function (data) {
-        var r = data.report || {};
-        toast('Restore complete', 'success');
-        backupReport('<div class="card-title"><span>Restore report for #' + esc(id) + '</span></div>' +
-          '<ul class="an-diff-list"><li>' + esc(r.summary.rolesCreated) + ' roles created</li><li>' + esc(r.summary.rolesUpdated) + ' roles updated</li>' +
-          '<li>' + esc(r.summary.channelsCreated) + ' channels created</li><li>' + esc(r.summary.failed) + ' failed</li></ul>' +
-          '<div class="field-hint">' + esc(r.note || '') + '</div>');
-      })
-      .catch(function (err) { toast('Restore failed: ' + err.message, 'error'); });
+      .then(function (data) { renderRestoreReport(id, data.report || {}); })
+      .catch(function (err) {
+        var report = err && err.body && err.body.report;
+        if (report) { renderRestoreReport(id, report); return; }
+        toast('Restore failed: ' + err.message, 'error');
+      });
+  }
+
+  function renderRestoreReport(id, r) {
+    var st = r.status || 'FAILED';
+    var s = r.summary || {};
+    if (st === 'SUCCESS') toast('Restore verified', 'success');
+    else toast('Restore ' + st + (s.failed ? ' (' + s.failed + ' failed)' : ''), 'error');
+    var failed = (r.failed || []);
+    var skipped = (r.skipped || []);
+    backupReport('<div class="card-title"><span>Restore report for #' + esc(id) + '</span> ' + statusChip(st) + '</div>' +
+      '<ul class="an-diff-list">' +
+      '<li>' + esc(s.rolesCreated || 0) + ' roles created · ' + esc(s.rolesUpdated || 0) + ' updated</li>' +
+      '<li>' + esc(s.channelsCreated || 0) + ' channels created · ' + esc(s.channelsUpdated || 0) + ' updated</li>' +
+      '<li>' + esc(s.overwritesApplied || 0) + ' overwrites applied · ' + esc(s.settingsUpdated || 0) + ' settings updated</li>' +
+      '<li>' + esc(s.failed || 0) + ' failed · ' + esc(s.applied || 0) + '/' + esc(s.attempted || 0) + ' applied · ' +
+      (s.verified ? 'verified' : 'not verified') + '</li>' +
+      '</ul>' +
+      (failed.length ? '<ul class="an-diff-list">' + failed.slice(0, 20).map(function (f) {
+        return '<li>' + esc(f.kind) + ' ' + esc(f.target) + ': ' + esc(f.error) + '</li>';
+      }).join('') + '</ul>' : '') +
+      (skipped.length ? '<div class="an-backup-errors">Skipped: ' +
+        esc(skipped.slice(0, 10).map(function (x) { return (x.name || x.target) + ' — ' + x.reason; }).join('; ')) + '</div>' : '') +
+      '<div class="field-hint">' + esc(r.note || '') + '</div>');
+    refreshBackupOperations();
   }
 
   function backupDelete(id) {

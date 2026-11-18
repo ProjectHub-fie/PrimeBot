@@ -480,6 +480,15 @@ async function createGuildChannel(guildId, body = {}) {
     });
 }
 
+/** Modify a channel via REST (name, topic, position, nsfw, bitrate, …). */
+async function patchChannel(channelId, body = {}) {
+    return fetchJson(`${API_BASE}/channels/${channelId}`, {
+        method: 'PATCH',
+        headers: { ...botHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+}
+
 module.exports = {
     API_BASE,
     exchangeCode,
@@ -502,6 +511,10 @@ module.exports = {
     getGuildChannelsRaw,
     putChannelOverwrite,
     deleteChannelOverwrite,
+    createGuildRole,
+    modifyGuildRole,
+    createGuildChannel,
+    patchChannel,
     fetchJson,
     sendChannelMessage,
     editChannelMessage,

@@ -2014,6 +2014,43 @@ const ANTINUKE_BACKUPS_DDL = `
         ON antinuke_backups (guild_id, created_at DESC);
 `;
 
+// Columns added with the honest-status backup pipeline. `ADD COLUMN IF NOT
+// EXISTS` keeps an existing deployment's rows; the back-fill then sets an old
+// row's status from its real payload (data → SUCCESS, empty → FAILED) so a
+// legacy row never reads as a false success.
+const ANTINUKE_BACKUPS_ALTER_SQL = [
+    `ALTER TABLE antinuke_backups ADD COLUMN IF NOT EXISTS status VARCHAR(16) NOT NULL DEFAULT 'PENDING'`,
+    `ALTER TABLE antinuke_backups ADD COLUMN IF NOT EXISTS operation VARCHAR(16) NOT NULL DEFAULT 'create'`,
+    `ALTER TABLE antinuke_backups ADD COLUMN IF NOT EXISTS started_at TIMESTAMP`,
+    `ALTER TABLE antinuke_backups ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP`,
+    `ALTER TABLE antinuke_backups ADD COLUMN IF NOT EXISTS resources JSONB NOT NULL DEFAULT '{}'`,
+    `ALTER TABLE antinuke_backups ADD COLUMN IF NOT EXISTS errors JSONB NOT NULL DEFAULT '[]'`,
+    `ALTER TABLE antinuke_backups ADD COLUMN IF NOT EXISTS verification JSONB NOT NULL DEFAULT '{}'`,
+    `ALTER TABLE antinuke_backups ADD COLUMN IF NOT EXISTS guild_settings JSONB`,
+    `UPDATE antinuke_backups SET status = CASE WHEN (jsonb_array_length(roles) + jsonb_array_length(channels)) > 0 THEN 'SUCCESS' ELSE 'FAILED' END, completed_at = COALESCE(completed_at, created_at) WHERE status = 'PENDING'`,
+];
+
+const ANTINUKE_BACKUP_OPS_DDL = `
+    CREATE TABLE IF NOT EXISTS antinuke_backup_operations (
+        id            SERIAL PRIMARY KEY,
+        backup_id     INTEGER,
+        guild_id      VARCHAR(50) NOT NULL,
+        operation     VARCHAR(16) NOT NULL,
+        status        VARCHAR(16) NOT NULL,
+        actor_id      VARCHAR(50),
+        started_at    TIMESTAMP DEFAULT NOW(),
+        completed_at  TIMESTAMP,
+        counts        JSONB NOT NULL DEFAULT '{}',
+        errors        JSONB NOT NULL DEFAULT '[]',
+        verification  JSONB NOT NULL DEFAULT '{}',
+        details       TEXT NOT NULL DEFAULT ''
+    );
+    CREATE INDEX IF NOT EXISTS antinuke_backup_ops_guild_created_idx
+        ON antinuke_backup_operations (guild_id, started_at DESC);
+    CREATE INDEX IF NOT EXISTS antinuke_backup_ops_backup_idx
+        ON antinuke_backup_operations (backup_id);
+`;
+
 const ANTINUKE_SETTINGS_COLUMNS = `guild_id, enabled, alert_channel_id, responses,
     trusted_user_ids, trusted_role_ids, watched, dry_run,
     dangerous_permissions, lockdown, response_cooldown_seconds, raid_settings,
@@ -2147,6 +2184,8 @@ async function ensureAntiNukeTable() {
         for (const sql of ANTINUKE_INCIDENT_INDEX_SQL) await anukePool.query(sql);
         await anukePool.query(ANTINUKE_LOCKDOWN_DDL);
         await anukePool.query(ANTINUKE_BACKUPS_DDL);
+        for (const sql of ANTINUKE_BACKUPS_ALTER_SQL) await anukePool.query(sql);
+        await anukePool.query(ANTINUKE_BACKUP_OPS_DDL);
         // Access-control + setup audit tables (shared with the manager).
         await require('../server/anukeDb').ensureAnukeTables();
     });
@@ -2397,6 +2436,15 @@ function backupRowToApi(row) {
         createdAt: row.created_at || null,
         counts: row.counts || { roles: 0, channels: 0 },
         notes: row.notes || '',
+        // Honest lifecycle + provenance.
+        status: row.status || 'PENDING',
+        operation: row.operation || 'create',
+        startedAt: row.started_at || null,
+        completedAt: row.completed_at || null,
+        resources: row.resources || {},
+        errors: row.errors || [],
+        verification: row.verification || {},
+        hasGuildSettings: !!row.guild_settings,
         // Payload is intentionally omitted from list queries (kept for detail).
     };
 }
@@ -2409,7 +2457,9 @@ async function getAntiNukeBackups(guildId, { limit = 25, offset = 0 } = {}) {
     const off = Math.max(0, parseInt(offset, 10) || 0);
     const [rows, count] = await Promise.all([
         anukePool.query(
-            'SELECT id, guild_id, name, created_by, created_at, counts, notes FROM antinuke_backups WHERE guild_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3',
+            `SELECT id, guild_id, name, created_by, created_at, counts, notes, status, operation,
+                    started_at, completed_at, resources, errors, verification, (guild_settings IS NOT NULL) AS has_guild_settings
+               FROM antinuke_backups WHERE guild_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
             [String(guildId), lim, off]),
         anukePool.query('SELECT COUNT(*)::int AS count FROM antinuke_backups WHERE guild_id = $1', [String(guildId)]),
     ]);
@@ -2429,27 +2479,131 @@ async function getAntiNukeBackup(guildId, id) {
         ...backupRowToApi(res.rows[0]),
         roles: res.rows[0].roles || [],
         channels: res.rows[0].channels || [],
+        guildSettings: res.rows[0].guild_settings || null,
         settings: res.rows[0].settings || null,
     };
 }
 
-/** Persist a new snapshot. Returns the created row. */
-async function createAntiNukeBackup({ guildId, name, createdBy, roles = [], channels = [], settings = null, notes = '' }) {
+/**
+ * Persist a new snapshot. The row is written with an explicit status so a
+ * snapshot is never stored as a bare "success": the caller passes the status
+ * it computed from the real capture (SUCCESS/PARTIAL/FAILED) along with the
+ * resource breakdown, the error list and the verification result.
+ */
+async function createAntiNukeBackup({
+    guildId, name, createdBy, roles = [], channels = [], settings = null, notes = '',
+    guildSettings = null, status = 'SUCCESS', operation = 'create', startedAt = null,
+    resources = {}, errors = [], verification = {},
+}) {
     await ensureAntiNukeTable();
     const { anukePool } = require('../server/anukeDb');
-    const counts = { roles: Array.isArray(roles) ? roles.length : 0, channels: Array.isArray(channels) ? channels.length : 0 };
+    const counts = {
+        roles: Array.isArray(roles) ? roles.length : 0,
+        channels: Array.isArray(channels) ? channels.length : 0,
+        overwrites: (Array.isArray(channels) ? channels : []).reduce((n, c) => n + ((c && c.permissionOverwrites) || []).length, 0),
+    };
     const res = await anukePool.query(`
-        INSERT INTO antinuke_backups (guild_id, name, created_by, roles, channels, settings, counts, notes)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-        RETURNING id, guild_id, name, created_by, created_at, counts, notes
+        INSERT INTO antinuke_backups
+            (guild_id, name, created_by, roles, channels, settings, guild_settings, counts, notes,
+             status, operation, started_at, completed_at, resources, errors, verification)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NOW(),$13,$14,$15)
+        RETURNING id, guild_id, name, created_by, created_at, counts, notes, status, operation,
+                  started_at, completed_at, resources, errors, verification,
+                  (guild_settings IS NOT NULL) AS has_guild_settings
     `, [
         String(guildId), String(name || '').slice(0, 120), createdBy ? String(createdBy) : null,
         JSON.stringify(roles), JSON.stringify(channels),
         settings ? JSON.stringify(settings) : null,
+        guildSettings ? JSON.stringify(guildSettings) : null,
         JSON.stringify(counts), String(notes || '').slice(0, 1000),
+        String(status), String(operation || 'create').slice(0, 16),
+        startedAt || null,
+        JSON.stringify(resources || {}), JSON.stringify(errors || []), JSON.stringify(verification || {}),
     ]);
     if (!res.rows.length) throw new Error('backup insert returned no row');
     return backupRowToApi(res.rows[0]);
+}
+
+/**
+ * Update an existing snapshot's lifecycle fields (used to reconcile a stale
+ * IN_PROGRESS row after a crash, or to record a late verification result).
+ */
+async function updateAntiNukeBackupStatus(guildId, id, { status, completedAt = null, resources, errors, verification } = {}) {
+    await ensureAntiNukeTable();
+    const { anukePool } = require('../server/anukeDb');
+    const res = await anukePool.query(`
+        UPDATE antinuke_backups SET
+            status = COALESCE($3, status),
+            completed_at = COALESCE($4, completed_at),
+            resources = COALESCE($5, resources),
+            errors = COALESCE($6, errors),
+            verification = COALESCE($7, verification)
+        WHERE guild_id = $1 AND id = $2
+        RETURNING id
+    `, [
+        String(guildId), Number(id),
+        status ? String(status) : null,
+        completedAt || null,
+        resources ? JSON.stringify(resources) : null,
+        errors ? JSON.stringify(errors) : null,
+        verification ? JSON.stringify(verification) : null,
+    ]);
+    return (res.rowCount || 0) > 0;
+}
+
+/**
+ * Finish an in-flight snapshot: write its real payload + terminal status and
+ * the resource/error/verification breakdown. Only the lifecycle columns and the
+ * payload are touched, so a partially-written row is always corrected in place.
+ */
+async function completeAntiNukeBackup(guildId, id, {
+    roles = [], channels = [], guildSettings = null, settings = null,
+    status, resources = {}, errors = [], verification = {},
+}) {
+    await ensureAntiNukeTable();
+    const { anukePool } = require('../server/anukeDb');
+    const counts = {
+        roles: Array.isArray(roles) ? roles.length : 0,
+        channels: Array.isArray(channels) ? channels.length : 0,
+        overwrites: (Array.isArray(channels) ? channels : []).reduce((n, c) => n + ((c && c.permissionOverwrites) || []).length, 0),
+    };
+    const res = await anukePool.query(`
+        UPDATE antinuke_backups SET
+            roles = $3, channels = $4, guild_settings = $5, settings = $6, counts = $7,
+            status = $8, completed_at = NOW(),
+            resources = $9, errors = $10, verification = $11
+        WHERE guild_id = $1 AND id = $2
+        RETURNING id, guild_id, name, created_by, created_at, counts, notes, status, operation,
+                  started_at, completed_at, resources, errors, verification,
+                  (guild_settings IS NOT NULL) AS has_guild_settings
+    `, [
+        String(guildId), Number(id),
+        JSON.stringify(roles), JSON.stringify(channels),
+        guildSettings ? JSON.stringify(guildSettings) : null,
+        settings ? JSON.stringify(settings) : null,
+        JSON.stringify(counts),
+        String(status),
+        JSON.stringify(resources || {}), JSON.stringify(errors || []), JSON.stringify(verification || {}),
+    ]);
+    if (!res.rows.length) throw new Error('backup update matched no row');
+    return backupRowToApi(res.rows[0]);
+}
+
+/**
+ * Count snapshots still in flight for a guild (used to refuse a duplicate
+ * capture). Only rows started within `withinSeconds` count, so an abandoned
+ * row (which reconcileStaleBackups will mark FAILED) cannot block forever.
+ */
+async function countInFlightBackups(guildId, { withinSeconds = 120 } = {}) {
+    await ensureAntiNukeTable();
+    const { anukePool } = require('../server/anukeDb');
+    const secs = Math.max(5, parseInt(withinSeconds, 10) || 120);
+    const res = await anukePool.query(`
+        SELECT COUNT(*)::int AS count FROM antinuke_backups
+         WHERE guild_id = $1 AND status IN ('PENDING','IN_PROGRESS')
+           AND COALESCE(started_at, created_at) > NOW() - ($2 || ' seconds')::interval
+    `, [String(guildId), String(secs)]);
+    return res.rows[0]?.count || 0;
 }
 
 /** Delete a snapshot (guild-scoped). Returns true when a row was removed. */
@@ -2461,6 +2615,83 @@ async function deleteAntiNukeBackup(guildId, id) {
         [String(guildId), Number(id)],
     );
     return (res.rowCount || 0) > 0;
+}
+
+// ── Backup operation log (append-only) ──────────────────────────────────────
+
+function backupOperationRowToApi(row) {
+    return {
+        id: row.id,
+        backupId: row.backup_id == null ? null : row.backup_id,
+        guildId: row.guild_id,
+        operation: row.operation,
+        status: row.status,
+        actorId: row.actor_id || null,
+        startedAt: row.started_at || null,
+        completedAt: row.completed_at || null,
+        counts: row.counts || {},
+        errors: row.errors || [],
+        verification: row.verification || {},
+        details: row.details || '',
+    };
+}
+
+/** Append an operation-log row. Returns the created row. */
+async function addAntiNukeBackupOperation({
+    backupId = null, guildId, operation, status, actorId = null,
+    startedAt = null, counts = {}, errors = [], verification = {}, details = '',
+}) {
+    await ensureAntiNukeTable();
+    const { anukePool } = require('../server/anukeDb');
+    const res = await anukePool.query(`
+        INSERT INTO antinuke_backup_operations
+            (backup_id, guild_id, operation, status, actor_id, started_at, completed_at, counts, errors, verification, details)
+        VALUES ($1,$2,$3,$4,$5,COALESCE($6, NOW()),NOW(),$7,$8,$9,$10)
+        RETURNING *
+    `, [
+        backupId == null ? null : Number(backupId), String(guildId),
+        String(operation).slice(0, 16), String(status).slice(0, 16),
+        actorId ? String(actorId) : null, startedAt || null,
+        JSON.stringify(counts || {}), JSON.stringify(errors || []),
+        JSON.stringify(verification || {}), String(details || '').slice(0, 2000),
+    ]);
+    if (!res.rows.length) throw new Error('backup operation insert returned no row');
+    return backupOperationRowToApi(res.rows[0]);
+}
+
+/** Recent operation-log rows for a guild (newest first, bounded). */
+async function getAntiNukeBackupOperations(guildId, { limit = 50 } = {}) {
+    await ensureAntiNukeTable();
+    const { anukePool } = require('../server/anukeDb');
+    const lim = Math.min(200, Math.max(1, parseInt(limit, 10) || 50));
+    const res = await anukePool.query(
+        'SELECT * FROM antinuke_backup_operations WHERE guild_id = $1 ORDER BY started_at DESC, id DESC LIMIT $2',
+        [String(guildId), lim],
+    );
+    return res.rows.map(backupOperationRowToApi);
+}
+
+/**
+ * Reconcile snapshots left IN_PROGRESS by a crash / process death. Anything
+ * still unfinished well past any plausible run time can never complete, so it
+ * is marked FAILED with a truthful reason instead of hanging in a green-ish
+ * state forever. The age guard (`STALE_BACKUP_MINUTES`, default 10) leaves an
+ * in-flight capture alone. Bounded to the guild's rows.
+ */
+async function reconcileStaleBackups(guildId, { olderThanMinutes = 10 } = {}) {
+    await ensureAntiNukeTable();
+    const { anukePool } = require('../server/anukeDb');
+    const mins = Math.max(1, parseInt(olderThanMinutes, 10) || 10);
+    const res = await anukePool.query(`
+        UPDATE antinuke_backups SET
+            status = 'FAILED',
+            completed_at = NOW(),
+            errors = errors || $3::jsonb
+        WHERE guild_id = $1 AND status IN ('PENDING','IN_PROGRESS')
+          AND COALESCE(started_at, created_at) < NOW() - ($2 || ' minutes')::interval
+        RETURNING id
+    `, [String(guildId), String(mins), JSON.stringify(['operation interrupted before completion'])]);
+    return res.rowCount || 0;
 }
 
 // ── Anti-Nuke access control (shared ANUKE pool) ───────────────────────────
@@ -4714,7 +4945,13 @@ module.exports = {
     getAntiNukeBackups,
     getAntiNukeBackup,
     createAntiNukeBackup,
+    updateAntiNukeBackupStatus,
+    completeAntiNukeBackup,
+    countInFlightBackups,
     deleteAntiNukeBackup,
+    addAntiNukeBackupOperation,
+    getAntiNukeBackupOperations,
+    reconcileStaleBackups,
     listAntiNukeAccess,
     getAntiNukeAccessRow,
     upsertAntiNukeAccess,
