@@ -239,10 +239,29 @@ function installStubs({ pool: p, discord: d }) {
 }
 
 /** A Discord REST stub with controllable reads + recorded writes. */
-function makeDiscord({ roles = [], channels = [], guildRaw = { verification_level: 1, name: 'Test' }, permissions = 0xFFFFFFFFFFFFFn, readError = {} } = {}) {
+function makeDiscord({ roles = [], channels = [], guildRaw = { verification_level: 1, name: 'Test' }, permissions = 0xFFFFFFFFFFFFFn, readError = {}, strict = false } = {}) {
     const writes = [];
     let liveRoles = roles.map(r => ({ ...r }));
     let liveChannels = channels.map(c => ({ ...c }));
+    // Mimic Discord's validation: a create whose parent_id or overwrite target
+    // does not exist is rejected with `Invalid Form Body (400)`.
+    const validate = (body) => {
+        if (!strict) return;
+        const channelIds = new Set(liveChannels.map(c => String(c.id)));
+        const roleIds = new Set(liveRoles.map(r => String(r.id)));
+        if (body.parent_id && !channelIds.has(String(body.parent_id))) {
+            const e = new Error('Discord API error: parent_id: Channel not found (50035) (400)');
+            e.status = 400; throw e;
+        }
+        for (const ow of body.permission_overwrites || []) {
+            const id = String(ow.id);
+            if (id === String(GUILD) || Number(ow.type) === 1) continue;
+            if (!roleIds.has(id)) {
+                const e = new Error(`Discord API error: permission_overwrites.${id}: Unknown role (50035) (400)`);
+                e.status = 400; throw e;
+            }
+        }
+    };
     const stub = {
         API_BASE: 'https://discord.com/api/v10',
         __writes: writes,
@@ -273,6 +292,7 @@ function makeDiscord({ roles = [], channels = [], guildRaw = { verification_leve
             return r || { id: roleId, ...body };
         },
         createGuildChannel: async (guildId, body) => {
+            validate(body);
             writes.push({ op: 'createGuildChannel', body });
             const ch = { id: 'new-chan-' + (writes.length), ...body };
             liveChannels.push(ch);
@@ -289,6 +309,14 @@ function makeDiscord({ roles = [], channels = [], guildRaw = { verification_leve
             return body;
         },
         putChannelOverwrite: async (channelId, overwriteId, body) => {
+            if (strict) {
+                const roleIds = new Set(liveRoles.map(r => String(r.id)));
+                const id = String(overwriteId);
+                if (id !== String(GUILD) && Number(body.type) !== 1 && !roleIds.has(id)) {
+                    const e = new Error(`Discord API error: Unknown role (50035) (400)`);
+                    e.status = 400; throw e;
+                }
+            }
             writes.push({ op: 'putChannelOverwrite', channelId, overwriteId, body });
             return body;
         },
@@ -688,4 +716,99 @@ test('a protected role (trusted / @everyone) is reported as skipped', async () =
     const plan = planRestore(snapshot, { roles: [], channels: [] }, { safeRoleIds: ['r-safe'], botHighestPosition: 100 });
     assert.equal(plan.ops.length, 0);
     assert.match(plan.skipped[0].reason, /protected/);
+});
+
+// ── 13. Stale-id remap: a nuked category's children must not 400 ─────────────
+//
+// Reproduces the production failure: after a nuke the categories/roles are gone,
+// so the restore recreates them with NEW ids. A child channel still referenced
+// the OLD parent_id (and an old role in its overwrites), so Discord rejected the
+// create with `Invalid Form Body (400)`. 53 of 73 creates failed this way.
+
+const NUKE_ROLES = [
+    { id: 'r-admin', name: 'Admin', position: 5, permissions: '8', color: 0, managed: false },
+];
+const NUKE_CHANNELS = [
+    { id: 'c-cat', name: 'General', type: 4, position: 0, permission_overwrites: [] },
+    { id: 'c-gen', name: 'general', type: 0, position: 1, parent_id: 'c-cat', topic: 'hi',
+      permission_overwrites: [{ id: 'r-admin', type: 0, allow: '0', deny: '2048' }] },
+    { id: 'c-voice', name: 'Voice', type: 2, position: 2, parent_id: 'c-cat', permission_overwrites: [] },
+];
+
+test('restore remaps a recreated category id so child channels do not 400', async () => {
+    const p = makeBackupPool();
+    // strict: Discord rejects a stale parent_id / unknown overwrite role with 400.
+    const d = makeDiscord({ roles: NUKE_ROLES, channels: NUKE_CHANNELS, strict: true });
+    const stubs = installStubs({ pool: p, discord: d });
+    try {
+        const { actions } = loadModules();
+        const captured = await actions.captureBackup({ guildId: GUILD, name: 'base', createdBy: 'u' });
+        assert.equal(captured.status, 'SUCCESS');
+
+        // Nuke: every channel AND the role are gone.
+        d.__setLive({ roles: [], channels: [] });
+
+        const report = await actions.restoreBackup(GUILD, captured.backup.id, { actorId: 'admin' });
+        assert.equal(report.summary.failed, 0, 'no create was rejected with Invalid Form Body');
+        assert.equal(report.summary.channelsCreated, 3, 'all three channels were created');
+        assert.equal(report.summary.rolesCreated, 1, 'the role was recreated');
+        assert.equal(report.status, 'SUCCESS', 'a fully applied + verified restore is SUCCESS');
+
+        // The category was created first, then the children reference its NEW id.
+        const creates = d.__writes.filter(w => w.op === 'createGuildChannel');
+        const cat = creates.find(w => w.body.name === 'General');
+        const gen = creates.find(w => w.body.name === 'general');
+        assert.ok(cat && gen, 'category and child were both created');
+        assert.match(String(gen.body.parent_id), /^new-chan-\d+$/, 'child parent_id is a NEW channel id');
+        assert.notEqual(String(gen.body.parent_id), 'c-cat', 'the stale parent id is not sent');
+        // The overwrite was remapped onto the recreated role (a new-role id).
+        const owRole = (gen.body.permission_overwrites || []).find(o => o.deny === '2048');
+        assert.ok(owRole, 'the overwrite survived');
+        assert.match(String(owRole.id), /^new-role-\d+$/, 'the overwrite targets the recreated role');
+        assert.notEqual(String(owRole.id), 'r-admin', 'the stale role id is not sent');
+    } finally { stubs.restore(); }
+});
+
+test('an overwrite referencing a role that could not be restored is dropped, not sent to fail', async () => {
+    const p = makeBackupPool();
+    const d = makeDiscord({ roles: NUKE_ROLES, channels: NUKE_CHANNELS, strict: true });
+    // The role create fails, so 'r-admin' is never recreated and cannot be remapped.
+    d.createGuildRole = async () => { throw new Error('Discord API error: Missing Permissions (50013)'); };
+    const stubs = installStubs({ pool: p, discord: d });
+    try {
+        const { actions } = loadModules();
+        const captured = await actions.captureBackup({ guildId: GUILD, name: 'base', createdBy: 'u' });
+        d.__setLive({ roles: [], channels: [] });
+        const report = await actions.restoreBackup(GUILD, captured.backup.id, { actorId: 'a' });
+        // The channels still get created (with the dangling overwrite dropped).
+        assert.ok(report.summary.channelsCreated >= 2, 'channels are created despite the missing role');
+        assert.ok(report.skipped.some(s => /unknown role/i.test(s.reason || '')), 'the dropped overwrite is reported');
+        // The role failure still keeps the overall status honest.
+        assert.equal(report.status, 'PARTIAL');
+    } finally { stubs.restore(); }
+});
+
+// ── 14. Field-level Discord errors + remap unit behaviour ───────────────────
+
+test('describeDiscordError surfaces the field path + code, not just "Invalid Form Body"', () => {
+    const { describeDiscordError } = require('../dashboard/discord');
+    const body = {
+        message: 'Invalid Form Body', code: 50035,
+        errors: { parent_id: { _errors: [{ code: 'CHANNEL_PARENT_INVALID', message: 'Channel not found' }] } },
+    };
+    const reason = describeDiscordError(body, 400);
+    assert.match(reason, /parent_id/);
+    assert.match(reason, /Channel not found/);
+    assert.doesNotMatch(reason, /^Invalid Form Body$/);
+    // A plain body still degrades sensibly.
+    assert.equal(describeDiscordError(null, 500), 'HTTP 500');
+    assert.equal(describeDiscordError({ message: 'boom' }, 400), 'boom');
+});
+
+test('remapRestoreOp drops a parent that was neither recreated nor live', () => {
+    const { remapRestoreOp } = require('../utils/antiNukeBackup');
+    const op = { kind: 'channelCreate', target: 'c1', payload: { name: 'x', type: 0, parentId: 'gone', permissionOverwrites: [] } };
+    const { op: out, dropped } = remapRestoreOp(op, { idMap: {}, liveChannelIds: [], liveRoleIds: [] });
+    assert.equal(out.payload.parentId, null, 'the stale parent is dropped');
+    assert.match(dropped[0], /parent category gone/);
 });

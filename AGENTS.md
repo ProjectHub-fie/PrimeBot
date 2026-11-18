@@ -806,6 +806,25 @@ SUCCESS when its data has actually been fetched, persisted AND re-read back.**
 - **Same-DB requirement:** the backups live in the `ANTI_DATABASE_URL` /
   `ANUKE_DATABASE_URL` pool — bot + dashboard must share it (or the
   `FALLBACK_DATABASE_URL`/`DATABASE_URL` fallback).
+- **Stale ids after a nuke (the `Invalid Form Body (400)` restore failure).** A
+  restore recreates deleted categories/roles with **NEW** ids (Discord never reuses
+  ids), but a child channel's `parent_id` and every permission overwrite still
+  referenced the **OLD** ids — so Discord rejected the create with `Invalid Form Body
+  (400)` and a real production restore failed 53 of 73 creates. `utils/antiNukeBackup.js`
+  `remapRestoreOp(op, { idMap, liveChannelIds, liveRoleIds, guildId })` fixes this at
+  apply time: it rewrites a `parent_id`/overwrite id onto the id mapped this run (the
+  categories are created first), keeps it when the target is still live, keeps
+  `@everyone` (`id === guildId`) and member overwrites (user ids are stable), and
+  **drops** a parent/overwrite whose target can neither be remapped nor found —
+  recording the reason in `report.skipped` instead of sending a request that will 400.
+  `restoreBackup` builds the `idMap` as each role/channel is created and re-reads the
+  live structure (after the permission gate) for the "still exists" check. Never send a
+  snapshot's raw ids to Discord — always route a restore op through `remapRestoreOp`.
+- **Field-level Discord errors.** `fetchJson` used to surface only the top-level
+  `Invalid Form Body`; `dashboard/discord.js` `describeDiscordError(body, status)` walks
+  the `errors` object (reading `_errors[0].message`/`.code`) so a failure reads
+  `parent_id (CHANNEL_PARENT_INVALID): Channel not found` — the field-level reason the
+  restore report and the operation log now show.
 
 ### Tests
 
@@ -818,7 +837,7 @@ resumable setup, a completed setup shows 100% with no resume, an unstarted setup
 real 0% (never a fake value), and the manual wizard seeds its completed sections from the
 persisted state (resume → 50%, not 0%). This is the regression test for the missing
 progress bar (the card used to exist only in the `in_progress` state).
-`tests/antiNukeBackupPipeline.test.js` (19) — the REAL backup workflow: drives the
+`tests/antiNukeBackupPipeline.test.js` (23) — the REAL backup workflow: drives the
 real `dashboard/db.js` backup SQL against an in-memory pg pool stub + the real
 `dashboard/antiNukeActions.js` capture/restore with a stubbed Discord REST layer.
 Asserts the honest lifecycle — a real capture persists roles/channels/guild-settings,
@@ -828,9 +847,12 @@ is refused (409); a restore applies + verifies (SUCCESS) and never deletes exist
 resources; a partly-failed restore is PARTIAL naming the failure; an all-failed restore
 is FAILED; a restore without Manage Roles/Channels is refused (not faked); a dry run
 writes nothing; corrupt data is caught by `verifySnapshot`; a stale IN_PROGRESS row is
-reconciled to FAILED; cross-guild access is impossible; and a role above the bot's
-hierarchy is reported as skipped (not silently dropped). **16 of these fail against the
-pre-fix code** — that is the proof they catch the false-success bug.
+reconciled to FAILED; cross-guild access is impossible; a role above the bot's
+hierarchy is reported as skipped (not silently dropped); and — reproducing the real
+production restore failure — a nuked category's child channel is created with the
+**remapped** parent id (and its overwrite remapped onto the recreated role) instead of
+the stale id that Discord rejects with `Invalid Form Body (400)`. **18 of these fail
+against the pre-fix code** — that is the proof they catch the false-success bug.
 `tests/automodHttp.test.js` — the real dashboard boot with a signed session: all 12
 Anti-Nuke routes 401 unauthenticated, validation rejects, guild isolation, and the
 authenticated admin happy path (the boot mocks `../utils/botRoles` to report the admin as
