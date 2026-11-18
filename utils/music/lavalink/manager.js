@@ -311,6 +311,25 @@ class LavalinkManager {
         return false;
     }
 
+    /**
+     * The providers a connected node can actually stream, in preference order.
+     *
+     * Mirrors the direct registry's `streamable` list so the provider adapter is
+     * a drop-in: it is the set of provider ids whose source the node advertises
+     * (`supportsSource`), with `direct` (a plain HTTP URL) always available.
+     * Before any node is connected the static baseline is returned so callers
+     * that merely READ the list do not crash; resolution still goes through the
+     * node and fails cleanly if it cannot serve the source.
+     */
+    streamableProviders() {
+        const order = [PROVIDERS.YOUTUBE, PROVIDERS.SOUNDCLOUD, PROVIDERS.SPOTIFY, PROVIDERS.DIRECT];
+        if (!this._kazagumo) return [PROVIDERS.YOUTUBE, PROVIDERS.SOUNDCLOUD, PROVIDERS.DIRECT];
+        const supported = order.filter(p => p === PROVIDERS.DIRECT || this.supportsSource(p));
+        // A node whose source managers are not (yet) reported still streams the
+        // built-in YouTube/SoundCloud sources, so never return an empty list.
+        return supported.length ? supported : [PROVIDERS.YOUTUBE, PROVIDERS.SOUNDCLOUD, PROVIDERS.DIRECT];
+    }
+
     /** Source managers advertised by the connected nodes (for diagnostics). */
     nodeInfo() {
         if (!this._kazagumo) return [];

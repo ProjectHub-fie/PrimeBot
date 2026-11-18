@@ -1,12 +1,23 @@
-# Lavalink setup (optional playback engine)
+# Lavalink setup (primary playback engine)
 
-PrimeBot ships two playback engines and **defaults to the original direct
-engine**. Nothing in this document is required for normal operation.
+PrimeBot ships two playback engines. **Lavalink is the primary engine once a
+node is configured**; a deployment with no node configured keeps using the
+original direct engine, so nothing here is required for normal operation.
 
-| Engine | How audio is produced | Default |
+| Engine | How audio is produced | When it runs |
 | --- | --- | --- |
-| `direct` | In-process: `@distube/ytdl-core` / `soundcloud-core` / plain HTTP → `ffmpeg` → `@discordjs/voice` | ✅ yes |
-| `lavalink` | A [Lavalink](https://github.com/lavalink-devs/Lavalink) server (Shoukaku + Kazagumo) decodes and streams; the bot only sends voice updates | no |
+| `direct` | In-process: `@distube/ytdl-core` / `soundcloud-core` / plain HTTP → `ffmpeg` → `@discordjs/voice` | `MUSIC_ENGINE=direct`, or no node configured |
+| `lavalink` | A [Lavalink](https://github.com/lavalink-devs/Lavalink) server (Shoukaku + Kazagumo) decodes and streams; the bot only sends voice updates | `MUSIC_ENGINE=lavalink`, or unset **and** a node is configured |
+
+Engine selection:
+
+| `MUSIC_ENGINE` | Node configured? | Engine |
+| --- | --- | --- |
+| `direct` | either | `direct` |
+| `lavalink` | yes | `lavalink` |
+| `lavalink` | no | `direct` (logged fallback) |
+| unset / `auto` / unknown | yes | `lavalink` |
+| unset / `auto` / unknown | no | `direct` |
 
 Both engines serve the **same commands, aliases, embeds, queue, playlists, DJ
 permissions, 24/7 sessions and dashboard**. Only *where the audio is decoded*
@@ -14,13 +25,17 @@ changes.
 
 ## 1. Enable Lavalink
 
+Lavalink is used automatically as soon as a node is configured. To be explicit:
+
 ```bash
 # .env
 MUSIC_ENGINE=lavalink
 LAVALINK_NODES=[{"name":"main","host":"lavalink.example.com","port":443,"password":"CHANGE_ME","secure":true}]
 ```
 
-A single node can also be described with individual variables:
+A single node can also be described with individual variables (the
+Linix-compatible `NODE_URL`/`NODE_AUTH`/`NODE_NAME`/`NODE_SECURE` aliases are
+accepted too — the `LAVALINK_*` names win when both are set):
 
 ```bash
 LAVALINK_HOST=lavalink.example.com
@@ -38,12 +53,12 @@ nodes (host + port only — **passwords are never logged**):
 [LAVALINK] Manager created — 1 node(s) from LAVALINK_NODES (main@lavalink.example.com:443 (secure))
 ```
 
-If `MUSIC_ENGINE=lavalink` but no usable node is configured, or the packages
-are missing, the bot logs the reason and **falls back to `direct`** so music
-never breaks:
+If the engine resolves to `lavalink` but no usable node is configured, or the
+packages are missing, the bot logs the reason and **falls back to `direct`** so
+music never breaks:
 
 ```
-[MUSIC] Lavalink engine unavailable (<reason>) — falling back to the direct engine.
+[MUSIC] Lavalink requested but no Lavalink node configured (...) — falling back to the direct engine.
 ```
 
 ## 2. Configuration reference
@@ -154,10 +169,13 @@ result — see the limitations section of the migration report.
 ## 6. Rolling back to direct playback
 
 ```bash
-MUSIC_ENGINE=direct     # or delete the variable entirely
+MUSIC_ENGINE=direct     # explicit rollback
 ```
 
-Restart the bot. Existing 24/7 sessions are re-created by the direct engine on
+Restart the bot. Alternatively, remove the node configuration (`LAVALINK_NODES`
+/ `LAVALINK_HOST` / `NODE_URL`): with no node configured, an unset
+`MUSIC_ENGINE` resolves to `direct` automatically. Existing 24/7 sessions are
+re-created by the direct engine on
 `ready`; queues are not carried across an engine switch (see the limitations
 section). No database change and no migration are involved — the engine switch
 is pure configuration.

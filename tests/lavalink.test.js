@@ -579,12 +579,21 @@ test('engine.isVoiceChannel accepts voice + stage channels only', () => {
 
 // ── 6. engine selection + MusicManager integration ──────────────────────────
 
-test('MUSIC_ENGINE defaults to direct; unknown values fall back to direct', () => {
+test('MUSIC_ENGINE: direct is explicit, unknown falls back to direct, unset prefers Lavalink only when configured', () => {
+    // No node configured → direct (an unconfigured deployment is never broken).
     assert.equal(resolveEngineName({}), 'direct');
+    assert.equal(resolveEngineName({ MUSIC_ENGINE: '' }), 'direct');
+    // Explicit values always win.
     assert.equal(resolveEngineName({ MUSIC_ENGINE: 'direct' }), 'direct');
     assert.equal(resolveEngineName({ MUSIC_ENGINE: 'lavalink' }), 'lavalink');
     assert.equal(resolveEngineName({ MUSIC_ENGINE: 'LAVALINK' }), 'lavalink');
+    // An explicit but unknown value never surprise-switches the engine.
     assert.equal(resolveEngineName({ MUSIC_ENGINE: 'bogus' }), 'direct');
+    // Unset + a configured node → Lavalink is the primary engine (the migration).
+    assert.equal(resolveEngineName({ LAVALINK_HOST: 'node.example.com', LAVALINK_PASSWORD: 'x' }), 'lavalink');
+    assert.equal(resolveEngineName({ LAVALINK_NODES: '[{"name":"n","host":"h","password":"p"}]' }), 'lavalink');
+    // …but an explicit `direct` still wins over a configured node (rollback).
+    assert.equal(resolveEngineName({ MUSIC_ENGINE: 'direct', LAVALINK_HOST: 'h', LAVALINK_PASSWORD: 'p' }), 'direct');
 });
 
 test('an injected voice layer always selects the direct engine (tests + rollback)', () => {
@@ -593,7 +602,7 @@ test('an injected voice layer always selects the direct engine (tests + rollback
     assert.equal(r.fallbackReason, null);
 });
 
-test('the default MusicManager runs the direct engine', () => {
+test('a MusicManager with injected deps runs the direct engine', () => {
     const mgr = new MusicManager(makeClient(), { voice: {}, providers: {}, store: null });
     assert.equal(mgr.engineName, 'direct');
     assert.equal(mgr.engineFallbackReason, null);
@@ -883,3 +892,76 @@ test('concurrent node-loss recoveries for one guild do not double-replay', async
     assert.equal(played.filter(id => id === 'yt1').length, 2, 'exactly one replay beyond the initial play');
 });
 
+
+// ── 10. provider-adapter parity + Linix env aliases + primary-engine selection ─
+
+test('LavalinkProviders.streamable mirrors the direct registry (regression: it called a missing method)', () => {
+    const { LavalinkProviders } = require('../utils/music/lavalink/lavalinkProviders');
+    const { LavalinkManager: LM } = require('../utils/music/lavalink/manager');
+    // The REAL manager class (not a hand-rolled double) — the old double masked
+    // the bug because it happened to define `streamableProviders`.
+    const mgr = Object.create(LM.prototype);
+    mgr._kazagumo = null; // not started: baseline list, no node access
+    mgr.health = new NodeHealthTracker([]);
+    const providers = new LavalinkProviders(mgr);
+    assert.doesNotThrow(() => providers.streamable, 'streamable must not throw');
+    assert.deepEqual(providers.streamable, ['youtube', 'soundcloud', 'direct']);
+});
+
+test('streamableProviders() reflects the node source managers once connected', () => {
+    const { LavalinkManager: LM } = require('../utils/music/lavalink/manager');
+    const mgr = Object.create(LM.prototype);
+    mgr.health = new NodeHealthTracker([{ name: 'n1' }]);
+    mgr.health.markReady('n1');
+    // A node advertising YouTube + SoundCloud but NOT Spotify.
+    mgr._kazagumo = {
+        shoukaku: { nodes: new Map([['n1', { name: 'n1', info: { sourceManagers: ['youtube', 'soundcloud'], plugins: [] } }]]) },
+    };
+    const list = mgr.streamableProviders();
+    assert.ok(list.includes('youtube') && list.includes('soundcloud'));
+    assert.ok(!list.includes('spotify'), 'a node without a Spotify source must not advertise Spotify as streamable');
+    assert.ok(list.includes('direct'), 'a plain HTTP URL is always streamable');
+});
+
+test('NODE_URL / NODE_AUTH / NODE_NAME / NODE_SECURE are accepted as Linix-compatible aliases', () => {
+    const cfg = nodeConfig.loadNodeConfig({
+        NODE_URL: 'lava.example.com:2333',
+        NODE_AUTH: 'secret-pass',
+        NODE_NAME: 'linix-node',
+        NODE_SECURE: 'false',
+    });
+    assert.equal(cfg.source, 'LAVALINK_HOST');
+    assert.equal(cfg.nodes.length, 1);
+    assert.equal(cfg.nodes[0].name, 'linix-node');
+    assert.equal(cfg.nodes[0].url, 'lava.example.com:2333');
+    assert.equal(cfg.nodes[0].auth, 'secret-pass');
+    assert.equal(cfg.nodes[0].secure, false);
+    // The host:port form must not become "lava.example.com:2333:2333".
+    assert.ok(!cfg.nodes[0].url.endsWith(':2333:2333'));
+});
+
+test('the PrimeBot-native LAVALINK_* variables win over the NODE_* aliases (never merged)', () => {
+    const cfg = nodeConfig.loadNodeConfig({
+        LAVALINK_HOST: 'native.example.com',
+        LAVALINK_PASSWORD: 'native-pass',
+        NODE_URL: 'linix.example.com:2333',
+        NODE_AUTH: 'linix-pass',
+    });
+    assert.equal(cfg.nodes.length, 1);
+    assert.equal(cfg.nodes[0].url, 'native.example.com:2333');
+    assert.equal(cfg.nodes[0].auth, 'native-pass');
+});
+
+test('describeNode never exposes the password from a NODE_AUTH alias', () => {
+    const cfg = nodeConfig.loadNodeConfig({ NODE_URL: 'lava.example.com:2333', NODE_AUTH: 'super-secret' });
+    const described = nodeConfig.describeNodes(cfg.nodes);
+    assert.ok(!JSON.stringify(described).includes('super-secret'));
+    assert.equal(described[0].hasPassword, true);
+});
+
+test('createEngine falls back to direct (with a reason) when lavalink is requested but no node is configured', () => {
+    const client = { guilds: { cache: new Map() }, ws: { shards: new Map() } };
+    const r = createEngine(client, { engineName: 'lavalink' });
+    assert.equal(r.name, 'direct', 'no node configured → direct');
+    assert.ok(r.fallbackReason && /no Lavalink node configured/.test(r.fallbackReason));
+});
