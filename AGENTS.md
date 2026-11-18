@@ -825,6 +825,26 @@ SUCCESS when its data has actually been fetched, persisted AND re-read back.**
   the `errors` object (reading `_errors[0].message`/`.code`) so a failure reads
   `parent_id (CHANNEL_PARENT_INVALID): Channel not found` — the field-level reason the
   restore report and the operation log now show.
+- **A failed live read must never become a mass-duplicate (restore safety).**
+  `readLiveStructure()` returns `[]` when a REST read fails, which the diff could not
+  tell apart from an empty guild — so a restore against an unreadable live structure
+  recreated EVERY role and channel and duplicated the whole server. `utils/antiNukeBackup.js`
+  `unsafeRestoreOpKinds(readErrors)` maps each failed read to the op kinds it invalidates
+  (`roles` → `roleCreate`/`roleUpdate`, `channels` → `channelCreate`/`channelUpdate`/
+  `overwriteApply`, `guildSettings` → `settingUpdate`) and `filterUnsafePlan(plan, kinds)`
+  drops them. `buildRestorePlan()` applies both, `previewBackupRestore()` returns the
+  `blocked[]` reasons, and `restoreBackup()` **refuses** (FAILED, 0 writes) when anything
+  is blocked. Partial failure is handled per resource type: a failed channel read blocks
+  only channel ops while a good role read still plans role ops.
+- **`recordLockdownIncident()` referenced an undefined `anukePool`.** The module imports
+  `const { anukePool: pool } = require('../server/anukeDb')`, so `anukePool.query(...)`
+  threw `ReferenceError: anukePool is not defined` inside the function's `catch` — every
+  backup/lockdown incident-ledger write silently recorded nothing. Use `pool`.
+- **`verifyRestore()` now checks channel + guild settings too.** It verified recreated
+  roles/channels, role permissions and overwrites, but never the `channelUpdate` /
+  `settingUpdate` ops — so a restore could read `verified: true` while those settings were
+  never applied. It now re-reads the live channel settings + serialized guild settings and
+  reports a mismatch.
 
 ### Tests
 

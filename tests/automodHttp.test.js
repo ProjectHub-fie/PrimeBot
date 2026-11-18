@@ -604,3 +604,36 @@ test('a restore without explicit confirmation is rejected with 400', async () =>
     });
     assert.equal(r.status, 400, r.body.slice(0, 200));
 });
+
+test('a restore whose live structure is unreadable returns 502 and writes nothing', async () => {
+    boot();
+    const cookie = await adminCookie();
+    // Capture a real snapshot first (reads succeed).
+    mockBackupReadFails = false;
+    mockBackupReads = {
+        roles: [{ id: 'r1', name: 'Admin', position: 1, permissions: '8' }],
+        channels: [{ id: 'c1', name: 'general', type: 0, position: 0, permission_overwrites: [] }],
+        guild: { verification_level: 1, name: 'T' },
+    };
+    const created = await request(`/api/guilds/${GUILD}/antinuke/backups`, {
+        method: 'POST', body: { name: 'blocked-snap' }, headers: { Cookie: cookie },
+    });
+    assert.equal(created.status, 200, created.body.slice(0, 200));
+    const backupId = JSON.parse(created.body).backup.id;
+
+    // Now the live reads fail (a transient Discord outage) — the guild is
+    // unchanged, but the diff cannot see it. The restore must refuse.
+    mockBackupReadFails = true;
+    httpDiscordWrites.length = 0;
+    const r = await request(`/api/guilds/${GUILD}/antinuke/backups/${backupId}/restore`, {
+        method: 'POST', body: { confirm: true }, headers: { Cookie: cookie },
+    });
+    assert.equal(r.status, 502, `expected 502, got ${r.status}: ${r.body.slice(0, 300)}`);
+    const report = JSON.parse(r.body).report;
+    assert.equal(report.status, 'FAILED');
+    assert.equal(report.summary.applied, 0);
+    assert.ok((report.blocked || []).length >= 1, 'the blocked reason is reported');
+    assert.equal(httpDiscordWrites.filter(w => w.op === 'createGuildRole').length, 0, 'no role was created');
+    assert.equal(httpDiscordWrites.filter(w => w.op === 'createGuildChannel').length, 0, 'no channel was created');
+    mockBackupReadFails = false;
+});

@@ -452,6 +452,45 @@ function remapRestoreOp(op, { idMap = {}, liveChannelIds = [], liveRoleIds = [],
 }
 
 /**
+ * Determine which restore op kinds are UNSAFE to plan because the live read for
+ * their resource type failed.
+ *
+ * A plan is a diff against the live guild. When a live read fails the caller
+ * gets an empty list — indistinguishable from "the guild is empty". Diffing a
+ * snapshot against that empty list would recreate EVERY role/channel and
+ * duplicate the whole server. A failed read therefore makes the ops for that
+ * resource type unsafe; the caller must refuse rather than guess.
+ *
+ * Returns `{ kinds: string[], blocked: string[] }` — the op kinds to drop and a
+ * human-readable reason per failed read (never empty when a read failed).
+ */
+function unsafeRestoreOpKinds(readErrors = {}) {
+    const errors = readErrors || {};
+    const kinds = new Set();
+    const blocked = [];
+    if (errors.roles) {
+        kinds.add('roleCreate'); kinds.add('roleUpdate');
+        blocked.push(`live roles could not be read (${errors.roles})`);
+    }
+    if (errors.channels) {
+        kinds.add('channelCreate'); kinds.add('channelUpdate'); kinds.add('overwriteApply');
+        blocked.push(`live channels could not be read (${errors.channels})`);
+    }
+    if (errors.guildSettings) {
+        kinds.add('settingUpdate');
+        blocked.push(`live guild settings could not be read (${errors.guildSettings})`);
+    }
+    return { kinds: [...kinds], blocked };
+}
+
+/** Drop the unsafe op kinds from a plan (keeps the rest of the plan intact). */
+function filterUnsafePlan(plan, unsafeKinds) {
+    const set = new Set(unsafeKinds || []);
+    const ops = (plan && plan.ops ? plan.ops : []).filter(o => !set.has(o.kind));
+    return { ...plan, ops };
+}
+
+/**
  * Decide the terminal status of a restore from its execution report. A restore
  * is never SUCCESS when an operation failed, and never SUCCESS when nothing was
  * actually applied. Returns `{ status, errors: string[] }`.
@@ -498,4 +537,6 @@ module.exports = {
     compareSnapshot,
     planRestore,
     remapRestoreOp,
+    unsafeRestoreOpKinds,
+    filterUnsafePlan,
 };

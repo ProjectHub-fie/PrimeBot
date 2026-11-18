@@ -1400,11 +1400,13 @@
         var ops = (data.plan && data.plan.ops) || [];
         var perms = data.permissions || {};
         var skipped = data.skipped || [];
+        var blocked = data.blocked || [];
         backupReport('<div class="card-title"><span>Restore preview for #' + esc(id) + '</span></div>' +
           (!perms.ok ? '<div class="an-backup-errors">Missing permissions: ' + esc((perms.missing || []).join(', ')) + '</div>' : '') +
+          (blocked.length ? '<div class="an-backup-errors">Cannot plan a safe restore: ' + esc(blocked.join('; ')) + '</div>' : '') +
           (ops.length ? '<ul class="an-diff-list">' + ops.slice(0, 50).map(function (op) {
             return '<li>' + esc(op.kind) + ' → ' + esc((op.payload && (op.payload.name || op.payload.key)) || op.target) + '</li>';
-          }).join('') + '</ul>' : '<div class="an-empty">Nothing to restore — structure matches the snapshot.</div>') +
+          }).join('') + '</ul>' : (blocked.length ? '' : '<div class="an-empty">Nothing to restore — structure matches the snapshot.</div>')) +
           (skipped.length ? '<div class="an-backup-errors">Skipped (Discord restrictions): ' +
             esc(skipped.slice(0, 10).map(function (s) { return (s.name || s.target) + ' — ' + s.reason; }).join('; ')) + '</div>' : '') +
           '<div class="field-hint">Recreated roles/channels receive NEW ids. Existing channels and roles are never deleted.</div>');
@@ -1430,7 +1432,9 @@
     else toast('Restore ' + st + (s.failed ? ' (' + s.failed + ' failed)' : ''), 'error');
     var failed = (r.failed || []);
     var skipped = (r.skipped || []);
+    var blocked = (r.blocked || []);
     backupReport('<div class="card-title"><span>Restore report for #' + esc(id) + '</span> ' + statusChip(st) + '</div>' +
+      (blocked.length ? '<div class="an-backup-errors">Could not plan a safe restore: ' + esc(blocked.join('; ')) + '</div>' : '') +
       '<ul class="an-diff-list">' +
       '<li>' + esc(s.rolesCreated || 0) + ' roles created · ' + esc(s.rolesUpdated || 0) + ' updated</li>' +
       '<li>' + esc(s.channelsCreated || 0) + ' channels created · ' + esc(s.channelsUpdated || 0) + ' updated</li>' +
