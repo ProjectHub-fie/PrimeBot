@@ -348,7 +348,7 @@ function buildDashboardManagerShim(guildId) {
 //     failures and verification state for the dashboard.
 
 const {
-    buildSnapshot, compareSnapshot, planRestore, verifySnapshot,
+    buildSnapshot, compareSnapshot, planRestore, verifySnapshot, remapRestoreOp,
     serializeRole, serializeChannel, serializeGuildSettings,
     computeBackupStatus, computeRestoreStatus,
     BACKUP_STATUS,
@@ -687,6 +687,13 @@ async function restoreBackup(guildId, id, { actorId = null, dryRun = false } = {
         errors: [],
     };
 
+    // Old → new id map, filled as resources are recreated so a child channel's
+    // parent_id and every overwrite can be remapped onto the new ids instead of
+    // being sent with stale ids (which Discord rejects as Invalid Form Body).
+    const idMap = new Map();
+    let liveChannelIds = [];
+    let liveRoleIds = [];
+
     // Refuse to run without the permissions the operations need — an attempt
     // that Discord would reject must fail loudly, not report success.
     if (!preview.permissions.ok) {
@@ -704,16 +711,37 @@ async function restoreBackup(guildId, id, { actorId = null, dryRun = false } = {
         return report;
     }
 
-    for (const op of preview.plan.ops) {
+    // The ids that still exist, so an overwrite/parent that was NOT recreated
+    // this run is only kept when its target is genuinely still present.
+    const live = await readLiveStructure(guildId);
+    liveChannelIds = live.channels.map(c => c.id);
+    liveRoleIds = live.roles.map(r => r.id);
+
+    for (const planned of preview.plan.ops) {
+        // Remap stale ids (recreated parent categories, deleted roles) so the
+        // request Discord receives is valid, and record anything we had to drop.
+        const { op, dropped } = remapRestoreOp(planned, {
+            idMap, liveChannelIds, liveRoleIds, guildId,
+        });
+        for (const reason of dropped) {
+            report.skipped.push({ kind: planned.kind, target: planned.target, reason });
+        }
+        if (!op) continue;
         try {
             const result = await applyRestoreOp(guildId, op);
-            if (result && result.skipped) { report.skipped.push({ kind: op.kind, target: op.target }); continue; }
+            if (result && result.skipped) { report.skipped.push({ kind: op.kind, target: op.target, reason: 'no applicable fields' }); continue; }
             if (op.kind === 'roleCreate') {
                 report.created.roles.push({ oldId: op.target, newId: result.newId, name: op.payload.name });
-                if (result.newId) report.newIds.push({ kind: 'role', oldId: op.target, newId: result.newId, name: op.payload.name });
+                if (result.newId) {
+                    idMap.set(String(op.target), String(result.newId));
+                    report.newIds.push({ kind: 'role', oldId: op.target, newId: result.newId, name: op.payload.name });
+                }
             } else if (op.kind === 'channelCreate') {
                 report.created.channels.push({ oldId: op.target, newId: result.newId, name: op.payload.name });
-                if (result.newId) report.newIds.push({ kind: 'channel', oldId: op.target, newId: result.newId, name: op.payload.name });
+                if (result.newId) {
+                    idMap.set(String(op.target), String(result.newId));
+                    report.newIds.push({ kind: 'channel', oldId: op.target, newId: result.newId, name: op.payload.name });
+                }
             } else if (op.kind === 'roleUpdate') {
                 report.updated.roles.push({ id: op.target });
             } else if (op.kind === 'channelUpdate') {

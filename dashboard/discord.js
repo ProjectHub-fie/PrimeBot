@@ -27,6 +27,33 @@ function requestTimeoutSignal() {
         : undefined;
 }
 
+/**
+ * Turn a Discord error body into a short, field-level reason. Discord's
+ * `Invalid Form Body` responses carry an `errors` object keyed by field path —
+ * without this the caller only sees the useless top-level "Invalid Form Body".
+ */
+function describeDiscordError(body, status) {
+    if (!body) return `HTTP ${status}`;
+    if (typeof body === 'string') return body;
+    const parts = [];
+    const walk = (node, path) => {
+        if (!node || typeof node !== 'object') return;
+        const first = Array.isArray(node._errors) ? node._errors[0] : null;
+        const message = (first && first.message) || node.message;
+        if (message) {
+            const code = (first && first.code) || node.code;
+            parts.push(code ? `${path} (${code}): ${message}` : `${path}: ${message}`);
+        }
+        for (const k of Object.keys(node)) {
+            if (k === '_errors' || k === 'message' || k === 'code') continue;
+            walk(node[k], path ? `${path}.${k}` : k);
+        }
+    };
+    if (body.errors) walk(body.errors, '');
+    if (!parts.length && body.message) parts.push(body.message);
+    return parts.length ? parts.join('; ') : `HTTP ${status}`;
+}
+
 async function fetchJson(url, options = {}) {
     const res = await fetch(url, options.signal ? options : { ...options, signal: requestTimeoutSignal() });
     let body = null;
@@ -35,10 +62,11 @@ async function fetchJson(url, options = {}) {
         try { body = JSON.parse(text); } catch { body = text; }
     }
     if (!res.ok) {
-        const msg = body && body.message ? body.message : `HTTP ${res.status}`;
-        const err = new Error(`Discord API error: ${msg} (${res.status})`);
+        const reason = describeDiscordError(body, res.status);
+        const err = new Error(`Discord API error: ${reason} (${res.status})`);
         err.status = res.status;
         err.body = body;
+        err.reason = reason;
         throw err;
     }
     return body;
@@ -516,6 +544,7 @@ module.exports = {
     createGuildChannel,
     patchChannel,
     fetchJson,
+    describeDiscordError,
     sendChannelMessage,
     editChannelMessage,
     deleteChannelMessage,
