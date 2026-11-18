@@ -2157,11 +2157,24 @@ app.get('/api/guilds/:guildId/antinuke/raid', requireAuth, requireGuildAdmin, an
 
 app.get('/api/guilds/:guildId/antinuke/backups', requireAuth, requireGuildAdmin, requireAntiNukePermission('antinuke.backup.view'), async (req, res) => {
     try {
+        // Reconcile any snapshot left mid-flight by a crashed process so the
+        // list never shows a stale IN_PROGRESS row as if it were healthy.
+        await dashboardDb.reconcileStaleBackups(req.guild.id).catch(() => 0);
         const data = await dashboardDb.getAntiNukeBackups(req.guild.id, { limit: req.query.limit, offset: req.query.offset });
         res.json(data);
     } catch (err) {
         console.error('[API] antinuke backups list error:', err.message);
         res.status(500).json({ error: 'Failed to load backups.' });
+    }
+});
+
+app.get('/api/guilds/:guildId/antinuke/backup-operations', requireAuth, requireGuildAdmin, requireAntiNukePermission('antinuke.backup.view'), async (req, res) => {
+    try {
+        const operations = await dashboardDb.getAntiNukeBackupOperations(req.guild.id, { limit: req.query.limit });
+        res.json({ operations });
+    } catch (err) {
+        console.error('[API] antinuke backup operations error:', err.message);
+        res.status(500).json({ error: 'Failed to load backup operations.' });
     }
 });
 
@@ -2188,13 +2201,30 @@ app.post('/api/guilds/:guildId/antinuke/backups', requireAuth, requireGuildAdmin
             settings,
             notes: String(body.notes || '').slice(0, 500),
         });
-        await antiNukeActions.recordLockdownIncident({
-            guildId: req.guild.id, action: 'backupCreated', startedBy: req.user && req.user.id,
-            severity: 'info', details: `Backup #${result.backup && result.backup.id}`,
-        });
-        recordWebsiteLog(req, 'Created Anti-Nuke backup');
-        res.json(result);
+        // The incident ledger + audit log only record a REAL success. A failed or
+        // partial capture is reported as such and never logged as a clean backup.
+        const ok = result.status === 'SUCCESS';
+        if (ok) {
+            await antiNukeActions.recordLockdownIncident({
+                guildId: req.guild.id, action: 'backupCreated', startedBy: req.user && req.user.id,
+                severity: 'info', details: `Backup #${result.backup && result.backup.id} (${result.counts.roles} roles, ${result.counts.channels} channels)`,
+            });
+            recordWebsiteLog(req, 'Created Anti-Nuke backup');
+        } else {
+            await antiNukeActions.recordLockdownIncident({
+                guildId: req.guild.id, action: 'backupFailed', startedBy: req.user && req.user.id,
+                severity: 'medium', responseOk: false,
+                details: `Backup #${result.backup && result.backup.id} ${result.status}: ${(result.errors || []).join('; ').slice(0, 300)}`,
+            });
+        }
+        // 502 signals the capture did not fully succeed; the body still carries
+        // the record so the UI can show exactly what happened.
+        const status = ok ? 200 : 502;
+        res.status(status).json(result);
     } catch (err) {
+        if (err && err.status === 409) {
+            return res.status(409).json({ error: err.message, reason: err.reason });
+        }
         console.error('[API] antinuke backup create error:', err.message);
         res.status(500).json({ error: 'Failed to create the backup.' });
     }
@@ -2238,19 +2268,31 @@ app.get('/api/guilds/:guildId/antinuke/backups/:id/restore-preview', requireAuth
 
 app.post('/api/guilds/:guildId/antinuke/backups/:id/restore', requireAuth, requireGuildAdmin, requireAntiNukePermission('antinuke.backup.restore'), async (req, res) => {
     try {
-        if ((req.body || {}).confirm !== true) {
+        const body = req.body || {};
+        const antiNukeActions = require('./antiNukeActions');
+        const dryRun = body.dryRun === true;
+        // A real restore is destructive and requires explicit confirmation.
+        if (!dryRun && body.confirm !== true) {
             return res.status(400).json({ error: 'Bulk restoration requires explicit confirmation.' });
         }
-        const antiNukeActions = require('./antiNukeActions');
-        const report = await antiNukeActions.restoreBackup(req.guild.id, req.params.id, { actorId: req.user && req.user.id });
+        const report = await antiNukeActions.restoreBackup(req.guild.id, req.params.id, {
+            actorId: req.user && req.user.id,
+            dryRun,
+        });
         if (!report) return res.status(404).json({ error: 'Backup not found.' });
+        if (dryRun) return res.json({ report });
+
         await antiNukeActions.recordLockdownIncident({
             guildId: req.guild.id, action: 'backupRestored', startedBy: req.user && req.user.id,
-            severity: 'medium', responseOk: report.summary.failed === 0,
-            details: `roles +${report.summary.rolesCreated}, channels +${report.summary.channelsCreated}, failed ${report.summary.failed}`,
+            severity: report.status === 'SUCCESS' ? 'medium' : 'high',
+            responseOk: report.status === 'SUCCESS',
+            details: `${report.status}: roles +${report.summary.rolesCreated}, channels +${report.summary.channelsCreated}, failed ${report.summary.failed}, verified ${report.summary.verified}`,
         });
-        recordWebsiteLog(req, 'Restored Anti-Nuke backup');
-        res.json({ report });
+        if (report.status === 'SUCCESS') recordWebsiteLog(req, 'Restored Anti-Nuke backup');
+        // 502 when the restore did not fully apply/verify; the report body still
+        // describes exactly what happened so the UI can be truthful.
+        const status = report.status === 'SUCCESS' ? 200 : 502;
+        res.status(status).json({ report });
     } catch (err) {
         console.error('[API] antinuke backup restore error:', err.message);
         res.status(500).json({ error: 'Failed to restore the backup.' });

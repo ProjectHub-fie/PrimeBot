@@ -40,6 +40,33 @@ function mockDb() {
         upsertAntiNukeAccess: async (gid, row) => ({ ...row, guildId: gid }),
         deleteAntiNukeAccess: async () => true,
         addWebsiteLog: async () => {},
+        // Backup-pipeline surface (see the backup HTTP tests at the end).
+        getAntiNukeBackups: async (gid) => ({ total: httpBackups.filter(b => b.guildId === gid).length, backups: httpBackups.filter(b => b.guildId === gid) }),
+        getAntiNukeBackup: async (gid, id) => httpBackups.find(b => b.guildId === gid && b.id === Number(id)) || null,
+        createAntiNukeBackup: async (rec) => {
+            const row = { id: ++httpBackupSeq, guildId: rec.guildId, status: rec.status, counts: { roles: 0, channels: 0 }, errors: [], verification: {}, roles: [], channels: [] };
+            httpBackups.push(row);
+            return row;
+        },
+        completeAntiNukeBackup: async (gid, id, rec) => {
+            const row = httpBackups.find(b => b.guildId === gid && b.id === Number(id));
+            if (!row) throw new Error('no row');
+            Object.assign(row, { status: rec.status, counts: { roles: rec.roles.length, channels: rec.channels.length }, roles: rec.roles, channels: rec.channels, guildSettings: rec.guildSettings, errors: rec.errors });
+            return row;
+        },
+        updateAntiNukeBackupStatus: async (gid, id, rec) => {
+            const row = httpBackups.find(b => b.guildId === gid && b.id === Number(id));
+            if (!row) return false;
+            if (rec.status) row.status = rec.status;
+            if (rec.verification) row.verification = rec.verification;
+            if (rec.errors) row.errors = rec.errors;
+            return true;
+        },
+        deleteAntiNukeBackup: async () => true,
+        countInFlightBackups: async () => 0,
+        reconcileStaleBackups: async () => 0,
+        addAntiNukeBackupOperation: async (rec) => { httpBackupOps.push(rec); return rec; },
+        getAntiNukeBackupOperations: async (gid) => httpBackupOps.filter(o => o.guildId === gid),
     };
 }
 
@@ -49,6 +76,13 @@ const MANAGE_GUILD = 0x20;
 // The mock guild list is populated by tests that need an authenticated happy
 // path; the default (empty) keeps the unauthenticated/403 assertions honest.
 let mockGuilds = [];
+// Backup HTTP-test state (reset per test where it matters).
+const httpBackups = [];
+const httpBackupOps = [];
+const httpDiscordWrites = [];
+let httpBackupSeq = 0;
+let mockBackupReads = { roles: [], channels: [], guild: { verification_level: 1, name: 'T' } };
+let mockBackupReadFails = false;
 
 function mockDiscord() {
     return {
@@ -59,11 +93,30 @@ function mockDiscord() {
             owner_id: '1', approximate_member_count: 5,
         }),
         getGuildChannels: async () => [],
-        getGuildRoles: async () => [],
         exchangeCode: async () => ({}),
         getCurrentUser: async () => ({ id: '1', username: 'tester' }),
         getUserGuilds: async () => mockGuilds,
         canManageGuild: (perms) => (Number(perms) & MANAGE_GUILD) === MANAGE_GUILD,
+        // Backup-pipeline surface: reads are controllable so a failing read can
+        // be simulated; writes are recorded.
+        getGuildRoles: async () => {
+            if (mockBackupReadFails) throw new Error('Discord API error: Missing Permissions (50013)');
+            return mockBackupReads.roles;
+        },
+        getGuildChannelsRaw: async () => {
+            if (mockBackupReadFails) throw new Error('Discord API error: Missing Permissions (50013)');
+            return mockBackupReads.channels;
+        },
+        getGuildRaw: async () => mockBackupReads.guild,
+        getBotMember: async () => ({ roles: [] }),
+        computeBotPermissions: async () => 0xFFFFFFFFFFFFFn,
+        createGuildRole: async (gid, body) => { httpDiscordWrites.push({ op: 'createGuildRole', body }); return { id: 'nr', ...body }; },
+        createGuildChannel: async (gid, body) => { httpDiscordWrites.push({ op: 'createGuildChannel', body }); return { id: 'nc', ...body }; },
+        modifyGuildRole: async () => ({}),
+        patchChannel: async () => ({}),
+        patchGuild: async () => ({}),
+        putChannelOverwrite: async () => ({}),
+        deleteChannelOverwrite: async () => ({}),
     };
 }
 
@@ -117,6 +170,14 @@ function boot() {
     try {
         delete require.cache[require.resolve('../dashboard/server')];
         app = require('../dashboard/server');
+        // antiNukeActions requires './db' lazily (inside each function), which
+        // happens after the Module._load interception above is lifted. Prime the
+        // require cache with the mock so the REAL db (which needs Postgres) is
+        // never reached by a backup handler.
+        const dbPath = require.resolve('../dashboard/db');
+        require.cache[dbPath] = { id: dbPath, filename: dbPath, loaded: true, exports: mockDb() };
+        const actionsPath = require.resolve('../dashboard/antiNukeActions');
+        require.cache[actionsPath] = { id: actionsPath, filename: actionsPath, loaded: true, exports: require('../dashboard/antiNukeActions') };
     } finally {
         Module._load = origLoad;
         if (saved !== undefined) process.env.DATABASE_URL = saved;
@@ -169,6 +230,14 @@ const AUTOMOD_ROUTES = [
     ['POST', `/api/guilds/${GUILD}/antinuke/toggle`],
     ['GET', `/api/guilds/${GUILD}/antinuke/incidents`],
     ['POST', `/api/guilds/${GUILD}/antinuke/lockdown`],
+    ['GET', `/api/guilds/${GUILD}/antinuke/backups`],
+    ['POST', `/api/guilds/${GUILD}/antinuke/backups`],
+    ['GET', `/api/guilds/${GUILD}/antinuke/backups/1`],
+    ['DELETE', `/api/guilds/${GUILD}/antinuke/backups/1`],
+    ['GET', `/api/guilds/${GUILD}/antinuke/backups/1/compare`],
+    ['GET', `/api/guilds/${GUILD}/antinuke/backups/1/restore-preview`],
+    ['POST', `/api/guilds/${GUILD}/antinuke/backups/1/restore`],
+    ['GET', `/api/guilds/${GUILD}/antinuke/backup-operations`],
     ['GET', `/api/guilds/${GUILD}/antinuke/setup`],
     ['POST', `/api/guilds/${GUILD}/antinuke/setup/start`],
     ['POST', `/api/guilds/${GUILD}/antinuke/setup/resume`],
@@ -458,4 +527,80 @@ test('Anti-Nuke refuses to serve a guild the admin cannot manage (guild isolatio
         method: 'GET', headers: { Cookie: cookie },
     });
     assert.equal(r.status, 403, r.body.slice(0, 200));
+});
+// ── Backup pipeline: truthful HTTP status codes ─────────────────────────────
+//
+// These drive the REAL create/restore routes through the real middleware chain
+// and assert the contract the false-success bug violated: a capture that did
+// not really succeed must NOT return 200.
+
+async function adminCookie() {
+    mockGuilds = [{ id: GUILD, name: 'Test Guild', owner: true, permissions: String(MANAGE_GUILD) }];
+    return signIn({
+        user: { id: '1', username: 'admin', avatar: null },
+        accessToken: 'tok',
+        idleExpiresAt: Date.now() + 60 * 60 * 1000,
+    });
+}
+
+test('a real capture over HTTP returns 200 and a SUCCESS status', async () => {
+    boot();
+    const cookie = await adminCookie();
+    mockBackupReadFails = false;
+    mockBackupReads = {
+        roles: [{ id: 'r1', name: 'Admin', position: 1, permissions: '8' }],
+        channels: [{ id: 'c1', name: 'general', type: 0, position: 0, permission_overwrites: [] }],
+        guild: { verification_level: 1, name: 'T' },
+    };
+    const r = await request(`/api/guilds/${GUILD}/antinuke/backups`, {
+        method: 'POST', body: { name: 'http-snap' }, headers: { Cookie: cookie },
+    });
+    assert.equal(r.status, 200, r.body.slice(0, 300));
+    const payload = JSON.parse(r.body);
+    assert.equal(payload.status, 'SUCCESS');
+    assert.equal(payload.counts.roles, 1);
+    assert.equal(payload.counts.channels, 1);
+});
+
+test('a capture whose Discord reads all fail returns 502 — never a green 200', async () => {
+    boot();
+    const cookie = await adminCookie();
+    mockBackupReadFails = true;
+    const r = await request(`/api/guilds/${GUILD}/antinuke/backups`, {
+        method: 'POST', body: { name: 'http-fail' }, headers: { Cookie: cookie },
+    });
+    assert.equal(r.status, 502, `expected 502 for a failed capture, got ${r.status}: ${r.body.slice(0, 200)}`);
+    const payload = JSON.parse(r.body);
+    assert.equal(payload.status, 'FAILED');
+    assert.ok(payload.errors.length > 0, 'the real reason is in the body');
+    mockBackupReadFails = false;
+});
+
+test('an empty capture (0 resources) over HTTP returns 502, not 200', async () => {
+    boot();
+    const cookie = await adminCookie();
+    mockBackupReadFails = false;
+    mockBackupReads = { roles: [], channels: [], guild: { verification_level: 1, name: 'T' } };
+    const r = await request(`/api/guilds/${GUILD}/antinuke/backups`, {
+        method: 'POST', body: {}, headers: { Cookie: cookie },
+    });
+    assert.equal(r.status, 502, r.body.slice(0, 200));
+    assert.equal(JSON.parse(r.body).status, 'FAILED');
+});
+
+test('the backup-operations endpoint is authenticated and returns the log', async () => {
+    boot();
+    const cookie = await adminCookie();
+    const r = await request(`/api/guilds/${GUILD}/antinuke/backup-operations`, { headers: { Cookie: cookie } });
+    assert.equal(r.status, 200, r.body.slice(0, 200));
+    assert.ok(Array.isArray(JSON.parse(r.body).operations));
+});
+
+test('a restore without explicit confirmation is rejected with 400', async () => {
+    boot();
+    const cookie = await adminCookie();
+    const r = await request(`/api/guilds/${GUILD}/antinuke/backups/1/restore`, {
+        method: 'POST', body: {}, headers: { Cookie: cookie },
+    });
+    assert.equal(r.status, 400, r.body.slice(0, 200));
 });

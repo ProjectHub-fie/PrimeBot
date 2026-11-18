@@ -760,6 +760,53 @@ node cannot double-respond. All nodes share one `ANUKE_DATABASE_URL`.
   or trusted users/roles, never acts without audit-log attribution, and never auto-bans/kicks
   a moderator. 'Log only' stays off.
 
+### Backups — honest status pipeline (false-success fix)
+
+The backup system used to report SUCCESS the moment a row was INSERTed, even when
+every Discord REST read had failed — the errors were swallowed into `catch(() => [])`,
+so a snapshot could "succeed" carrying no data at all. **A backup now only shows
+SUCCESS when its data has actually been fetched, persisted AND re-read back.**
+
+- **Lifecycle:** `utils/antiNukeBackup.js` `BACKUP_STATUS` = `PENDING / IN_PROGRESS /
+  SUCCESS / PARTIAL / FAILED`. `computeBackupStatus(snapshot)` decides the terminal
+  status: nothing captured → FAILED; every resource type failed → FAILED; some failed →
+  PARTIAL (with the per-type reason); all fetched with ≥1 record → SUCCESS.
+  `computeRestoreStatus(report)` mirrors it for restores (applied+verified → SUCCESS;
+  some failed → PARTIAL; all failed / nothing applied → FAILED). `verifySnapshot()`
+  validates a stored row (guild id, array shapes, counts match, role bitfields present)
+  and `planRestore()` returns a `skipped[]` list (protected / above-bot-hierarchy roles)
+  so nothing is silently dropped.
+- **`dashboard/antiNukeActions.js` `captureBackup()`** creates the row `IN_PROGRESS`
+  first, fetches live roles/channels/guild-settings recording a **real error per resource
+  type**, computes the honest status, persists the payload + status, **re-reads the row
+  back and verifies it**, and finally writes the terminal status + verification. A
+  verification failure downgrades SUCCESS → PARTIAL; a persist failure is FAILED.
+  `restoreBackup()` runs a pre-flight `validateBackupPermissions()` (Manage Roles /
+  Manage Channels / View Channels / Manage Server) and **refuses** when permissions are
+  missing rather than faking success; it applies role/channel creation, role permission
+  updates, channel overwrites + settings, then **re-fetches and verifies** the result.
+- **Storage:** `antinuke_backups` gained `status, operation, started_at, completed_at,
+  resources, errors, verification, guild_settings` (migration `0033`, mirrored in
+  `shared/schema.js`, self-created via `ANTINUKE_BACKUPS_ALTER_SQL` in
+  `dashboard/db.js`). A new append-only `antinuke_backup_operations` table logs every
+  create/restore with real start/finish times, counts, failures and verification.
+  A legacy row is back-filled by the migration (`data → SUCCESS`, empty → FAILED) so an
+  old row never reads as a false success.
+- **Reconciliation + dedup:** `reconcileStaleBackups()` marks a row stuck
+  `PENDING/IN_PROGRESS` past 10 min as FAILED ("operation interrupted"), and
+  `countInFlightBackups()` refuses a duplicate concurrent capture (409).
+- **HTTP contract:** `POST .../antinuke/backups` and `POST .../backups/:id/restore`
+  return **502** (body still carries the record/report) when the operation did not fully
+  succeed — a green 200 is reserved for a verified SUCCESS. `POST .../restore` accepts
+  `{ dryRun: true }` (preview, writes nothing) and requires `{ confirm: true }` for a
+  real restore. `GET .../antinuke/backup-operations` exposes the log.
+- **Dashboard:** `antinuke.js` renders a status chip per snapshot, the real error
+  reasons, a restore report with applied/skipped/failed/verified counts, and an
+  operation-log table; the toast is only green for a verified SUCCESS.
+- **Same-DB requirement:** the backups live in the `ANTI_DATABASE_URL` /
+  `ANUKE_DATABASE_URL` pool — bot + dashboard must share it (or the
+  `FALLBACK_DATABASE_URL`/`DATABASE_URL` fallback).
+
 ### Tests
 
 `tests/antiNuke.test.js` (47) — catalog, detector, trust/owner/bot exemption, thresholds,
@@ -771,6 +818,19 @@ resumable setup, a completed setup shows 100% with no resume, an unstarted setup
 real 0% (never a fake value), and the manual wizard seeds its completed sections from the
 persisted state (resume → 50%, not 0%). This is the regression test for the missing
 progress bar (the card used to exist only in the `in_progress` state).
+`tests/antiNukeBackupPipeline.test.js` (19) — the REAL backup workflow: drives the
+real `dashboard/db.js` backup SQL against an in-memory pg pool stub + the real
+`dashboard/antiNukeActions.js` capture/restore with a stubbed Discord REST layer.
+Asserts the honest lifecycle — a real capture persists roles/channels/guild-settings,
+verifies and is SUCCESS; a failed read is PARTIAL/FAILED with the real reason, never
+SUCCESS; an empty capture is FAILED; a DB write failure is FAILED; a duplicate capture
+is refused (409); a restore applies + verifies (SUCCESS) and never deletes existing
+resources; a partly-failed restore is PARTIAL naming the failure; an all-failed restore
+is FAILED; a restore without Manage Roles/Channels is refused (not faked); a dry run
+writes nothing; corrupt data is caught by `verifySnapshot`; a stale IN_PROGRESS row is
+reconciled to FAILED; cross-guild access is impossible; and a role above the bot's
+hierarchy is reported as skipped (not silently dropped). **16 of these fail against the
+pre-fix code** — that is the proof they catch the false-success bug.
 `tests/automodHttp.test.js` — the real dashboard boot with a signed session: all 12
 Anti-Nuke routes 401 unauthenticated, validation rejects, guild isolation, and the
 authenticated admin happy path (the boot mocks `../utils/botRoles` to report the admin as

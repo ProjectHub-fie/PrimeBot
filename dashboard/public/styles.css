@@ -4030,6 +4030,17 @@ select:focus {
 .an-backup-meta { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
 .an-backup-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .an-backup-report { padding: 14px 15px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-2); margin-bottom: 12px; }
+.an-backup-errors { font-size: 12px; color: var(--red); margin-top: 4px; word-break: break-word; }
+.an-backup-ops { overflow-x: auto; }
+.an-ops-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.an-ops-table th, .an-ops-table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.an-ops-table th { font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim); }
+.an-status { display: inline-block; font-size: 10.5px; font-weight: 700; letter-spacing: .04em; padding: 2px 7px;
+  border-radius: 999px; border: 1px solid transparent; vertical-align: middle; }
+.an-status-ok { color: var(--green); border-color: var(--green); background: rgba(59, 165, 93, 0.12); }
+.an-status-warn { color: var(--yellow); border-color: var(--yellow); background: rgba(240, 178, 50, 0.12); }
+.an-status-fail { color: var(--red); border-color: var(--red); background: rgba(237, 66, 69, 0.12); }
+.an-status-run { color: var(--text-dim); border-color: var(--border); background: var(--surface-2); }
 .an-diff-list { margin: 8px 0 0; padding-left: 18px; font-size: 12.5px; color: var(--text-dim); }
 .an-diff-list li { margin: 3px 0; }
 
