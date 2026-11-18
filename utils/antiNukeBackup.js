@@ -397,6 +397,61 @@ function planRestore(snapshot, live = {}, { safeRoleIds = [], botHighestPosition
 }
 
 /**
+ * Remap a single restore operation's ids against the ids known at apply time.
+ *
+ * A nuke deletes channels and roles, so a restored category/role gets a NEW id
+ * (Discord never reuses ids). A child channel's `parent_id` and every permission
+ * overwrite still reference the OLD ids, and Discord rejects a create that names
+ * a non-existent parent or overwrite target with `Invalid Form Body (400)`.
+ *
+ * `idMap` maps old → new ids for resources already recreated in this run, and
+ * `liveChannelIds` / `liveRoleIds` are the ids that still exist. Returns
+ * `{ op, dropped: string[] }`; a parent/overwrite that can neither be remapped
+ * nor found is dropped (with a reason) rather than sent to Discord to fail.
+ */
+function remapRestoreOp(op, { idMap = {}, liveChannelIds = [], liveRoleIds = [], guildId = null } = {}) {
+    const map = idMap instanceof Map ? idMap : new Map(Object.entries(idMap));
+    const liveChannels = new Set((liveChannelIds || []).map(String));
+    const liveRoles = new Set((liveRoleIds || []).map(String));
+    const dropped = [];
+    const resolve = (id) => {
+        const key = String(id);
+        if (map.has(key)) return String(map.get(key));
+        return null;
+    };
+    const keepOverwrite = (ow) => {
+        const id = String(ow.id);
+        if (guildId != null && id === String(guildId)) return ow;      // @everyone — always valid
+        if (Number(ow.type) === 1) return ow;                           // member overwrite — user ids are stable
+        if (liveRoles.has(id)) return ow;                               // role still exists
+        const mapped = resolve(id);
+        if (mapped) return { ...ow, id: mapped };                       // role recreated this run
+        dropped.push(`overwrite for unknown role ${id}`);
+        return null;
+    };
+
+    if (op.kind === 'channelCreate') {
+        const payload = { ...op.payload };
+        if (payload.parentId) {
+            const id = String(payload.parentId);
+            if (map.has(id)) payload.parentId = String(map.get(id));
+            else if (liveChannels.has(id)) payload.parentId = id;
+            else { dropped.push(`parent category ${id} was not restored`); payload.parentId = null; }
+        }
+        if (Array.isArray(payload.permissionOverwrites)) {
+            payload.permissionOverwrites = payload.permissionOverwrites.map(keepOverwrite).filter(Boolean);
+        }
+        return { op: { ...op, payload }, dropped };
+    }
+    if (op.kind === 'overwriteApply') {
+        const overwrite = keepOverwrite(op.payload.overwrite || {});
+        if (!overwrite) return { op: null, dropped };
+        return { op: { ...op, payload: { ...op.payload, overwrite } }, dropped };
+    }
+    return { op, dropped };
+}
+
+/**
  * Decide the terminal status of a restore from its execution report. A restore
  * is never SUCCESS when an operation failed, and never SUCCESS when nothing was
  * actually applied. Returns `{ status, errors: string[] }`.
@@ -442,4 +497,5 @@ module.exports = {
     verifySnapshot,
     compareSnapshot,
     planRestore,
+    remapRestoreOp,
 };
