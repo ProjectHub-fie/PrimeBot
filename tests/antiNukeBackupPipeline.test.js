@@ -36,6 +36,7 @@ const OTHER_GUILD = '222222222222222222';
 function makeBackupPool({ failOn = null } = {}) {
     const backups = [];
     const operations = [];
+    const incidents = [];
     let seq = 0;
     let opSeq = 0;
     const calls = [];
@@ -178,6 +179,13 @@ function makeBackupPool({ failOn = null } = {}) {
         // antinuke_settings read (used by preview for trusted roles)
         if (/FROM antinuke_settings/i.test(sql)) return { rows: [], rowCount: 0 };
 
+        // Incident-ledger write (recordLockdownIncident). Recorded so a test can
+        // prove a backup/lockdown action actually reaches the ledger.
+        if (/^INSERT INTO antinuke_incidents/i.test(sql)) {
+            incidents.push({ sql, params });
+            return { rows: [{ id: incidents.length }], rowCount: 1 };
+        }
+
         return { rows: [], rowCount: 0 };
     }
 
@@ -188,6 +196,7 @@ function makeBackupPool({ failOn = null } = {}) {
         on: () => {},
         __backups: backups,
         __operations: operations,
+        __incidents: incidents,
         __calls: calls,
     };
 }
@@ -243,6 +252,8 @@ function makeDiscord({ roles = [], channels = [], guildRaw = { verification_leve
     const writes = [];
     let liveRoles = roles.map(r => ({ ...r }));
     let liveChannels = channels.map(c => ({ ...c }));
+    // Mutable read-error state so a test can make reads start failing mid-flow.
+    const readErrorState = { ...readError };
     // Mimic Discord's validation: a create whose parent_id or overwrite target
     // does not exist is rejected with `Invalid Form Body (400)`.
     const validate = (body) => {
@@ -266,15 +277,15 @@ function makeDiscord({ roles = [], channels = [], guildRaw = { verification_leve
         API_BASE: 'https://discord.com/api/v10',
         __writes: writes,
         getGuildRoles: async () => {
-            if (readError.roles) throw new Error(readError.roles);
+            if (readErrorState.roles) throw new Error(readErrorState.roles);
             return liveRoles;
         },
         getGuildChannelsRaw: async () => {
-            if (readError.channels) throw new Error(readError.channels);
+            if (readErrorState.channels) throw new Error(readErrorState.channels);
             return liveChannels;
         },
         getGuildRaw: async () => {
-            if (readError.guild) throw new Error(readError.guild);
+            if (readErrorState.guild) throw new Error(readErrorState.guild);
             return guildRaw;
         },
         getBotMember: async () => ({ roles: ['botrole'] }),
@@ -327,6 +338,9 @@ function makeDiscord({ roles = [], channels = [], guildRaw = { verification_leve
         __setLive({ roles: r, channels: c }) {
             if (r) liveRoles = r.map(x => ({ ...x }));
             if (c) liveChannels = c.map(x => ({ ...x }));
+        },
+        __setReadError(next) {
+            Object.assign(readErrorState, next || {});
         },
     };
     return stub;
@@ -812,3 +826,119 @@ test('remapRestoreOp drops a parent that was neither recreated nor live', () => 
     assert.equal(out.payload.parentId, null, 'the stale parent is dropped');
     assert.match(dropped[0], /parent category gone/);
 });
+
+// ── 15. A restore must never mass-duplicate when the live read fails ─────────
+//
+// Regression: `readLiveStructure` returns [] on a failed read, which the diff
+// could not tell apart from an empty guild — so a restore recreated EVERY
+// role/channel and duplicated the whole server. A failed read must block the
+// affected op kinds and refuse the restore.
+
+test('a restore whose live roles/channels read fails is refused — it never mass-duplicates', async () => {
+    const p = makeBackupPool();
+    const d = makeDiscord({ roles: SAMPLE_ROLES, channels: SAMPLE_CHANNELS });
+    const stubs = installStubs({ pool: p, discord: d });
+    try {
+        const { actions } = loadModules();
+        const captured = await actions.captureBackup({ guildId: GUILD, name: 'base', createdBy: 'u' });
+        assert.equal(captured.status, 'SUCCESS');
+
+        // The live structure is UNCHANGED, but the reads now fail (a transient
+        // Discord outage). A naive diff would treat the guild as empty.
+        d.__setReadError({ roles: 'Discord API error: Missing Permissions (50013)', channels: 'Discord API error: Missing Permissions (50013)' });
+
+        const preview = await actions.previewBackupRestore(GUILD, captured.backup.id);
+        assert.equal(preview.plan.ops.length, 0, 'no ops are planned from an unreadable live structure');
+        assert.ok(preview.blocked.length >= 2, 'both failed reads are reported');
+
+        const report = await actions.restoreBackup(GUILD, captured.backup.id, { actorId: 'a' });
+        assert.equal(report.status, 'FAILED');
+        assert.equal(report.summary.applied, 0);
+        assert.equal(d.__writes.filter(w => w.op === 'createGuildRole').length, 0, 'no roles were recreated');
+        assert.equal(d.__writes.filter(w => w.op === 'createGuildChannel').length, 0, 'no channels were recreated');
+        assert.ok(report.errors.some(e => /live server structure/i.test(e)), 'the real reason is recorded');
+    } finally { stubs.restore(); }
+});
+
+test('a failed channel read blocks channel ops but a good role read still plans role ops', async () => {
+    const p = makeBackupPool();
+    const d = makeDiscord({ roles: SAMPLE_ROLES, channels: SAMPLE_CHANNELS });
+    const stubs = installStubs({ pool: p, discord: d });
+    try {
+        const { actions } = loadModules();
+        const captured = await actions.captureBackup({ guildId: GUILD, name: 'base', createdBy: 'u' });
+        // A role is genuinely missing; the channel read alone fails.
+        d.__setLive({ roles: [SAMPLE_ROLES[0]], channels: SAMPLE_CHANNELS });
+        d.__setReadError({ channels: 'Discord API error: Missing Permissions (50013)' });
+
+        const preview = await actions.previewBackupRestore(GUILD, captured.backup.id);
+        assert.ok(preview.plan.ops.some(o => o.kind === 'roleCreate'), 'the genuinely-missing role is still planned');
+        assert.ok(!preview.plan.ops.some(o => o.kind === 'channelCreate'), 'no channel op is planned from an unreadable read');
+    } finally { stubs.restore(); }
+});
+
+test('unsafeRestoreOpKinds maps each failed read to the op kinds it invalidates', () => {
+    const { unsafeRestoreOpKinds, filterUnsafePlan } = require('../utils/antiNukeBackup');
+    const none = unsafeRestoreOpKinds({});
+    assert.deepEqual(none.kinds, [], 'no failures → nothing blocked');
+    assert.deepEqual(none.blocked, []);
+
+    const roles = unsafeRestoreOpKinds({ roles: 'boom' });
+    assert.ok(roles.kinds.includes('roleCreate') && roles.kinds.includes('roleUpdate'));
+    assert.ok(roles.blocked[0].includes('roles'));
+
+    const channels = unsafeRestoreOpKinds({ channels: 'boom' });
+    assert.ok(channels.kinds.includes('channelCreate'));
+    assert.ok(channels.kinds.includes('channelUpdate'));
+    assert.ok(channels.kinds.includes('overwriteApply'));
+
+    const plan = { ops: [{ kind: 'roleCreate' }, { kind: 'channelCreate' }, { kind: 'settingUpdate' }] };
+    const filtered = filterUnsafePlan(plan, channels.kinds);
+    assert.deepEqual(filtered.ops.map(o => o.kind), ['roleCreate', 'settingUpdate'], 'only the unsafe kinds are dropped');
+});
+
+// ── 16. recordLockdownIncident really writes the ledger ─────────────────────
+//
+// Regression: the function referenced an undefined `anukePool`, so every
+// backup/lockdown incident write threw a ReferenceError inside its catch and
+// silently recorded nothing.
+
+test('recordLockdownIncident writes the incident ledger (no silent ReferenceError)', async () => {
+    const p = makeBackupPool();
+    const d = makeDiscord({ roles: SAMPLE_ROLES, channels: SAMPLE_CHANNELS });
+    const stubs = installStubs({ pool: p, discord: d });
+    try {
+        const { actions } = loadModules();
+        await actions.recordLockdownIncident({
+            guildId: GUILD, action: 'backupCreated', startedBy: 'u1', severity: 'info', details: 'Backup #1',
+        });
+        assert.equal(p.__incidents.length, 1, 'the incident row is written');
+        assert.match(p.__incidents[0].sql, /INSERT INTO antinuke_incidents/);
+        assert.equal(p.__incidents[0].params[1], 'backupCreated');
+    } finally { stubs.restore(); }
+});
+
+// ── 17. verifyRestore checks channel + guild settings ───────────────────────
+
+test('verifyRestore flags a channel setting that was not applied', async () => {
+    const p = makeBackupPool();
+    const d = makeDiscord({ roles: SAMPLE_ROLES, channels: SAMPLE_CHANNELS });
+    const stubs = installStubs({ pool: p, discord: d });
+    try {
+        const { actions } = loadModules();
+        const captured = await actions.captureBackup({ guildId: GUILD, name: 'base', createdBy: 'u' });
+        // The live channel differs on `topic`, so a channelUpdate is planned.
+        d.__setLive({
+            roles: SAMPLE_ROLES,
+            channels: [{ ...SAMPLE_CHANNELS[0] }, { ...SAMPLE_CHANNELS[1], topic: 'changed' }],
+        });
+        // Make the update a no-op so the read-back still shows the wrong topic.
+        d.patchChannel = async () => ({ ok: true });
+
+        const report = await actions.restoreBackup(GUILD, captured.backup.id, { actorId: 'a' });
+        assert.equal(report.verified, false, 'a setting that did not take effect is not verified');
+        assert.ok(report.verification.mismatches.some(m => /setting topic/.test(m)), 'the unapplied setting is named');
+        assert.notEqual(report.status, 'SUCCESS');
+    } finally { stubs.restore(); }
+});
+

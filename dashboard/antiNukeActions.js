@@ -176,7 +176,7 @@ async function clearLockdown(guildId) {
 /** Record a dashboard-triggered lockdown action in the incident ledger. */
 async function recordLockdownIncident({ guildId, action, startedBy, severity, details = '', responseOk = true }) {
     try {
-        await anukePool.query(`
+        await pool.query(`
             INSERT INTO antinuke_incidents
                 (guild_id, action, module, severity, response_taken, response_ok, dry_run, attribution, details)
             VALUES ($1,$2,'server',$3,$4,$5,false,'manual',$6)
@@ -351,6 +351,7 @@ const {
     buildSnapshot, compareSnapshot, planRestore, verifySnapshot, remapRestoreOp,
     serializeRole, serializeChannel, serializeGuildSettings,
     computeBackupStatus, computeRestoreStatus,
+    unsafeRestoreOpKinds, filterUnsafePlan,
     BACKUP_STATUS,
 } = require('../utils/antiNukeBackup');
 const { DANGEROUS_PERMISSION_BY_KEY } = require('../utils/antiNukeRules');
@@ -550,7 +551,13 @@ async function buildRestorePlan(guildId, snapshot) {
         liveShape,
         { safeRoleIds, botHighestPosition: botHighest == null ? Infinity : botHighest },
     );
-    return { plan, readErrors: live.errors, botHighest };
+    // A failed live read returns an empty list, which the diff cannot tell apart
+    // from an empty guild — planning against it would recreate EVERY role and
+    // channel and duplicate the whole server. Drop the ops whose live read
+    // failed and report why, so a restore never mass-duplicates on a read blip.
+    const { kinds: unsafeKinds, blocked } = unsafeRestoreOpKinds(live.errors);
+    const safePlan = unsafeKinds.length ? filterUnsafePlan(plan, unsafeKinds) : plan;
+    return { plan: safePlan, readErrors: live.errors, blocked, botHighest };
 }
 
 /** Preview the restore operations for a snapshot (no writes). */
@@ -558,12 +565,13 @@ async function previewBackupRestore(guildId, id) {
     const db = require('./db');
     const snapshot = await db.getAntiNukeBackup(guildId, id);
     if (!snapshot) return null;
-    const { plan, readErrors } = await buildRestorePlan(guildId, snapshot);
+    const { plan, readErrors, blocked } = await buildRestorePlan(guildId, snapshot);
     const permissions = await validateBackupPermissions(guildId);
     return {
         plan, counts: snapshot.counts, status: snapshot.status,
         readErrors, permissions,
         skipped: plan.skipped || [],
+        blocked: blocked || [],
         destructive: false,
         note: 'Recreated roles/channels receive NEW ids. Existing channels and roles are never deleted.',
     };
@@ -685,6 +693,7 @@ async function restoreBackup(guildId, id, { actorId = null, dryRun = false } = {
         failed: [],
         newIds: [],
         errors: [],
+        blocked: (preview.blocked || []).slice(),
     };
 
     // Old → new id map, filled as resources are recreated so a child channel's
@@ -693,6 +702,27 @@ async function restoreBackup(guildId, id, { actorId = null, dryRun = false } = {
     const idMap = new Map();
     let liveChannelIds = [];
     let liveRoleIds = [];
+
+    // Refuse to run when the live structure could not be fully read. A restore
+    // is a diff against the live guild; a failed read looks like an empty guild,
+    // so proceeding would recreate every role/channel and duplicate the server.
+    // Refusing is the only safe answer — the operator retries once Discord is
+    // reachable.
+    if (preview.blocked && preview.blocked.length) {
+        report.errors.push(`could not read the live server structure: ${preview.blocked.join('; ')}`);
+        report.status = BACKUP_STATUS.FAILED;
+        report.attempted = 0; report.applied = 0; report.failedCount = 0;
+        report.verified = false;
+        report.note = 'Restore refused — the live server structure could not be read, so a safe plan could not be built.';
+        await db.addAntiNukeBackupOperation({
+            backupId: Number(id), guildId, operation: 'restore', status: report.status, actorId,
+            startedAt, counts: { attempted: 0, applied: 0, failed: 0 },
+            errors: report.errors, verification: { ok: false, errors: report.errors },
+            details: 'restore refused — live structure unreadable',
+        }).catch(() => {});
+        report.summary = { attempted: 0, applied: 0, failed: 0, skipped: 0, verified: false };
+        return report;
+    }
 
     // Refuse to run without the permissions the operations need — an attempt
     // that Discord would reject must fail loudly, not report success.
@@ -852,6 +882,26 @@ async function verifyRestore(guildId, id, report) {
         if (!ch) { mismatches.push(`channel ${ow.channelId} missing during verify`); continue; }
         const applied = (ch.permissionOverwrites || []).find(o => String(o.id) === String(ow.overwriteId));
         if (!applied) mismatches.push(`overwrite ${ow.overwriteId} not applied on ${ow.channelId}`);
+    }
+    // Channel settings: confirm the intended values are now live on each channel.
+    for (const cu of report.updated.channels) {
+        checked++;
+        const liveCh = liveChannels.find(c => String(c.id) === String(cu.id));
+        if (!liveCh) { mismatches.push(`channel ${cu.id} missing during verify`); continue; }
+        const snapChannel = (snapshot.channels || []).find(x => String(x.id) === String(cu.id));
+        for (const [key, want] of Object.entries((snapChannel && snapChannel.settings) || {})) {
+            if (String((liveCh.settings || {})[key]) !== String(want)) {
+                mismatches.push(`channel ${liveCh.name} setting ${key} not applied`);
+            }
+        }
+    }
+    // Guild settings: confirm each restored setting now matches the snapshot.
+    const liveGuildSettings = serializeGuildSettings(live.guildSettings) || {};
+    for (const su of report.updated.settings) {
+        checked++;
+        const want = (snapshot.guildSettings || {})[su.key];
+        const have = liveGuildSettings[su.key];
+        if (String(have) !== String(want)) mismatches.push(`server setting ${su.key} not applied`);
     }
 
     if (mismatches.length) errors.push(...mismatches.slice(0, 20));
