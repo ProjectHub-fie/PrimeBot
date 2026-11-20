@@ -55,6 +55,28 @@ for (const file of commandFiles) {
     }
 }
 
+// Linix music slash commands (/play, /247, /bass, …). They use Linix's
+// `{ name, description, options }` shape rather than discord.js builders, so
+// they are converted to the same JSON the REST bulk-overwrite expects.
+const musicSlashPath = path.join(__dirname, 'music', 'slashCommands');
+if (fs.existsSync(musicSlashPath)) {
+    for (const dir of fs.readdirSync(musicSlashPath)) {
+        const dirPath = path.join(musicSlashPath, dir);
+        if (!fs.statSync(dirPath).isDirectory()) continue;
+        for (const file of fs.readdirSync(dirPath).filter(f => f.endsWith('.js'))) {
+            const slashCommand = require(path.join(dirPath, file));
+            if (!slashCommand.name || !slashCommand.description) continue;
+            commands.push({
+                name: slashCommand.name,
+                description: slashCommand.description,
+                options: slashCommand.options || [],
+                default_member_permissions: '0',
+            });
+            console.log(`Loaded music command: ${slashCommand.name}`);
+        }
+    }
+}
+
 // Configure REST for deployment
 const rest = new REST().setToken(process.env.DISCORD_TOKEN);
 

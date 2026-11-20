@@ -217,47 +217,11 @@ client.betaManager = betaManager;
         sendTestAnnouncement: async () => { throw new Error('YouTube notifications are not available right now.'); },
         stop: noop,
     };
-    // 24/7 Radio — stub keeps the voice-state handler and commands inert until
-    // the real manager is constructed in initializeManagers().
-    client.radioManager = {
-        sessions: new Map(),
-        waitForReady: noopAsync,
-        getSession: () => null,
-        describe: () => null,
-        stations: { get: () => null, listForGuild: () => [] },
-        start: async () => { throw new Error('Radio is not available right now.'); },
-        stop: async () => false,
-        pause: async () => { throw new Error('Radio is not available right now.'); },
-        resume: async () => { throw new Error('Radio is not available right now.'); },
-        skip: async () => { throw new Error('Radio is not available right now.'); },
-        setStation: async () => { throw new Error('Radio is not available right now.'); },
-        setVolume: async () => { throw new Error('Radio is not available right now.'); },
-        setChannel: async () => { throw new Error('Radio is not available right now.'); },
-        handleVoiceStateUpdate: noopAsync,
-        restore: noopAsync,
-        shutdown: noopAsync,
-    };
-    // On-demand Music — stub keeps commands inert until the real manager is
-    // constructed in initializeManagers().
-    client.musicManager = {
-        sessions: new Map(),
-        getSession: () => null,
-        describe: () => null,
-        play: async () => { throw new Error('Music is not available right now.'); },
-        addToQueue: async () => { throw new Error('Music is not available right now.'); },
-        pause: async () => { throw new Error('Music is not available right now.'); },
-        resume: async () => { throw new Error('Music is not available right now.'); },
-        skip: async () => { throw new Error('Music is not available right now.'); },
-        stop: async () => { throw new Error('Music is not available right now.'); },
-        setVolume: async () => { throw new Error('Music is not available right now.'); },
-        setRepeat: async () => { throw new Error('Music is not available right now.'); },
-        enable247: async () => { throw new Error('Music is not available right now.'); },
-        disable247: async () => { throw new Error('Music is not available right now.'); },
-        set247Channel: async () => { throw new Error('Music is not available right now.'); },
-        handleVoiceStateUpdate: noopAsync,
-        restore: noopAsync,
-        shutdown: noopAsync,
-    };
+    // Music + 24/7 Radio (Linix system) — the real subsystem is attached to the
+    // client by music/index.js on ready. `client.manager` is the Kazagumo
+    // player manager; `client.commands` / `client.slashCommands` hold the
+    // Linix command trees. Until then the music commands are absent, which is
+    // the correct inert state.
 }
 
 // ── Real manager boot — runs exactly once when this node connects ─────────
@@ -420,42 +384,28 @@ async function initializeManagers() {
         console.error('[MANAGERS] Failed to load BirthdayManager:', err.message);
     }
 
-    // 24/7 Radio (SoundCloud). The manager owns the voice connection + the
-    // continuous-playback state machine; sessions are restored on ready.
-    try {
-        const { RadioManager } = require('./utils/radioManager');
-        client.radioManager = new RadioManager(client);
-        console.log('[MANAGERS] RadioManager loaded.');
-    } catch (err) {
-        console.error('[MANAGERS] Failed to load RadioManager:', err.message);
-    }
-
-    // On-demand Music. Owns one authoritative player per guild, the queue and
-    // the admin-controlled 24/7 persistent voice connection. 24/7 sessions are
-    // restored on ready. Separate from the radio feature.
-    //
-    // The playback engine is selected with MUSIC_ENGINE (default `direct`, the
-    // original ffmpeg pipeline). `MUSIC_ENGINE=lavalink` routes playback through
-    // a Lavalink node instead; an unconfigured/unknown value falls back to
-    // direct so music never breaks. See utils/music/engines/index.js.
-    try {
-        const { MusicManager } = require('./utils/music/musicManager');
-        const musicStore = require('./utils/music/musicStore');
-        client.musicManager = new MusicManager(client, {
-            store: musicStore,
-            // Cross-link the two playback features so a guild can never run the
-            // 24/7 radio and on-demand music on the same voice connection.
-            radioManager: client.radioManager || null,
-        });
-        // Back-reference from radio → music (radio is constructed first).
-        if (client.radioManager && !client.radioManager.musicManager) {
-            client.radioManager.musicManager = client.musicManager;
+    // Music + 24/7 Radio — the complete Linix music system (Kazagumo/Shoukaku
+    // on an authorized Lavalink node). It owns the prefix command tree
+    // (`$play`, `$skip`, `$filter`, `$247`, `$playlist`, …), the slash command
+    // tree (`/play`, `/247`, `/bass`, …), the player/node events, filters,
+    // autoplay, Spotify/YouTube/SoundCloud resolution, playlists and radio.
+    // Initialization is deferred to the ready event so the client is logged in
+    // (the Lavalink connector needs the bot's user id to accept voice updates).
+    const startMusic = () => {
+        try {
+            const { initMusic } = require('./music');
+            const state = initMusic(client);
+            if (state.enabled) {
+                console.log(`[MUSIC] Linix music system ready (${state.nodes} node(s), ${state.commands?.prefix ?? 0} prefix + ${state.commands?.slash ?? 0} slash commands).`);
+            }
+        } catch (err) {
+            console.error('[MANAGERS] Failed to load the music system:', err.message);
         }
-        console.log(`[MANAGERS] MusicManager loaded (engine: ${client.musicManager.engineName}${client.musicManager.engineFallbackReason ? ` — ${client.musicManager.engineFallbackReason}` : ''}).`);
-        client.musicManager.start().catch(err => console.error('[MUSIC] start failed:', err.message));
-    } catch (err) {
-        console.error('[MANAGERS] Failed to load MusicManager:', err.message);
-    }
+    };
+    // A standby node connects later on takeover, so the client can already be
+    // ready by the time managers boot — `once('ready')` would then never fire.
+    if (client.isReady && client.isReady()) startMusic();
+    else client.once('ready', startMusic);
 
     // LevelingManager needs the DB fully ready — brief delay is intentional
     setTimeout(() => {

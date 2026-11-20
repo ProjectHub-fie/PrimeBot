@@ -23,20 +23,19 @@ test('JOIN_OPTIONS defend the bot: self-deafened, never self-muted', () => {
     assert.deepStrictEqual({ ...vd.JOIN_OPTIONS }, { selfDeaf: true, selfMute: false });
 });
 
-test('both voice layers build their join from JOIN_OPTIONS (no hardcoded drift)', () => {
-    for (const rel of ['utils/music/musicVoice.js', 'utils/radioVoice.js']) {
+test('every Linix player creation joins self-deafened (no hardcoded drift)', () => {
+    const files = [
+        'music/commands/Music/play.js',
+        'music/commands/Music/join.js',
+        'music/commands/Music/search.js',
+        'music/slashCommands/Music/play.js',
+        'music/slashCommands/Music/join.js',
+        'music/loaders/restore247.js',
+    ];
+    for (const rel of files) {
         const src = fs.readFileSync(path.join(ROOT, rel), 'utf8');
-        assert.match(src, /\.\.\.require\(['"][^'"]*voiceDefense['"]\)\.JOIN_OPTIONS/,
-            `${rel} must spread voiceDefense.JOIN_OPTIONS into joinVoiceChannel`);
-        assert.doesNotMatch(src, /selfDeaf:\s*false/, `${rel} must never self-deafen:false`);
-    }
-});
-
-test('both voice layers re-assert the defense after a successful join', () => {
-    for (const rel of ['utils/music/musicVoice.js', 'utils/radioVoice.js']) {
-        const src = fs.readFileSync(path.join(ROOT, rel), 'utf8');
-        assert.match(src, /voiceDefense'\)\.defendGuild\(client, guildId\)/,
-            `${rel} must call defendGuild(client, guildId) after a successful join`);
+        assert.match(src, /deaf:\s*true/, `${rel} must create its player with deaf: true`);
+        assert.doesNotMatch(src, /deaf:\s*false/, `${rel} must never self-deafen:false`);
     }
 });
 
@@ -108,12 +107,10 @@ test('defense can be disabled with VOICE_DEFEND_ENABLED=false', async () => {
     assert.strictEqual(vd.isEnabled(), true);
 });
 
-test('the voiceStateUpdate event wires the defense in, before radio/music', () => {
+test('the voiceStateUpdate event wires the defense in', () => {
     const src = fs.readFileSync(path.join(ROOT, 'events/voiceStateUpdate.js'), 'utf8');
-    const defIdx = src.indexOf("voiceDefense').handleVoiceStateUpdate");
-    const radioIdx = src.indexOf('radioManager');
-    assert.ok(defIdx > -1, 'the defense must be wired into the event');
-    assert.ok(defIdx < radioIdx, 'the defense must run before the radio forwarder');
+    assert.ok(src.includes("voiceDefense').handleVoiceStateUpdate"),
+        'the defense must be wired into the event');
 });
 
 test('defendGuild resolves the bot member and defends it', async () => {

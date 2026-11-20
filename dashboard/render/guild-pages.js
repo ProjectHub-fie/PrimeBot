@@ -552,27 +552,6 @@ function youtubePage({ guild, user }) {
     return render({ title, body, active: 'servers', scripts, user });
 }
 
-// ── Radio (24/7 SoundCloud radio) ───────────────────────────────────────────
-// Dashboard-only configuration surface: the bot's RadioManager owns the live
-// voice session; this page reads the persisted session + station catalog and
-// lets admins toggle the persistent session / pick a channel / manage stations.
-// Heavy markup lives in render/radio-page.js.
-
-function radioPage({ guild, user }) {
-    const { body, scripts, title } = require('./radio-page').radioPageHTML({ guild, user });
-    return render({ title, body, active: 'servers', scripts, user });
-}
-
-// ── Music (on-demand music + 24/7 radio, in one tab) ────────────────────────
-// The bot's MusicManager owns the live player; this page reads the persisted
-// music settings / playlists / history and embeds the radio sections. Heavy
-// markup lives in render/music-page.js.
-
-function musicPage({ guild, user }) {
-    const { body, scripts, title } = require('./music-page').musicPageHTML({ guild, user });
-    return render({ title, body, active: 'servers', scripts, user });
-}
-
 // ── Logging ─────────────────────────────────────────────────────────────────
 
 function loggingPanelHTML(logging, channels) {
@@ -1854,8 +1833,6 @@ module.exports = {
     welcomePage, levelingPage, badgesPage, prefixPage, roleRewardsPage, autoResponderPage, reactionsPage, broadcastPage,
     birthdaysPage, embedPage, loggingPage, reactionRolesPage, ticketsPage, ticketEditPage, automodPage, antiNukePage, eventsPage,
     youtubePage,
-    radioPage,
-    musicPage,
     eventWizardPage, eventManagePage,
     livePollsPage, liveGiveawaysPage,
     ticketEmbedBuilderHTML,
