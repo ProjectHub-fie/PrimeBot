@@ -175,6 +175,22 @@ test('NODE_URL scheme forms still win over NODE_PORT for a full URL', () => {
     });
 });
 
+test('unset NODE_SECURE defaults to plaintext (secure=false) — the EPROTO regression', () => {
+    // Regression: the old `parseBoolean(node.secure, true)` default made an
+    // unset NODE_SECURE dial wss:// against the plaintext CloudWave node,
+    // surfacing as `write EPROTO ... wrong version number`. Shoukaku's own
+    // NodeDefaults is secure:false, and CloudWave is plaintext.
+    withEnv({ NODE_URL: 'lavalink.cloudewave.in', NODE_PORT: '2336', NODE_AUTH: 'cloudewave.in' }, () => {
+        const nodes = resolveNodes();
+        assert.strictEqual(nodes.length, 1);
+        assert.strictEqual(nodes[0].url, 'lavalink.cloudewave.in:2336');
+        assert.strictEqual(nodes[0].secure, false);
+        // Shoukaku must dial plaintext ws://, never wss://.
+        assert.strictEqual(`${nodes[0].secure ? 'wss' : 'ws'}://${nodes[0].url}/v4/websocket`,
+            'ws://lavalink.cloudewave.in:2336/v4/websocket');
+    });
+});
+
 test('resolvePerms accepts Linix SCREAMING_SNAKE names without throwing', () => {
     // `EMBED_LINKS` is what every Linix music command declares as botPrams;
     // the installed discord.js resolves camelCase only, and the old

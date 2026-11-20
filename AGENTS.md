@@ -1418,15 +1418,26 @@ add its customId there too** — `tests/musicLinixReplacement.test.js` scans
 - **Env vars (Linix-compatible):** `NODE_URL` (host, host:port, or a full
   ws/wss URL), `NODE_PORT` (used only when the host has no port — a bare host
   with **no port silently routes the socket to :80**, which is exactly how the
-  bot seemed "connected" while every request still failed; the Lavalink error is
-  `EPROTO wrong version number` against nginx). `NODE_AUTH` (node password),
-  `NODE_NAME` (label), `NODE_SECURE` (`true` behind TLS). The `LAVALINK_*` names
+  bot seemed "connected" while every request still failed). `NODE_AUTH` (node
+  password), `NODE_NAME` (label), `NODE_SECURE` (default **`false`** =
+  plaintext; set `true` only behind TLS). The `LAVALINK_*` names
   (`LAVALINK_NODES` JSON array, `LAVALINK_HOST`/`_PORT`/`_PASSWORD`/`_SECURE`/
   `_NAME`) are also accepted and **win** when both are set. Credentials come from
   the environment only — never hardcoded. `NODE_NAME` is dual-purpose: it is
   also PrimeBot's shard-node identity (`utils/nodeIdentity.js`), so prefer
   `LAVALINK_NAME` for the Lavalink label when the shard node identity must stay
   a `sn1`/`sn2`/`sn3`-style value.
+- **`secure` MUST default to `false`.** `normalizeNode()` used
+  `parseBoolean(node.secure, true)` — an **unset** `NODE_SECURE` made Shoukaku
+  dial `wss://` (TLS) against a plaintext host, surfacing as
+  `write EPROTO ... wrong version number` in the boot log (the SAME error as the
+  missing-port case, but for the opposite reason). The default is now
+  `parseBoolean(node.secure, false)`, matching Shoukaku's `NodeDefaults.secure:
+  false` and the authorized plaintext CloudWave node. Authorized config:
+  `NODE_URL=lavalink.cloudewave.in`, `NODE_PORT=2336`,
+  `NODE_AUTH=cloudewave.in`, `NODE_SECURE=false` (or omit the flag — plaintext
+  is the default). Verified live: the resolved config dials
+  `ws://lavalink.cloudewave.in:2336/v4/websocket` and returns `{"op":"ready"}`.
 - **Permission-flag tolerance.** Linix's music commands declare `botPrams`/
   `userPrams` with SCREAMING_SNAKE names (`["EMBED_LINKS"]`, `["Connect",
   "Speak"]`) as written for an older discord.js. The installed discord.js v14
