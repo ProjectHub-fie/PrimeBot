@@ -1435,6 +1435,64 @@ can never disagree with the page.
   change, background-tab refresh, bfcache restore, and full restore on stop/pagehide.
 
 
+## Private security audit log (owner-controlled, no database)
+
+A private audit trail of PrimeBot's own server membership and of voice activity in
+every guild, delivered to ONE hardcoded private channel.
+
+- **Destination:** `config.js` top-level `const SECURITY_AUDIT_CHANNEL_ID` →
+  `config.securityAudit = { enabled: true, channelId: SECURITY_AUDIT_CHANNEL_ID }`.
+  Source-only, owner-only: no env var, no slash command, no dashboard page, no
+  per-guild setting. While it holds the `YOUR_LOG_CHANNEL_ID` placeholder the
+  logger is inert (`isConfigured()` requires a 15–22 digit snowflake) and logs ONE
+  masked diagnostic. The channel id is never echoed to users and diagnostics only
+  show `maskId()` (`••••1234`). The channel itself must deny @everyone View
+  Channel; the bot needs View Channel + Send Messages.
+- **Module:** `utils/securityAuditLogger.js` — `SecurityAuditLogger` (dependency
+  injected: `client`, `channelId`, `nowFn`, `sleepFn`, `retryDelays`, `logger`) +
+  the process-wide `getSecurityAuditLogger()` / `resetSecurityAuditLogger()`.
+  Pure embed builders (`buildGuildJoinEmbed`, `buildGuildLeaveEmbed`,
+  `buildVoiceEmbed`), `discordTime()` (`<t:…:F> (<t:…:R>)`) and `formatDuration()`.
+- **Handlers:** `events/guildCreate.js`, `events/guildDelete.js`,
+  `events/voiceStateUpdate.js` (audit runs alongside `utils/voiceDefense`;
+  neither can throw into the gateway). `events/ready.js` calls `attach(client)`
+  (snapshot guilds) + `verifyDestination()`.
+- **Event types:** `server_join` (green), `server_leave` (red), `voice_join`
+  (green), `voice_leave` (red), `voice_move` (orange), `voice_bot_join` (blue),
+  `voice_bot_leave` (red), `voice_bot_move` (orange), `voice_bot_disconnect`
+  (orange — the bot's channel was deleted). Colors are plain ints
+  (`0x2ECC71/0xE74C3C/0xE67E22/0x3498DB`) so the embed theme never remaps them.
+- **No database.** `guildCache` (name/owner/memberCount/icon per guild) and
+  `voiceSessions` (join timestamps per `guildId:userId`) are in-memory Maps. A
+  `guildDelete` merges Discord's partial object with the cached snapshot and
+  prints **Unavailable** for anything it never knew (never invents data). After a
+  restart there are no sessions, so a leave reports "duration unavailable — the
+  session began before the latest bot restart".
+- **Voice classification:** only a `channelId` change produces an event — mute,
+  deafen, streaming, camera, suppress and status changes are ignored. A move is
+  ONE `voice_move` (never leave+join) and re-points the session. Bot events are
+  detected via `member.user.bot` / `client.user.id`.
+- **Two false-positive guards (important):** (1) discord.js re-emits
+  `guildCreate` for every guild while hydrating the cache at READY, so a join is
+  logged only when `guild.joinedTimestamp` is within `JOIN_FRESHNESS_MS` (5 min) —
+  else when the client has been ready for more than `READY_GRACE_MS` (60 s);
+  (2) `guildDelete` with `guild.available === false` is a Discord outage, not a
+  removal, and is skipped (the snapshot is kept).
+- **Reliability:** delivery goes through a serialized promise queue
+  (`maxQueue`, default 200 — a full queue drops with a diagnostic instead of
+  growing), `allowedMentions: { parse: [] }`, retries for 429 (honouring
+  `retryAfter`/`retry_after`, clamped to 30 s) and 5xx/ECONNRESET, and a 60 s
+  fetch cooldown when the destination cannot be resolved. Every failure is a
+  masked `[SECURITY AUDIT]` diagnostic; nothing throws back into the gateway.
+  Duplicate deliveries of the same event are dropped via a 2 s bucketed dedupe key.
+- **Tests:** `tests/securityAuditLogger.test.js` (35) — the twelve required
+  scenarios (join, leave, member join/leave/move, bot join/leave/disconnect, multi
+  guild, restart, missing destination, 429/5xx, mute/deafen) plus an end-to-end
+  run through the REAL event handlers, the READY-burst guard, the outage guard,
+  privacy assertions (private id never in the payload or diagnostics, never posted
+  into the originating guild) and a static "no database dependency" audit.
+
+
 ## Music — the Linix music system (vendored, source-level replacement)
 
 PrimeBot's music feature is **Linix's music implementation**, vendored verbatim
