@@ -40,13 +40,21 @@ function makeManager(settings) {
     };
 }
 
+const { NUKE_ACTIONS } = require('../utils/antiNukeRules');
+
+// A genuinely "fully operational" setup watches every rule (what
+// defaultAntiNukeSettings() produces) — a partial watch list is a blind spot,
+// which the health scan now reports.
+const allWatched = Object.fromEntries(
+    NUKE_ACTIONS.map(a => [a.key, { enabled: true, threshold: a.threshold, seconds: a.seconds }]));
+
 const baseSettings = {
     enabled: true,
     dryRun: false,
     alertChannelId: '500000000000000000',
     trustedUserIds: [],
     trustedRoleIds: [],
-    watched: { memberBan: { enabled: true, threshold: 5, seconds: 15 } },
+    watched: allWatched,
     actionResponses: {},
     responses: ['alertOwner', 'alertChannel', 'logOnly'],
     quarantineRoleId: null,

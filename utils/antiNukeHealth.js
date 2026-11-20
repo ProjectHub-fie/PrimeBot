@@ -15,7 +15,10 @@
 
 const { PermissionFlagsBits } = require('discord.js');
 const { validateBotPermissions } = require('./antiNukeContainment');
-const { NUKE_ACTIONS, responsesForAction, NUKE_ACTION_BY_KEY } = require('./antiNukeRules');
+const {
+    NUKE_ACTIONS, responsesForAction, NUKE_ACTION_BY_KEY,
+    NOTIFYING_RESPONSE_KEYS, ENFORCED_RESPONSE_KEYS,
+} = require('./antiNukeRules');
 
 const PASS = 'PASS';
 const WARN = 'WARNING';
@@ -35,7 +38,9 @@ const RECOMMENDATIONS = {
     enabled: 'Enable Anti-Nuke from the Overview hero switch.',
     dry_run: 'Turn Dry run OFF in Settings so containment actually enforces.',
     watched: 'Enable at least one watched action in Protection.',
+    critical_coverage: 'Enable the disabled critical rules in Protection — an attack they watch for cannot be detected while they are off.',
     responses: 'Select at least one response in the Responses section.',
+    silent_rules: 'Add an alert response (or clear the per-rule override) so the rule notifies someone when it trips.',
     own_responses: 'Add a punishment response (ban/kick) to a specific action if you want automatic punishment.',
     bot_permissions: 'Grant the missing permissions to PrimeBot in Server Settings → Roles.',
     hierarchy_bot: 'Move the PrimeBot role above the roles it must manage.',
@@ -53,6 +58,19 @@ function check(key, label, result, note = '') {
         out.recommendation = 'Grant this permission to PrimeBot in Server Settings → Roles.';
     }
     return out;
+}
+
+/**
+ * Classify a resolved response plan for the "would this rule do anything?"
+ * check. Kept pure so both branches are unit-testable without a gateway.
+ *
+ * @returns {'effective'|'record_only'|'inert'}
+ */
+function classifyRulePlan(responses) {
+    const list = Array.isArray(responses) ? responses : [];
+    if (list.some(r => NOTIFYING_RESPONSE_KEYS.includes(r) || ENFORCED_RESPONSE_KEYS.includes(r))) return 'effective';
+    if (list.includes('logOnly')) return 'record_only';
+    return 'inert';
 }
 
 /**
@@ -140,6 +158,23 @@ async function healthScan({ manager, client, guild, botPerms }) {
         watchedEnabled > 0 ? PASS : WARN,
         watchedEnabled > 0 ? `${watchedEnabled} of ${NUKE_ACTIONS.length} protection rules enabled` : 'No protection rules are enabled.'));
 
+    // A critical rule that is switched OFF is a blind spot: the attack it
+    // watches for cannot be detected at all, so no threshold or response plan
+    // can ever help. Reported separately from "watched" (which only asks
+    // whether ANY rule is on) because a guild can be "enabled" and still have
+    // its most destructive vector disabled.
+    const disabledCritical = NUKE_ACTIONS
+        .filter(a => a.severity === 'critical')
+        .filter(a => {
+            const w = s.watched && s.watched[a.key];
+            return !w || w.enabled === false;
+        });
+    checks.push(check('critical_coverage', 'Critical rules switched off',
+        disabledCritical.length === 0 ? PASS : (disabledCritical.length >= 3 ? FAIL : WARN),
+        disabledCritical.length === 0
+            ? ''
+            : `${disabledCritical.length} critical rule(s) are disabled, so those attacks cannot be detected: ${disabledCritical.slice(0, 5).map(a => a.key).join(', ')}. Enable them unless the guild deliberately accepts that risk.`));
+
     // Effective responses per watched action — the requirement says display and
     // log the effective response list for EVERY rule.
     const effective = {};
@@ -158,6 +193,23 @@ async function healthScan({ manager, client, guild, botPerms }) {
     checks.push(check('responses', 'Effective response plan',
         hasEnforcement ? PASS : WARN,
         hasEnforcement ? '' : 'No watched rule resolves to a containment/punishment response — detection-only.'));
+
+    // A rule that resolves to neither a notification nor an enforcement action
+    // does nothing visible when it trips. An explicit `logOnly` is a deliberate
+    // "record only" choice, so it is reported as a warning; a plan that resolves
+    // to NOTHING at all is a defect (it silently ignores the attack it was
+    // configured for) and is reported as a failure. This is the check that would
+    // have caught a per-rule override that left a critical rule inert.
+    const silent = Object.entries(effective)
+        .filter(([, e]) => classifyRulePlan(e.responses) !== 'effective');
+    const inert = silent.filter(([, e]) => classifyRulePlan(e.responses) === 'inert');
+    checks.push(check('silent_rules', 'Rules that would do nothing',
+        inert.length ? FAIL : (silent.length ? WARN : PASS),
+        inert.length
+            ? `${inert.length} watched rule(s) resolve to no alert and no containment (e.g. a per-rule override of "manual review" only): ${inert.slice(0, 5).map(([k]) => k).join(', ')}. Add an alert response (or clear the override to use the global plan).`
+            : (silent.length
+                ? `${silent.length} watched rule(s) are record-only ("Log only") by choice — nothing is contained when they trip.`
+                : '')));
     checks.push(check('own_responses', 'Owner opted-in punishment',
         (Object.values(effective).some(e => e.responses.includes('ban') || e.responses.includes('kick')))
             ? PASS : WARN,
@@ -270,4 +322,4 @@ function healthEmbed(guildName, scan) {
     return embed;
 }
 
-module.exports = { healthScan, healthEmbed, PASS, WARN, FAIL };
+module.exports = { healthScan, healthEmbed, classifyRulePlan, PASS, WARN, FAIL };

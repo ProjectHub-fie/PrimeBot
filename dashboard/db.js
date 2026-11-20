@@ -1719,10 +1719,18 @@ const ANTINUKE_INCIDENT_DDL = `
         response_ok       BOOLEAN NOT NULL DEFAULT false,
         dry_run           BOOLEAN NOT NULL DEFAULT false,
         attribution       VARCHAR(30) NOT NULL DEFAULT 'unknown',
+        status            VARCHAR(40),
         details           TEXT NOT NULL DEFAULT '',
         created_at        TIMESTAMP DEFAULT NOW()
     );
 `;
+// Heal a deployment whose `antinuke_incidents` was created before `status`
+// existed. `CREATE TABLE IF NOT EXISTS` never alters an existing table, so
+// without this backfill the dashboard's own writes/filters failed with
+// `column "status" does not exist`.
+const ANTINUKE_INCIDENT_ALTER_SQL = [
+    `ALTER TABLE antinuke_incidents ADD COLUMN IF NOT EXISTS status VARCHAR(40)`,
+];
 const ANTINUKE_INCIDENT_INDEX_SQL = [
     `CREATE INDEX IF NOT EXISTS antinuke_incidents_guild_created_idx ON antinuke_incidents (guild_id, created_at DESC)`,
     `CREATE INDEX IF NOT EXISTS antinuke_incidents_guild_action_idx ON antinuke_incidents (guild_id, action)`,
@@ -1925,6 +1933,7 @@ async function ensureAntiNukeTable() {
         await anukePool.query(ANTINUKE_DDL);
         for (const sql of ANTINUKE_ALTER_SQL) await anukePool.query(sql);
         await anukePool.query(ANTINUKE_INCIDENT_DDL);
+        for (const sql of ANTINUKE_INCIDENT_ALTER_SQL) await anukePool.query(sql);
         for (const sql of ANTINUKE_INCIDENT_INDEX_SQL) await anukePool.query(sql);
         await anukePool.query(ANTINUKE_LOCKDOWN_DDL);
         await anukePool.query(ANTINUKE_BACKUPS_DDL);

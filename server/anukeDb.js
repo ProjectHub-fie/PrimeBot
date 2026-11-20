@@ -143,6 +143,16 @@ const CREATE_INCIDENT_SQL = `
     );
 `;
 
+// Columns added to `antinuke_incidents` after the table first shipped. Applied
+// with ADD COLUMN IF NOT EXISTS so a deployment that created the table from an
+// older DDL (which lacked `status`) is healed in place: without this every
+// incident INSERT failed with `column "status" does not exist`, the error was
+// swallowed as "best effort", and the security ledger stayed silently empty
+// during a real nuke.
+const ADD_INCIDENT_COLUMNS_SQL = [
+    `ALTER TABLE antinuke_incidents ADD COLUMN IF NOT EXISTS status VARCHAR(40)`,
+];
+
 const CREATE_INCIDENT_INDEXES_SQL = [
     `CREATE INDEX IF NOT EXISTS antinuke_incidents_guild_created_idx ON antinuke_incidents (guild_id, created_at DESC)`,
     `CREATE INDEX IF NOT EXISTS antinuke_incidents_guild_action_idx ON antinuke_incidents (guild_id, action)`,
@@ -190,6 +200,7 @@ async function ensureAnukeTables() {
             await client.query(CREATE_ACCESS_HISTORY_SQL);
             for (const sql of CREATE_ACCESS_HISTORY_INDEX_SQL) await client.query(sql);
             await client.query(CREATE_INCIDENT_SQL);
+            for (const sql of ADD_INCIDENT_COLUMNS_SQL) await client.query(sql);
             for (const sql of CREATE_INCIDENT_INDEXES_SQL) await client.query(sql);
             await client.query(CREATE_DEDUP_SQL);
             await client.query(CREATE_DEDUP_INDEX_SQL);

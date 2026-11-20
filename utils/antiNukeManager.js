@@ -829,8 +829,11 @@ class AntiNukeManager {
                     });
                     execAction('deleteWebhook', res);
                 } else if (key === 'lockChannels') {
-                    const chIds = targetIds.length ? targetIds : (action.module === 'channel' && member ? [] : []);
-                    const res = await enforcer.lockChannels(this.client, guild, chIds, {
+                    // Only the channels the audit entry actually names are
+                    // locked. A deleted channel cannot be locked and a role
+                    // attack names no channel, so an empty list is a no-op by
+                    // design (never "lock every channel in the guild").
+                    const res = await enforcer.lockChannels(this.client, guild, targetIds, {
                         reason: `Anti-Nuke: ${action.label} by ${executorId}`,
                     });
                     execAction('lockChannels', res);
@@ -943,8 +946,16 @@ class AntiNukeManager {
         // the alert keys even when the global list includes them).
         const responses = responsesForAction(settings, action.key);
 
+        // `manualReview` means "a human must decide" — the incident is worthless
+        // if nobody is told about it. Deliver the alert for it exactly like an
+        // explicit alert response, otherwise a rule whose only response is
+        // manual review is completely silent (no embed, no DM) and a nuke can
+        // run to completion unnoticed.
+        const wantsAlert = responses.includes('alertChannel') || responses.includes('manualReview');
+        const wantsOwnerDm = responses.includes('alertOwner') || responses.includes('manualReview');
+
         // Alert channel.
-        if (responses.includes('alertChannel') && settings.alertChannelId) {
+        if (wantsAlert && settings.alertChannelId) {
             try {
                 const ch = await this.client.channels.fetch(settings.alertChannelId).catch(() => null);
                 if (ch && typeof ch.send === 'function') await ch.send(payload);
@@ -955,7 +966,7 @@ class AntiNukeManager {
         }
 
         // Owner DM.
-        if (responses.includes('alertOwner')) {
+        if (wantsOwnerDm) {
             try {
                 const owner = await guild.fetchOwner().catch(() => null);
                 if (owner && typeof owner.send === 'function') await owner.send(payload);
@@ -973,6 +984,21 @@ class AntiNukeManager {
         responseTaken = [], responseResult = {}, responseOk = false,
         dryRun = false, attribution = 'unknown', status = null, details = '',
     }) {
+        const row = [
+            String(guildId),
+            executorId ? String(executorId) : null,
+            executorName ? String(executorName).slice(0, 120) : null,
+            String(action).slice(0, 60), module ? String(module).slice(0, 30) : null,
+            String(severity).slice(0, 20),
+            Math.max(0, Number(count) || 0), Math.max(0, Number(threshold) || 0),
+            Math.max(0, Number(windowSeconds) || 0),
+            JSON.stringify(Array.isArray(responseTaken) ? responseTaken : []),
+            JSON.stringify(responseResult || {}),
+            responseOk === true, dryRun === true,
+            String(attribution).slice(0, 30),
+            status ? String(status).slice(0, 40) : (dryRun ? 'dry_run' : null),
+            String(details || '').slice(0, 1000),
+        ];
         try {
             await this._ensureTable();
             await pool.query(`
@@ -981,22 +1007,33 @@ class AntiNukeManager {
                      count, threshold, window_seconds, response_taken, response_result,
                      response_ok, dry_run, attribution, status, details)
                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
-            `, [
-                String(guildId),
-                executorId ? String(executorId) : null,
-                executorName ? String(executorName).slice(0, 120) : null,
-                String(action).slice(0, 60), module ? String(module).slice(0, 30) : null,
-                String(severity).slice(0, 20),
-                Math.max(0, Number(count) || 0), Math.max(0, Number(threshold) || 0),
-                Math.max(0, Number(windowSeconds) || 0),
-                JSON.stringify(Array.isArray(responseTaken) ? responseTaken : []),
-                JSON.stringify(responseResult || {}),
-                responseOk === true, dryRun === true,
-                String(attribution).slice(0, 30),
-                status ? String(status).slice(0, 40) : (dryRun ? 'dry_run' : null),
-                String(details || '').slice(0, 1000),
-            ]);
+            `, row);
         } catch (err) {
+            // A schema that predates the `status` column must not cost us the
+            // whole incident — the ledger is the only record of what happened.
+            // Retry without `status`, then surface the drift loudly instead of
+            // failing silently (which is how a real nuke went unrecorded).
+            // Postgres words this as `column "status" of relation
+            // "antinuke_incidents" does not exist` (SQLSTATE 42703).
+            const missingStatus = err && err.code === '42703'
+                ? /"status"/i.test(err.message || '')
+                : /column\s+"status"[\s\S]*does not exist/i.test((err && err.message) || '');
+            if (missingStatus) {
+                try {
+                    await pool.query(`
+                        INSERT INTO antinuke_incidents
+                            (guild_id, executor_id, executor_name, action, module, severity,
+                             count, threshold, window_seconds, response_taken, response_result,
+                             response_ok, dry_run, attribution, details)
+                        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$16)
+                    `, row);
+                    console.error('[ANTINUKE] antinuke_incidents is missing the `status` column — incident recorded without it. Apply migrations/0034_antinuke_incident_status.sql.');
+                    return;
+                } catch (retryErr) {
+                    console.error('[ANTINUKE] failed to record incident:', retryErr.message);
+                    return;
+                }
+            }
             // Incident recording is best-effort — it must never break detection.
             console.error('[ANTINUKE] failed to record incident:', err.message);
         }
