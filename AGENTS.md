@@ -1382,6 +1382,59 @@ bugs were fixed at the SOURCE (never by relabelling the frontend).
   scenarios) + `tests/monitoringPipeline.test.js` + `tests/statusMonitor.test.js`.
   Env: `STATUS_STALE_FACTOR` (3), `STATUS_OUTAGE_FACTOR` (6).
 
+## Live browser-tab status indicator (/stats favicon + title)
+
+The Stats page paints a status dot onto the PrimeBot favicon and rewrites the tab
+title from the SAME `/api/status/detailed` payload the board renders, so the tab
+can never disagree with the page.
+
+- **Files:** `dashboard/public/js/tab-status.js` (the indicator — a factory with
+  every dependency injectable: `document` / `window` / `location` / `fetchFn` /
+  `setTimeoutFn` / `clearTimeoutFn` / `nowFn`), `dashboard/public/js/status.js`
+  (boots it with the summary the board already fetched), `dashboard/render/pages.js`
+  `statsPage` (`scripts: ['/js/tab-status.js', '/js/status.js']` — the module MUST
+  load first).
+- **Colour mapping (`levelForSummary`) — existing health definitions only:** green
+  only when `overall.key === 'operational'` AND the `bot` + `gateway` components are
+  `operational` AND no shard node is `unavailable`; `major`/`critical` (and any
+  `bot.status === 'unavailable'`) → red; `degraded`/`no_data`/`maintenance`/unknown/
+  malformed → yellow. A `stale` service reading is yellow (outdated data is not
+  "healthy"). Standby shard nodes are `operational` in `utils/statusWorker`
+  `classifyNode`, so two standbys are green — never read a standby as offline.
+- **Titles:** `🟢 PrimeBot — Operational`, `🟡 PrimeBot — Degraded`,
+  `🔴 PrimeBot — Outage`.
+- **Favicon:** the existing bolt SVG plus a bottom-right dot (dark ring + status
+  colour), rasterized to a 64×64 canvas PNG when `canvas` is available (iOS/older
+  Safari do not render SVG favicons) and falling back to an SVG data URI. The
+  original `link[rel="icon"]` href is captured at start and restored on stop /
+  `pagehide`, so the change is never permanent.
+- **Polling:** 45s (inside the 30–60s window), one chain — the next request is
+  scheduled only after the previous one settles, so polls can never overlap.
+  A 12s request timeout, non-OK status, unparseable JSON or a payload without
+  `overall.key` all paint YELLOW (never green) and keep polling, so it recovers on
+  its own. The favicon/title are written ONLY when the level changes.
+- **Background tabs:** polling continues (browsers throttle, they do not stop);
+  `visibilitychange` triggers an immediate refresh when the tab returns (skipped
+  while a request is in flight or within 5s of the last poll), and `pageshow`
+  (`persisted`) re-arms the indicator after a bfcache restore.
+- **Cleanup:** `stop()` clears the timer, detaches every listener and restores the
+  original title/favicon; `pagehide`/`beforeunload` restore the originals so
+  leaving `/stats` never leaves the dot behind. The indicator only starts on
+  `/stats` (`/^\/stats\/?$/`).
+- **Board repaint:** `status.js` `onUpdate` re-renders the board only when the
+  status signature (`overall.key` + per-component status) changed, and skips while
+  the detail modal is open. The API-error state renders inside `#status-result`
+  (`showBoardError()`), so a later successful poll repaints the board without a
+  reload.
+- **Tests:** `tests/tabStatusIndicator.test.js` (25) — the colour mapping driven by
+  the real `statusWorker.evaluateState` + `statusView.summarize` (three nodes with
+  two standbys → green; offline standby → yellow; dead active node / offline bot →
+  red; stale → yellow; no data / malformed → yellow), title text, favicon content +
+  canvas path, script order, and a vm sandbox covering single-chain polling,
+  no-overlap, failure/timeout/invalid → yellow, recovery to green, write-only-on-
+  change, background-tab refresh, bfcache restore, and full restore on stop/pagehide.
+
+
 ## Music — the Linix music system (vendored, source-level replacement)
 
 PrimeBot's music feature is **Linix's music implementation**, vendored verbatim

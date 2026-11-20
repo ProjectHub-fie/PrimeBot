@@ -398,6 +398,41 @@
         });
     }
 
+    // ── Live tab indicator (favicon dot + title) ───────────────────────────────
+
+    // Reuses the summary the board already fetched (no extra request on load);
+    // the indicator then owns the single 45s poll chain and asks us to repaint
+    // the board only when the underlying status actually changed.
+    let tabStatus = null;
+    let lastSignature = null;
+
+    function statusSignature(summary) {
+        const comps = (summary.components || []).map(c => `${c.key}:${c.status}`).join('|');
+        return `${(summary.overall && summary.overall.key) || 'none'}|${comps}`;
+    }
+
+    function bootTabStatus(seedSummary) {
+        if (!window.PrimeBotTabStatus || typeof window.PrimeBotTabStatus.create !== 'function') return;
+        if (!tabStatus) {
+            tabStatus = window.PrimeBotTabStatus.create({
+                intervalMs: 45000,
+                onUpdate: (summary) => {
+                    const sig = statusSignature(summary);
+                    if (sig === lastSignature) return;
+                    lastSignature = sig;
+                    const modal = $('#status-detail-modal');
+                    if (modal && !modal.classList.contains('hidden')) return;
+                    try {
+                        render(summary);
+                        window.__statusSummary = summary;
+                    } catch (_) { /* a repaint failure must never break the poll loop */ }
+                },
+            });
+        }
+        if (seedSummary) lastSignature = statusSignature(seedSummary);
+        tabStatus.start(seedSummary ? { summary: seedSummary } : undefined);
+    }
+
     // ── Bootstrap ──────────────────────────────────────────────────────────────
 
     // Skeleton markup mirroring the real board, kept in sync with the
@@ -411,11 +446,34 @@
 
     async function init() {
         const root = $('#stats-status');
-        if (!root) return;
+        if (!root) {
+            // No board markup (unexpected), but the tab indicator is still
+            // useful — it polls the same endpoint on its own.
+            bootTabStatus(null);
+            return;
+        }
 
-        // Build the static shell + shared tooltip/modal once. The skeleton the
-        // server rendered stays in place until the data arrives, so the board
-        // never flashes empty.
+        mountShell(root);
+
+        try {
+            const summary = await fetchStatus('/api/status/detailed');
+            render(summary);
+            window.__statusSummary = summary;
+            bootTabStatus(summary);
+        } catch (err) {
+            showBoardError();
+            // The API is unreachable — the tab shows YELLOW and keeps polling
+            // so it recovers on its own once monitoring data is back.
+            bootTabStatus(null);
+        } finally {
+            root.setAttribute('aria-busy', 'false');
+        }
+    }
+
+    // Build the static shell + shared tooltip/modal once. The skeleton the
+    // server rendered stays in place until the data arrives, so the board
+    // never flashes empty.
+    function mountShell(root) {
         root.innerHTML = `
         <div id="status-result">
           <div class="status-skeleton" role="status" aria-label="Loading infrastructure status">${SKELETON}</div>
@@ -436,16 +494,15 @@
             if (e.key === 'Escape') closeDetail();
         });
         bindMouseStrips();
+    }
 
-        try {
-            const summary = await fetchStatus('/api/status/detailed');
-            render(summary);
-            window.__statusSummary = summary;
-        } catch (err) {
-            root.innerHTML = `<div class="status-error">Monitoring data is unavailable right now. It will appear after the monitor starts collecting observations.</div>`;
-        } finally {
-            root.setAttribute('aria-busy', 'false');
-        }
+    // The API failed: show the error INSIDE the board container so a later
+    // successful poll (the tab indicator keeps polling) can repaint the board
+    // without a page reload.
+    function showBoardError() {
+        const result = $('#status-result');
+        if (!result) return;
+        result.innerHTML = '<div class="status-error">Monitoring data is unavailable right now. It will appear after the monitor starts collecting observations.</div>';
     }
 
     function render(summary) {
