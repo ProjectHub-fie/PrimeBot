@@ -38,7 +38,11 @@ function intEnv(value, fallback) {
  */
 function normalizeNode(node) {
     let url = String(node.url || '').trim();
-    let secure = parseBoolean(node.secure, true);
+    // Default to PLAINTEXT (secure:false), matching Shoukaku's NodeDefaults
+    // and the authorized CloudWave node. The old default of `true` made an
+    // unset NODE_SECURE dial wss:// against a plaintext host, which surfaced
+    // as `EPROTO wrong version number` in the boot log.
+    let secure = parseBoolean(node.secure, false);
 
     const schemeMatch = /^(ws|wss|http|https):\/\//i.exec(url);
     if (schemeMatch) {
