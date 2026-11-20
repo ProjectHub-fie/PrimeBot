@@ -846,7 +846,56 @@ SUCCESS when its data has actually been fetched, persisted AND re-read back.**
   never applied. It now re-reads the live channel settings + serialized guild settings and
   reports a mismatch.
 
-### Tests
+### The 2026-11-19/20 production nuke failures
+
+Anti-Nuke did not stop a real nuke in two guilds. Two independent root causes were
+confirmed against the production database; both are fixed and covered by
+`tests/antiNukeNukeFailure.test.js` (20 cases).
+
+- **Cause 1 — `antinuke_incidents` had no `status` column.** The table was created by an
+  older DDL and `CREATE TABLE IF NOT EXISTS` never ALTERs an existing table, so every
+  incident INSERT failed with `column "status" of relation "antinuke_incidents" does not
+  exist` (SQLSTATE 42703). `_recordIncident()` swallowed the error as "best effort", so
+  **the security ledger was empty exactly when it mattered** and the dashboard's `status`
+  filters 500'd. Fixes: `server/anukeDb.js` + `dashboard/db.js` DDL/ALTER now include
+  `status`; `migrations/0034_antinuke_incident_status.sql` backfills existing
+  deployments; and `_recordIncident()` now retries the INSERT **without** `status` and
+  logs the drift loudly rather than losing the incident. Both insert shapes must keep
+  column/placeholder parity — the test parses both INSERTs.
+- **Cause 2 — a per-rule override of `manualReview` alone was inert.** Guild
+  `1317411980625313893` had `actionResponses.channelCreate` and `channelDelete` set to
+  `['manualReview']`. That plan contains no notifying key and no enforcement key, so the
+  rule delivered no alert and contained nothing: a channel-deletion nuke ran to
+  completion with no embed, no DM and no containment. Fixes: `responsesForAction()` now
+  guarantees a resolved plan is never inert (an override that resolves to nothing falls
+  back to the per-rule catalog default); `NOTIFYING_RESPONSE_KEYS` is the single source
+  for "this response tells a human"; `_alert()` treats `manualReview` exactly like an
+  explicit alert (channel + owner DM), because a manual-review incident is worthless if
+  nobody is told; and `healthScan()` reports a `silent_rules` FAIL for a rule that
+  resolves to nothing (an explicit `logOnly` stays a deliberate record-only WARN).
+- **Guild `1543308503777673419` — the exemption was silent.** Its destructive events were
+  performed by the **guild owner** (`1364577822844387432`), who is exempt by design
+  (`isExempt` → `isTrusted`, `guildOwnerId` match). The owner must never be contained or
+  punished — a bot must never moderate its own owner — but the exemption used to be
+  **completely silent** apart from a deduped `ignored_trusted_user` incident row, so a
+  compromised owner account (one of the most common real nukes) looked exactly like a
+  broken bot. `processEvent()` now counts owner events in the same bounded detector and,
+  when the threshold trips, sends an **alert only** (`reason: 'owner_exempt'`,
+  response label "Alert only (server owner — never contained)") with no containment and no
+  punishment. Explicitly trusted users/roles and the bot itself stay silent by design.
+- **Two more blind spots surfaced by `/antinuke health`.** (a) `critical_coverage` FAILs
+  when critical rules are switched off — guild `1543308503777673419` had `webhookCreate`/
+  `channelUpdate` disabled while a webhook attack was in fact its lockdown trigger.
+  (b) `lockdown_active` FAILs on a lockdown active ≥3 days: lockdowns have **no
+  auto-expiry**, and three production guilds sat locked (invites paused, verification
+  raised, dangerous permissions stripped) for over a week. Clear the flag by hand and
+  `/antinuke restore` breaks — `liftLockdown()` needs the active record to know what to
+  reverse — so the check tells the operator to run `/antinuke restore` instead.
+- **Third, smaller defect found while auditing:** the `lockChannels` branch computed
+  `targetIds.length ? targetIds : (action.module === 'channel' && member ? [] : [])` — every
+  branch yielded `targetIds` or `[]`, so the ternary was dead code that read as if it
+  widened the lock. It now passes the audit target ids directly, with a comment stating
+  that an empty list is a deliberate no-op (never "lock every channel").
 
 `tests/antiNuke.test.js` (47) — catalog, detector, trust/owner/bot exemption, thresholds,
 dedup, dry-run, containment planning, lockdown reversibility, alert-channel resolution.

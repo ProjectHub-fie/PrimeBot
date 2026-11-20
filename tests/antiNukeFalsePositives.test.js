@@ -421,15 +421,21 @@ test('PROTECTION: unauthorized rapid bans evaluate the configured threshold', as
     mgr._seenEventIds.clear();
 });
 
-test('PROTECTION: the owner is never punished even when a threshold trips', async () => {
+test('PROTECTION: the owner is never punished, but an owner nuke is still alerted', async () => {
     const det = new AntiNukeDetector();
     const { mgr } = makeManager({ detector: det });
     const guild = stubGuild({ ownerId: 'owner' });
     mgr._cache.set(guild.id, normalSettings());
     mgr._fetchMember = async () => ({ id: 'owner', user: { tag: 'owner#0' }, roles: { cache: new Map(), highest: { position: 0 } } });
     let incident = null;
-    mgr._alert = async (a) => { throw new Error('owner must never be alerted'); };
+    const alerts = [];
+    // The owner must NEVER be contained or punished — but a burst of destructive
+    // actions from the owner account is alerted, because a compromised owner is
+    // a real nuke and a fully silent one is indistinguishable from a broken bot.
+    mgr._alert = async (a) => { alerts.push(a); };
     mgr._recordIncident = async (i) => { incident = i; };
+    // Containment/punishment must never run for the owner.
+    mgr._respond = async () => { throw new Error('the owner must never be contained'); };
 
     const thr = rules.NUKE_ACTION_BY_KEY.roleDelete.threshold;
     for (let i = 0; i < thr; i++) {
@@ -438,9 +444,34 @@ test('PROTECTION: the owner is never punished even when a threshold trips', asyn
             details: { auditEntryId: `o${i}`, targetId: `r${i}`, summary: 'owner cleanup' },
         });
     }
-    // Owner is always exempt → no response, no alert, an "ignored trusted user"
-    // record at most.
+    // Exempt from punishment, recorded as trusted, and surfaced to a human.
     assert.equal(incident && incident.status, 'ignored_trusted_user');
+    assert.ok(alerts.length > 0, 'an owner-performed burst must still be visible');
+    assert.equal(alerts[0].reason, 'owner_exempt');
+    assert.match(alerts[0].responseLabel, /never contained/);
+    mgr._seenEventIds.clear();
+});
+
+test('PROTECTION: a trusted (non-owner) user stays completely silent', async () => {
+    const det = new AntiNukeDetector();
+    const { mgr } = makeManager({ detector: det });
+    const guild = stubGuild({ ownerId: 'owner' });
+    const settings = normalSettings();
+    settings.trustedUserIds = ['trusted1'];
+    mgr._cache.set(guild.id, settings);
+    mgr._fetchMember = async () => ({ id: 'trusted1', user: { tag: 't#0' }, roles: { cache: new Map(), highest: { position: 0 } } });
+    let alerts = 0;
+    mgr._alert = async () => { alerts++; };
+    mgr._recordIncident = async () => {};
+
+    const thr = rules.NUKE_ACTION_BY_KEY.roleDelete.threshold;
+    for (let i = 0; i < thr; i++) {
+        await mgr.processEvent({
+            guild, actionKey: 'roleDelete', knownExecutorId: 'trusted1',
+            details: { auditEntryId: `t${i}`, targetId: `r${i}`, summary: 'trusted cleanup' },
+        });
+    }
+    assert.equal(alerts, 0, 'an explicitly trusted user is deliberately silent');
     mgr._seenEventIds.clear();
 });
 

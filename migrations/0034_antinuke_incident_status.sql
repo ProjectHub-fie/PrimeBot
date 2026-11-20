@@ -1,0 +1,15 @@
+-- Anti-Nuke: heal `antinuke_incidents.status`.
+--
+-- `status` is part of the incident ledger (it records whether a detected threat
+-- was contained, partially contained, failed, ignored as trusted, or was only a
+-- dry run) and every incident INSERT names it. Deployments whose table was
+-- created from an older DDL — `CREATE TABLE IF NOT EXISTS` never alters an
+-- existing table — were left without the column, so EVERY insert failed with
+-- `column "status" does not exist`. The failure was swallowed by the
+-- "best effort" incident recorder, which meant the security ledger stayed
+-- silently empty exactly when it mattered: during a real nuke.
+--
+-- Idempotent: safe to run again. Also applied at boot by
+-- server/anukeDb.js (ensureAnukeTables) and dashboard/db.js
+-- (ensureAntiNukeTable), so an un-migrated deployment heals itself.
+ALTER TABLE antinuke_incidents ADD COLUMN IF NOT EXISTS status VARCHAR(40);

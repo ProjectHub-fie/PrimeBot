@@ -441,6 +441,13 @@ const ENFORCED_RESPONSE_KEYS = NUKE_RESPONSES
     .filter(k => !['alertOwner', 'alertChannel', 'manualReview', 'logOnly'].includes(k));
 const ENFORCED_RESPONSE_BY_KEY = Object.fromEntries(ENFORCED_RESPONSE_KEYS.map(k => [k, NUKE_RESPONSE_BY_KEY[k]]));
 
+// Response keys that actually reach a human: the alert delivery in
+// `_alert` (channel embed / owner DM) and `manualReview`, which means "flag it
+// for a human decision" and therefore must notify too. A response plan that
+// resolves to none of these AND none of ENFORCED_RESPONSE_KEYS does nothing at
+// all when a threat trips — see `responsesForAction`.
+const NOTIFYING_RESPONSE_KEYS = ['alertOwner', 'alertChannel', 'manualReview'];
+
 // ── Per-action response maps ────────────────────────────────────────────────
 //
 // Every detection rule has an explicit response mapping, separate from the
@@ -524,11 +531,27 @@ function isLegacyStockResponses(list) {
     return same(list, LEGACY_DEFAULT_NUKE_RESPONSES);
 }
 
-/** The effective response set for one action: per-action map or global list. */
+/**
+ * The effective response set for one action: per-action map or global list.
+ *
+ * A plan that would notify nobody AND contain nothing is not a protection
+ * decision — it is an inert rule that silently ignores the exact attack it was
+ * configured for. A per-action override is all-or-nothing (it replaces the
+ * whole global plan), so unchecking two boxes in the per-rule editor used to be
+ * enough to turn a fully-protected rule into a no-op with no warning. Such a
+ * plan falls back to the per-action catalog default, which always alerts.
+ * An explicit `logOnly` is a deliberate "record only" choice and is honoured.
+ */
 function responsesForAction(settings, actionKey) {
+    const usable = (list) => Array.isArray(list)
+        && list.some(k => NUKE_RESPONSE_BY_KEY[k] && (
+            NOTIFYING_RESPONSE_KEYS.includes(k) || ENFORCED_RESPONSE_KEYS.includes(k)
+        ));
     const actionMap = settings && settings.actionResponses && settings.actionResponses[actionKey];
     if (Array.isArray(actionMap) && actionMap.length) {
-        return actionMap.filter(k => NUKE_RESPONSE_BY_KEY[k]);
+        const cleaned = actionMap.filter(k => NUKE_RESPONSE_BY_KEY[k]);
+        if (usable(cleaned) || cleaned.includes('logOnly')) return cleaned;
+        return (DEFAULT_ACTION_RESPONSES[actionKey] || DEFAULT_NUKE_RESPONSES.slice());
     }
     const global = Array.isArray(settings && settings.responses) ? settings.responses : [];
     // A global list that is still a stock default (or empty) does not represent
@@ -813,6 +836,7 @@ module.exports = {
     NUKE_RESPONSE_BY_KEY,
     ENFORCED_RESPONSE_KEYS,
     ENFORCED_RESPONSE_BY_KEY,
+    NOTIFYING_RESPONSE_KEYS,
     DEFAULT_NUKE_RESPONSES,
     LEGACY_DEFAULT_NUKE_RESPONSES,
     isStockResponses,
