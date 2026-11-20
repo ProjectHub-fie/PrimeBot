@@ -393,6 +393,10 @@ class AntiNukeManager {
             // Trust gate — owner/bot/trusted never count toward a threshold.
             const exempt = await this.isExempt(guild, executorId, settings);
             if (exempt) {
+                const isOwner = Boolean(guild.ownerId && executorId === guild.ownerId);
+                const me = guild.members && guild.members.me;
+                const isBot = Boolean(me && executorId === me.id);
+
                 // Record an "Ignored — Trusted User" incident (deduped per
                 // window) so the audit trail explains why nothing fired.
                 const wk = Math.floor(Date.now() / (Math.max(1, watch.seconds) * 1000));
@@ -407,6 +411,41 @@ class AntiNukeManager {
                     status: 'ignored_trusted_user',
                     details: 'Executor is the owner, the bot, or a trusted user/role — excluded from detection.',
                 });
+
+                // An exempt executor is never punished, but the owner is NOT
+                // invisible: a compromised owner account is one of the most
+                // common real nukes, and a fully silent owner nuke looks exactly
+                // like a broken bot. Count owner events in the same bounded
+                // detector and, once the threshold trips, alert only (no
+                // containment, no punishment — a bot must never moderate its
+                // own owner). Trusted users/roles and the bot stay silent.
+                if (isOwner && !isBot) {
+                    const ownerVerdict = this.detector.record({
+                        guildId: guild.id,
+                        actionKey,
+                        executorId,
+                        threshold: watch.threshold,
+                        seconds: watch.seconds,
+                    });
+                    if (ownerVerdict.tripped) {
+                        const dedup = `owner|${guild.id}|${action.key}|${executorId}|${wk}`;
+                        let claimed = true;
+                        try { claimed = await claimDedupKey(dedup, { guildId: guild.id, ttlSeconds: Math.max(10, watch.seconds) }); }
+                        catch (_) { claimed = true; }
+                        if (claimed) {
+                            await this._alert({
+                                guild, settings, action, watch,
+                                executorId, executorName: null,
+                                attribution: attribution || 'audit_log',
+                                reason: 'owner_exempt',
+                                responseLabel: 'Alert only (server owner — never contained)',
+                                status: 'ignored_trusted_user',
+                            });
+                        }
+                        stage('trust_check', 'owner_alerted', { executorId, count: ownerVerdict.count });
+                    }
+                }
+
                 stage('trust_check', 'exempt', { executorId });
                 return { handled: false, reason: 'trusted', executorId, stages };
             }

@@ -477,3 +477,68 @@ test('the production guild config now delivers an alert and containment for a ch
     assert.ok(alerts >= 1, 'a channel-delete nuke must raise an alert');
     assert.equal(alertPayload.action.key, 'channelDelete');
 });
+
+// ── 6. A forgotten lockdown is a long-lived outage ──────────────────────────
+
+test('health scan FAILS on a lockdown that has been active for days', async () => {
+    const { NUKE_ACTIONS } = require('../utils/antiNukeRules');
+    const watched = Object.fromEntries(
+        NUKE_ACTIONS.map(a => [a.key, { enabled: true, threshold: 3, seconds: 10 }]));
+    const settings = normalizeAntiNukeSettings({
+        enabled: true,
+        dryRun: false,
+        alertChannelId: '500000000000000000',
+        watched,
+        responses: ['alertOwner', 'alertChannel', 'quarantine'],
+    });
+    const guild = {
+        id: '100000000000000000',
+        ownerId: '200000000000000000',
+        roles: { cache: new Map() },
+        channels: { cache: new Map(), fetch: async () => null },
+        members: { me: null, cache: new Map(), fetch: async () => null },
+    };
+    const nineDaysAgo = new Date(Date.now() - 9 * 86400000).toISOString();
+    const scan = await healthScan({
+        manager: {
+            _auditStreamAvailable: true,
+            processEvent: async () => ({}),
+            getSettings: () => settings,
+            // Three production guilds sat locked for over a week.
+            getLockdown: async () => ({ active: true, startedAt: nineDaysAgo, reason: 'Category deletions' }),
+        },
+        client: null,
+        guild,
+    });
+    const lock = scan.checks.find(c => c.key === 'lockdown_active');
+    assert.ok(lock, 'lockdown_active check must exist');
+    assert.equal(lock.result, FAIL);
+    assert.match(lock.note, /9 day/);
+    assert.match(lock.note, /antinuke restore/);
+});
+
+test('health scan passes when no lockdown is active', async () => {
+    const { NUKE_ACTIONS } = require('../utils/antiNukeRules');
+    const watched = Object.fromEntries(
+        NUKE_ACTIONS.map(a => [a.key, { enabled: true, threshold: 3, seconds: 10 }]));
+    const settings = normalizeAntiNukeSettings({
+        enabled: true, dryRun: false, alertChannelId: '1', watched,
+        responses: ['alertOwner', 'alertChannel', 'quarantine'],
+    });
+    const guild = {
+        id: '100000000000000000', ownerId: '200000000000000000',
+        roles: { cache: new Map() }, channels: { cache: new Map(), fetch: async () => null },
+        members: { me: null, cache: new Map(), fetch: async () => null },
+    };
+    const scan = await healthScan({
+        manager: {
+            _auditStreamAvailable: true,
+            processEvent: async () => ({}),
+            getSettings: () => settings,
+            getLockdown: async () => ({ active: false, startedAt: null, reason: '' }),
+        },
+        client: null,
+        guild,
+    });
+    assert.equal(scan.checks.find(c => c.key === 'lockdown_active').result, PASS);
+});

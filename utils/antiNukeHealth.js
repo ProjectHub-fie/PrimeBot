@@ -41,6 +41,7 @@ const RECOMMENDATIONS = {
     critical_coverage: 'Enable the disabled critical rules in Protection — an attack they watch for cannot be detected while they are off.',
     responses: 'Select at least one response in the Responses section.',
     silent_rules: 'Add an alert response (or clear the per-rule override) so the rule notifies someone when it trips.',
+    lockdown_active: 'Run /antinuke restore to lift the lockdown once the incident is over.',
     own_responses: 'Add a punishment response (ban/kick) to a specific action if you want automatic punishment.',
     bot_permissions: 'Grant the missing permissions to PrimeBot in Server Settings → Roles.',
     hierarchy_bot: 'Move the PrimeBot role above the roles it must manage.',
@@ -214,6 +215,27 @@ async function healthScan({ manager, client, guild, botPerms }) {
         (Object.values(effective).some(e => e.responses.includes('ban') || e.responses.includes('kick')))
             ? PASS : WARN,
         'Permanent bans/kicks are NOT enabled for any rule (they stay owner-opt-in).'));
+
+    // An active lockdown that nobody lifted leaves the server unusable (invites
+    // paused, verification raised, dangerous roles stripped). It has no
+    // auto-expiry, so a forgotten lockdown is a real, long-lived outage — three
+    // production guilds sat locked for over a week. Surfaced here so the
+    // operator sees it and can run /antinuke restore.
+    if (manager && typeof manager.getLockdown === 'function') {
+        let lock = null;
+        try { lock = await manager.getLockdown(gid); } catch (_) { lock = null; }
+        if (lock && lock.active) {
+            const startedAt = lock.startedAt ? new Date(lock.startedAt) : null;
+            const days = startedAt && !Number.isNaN(startedAt.getTime())
+                ? Math.floor((Date.now() - startedAt.getTime()) / 86400000) : null;
+            const stale = days != null && days >= 3;
+            checks.push(check('lockdown_active', 'Active lockdown',
+                stale ? FAIL : WARN,
+                `A lockdown has been active${days != null ? ` for ${days} day(s)` : ''}${lock.reason ? ` (${lock.reason})` : ''}. It pauses invites, raises the verification level and strips dangerous permissions — run /antinuke restore once the incident is over.`));
+        } else {
+            checks.push(check('lockdown_active', 'Active lockdown', PASS, ''));
+        }
+    }
 
     // 4. Bot permissions + hierarchy + quarantine role.
     const permReport = botPerms || validateBotPermissions(guild);

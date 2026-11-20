@@ -850,7 +850,7 @@ SUCCESS when its data has actually been fetched, persisted AND re-read back.**
 
 Anti-Nuke did not stop a real nuke in two guilds. Two independent root causes were
 confirmed against the production database; both are fixed and covered by
-`tests/antiNukeNukeFailure.test.js` (17 cases).
+`tests/antiNukeNukeFailure.test.js` (20 cases).
 
 - **Cause 1 — `antinuke_incidents` had no `status` column.** The table was created by an
   older DDL and `CREATE TABLE IF NOT EXISTS` never ALTERs an existing table, so every
@@ -873,16 +873,24 @@ confirmed against the production database; both are fixed and covered by
   explicit alert (channel + owner DM), because a manual-review incident is worthless if
   nobody is told; and `healthScan()` reports a `silent_rules` FAIL for a rule that
   resolves to nothing (an explicit `logOnly` stays a deliberate record-only WARN).
-- **Guild `1543308503777673419` was NOT a code defect.** Its destructive events were
-  performed by the **guild owner** (`1364577822844387432`), and the owner is exempt by
-  design (`isExempt` → `isTrusted`, `guildOwnerId` match). The exemption was recorded
-  only as a deduped `ignored_trusted_user` incident, so it looked like a silent failure.
-  Do not "fix" this by punishing owners — a bot must never moderate its own owner. What
-  was fixed is **visibility**: the exempt path still records the incident, and the health
-  scan surfaces the other silent blind spot found on that guild — critical rules switched
-  off (`critical_coverage`, FAIL at ≥3 disabled critical rules). That guild had
-  `webhookCreate`/`channelUpdate` disabled while a webhook attack was in fact its lockdown
-  trigger.
+- **Guild `1543308503777673419` — the exemption was silent.** Its destructive events were
+  performed by the **guild owner** (`1364577822844387432`), who is exempt by design
+  (`isExempt` → `isTrusted`, `guildOwnerId` match). The owner must never be contained or
+  punished — a bot must never moderate its own owner — but the exemption used to be
+  **completely silent** apart from a deduped `ignored_trusted_user` incident row, so a
+  compromised owner account (one of the most common real nukes) looked exactly like a
+  broken bot. `processEvent()` now counts owner events in the same bounded detector and,
+  when the threshold trips, sends an **alert only** (`reason: 'owner_exempt'`,
+  response label "Alert only (server owner — never contained)") with no containment and no
+  punishment. Explicitly trusted users/roles and the bot itself stay silent by design.
+- **Two more blind spots surfaced by `/antinuke health`.** (a) `critical_coverage` FAILs
+  when critical rules are switched off — guild `1543308503777673419` had `webhookCreate`/
+  `channelUpdate` disabled while a webhook attack was in fact its lockdown trigger.
+  (b) `lockdown_active` FAILs on a lockdown active ≥3 days: lockdowns have **no
+  auto-expiry**, and three production guilds sat locked (invites paused, verification
+  raised, dangerous permissions stripped) for over a week. Clear the flag by hand and
+  `/antinuke restore` breaks — `liftLockdown()` needs the active record to know what to
+  reverse — so the check tells the operator to run `/antinuke restore` instead.
 - **Third, smaller defect found while auditing:** the `lockChannels` branch computed
   `targetIds.length ? targetIds : (action.module === 'channel' && member ? [] : [])` — every
   branch yielded `targetIds` or `[]`, so the ternary was dead code that read as if it
