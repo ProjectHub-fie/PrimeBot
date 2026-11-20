@@ -396,7 +396,10 @@ async function initializeManagers() {
             const { initMusic } = require('./music');
             const state = initMusic(client);
             if (state.enabled) {
-                console.log(`[MUSIC] Linix music system ready (${state.nodes} node(s), ${state.commands?.prefix ?? 0} prefix + ${state.commands?.slash ?? 0} slash commands).`);
+                // Configured, not yet connected — the actual "ready" is only
+                // reported from the Lavalink node `ready` event (see
+                // music/events/Node/ready.js), never from configuration alone.
+                console.log(`[MUSIC] Linix music system configured (${state.nodes} node(s), ${state.commands?.prefix ?? 0} prefix + ${state.commands?.slash ?? 0} slash commands); waiting for Lavalink node connection.`);
             }
         } catch (err) {
             console.error('[MANAGERS] Failed to load the music system:', err.message);

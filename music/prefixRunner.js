@@ -12,7 +12,8 @@
  * command-log — PrimeBot's own logging feature covers that.
  */
 
-const { EmbedBuilder, PermissionsBitField } = require('discord.js');
+const { EmbedBuilder } = require('discord.js');
+const { resolvePerms } = require('./utils/perms');
 
 function findCommand(client, commandName) {
     const tree = client.musicCommands;
@@ -32,12 +33,15 @@ async function runPrefixCommand(client, message, commandName, args, prefix) {
     const me = message.guild && message.guild.members.me;
 
     // Linix's modules declare these as `botPrams` / `userPrams` (typo
-    // preserved); accept both spellings here too.
+    // preserved); accept both spellings here too. `resolvePerms` maps Linix's
+    // SCREAMING_SNAKE names (EMBED_LINKS) to the camelCase flags the installed
+    // discord.js resolves — an unrecognized name must not throw and break the
+    // command.
     const commandPerms = (key) =>
         command[key] || command[key.replace(/Prams$/, 'Perms')];
 
     const botPerms = commandPerms('botPrams');
-    if (botPerms && me && !me.permissions.has(PermissionsBitField.resolve(botPerms || []))) {
+    if (botPerms && me && !me.permissions.has(resolvePerms(botPerms))) {
         return message.channel.send({
             embeds: [new EmbedBuilder().setColor(client.color).setDescription(
                 `I don't have **\`${botPerms}\`** permission in <#${message.channelId}> to execute this **\`${command.name}\`** command.`,
@@ -46,7 +50,7 @@ async function runPrefixCommand(client, message, commandName, args, prefix) {
     }
 
     const userPerms = commandPerms('userPrams');
-    if (userPerms && message.member && !message.member.permissions.has(PermissionsBitField.resolve(userPerms || []))) {
+    if (userPerms && message.member && !message.member.permissions.has(resolvePerms(userPerms))) {
         return message.channel.send({
             embeds: [new EmbedBuilder().setColor(client.color).setDescription(
                 `You don't have **\`${userPerms}\`** permission in <#${message.channelId}> to execute this **\`${command.name}\`** command.`,

@@ -1415,11 +1415,28 @@ add its customId there too** — `tests/musicLinixReplacement.test.js` scans
 
 ### Lavalink
 
-- **Env vars (Linix-compatible):** `NODE_URL` (host:port or a full ws/wss URL),
-  `NODE_AUTH` (node password), `NODE_NAME` (label), `NODE_SECURE` (`true` behind
-  TLS). The `LAVALINK_*` names (`LAVALINK_NODES` JSON array, `LAVALINK_HOST`/
-  `_PORT`/`_PASSWORD`/`_SECURE`/`_NAME`) are also accepted and **win** when both
-  are set. Credentials come from the environment only — never hardcoded.
+- **Env vars (Linix-compatible):** `NODE_URL` (host, host:port, or a full
+  ws/wss URL), `NODE_PORT` (used only when the host has no port — a bare host
+  with **no port silently routes the socket to :80**, which is exactly how the
+  bot seemed "connected" while every request still failed; the Lavalink error is
+  `EPROTO wrong version number` against nginx). `NODE_AUTH` (node password),
+  `NODE_NAME` (label), `NODE_SECURE` (`true` behind TLS). The `LAVALINK_*` names
+  (`LAVALINK_NODES` JSON array, `LAVALINK_HOST`/`_PORT`/`_PASSWORD`/`_SECURE`/
+  `_NAME`) are also accepted and **win** when both are set. Credentials come from
+  the environment only — never hardcoded. `NODE_NAME` is dual-purpose: it is
+  also PrimeBot's shard-node identity (`utils/nodeIdentity.js`), so prefer
+  `LAVALINK_NAME` for the Lavalink label when the shard node identity must stay
+  a `sn1`/`sn2`/`sn3`-style value.
+- **Permission-flag tolerance.** Linix's music commands declare `botPrams`/
+  `userPrams` with SCREAMING_SNAKE names (`["EMBED_LINKS"]`, `["Connect",
+  "Speak"]`) as written for an older discord.js. The installed discord.js v14
+  resolves **camelCase** flags only, and `PermissionsBitField.resolve(["EMBED_LINKS"])`
+  **throws** `BitFieldInvalid` — which crashed every music prefix AND slash
+  command (`$247`, `/play`, …) before the first usable line. `music/utils/perms.js`
+  `resolvePerms()` maps the legacy snake names onto the real flags and silently
+  drops unknown ones; both `music/interactions.js` and `music/prefixRunner.js`
+  use it. Never call `PermissionsBitField.resolve` on Linix's raw permission
+  arrays.
 - **Node registration is idempotent.** Shoukaku's connector registers nodes from
   its own `once('clientReady')` listener. PrimeBot can boot the subsystem *after*
   that event (a standby node taking over, a reconnect, a hot reload), where the
@@ -1488,10 +1505,12 @@ surface in `music/clientBridge.js`):
   (typo). `music/interactions.js` and `music/prefixRunner.js` read both spellings,
   so the permission gates actually run.
 - **Tests:** `tests/musicEnvConfig.test.js` — Unicode defaults coverage, env
-  overrides, node scheme unwrap, playlist menu config, and a static audit that no
-  Linix custom-emoji ids / owner id / CDN asset URLs / Arrkiii branding survive in
-  `music/commands`, `slashCommands`, `events`, `utils`, `loaders`, `schema`,
-  `custom`.
+  overrides, node scheme unwrap, `NODE_PORT` for a bare host (CloudeWave-style
+  `lavalink.cloudewave.in` + `NODE_PORT=2336`), the real `ws://…/v4/websocket`
+  connection string, `resolvePerms` (SCREAMING_SNAKE never throws), playlist menu
+  config, and a static audit that no Linix custom-emoji ids / owner id / CDN asset
+  URLs / Arrkiii branding survive in `music/commands`, `slashCommands`, `events`,
+  `utils`, `loaders`, `schema`, `custom`.
 
 ### Dependencies
 
