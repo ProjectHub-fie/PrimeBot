@@ -242,3 +242,31 @@ test('no Linix custom-emoji ids, owner id, CDN asset URLs or Arrkiii branding su
     walk(path.join(MUSIC, 'custom'), hits);
     assert.deepStrictEqual(hits, []);
 });
+
+test('no native `canvas` / `canvafy` in the runtime dependencies (Vercel build regression)', () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+    const lock = JSON.parse(fs.readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8'));
+
+    // `canvafy` is the only vendored card package that hard-depends on the
+    // native `canvas` module (Cairo/Pixman source compile) which Vercel's
+    // Node 24 cannot build. The now-playing Spotify card must stay on
+    // canvacard (prebuilt @napi-rs/canvas).
+    assert.ok(!pkg.dependencies.canvafy, 'package.json must not list canvafy');
+    assert.ok(!lock.packages['node_modules/canvafy'], 'package-lock must not contain canvafy');
+    assert.ok(!lock.packages['node_modules/canvas'], 'package-lock must not contain the native canvas package');
+
+    // Every card package that IS shipped must rely on prebuilt @napi-rs/canvas,
+    // never the native `canvas` (regular, non-optional) dependency.
+    for (const name of ['canvacard', 'musicard', 'musicard-quartz', 'songcard']) {
+        const entry = lock.packages[`node_modules/${name}`];
+        assert.ok(entry, `lock must contain ${name}`);
+        const deps = entry.dependencies || {};
+        assert.ok(!deps.canvas || deps.canvas.__resolved === undefined,
+            `${name} must not hard-depend on native canvas`);
+    }
+
+    // spotifyCard.js uses canvacard (never requires canvafy).
+    const spotifyCard = fs.readFileSync(path.join(MUSIC, 'utils', 'spotifyCard.js'), 'utf8');
+    assert.ok(spotifyCard.includes("require('canvacard')"));
+    assert.ok(!spotifyCard.includes("require('canvafy')"));
+});

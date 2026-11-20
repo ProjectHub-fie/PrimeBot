@@ -1,33 +1,24 @@
 /**
  * Now-playing artwork card.
  *
- * Linix renders this with `canvafy`'s Spotify card. `canvafy` pulls in the
- * native `canvas` package, which needs system Cairo/Pango headers to build and
- * therefore cannot install on every host (it fails outright on a machine
- * without those dev packages). This adapter keeps the same card, the same
- * inputs and the same PNG output, but prefers `canvafy` and falls back to
- * `canvacard`'s Spotify card — which ships a prebuilt `@napi-rs/canvas` — when
- * `canvafy` cannot load. Both are real renderers; nothing is stubbed.
+ * Renders a Spotify-style card with `canvacard` (which ships a prebuilt
+ * `@napi-rs/canvas`, so it installs cleanly on hosts with no system Cairo/
+ * Pango). The original Linix renderer `canvafy` was dropped because it pulls
+ * in the native `canvas` package, whose source compile needs `pixman-1` /
+ * Cairo headers and breaks cloud builds (Vercel's Node 24 included). The card
+ * shape, inputs and PNG output are the same.
  */
 
-let canvafy = null;
 let canvacardSpotify = null;
 let resolved = false;
 
-function loadRenderers() {
+function loadRenderer() {
     if (resolved) return;
     resolved = true;
     try {
-        canvafy = require('canvafy');
+        canvacardSpotify = require('canvacard').Spotify;
     } catch (err) {
-        console.warn('[MUSIC] canvafy unavailable, using canvacard for now-playing cards:', err.message.split('\n')[0]);
-    }
-    if (!canvafy) {
-        try {
-            canvacardSpotify = require('canvacard').Spotify;
-        } catch (err) {
-            console.warn('[MUSIC] No card renderer available:', err.message.split('\n')[0]);
-        }
+        console.warn('[MUSIC] No card renderer available:', err.message.split('\n')[0]);
     }
 }
 
@@ -37,18 +28,7 @@ function loadRenderers() {
  * @returns {Promise<Buffer|null>} PNG buffer, or null when no renderer is usable
  */
 async function buildSpotifyCard({ author, title, image, current = 0, total = 0 }) {
-    loadRenderers();
-
-    if (canvafy) {
-        return new canvafy.Spotify()
-            .setAuthor(author)
-            .setTimestamp(current, total)
-            .setImage(image)
-            .setTitle(title)
-            .setBlur(1)
-            .setOverlayOpacity(0.5)
-            .build();
-    }
+    loadRenderer();
 
     if (canvacardSpotify) {
         const start = Date.now() - Math.max(0, current);

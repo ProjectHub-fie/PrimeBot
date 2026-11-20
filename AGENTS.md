@@ -1496,9 +1496,15 @@ surface in `music/clientBridge.js`):
 ### Dependencies
 
 Added: `kazagumo`, `kazagumo-spotify`, `shoukaku` (already present), `musicard`,
-`musicard-quartz`, `canvacard`, `canvafy`, `songcard`, `moment`,
+`musicard-quartz`, `canvacard`, `songcard`, `moment`,
 `moment-duration-format`, `moment-timezone`, `lodash`, `axios`,
-`@flytri/lyrics-finder`.
+`@flytri/lyrics-finder`. **`canvafy` is deliberately NOT included:** its hard
+`canvas` dependency is a native C++ package (needs system Cairo/Pixman headers
+to compile) and breaks cloud builds — Vercel's Node 24 cannot install it. The
+Spotify now-playing card (`music/utils/spotifyCard.js`) renders with
+`canvacard.Spotify` instead (prebuilt `@napi-rs/canvas`); all the other card
+packages (`musicard`, `musicard-quartz`, `songcard`, `canvacard`) also use
+`@napi-rs/canvas` and install cleanly.
 Removed as orphaned by the deleted direct engine: `@discordjs/voice`,
 `@distube/ytdl-core`, `ffmpeg-static`, `opusscript`, `soundcloud-core`,
 `youtube-sr`. Nothing outside `music/` referenced any of them.

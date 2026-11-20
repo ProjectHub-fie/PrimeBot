@@ -1,6 +1,5 @@
 const { EmbedBuilder, MessageFlags, AttachmentBuilder } = require("discord.js");
 const { convertTime } = require("../../utils/convert.js");
-const canvacard = require("canvacard");
 const { progressbar } = require("../../utils/progressbar.js");
 
 const { dynamicCard } = require("songcard");
