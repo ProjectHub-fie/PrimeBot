@@ -5,7 +5,6 @@ const config = require('../config');
 const betaManager = require('../utils/betaManager');
 const { isBetaFeature } = require('../utils/betaFeatureMatcher');
 const { logEvent } = require('../utils/serverLogger');
-const musicUi = require('../utils/music/musicEmbed');
 
 /**
  * Helper function to show main help menu for button interactions
@@ -391,6 +390,15 @@ module.exports = {
 
             // Handle slash commands
             if (interaction.isChatInputCommand()) {
+                // Linix music slash commands (/play, /247, /bass, …) live in their
+                // own tree (`client.slashCommands`) and are dispatched by the
+                // Linix router — never merged into `client.commands`, so they can
+                // never collide with PrimeBot's own slash commands.
+                if (require('../music/interactions').isMusicSlashCommand(client, interaction)) {
+                    await require('../music/interactions').handleMusicSlash(client, interaction);
+                    return;
+                }
+
                 // Log the command usage
                 console.log(`[COMMAND] Executing slash command /${interaction.commandName} from ${interaction.user.tag}`);
                 interactionDebugger.logInteraction(interaction, `Slash Command (/${interaction.commandName})`);
@@ -567,19 +575,11 @@ module.exports = {
                     return;
                 }
 
-                // Music control buttons (customIds: music_prev, music_pauseresume,
-                // music_skip, music_stop, music_shuffle, music_repeat, music_queue,
-                // music_247status, music_qpage:<n>). Handled here so they never
-                // fall through to the "not functional" default.
-                if (/^music_/.test(customId)) {
-                    const mgr = client.musicManager;
-                    if (!mgr) {
-                        await interaction.reply({ content: 'The music service is not available right now.', ephemeral: true }).catch(() => {});
-                        return;
-                    }
-                    await safeExecute(require('../utils/music/musicButtons').handleButton.bind(null, interaction), [mgr], null, `Music button (${customId})`);
-                    return;
-                }
+                // Linix music controls (disable_h + the player's own buttons) are
+                // owned by the collector Linix attaches to the now-playing message,
+                // which is created in a DIFFERENT interaction context. PrimeBot's
+                // generic button switch must therefore leave them untouched.
+                if (require('../music/interactions').isMusicCustomId(customId)) return;
 
                 // Event Management buttons (customIds: evjoin:/evleave:/evcheckin:/
                 // evparts:/evinfo:/evremind: + <eventId>). The manager rejects any event
@@ -1122,100 +1122,16 @@ module.exports = {
             }
 
             // Handle select menus
-            // Music 24/7 channel selection (channel select menu).
-            if (interaction.isChannelSelectMenu && interaction.isChannelSelectMenu()) {
-                if (interaction.customId === 'music_247_channel') {
-                    const m = interaction.client.musicManager;
-                    const perms = require('../utils/music/musicPermissions');
-                    if (!m) return interaction.reply({ content: 'The music service is not available right now.', ephemeral: true }).catch(() => {});
-                    if (!perms.canConfigure(interaction.member)) {
-                        return interaction.reply({ content: 'You need Manage Server to configure 24/7 mode.', ephemeral: true }).catch(() => {});
-                    }
-                    const channelId = interaction.values && interaction.values[0];
-                    try {
-                        const { getSettings } = require('../utils/music/musicStore');
-                        const settings = await getSettings(interaction.guildId).catch(() => ({}));
-                        const snap = m.getSession(interaction.guildId);
-                        const view = snap && snap.twentyFourSeven
-                            ? await m.set247Channel(interaction.guildId, channelId, { settings: settings || {} })
-                            : await m.enable247(interaction.guildId, channelId, { settings: settings || {} });
-                        return interaction.update({ embeds: [musicUi.status247Embed(view)], components: [] }).catch(() => {});
-                    } catch (err) {
-                        return interaction.reply({ embeds: [musicUi.errorEmbed(err.message)], ephemeral: true }).catch(() => {});
-                    }
-                }
-            }
-
             if (interaction.isStringSelectMenu()) {
                 console.log(`[DEBUG] Select menu interaction with customId: "${interaction.customId}"`);
                 interactionDebugger.logInteraction(interaction, `Select Menu (${interaction.customId})`);
 
                 try {
-                    // Radio station dropdown (customId: radio_station_select).
-                    if (interaction.customId === 'radio_station_select') {
-                        const manager = interaction.client.radioManager;
-                        if (!manager) return interaction.reply({ content: 'The radio service is not available right now.', ephemeral: true }).catch(() => {});
-                        const stationId = (interaction.values && interaction.values[0]) || null;
-                        try {
-                            const { isAdmin } = require('../utils/music/musicPermissions');
-                            const session = manager.getSession(interaction.guildId);
-                            const inRadio = session && interaction.member && interaction.member.voice && interaction.member.voice.channelId === session.channelId;
-                            if (!isAdmin(interaction.member) && !inRadio) {
-                                return interaction.reply({ content: 'Join the radio voice channel (or have Manage Server) to switch stations.', ephemeral: true }).catch(() => {});
-                            }
-                            const status = await manager.setStation(interaction.guildId, stationId, { actor: interaction.user.id });
-                            const { statusEmbed } = require('../utils/radioEmbed');
-                            return interaction.update({ embeds: [statusEmbed(status)], components: [] }).catch(() => {});
-                        } catch (err) {
-                            return interaction.reply({ content: err.message || 'Could not switch stations.', ephemeral: true }).catch(() => {});
-                        }
-                    }
-
-                    // Music audio-filter select (customId: music_filter).
-                    if (interaction.customId === 'music_filter') {
-                        const m = interaction.client.musicManager;
-                        if (!m) return interaction.reply({ content: 'The music service is not available right now.', ephemeral: true }).catch(() => {});
-                        await safeExecute(require('../utils/music/musicButtons').handleSelect.bind(null, interaction), [m], null, `Music filter (${interaction.customId})`);
-                        return;
-                    }
-
-                    // Music search select (customId: music_search:<token>).
-                    if (interaction.customId.startsWith('music_search:')) {
-                        const token = interaction.customId.slice('music_search:'.length);
-                        const cache = interaction.client.musicSearchCache;
-                        const entry = cache && cache.get(token);
-                        if (!entry || entry.userId !== interaction.user.id) {
-                            return interaction.reply({ content: 'That search has expired. Run the search again.', ephemeral: true }).catch(() => {});
-                        }
-                        const idx = parseInt(interaction.values[0], 10) || 0;
-                        const track = entry.tracks[idx];
-                        if (!track) return interaction.reply({ content: 'That result is no longer available.', ephemeral: true }).catch(() => {});
-                        const m = interaction.client.musicManager;
-                        if (!m) return interaction.reply({ content: 'The music service is not available right now.', ephemeral: true }).catch(() => {});
-                        await interaction.deferUpdate().catch(() => {});
-                        try {
-                            const { getSettings } = require('../utils/music/musicStore');
-                            const settings = await getSettings(interaction.guildId).catch(() => ({}));
-                            const voiceChannelId = interaction.member && interaction.member.voice ? interaction.member.voice.channelId : null;
-                            const session = m.getSession(interaction.guildId);
-                            const channelId = voiceChannelId || (session && session.channelId) || null;
-                            if (!channelId) return interaction.editReply({ embeds: [musicUi.errorEmbed('Join a voice channel first.')], components: [] }).catch(() => {});
-                            const s = m._ensureSession(interaction.guildId, channelId, settings || {});
-                            s.channelId = channelId;
-                            await m._ensureConnected(s);
-                            if (s.state === 'playing' && s.current) {
-                                m.enqueue(s, [{ ...track, requesterId: interaction.user.id }], { requesterId: interaction.user.id });
-                                const p = musicUi.nowPlayingPayload(m.describe(interaction.guildId), { title: '➕ Queued', track });
-                                return interaction.editReply(p).catch(() => {});
-                            }
-                            s.queue.push({ ...track, _key: `${track.provider}:${track.id}`, requesterId: interaction.user.id });
-                            await m._playNext(s);
-                            const p = musicUi.nowPlayingPayload(m.describe(interaction.guildId), { title: '▶️ Playing' });
-                            return interaction.editReply(p).catch(() => {});
-                        } catch (err) {
-                            return interaction.editReply({ embeds: [musicUi.errorEmbed(err.message)], components: [] }).catch(() => {});
-                        }
-                    }
+                    // Linix music selects (search result picker, filter picker,
+                    // playlist share picker) are owned by the collector Linix
+                    // attaches to the message it posted; PrimeBot's generic
+                    // select switch leaves them untouched.
+                    if (require('../music/interactions').isMusicCustomId(interaction.customId)) return;
 
                     // Premium ticket-panel select menus (panel builder): thepper
                     // component id rides in the customId, the selected option id in the value.

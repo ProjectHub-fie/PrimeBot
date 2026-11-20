@@ -227,27 +227,18 @@ const METADATA = {
         usage: ['birthday set <MM/DD/YYYY>', 'birthday remove', 'birthday list',
                 'birthday check [@user]', 'birthday channel [#channel]', 'birthday role [@role]'],
     },
-    radio: {
-        category: 'Engagement',
-        description: 'Continuous 24/7 SoundCloud radio. PrimeBot stays connected to the configured voice channel and plays only while someone is listening: the channel emptying pauses playback (the connection is kept), and a listener joining resumes it. An admin pause is honoured and is not overridden by a join. Stations (SoundCloud playlists, single tracks or genre searches) are managed from the dashboard (Radio tab).',
-        usage: ['radio start [#channel]', 'radio stop', 'radio pause', 'radio resume', 'radio skip',
-                'radio station <id>', 'radio stations', 'radio status', 'radio volume <0-100>',
-                'radio channel #voice-channel'],
-        note: 'start/stop/station/channel require Manage Server; pause/resume/skip/volume need Manage Server or presence in the radio channel.',
-    },
     music: {
         category: 'Music',
-        description: 'On-demand music with an administrator-controlled 24/7 persistent voice connection. Plays from YouTube, SoundCloud, Spotify (matched to a streamable source) and direct audio URLs. PrimeBot stays connected with an empty queue and nobody listening; playback state is independent of the connection, so pausing/stopping/an empty queue never disconnects. Real ffmpeg audio filters, autoplay, lyrics, queue pagination, requester protection, DJ roles and interactive controls are all free.',
+        description: 'Music and 24/7 radio powered by Lavalink (Kazagumo/Shoukaku). Resolves YouTube, SoundCloud, Spotify and direct URLs, with filters, autoplay, lyrics, playlists, queue controls, radio and 24/7 mode.',
         usage: ['music play <song or URL>', 'music search <query>', 'music pause', 'music resume',
-                'music skip [count]', 'music previous', 'music stop', 'music seek <timestamp>',
-                'music rewind [seconds]', 'music skipto <position>',
-                'music queue', 'music remove <position>', 'music clear', 'music shuffle',
-                'music loop <off|track|queue>', 'music autoplay [on|off]', 'music filter [preset]',
-                'music nowplaying', 'music track', 'music lyrics [song]', 'music grab',
-                'music volume <1-100>',
-                'music join', 'music leave', 'music 247 <enable|disable|status|channel>',
-                'music playlist <list|create|view|add|play|queue|delete>', 'music help'],
-        note: 'Everyone in the music voice channel can request and control playback; DJ role holders and Manage Server can manage the whole queue. Filters are real ffmpeg presets (bassboost/nightcore/vaporwave/8d/karaoke/equalizer/treble/soft). 24/7 configuration requires Manage Server.',
+                'music skip', 'music forceskip', 'music stop', 'music seek <timestamp>',
+                'music skipto <position>', 'music queue', 'music remove <position>',
+                'music clear', 'music shuffle', 'music loop <off|track|queue>',
+                'music autoplay', 'music filter <preset>', 'music nowplaying',
+                'music lyrics [song]', 'music grab', 'music volume <1-100>',
+                'music join', 'music leave', 'music 247',
+                'music playlist <create|delete|info|list|load|rename|share>'],
+        note: 'Playback requires an authorized Lavalink node (NODE_URL / NODE_AUTH / NODE_NAME / NODE_SECURE). 24/7 mode keeps a station playing in a voice channel and requires Manage Server.',
     },
     thelp: {
         category: 'Tickets',
@@ -537,6 +528,44 @@ function extractCommandGroups() {
 const CATEGORY_LOOKUP = new Map(CATEGORIES.map((c) => [c.name, c]));
 const DOCS_VERSION_ID = '_primebotCommandDocs'; // cache marker for test visibility
 
+/**
+ * The vendored Linix music tree lives outside the `switch (commandName)`, so its
+ * prefix commands are read from the command modules themselves. Linix's own
+ * `description` / `usage` / `aliases` / `userPrams` are used verbatim, which
+ * keeps `/docs` in step with the tree instead of listing a single `music` entry.
+ */
+function extractMusicCommands() {
+    const root = path.join(__dirname, '..', 'music', 'commands');
+    if (!fs.existsSync(root)) return [];
+
+    const out = [];
+    for (const dir of fs.readdirSync(root)) {
+        const dirPath = path.join(root, dir);
+        if (!fs.statSync(dirPath).isDirectory()) continue;
+        for (const file of fs.readdirSync(dirPath).filter((f) => f.endsWith('.js'))) {
+            let command;
+            try {
+                command = require(path.join(dirPath, file));
+            } catch (err) {
+                console.warn(`[DOCS] Could not load music command ${file}:`, err.message);
+                continue;
+            }
+            if (!command || !command.name) continue;
+            out.push({
+                name: command.name,
+                aliases: command.aliases || [],
+                category: 'Music',
+                icon: 'music',
+                description: command.description || `Run the ${command.name} music command.`,
+                usage: command.usage ? [`${command.name} ${command.usage}`.trim()] : [command.name],
+                permission: (command.userPrams || []).length ? command.userPrams.join(', ') : null,
+                note: command.usage ? null : 'Also available as a slash command.',
+            });
+        }
+    }
+    return out;
+}
+
 let _cache = null;
 function buildCommandDocs() {
     if (_cache) return _cache;
@@ -554,6 +583,7 @@ function buildCommandDocs() {
             note: meta.note || null,
         };
     });
+    cmds.push(...extractMusicCommands());
     _cache = { id: DOCS_VERSION_ID, categories: CATEGORIES, commands: cmds };
     return _cache;
 }

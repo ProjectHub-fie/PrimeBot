@@ -104,7 +104,7 @@ The dashboard login page is protected by an **invisible Cloudflare Turnstile** w
 
 ## Env vars (Vercel)
 
-On Vercel, set in Settings → Environment Variables: `DISCORD_TOKEN2` (the primary bot token — checked first by `utils/tokenResolver.js`), `DISCORD_TOKEN` (legacy fallback), `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DATABASE_URL` (with `?sslmode=require` if the host needs SSL), `FALLBACK_DATABASE_URL` (optional shared fallback for every per-feature pool whose own var is unset — see "Database connection fallback — FALLBACK_DATABASE_URL" above), `SESSION_SECRET`, `DASHBOARD_BASE_URL` (= `https://<prod>.vercel.app`), `DISCORD_REDIRECT_URI` (= `<DASHBOARD_BASE_URL>/auth/callback`, registered in the Discord Developer Portal), `WELCOME_DATABASE_URL` (separate pool for welcome settings), `REACTION_DATABASE_URL` (separate pool for reaction-role menus; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `AUTOMOD_DATABASE_URL` (separate pool for automod settings/warnings; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `ANTI_DATABASE_URL` (canonical) / `ANUKE_DATABASE_URL` (legacy alias) (separate pool for the Anti-Nuke settings/incidents/dedup/lockdown tables; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset — all shard nodes must share it), `TICKET_DATABASE_URL` (separate pool for ticket panels/instances; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `TCLAIM_DATABASE_URL` (separate pool for the ticket claim system — `ticket_claims` table via `server/tclaimDb.js` `tclaimPool`; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `LIVE_DATABASE_URL` (separate pool for live giveaways AND live polls; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `EVENT_DATABASE_URL` (separate pool for event schedules/tasks; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `LOG_DATABASE_URL` (separate pool for server logging settings + website logs; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `ALOG_DATABASE_URL` (separate pool for the dashboard **audit log** `website_logs` table — `server/alogDb.js`; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `TROLE_DATABASE_URL` (separate pool for per-panel ticket role add/remove settings — `server/troleDb.js`; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `TLOG_DATABASE_URL` (separate pool for per-panel **ticket logging** settings — `ticket_logging_settings` in `server/tlogDb.js`; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `BETA_DATABASE_URL` (separate pool for beta settings; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `SEASON_DATABASE_URL` (separate pool for the dashboard session store `primebot_dashboard_session` + the shardnode failover service `bot_node_status`/`bot_failover_lock` tables; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset — works in single-DB setups with zero extra config), and `COMMUNITY_DATABASE_URL` (separate pool for the per-server static polls `polls`/`poll_options`/`poll_votes`, static giveaways `giveaways`/`giveaway_participants`/`giveaway_winners`, and the counting game `counting_games`; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset — works in single-DB setups with zero extra config). `EVENT_EXEC_INTERVAL_MS` (optional, default 5000) controls how often the bot's event scheduler wakes to fire due tasks. `SESSION_IDLE_TIMEOUT_MS` (optional, default 1800000 = 30 min) is the dashboard idle auto-logout window in ms, `SESSION_WARNING_MS` (optional, default 1500000 = 25 min) starts the client-only warning countdown, and `SESSION_ACTIVITY_REFRESH_INTERVAL_MS` (optional, default 600000 = 10 min) throttles server-side session-activity writes — see "Idle auto-logout (tab inactivity) — Neon-optimized" above. `TURNSTILE_SITE_KEY` + `TURNSTILE_SECRET_KEY` (optional pair) enable the invisible Cloudflare Turnstile login gate — see "Cloudflare Turnstile (invisible) login gate" above.
+On Vercel, set in Settings → Environment Variables: `DISCORD_TOKEN2` (the primary bot token — checked first by `utils/tokenResolver.js`), `DISCORD_TOKEN` (legacy fallback), `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DATABASE_URL` (with `?sslmode=require` if the host needs SSL), `FALLBACK_DATABASE_URL` (optional shared fallback for every per-feature pool whose own var is unset — see "Database connection fallback — FALLBACK_DATABASE_URL" above), `SESSION_SECRET`, `DASHBOARD_BASE_URL` (= `https://<prod>.vercel.app`), `DISCORD_REDIRECT_URI` (= `<DASHBOARD_BASE_URL>/auth/callback`, registered in the Discord Developer Portal), `WELCOME_DATABASE_URL` (separate pool for welcome settings), `REACTION_DATABASE_URL` (separate pool for reaction-role menus; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `AUTOMOD_DATABASE_URL` (separate pool for automod settings/warnings; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `ANTI_DATABASE_URL` (canonical) / `ANUKE_DATABASE_URL` (legacy alias) (separate pool for the Anti-Nuke settings/incidents/dedup/lockdown tables; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset — all shard nodes must share it), `TICKET_DATABASE_URL` (separate pool for ticket panels/instances; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `TCLAIM_DATABASE_URL` (separate pool for the ticket claim system — `ticket_claims` table via `server/tclaimDb.js` `tclaimPool`; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `LIVE_DATABASE_URL` (separate pool for live giveaways AND live polls; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `EVENT_DATABASE_URL` (separate pool for event schedules/tasks; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `LOG_DATABASE_URL` (separate pool for server logging settings + website logs; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `ALOG_DATABASE_URL` (separate pool for the dashboard **audit log** `website_logs` table — `server/alogDb.js`; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `TROLE_DATABASE_URL` (separate pool for per-panel ticket role add/remove settings — `server/troleDb.js`; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `TLOG_DATABASE_URL` (separate pool for per-panel **ticket logging** settings — `ticket_logging_settings` in `server/tlogDb.js`; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `BETA_DATABASE_URL` (separate pool for beta settings; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset), `SEASON_DATABASE_URL` (separate pool for the dashboard session store `primebot_dashboard_session` + the shardnode failover service `bot_node_status`/`bot_failover_lock` tables; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset — works in single-DB setups with zero extra config), and `COMMUNITY_DATABASE_URL` (separate pool for the per-server static polls `polls`/`poll_options`/`poll_votes`, static giveaways `giveaways`/`giveaway_participants`/`giveaway_winners`, and the counting game `counting_games`; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL` if unset — works in single-DB setups with zero extra config). `EVENT_EXEC_INTERVAL_MS` (optional, default 5000) controls how often the bot's event scheduler wakes to fire due tasks. `SESSION_IDLE_TIMEOUT_MS` (optional, default 1800000 = 30 min) is the dashboard idle auto-logout window in ms, `SESSION_WARNING_MS` (optional, default 1500000 = 25 min) starts the client-only warning countdown, and `SESSION_ACTIVITY_REFRESH_INTERVAL_MS` (optional, default 600000 = 10 min) throttles server-side session-activity writes — see "Idle auto-logout (tab inactivity) — Neon-optimized" above. `TURNSTILE_SITE_KEY` + `TURNSTILE_SECRET_KEY` (optional pair) enable the invisible Cloudflare Turnstile login gate — see "Cloudflare Turnstile (invisible) login gate" above. Music runs on Lavalink, so set `NODE_URL` + `NODE_AUTH` (+ `NODE_NAME`, `NODE_SECURE`) or the `LAVALINK_*` equivalents, and `SPOTIFY_CLIENT_ID` + `SPOTIFY_CLIENT_SECRET` for Spotify resolution — see "Music — the Linix music system" below.
 
 ## Beta program feature
 
@@ -1292,76 +1292,6 @@ recurred.
 - Env: `MONITOR_DATABASE_URL` (optional; else SEASON → FALLBACK → DATABASE_URL),
   `MONITOR_PULSE_INTERVAL_MS`, `STATUS_RECOVERY_CONFIRMATIONS`.
 
-## 24/7 Radio (SoundCloud, via soundcloud-core) — dashboard + /radio
-
-A continuous 24/7 SoundCloud radio. The bot stays CONNECTED to a configured
-voice channel but only plays while at least one human listener is in it: the
-channel emptying PAUSES the player (never stops, never disconnects), a listener
-joining RESUMES it, and an administrator's manual pause is tracked separately so
-a join never overrides it. Configured from the dashboard's **📻 Radio** tab or
-the `/radio` + `$radio` commands.
-
-- **Package:** `soundcloud-core` (^2.0.0, added to `package.json`). The adapter
-  `utils/soundcloudSource.js` is the ONLY place that touches it. **Verified
-  API (do not invent methods):** `new SoundCloudClient({ userAgent?, clientId? })`
-  → `.search({ query, limit })`, `.getMetaData({ url })`, `.getPlaylist({ url, limit })`,
-  `.getProfile({ username })`, `.getClientId({})`. **`getPlaylist` resolves to a
-  SINGLE playlist OBJECT at runtime** (the `.d.ts` wrongly says `Playlist[]`) — read
-  `raw.tracks`, not the return value as an array. `.getMetaData().streamUrl` is a
-  SHORT-LIVED signed URL (usually an HLS `.m3u8` with `expires=`/`Signature=`), so
-  it is NEVER persisted and `resolveStreamUrl()` re-resolves on every play (an
-  expired URL is always replaced). ffmpeg reads the URL directly, so HLS is fine.
-  No raw-byte/stream API and no genre primitive exist — genre stations are built
-  by searching and collecting tracks.
-- **Manager:** `utils/radioManager.js` (`RadioManager`) — the state machine
-  (`stopped / connecting / playing / paused_empty / paused_manual / idle`).
-  `handleVoiceStateUpdate` only reacts to the CONFIGURED channel, pauses on empty
-  (`_pausePlayer` keeps the player + connection), resumes on join unless
-  `manualPause`. Track end advances the queue with duplicate-end guarding
-  (`trackEndHandled`), bounded retries (`RADIO_MAX_TRACK_RETRIES`, default 2) skip
-  an unplayable track safely (never an infinite loop), and an empty queue reloads
-  the station so playback continues. Voice layer (`utils/radioVoice.js`) is
-  injected (`deps.voice`) so the whole machine is unit-testable with a mock.
-- **Stations:** `utils/radioStations.js` — a station is a SoundCloud playlist URL,
-  a single track URL, or a genre search (no fake/hardcoded tracks; built-ins are
-  real SoundCloud sources). `shared/radioConstants.js` holds the source catalog +
-  `normalizeStation()` (the security boundary: URL sources must be
-  `soundcloud.com`, genre sources must be a search term, ids slugged, lengths capped).
-- **Persistence:** `radio_sessions` (guild/channel/station/enabled/manualPause/
-  current track metadata/position/queue/state/volume/owner_node) + `radio_stations`
-  in the dedicated `RADIO_DATABASE_URL` pool (`server/radioDb.js`; falls back to
-  `FALLBACK_DATABASE_URL` then `DATABASE_URL`). **Stream URLs are never persisted.**
-  Migration `migrations/0032_add_radio.sql` + `shared/schema.js` mirror the shape;
-  `ensureRadioTables()` self-creates + additively ALTERs the `volume` column.
-- **Dashboard-driven reload:** the bot re-reads `radio_sessions` on the shared
-  `cacheScheduler` (`RadioManager._refreshFromDatabase`) so a dashboard
-  enable/disable/channel/station change takes effect without a restart — an
-  enabled row it does not hold is claimed + connected, a disabled row is torn
-  down + disconnected, a channel change reconnects. `deps.autoReload: false`
-  disables it in unit tests.
-- **Sharding:** only the node that has the guild cached (`ownsGuild`) drives its
-  session; `owner_node` is written on claim and a node never takes over another
-  live node's session, so two nodes cannot stream the same guild. All nodes share
-  `RADIO_DATABASE_URL`.
-- **Commands:** `/radio` (`commands/radio.js`): `start / stop / pause / resume /
-  skip / station / stations / status / volume / channel`. `stop` + `channel` require
-  Manage Guild; the rest require Move Members/Manage Channels. Prefix `$radio`
-  lives in `events/messageCreate.js`; the Sash/`$help` catalog entry is in
-  `utils/prefixHelp.js` (`radio` category).
-- **Dashboard:** `/guild/:id/radio` (`dashboard/render/radio-page.js` +
-  `dashboard/public/js/radio.js`, IIFE-wrapped) — Overview / Stations / Session
-  sections; the page reads `getGuildConfig({ only: ['radioSession','radioStations'] })`.
-  API (all `requireAuth + requireGuildAdmin`): `GET /api/guilds/:guildId/radio`,
-  `PATCH /api/guilds/:guildId/radio` (enable/channel/station; the channel must
-  belong to the guild AND be voice/stage), `POST/DELETE .../radio/station[/:id]`.
-- **Env vars:** `RADIO_DATABASE_URL` (optional), `RADIO_RESOLVE_CONCURRENCY`
-  (default 3), `RADIO_MAX_TRACK_RETRIES` (2), `RADIO_RECONNECT_DELAY_MS` (5000),
-  `RADIO_MAX_QUEUE` (500), `SOUNDCLOUD_CLIENT_ID`, `SOUNDCLOUD_USER_AGENT`.
-- **Tests:** `tests/radio.test.js` (33) — the full numbered scenario list
-  (pause-on-empty + stay-connected, resume-on-join, manual pause survives a join,
-  duplicate track-end, bounded retries, expired-URL re-resolution, restart restore,
-  multi-guild, cross-node ownership) + the dashboard reload cases.
-
 ## Monitoring false-OUTAGE + 30-day graph (the two production bugs)
 
 The Stats page is driven by `node process → pulse → monitorDb (Postgres) →
@@ -1403,439 +1333,206 @@ bugs were fixed at the SOURCE (never by relabelling the frontend).
   scenarios) + `tests/monitoringPipeline.test.js` + `tests/statusMonitor.test.js`.
   Env: `STATUS_STALE_FACTOR` (3), `STATUS_OUTAGE_FACTOR` (6).
 
-## Music (on-demand playback + admin 24/7 voice) — dashboard Music tab + /music
+## Music — the Linix music system (vendored, source-level replacement)
 
-A full on-demand music feature (`MusicManager`), separate from the 24/7 **Radio**
-engine but shipped on the same dashboard tab. **The Radio tab was renamed to
-Music** and the radio station/session sections are embedded *inside* the Music
-tab (radio lives inside music). `/guild/:guildId/radio` now 302-redirects to
-`/guild/:guildId/music`. The bot commands stay `/radio` and `/music`.
+PrimeBot's music feature is **Linix's music implementation**, vendored verbatim
+into `music/` and wired into PrimeBot's own client. The previous PrimeBot music
+and 24/7 SoundCloud radio code (`utils/music/**`, `utils/radio*.js`,
+`utils/playbackMode.js`, `utils/soundcloudSource.js`, `utils/voiceReadiness.js`,
+`utils/voiceConnectGate.js`, `server/musicDb.js`, `server/radioDb.js`, the
+`commands/{music,radio,playlist,247}.js` slash commands, the dashboard Music/Radio
+tabs and the direct ffmpeg playback engine) was **deleted**, not kept as a
+fallback. There is no hybrid architecture and no second music engine.
 
-- **Manager:** `utils/music/musicManager.js` (`MusicManager`). One authoritative
-  player per guild; a queue with add/remove/clear/shuffle/repeat/seek/volume;
-  continuous playback with **bounded retries** (`MUSIC_MAX_TRACK_RETRIES`,
-  default 2) and safe skipping of unplayable tracks. **Playback state is
-  independent of connection state** — pausing, stopping, an empty queue or a
-  finished track NEVER disconnect. `_playNext` walks the queue in a single pass
-  (`_advancing` guard) so ONE bad stream cannot stall the queue; `_onStreamError`
-  returns early when called from inside that walk (re-entering stalled the queue
-  — this was a real bug, covered by `tests/music.test.js`). `manualPause` is
-  never overridden by a listener joining. `ownsGuild()` gates every session so
-  only the node with the guild cached drives it. Voice layer
-  (`utils/music/musicVoice.js`) is injected (`deps.voice`) so the machine is
-  unit-testable with a mock; providers (`deps.providers`) likewise.
-- **Providers:** `utils/music/providers/registry.js` + `youtube.js`
-  (`youtube-sr` + `@distube/ytdl-core`), `soundcloud.js` (wraps the existing
-  verified `utils/soundcloudSource.js` — the ONLY music module that touches
-  `soundcloud-core` transitively), `spotify.js` (oEmbed metadata matched to a
-  streamable source) and `direct.js` (direct audio URLs). A URL routes to its
-  owner; a free-text query searches YouTube then SoundCloud; a Spotify result is
-  matched to a streamable provider but keeps its metadata with `source` = the
-  actual playback provider (honest about where audio comes from).
-- **Persistence:** `music_settings` / `music_playlists` / `music_playlist_tracks`
-  / `music_history` / `music_sessions` in the dedicated `MUSIC_DATABASE_URL` pool
-  (`server/musicDb.js`; falls back to `FALLBACK_DATABASE_URL` then `DATABASE_URL`
-  via `server/resolveDbUrl.js`; covered by `tests/fallbackDatabaseUrl.test.js`).
-  Self-creates its tables (`ensureMusicTables()`). **Stream URLs are never
-  persisted** (`stripTrackForPersist`); they are re-resolved on every play so an
-  expired URL recovers. After a restart `restore()` recreates the connection for
-  every enabled 24/7 session this node owns (the voice connection did NOT
-  survive — never pretend it did). Shard ownership: only the owning node
-  restores/drives a guild.
-- **Commands:** `/music` (play/search/pause/resume/skip/previous/stop/seek/queue/
-  remove/clear/shuffle/loop/nowplaying/volume/status/help), `/247`
-  (enable/disable/status/channel, Admin) and `/playlist`
-  (list/create/rename/delete/view/add/remove/save/play/queue) — all
-  auto-registered by `deploy-commands.js`. Prefix: **one fall-through case block
-  in `events/messageCreate.js`** carries `music` *plus every subcommand as a
-  top-level alias* (`play`, `pause`, `resume`, `skip`, `stop`, `join`, `leave`,
-  `queue`, `search`, `shuffle`, `loop`, `seek`, `previous`/`prev`,
-  `nowplaying`, `volume`/`vol`, `playlist`, `247`, `24/7`). The block unshifts
-  `commandName` onto `args` when it is not `music`, so `$play x` and
-  `$music play x` take the identical `args[0]` subcommand path. **This is the
-  fix for "music commands not working":** only `$music` was originally wired, so
-  `$play` / `$join` / `$247` and the bare words typed in **no-prefix mode**
-  (`play`, `join`) fell through to the switch `default` and were silently
-  ignored (`$music` alone worked, which is why it looked half-broken). There is
-  **no** `m` alias — deliberately, to avoid colliding with `mute`/`move`.
-  `tests/music.test.js` drives the real handler for both the prefixed and
-  no-prefix paths so a new subcommand cannot be added without an alias case.
-  Interactive control buttons + the search string-select + the `music_247_channel`
-  channel-select are routed in `events/interactionCreate.js` (module
-  `utils/music/musicButtons.js`, embed helper `utils/music/musicEmbed.js`).
-- **Dashboard:** `dashboard/render/music-page.js` (sections: overview /
-  playlists / history + the embedded radio `stations`/`radio` sections from
-  `dashboard/render/radio-page.js`, which now exports its section builders) +
-  `dashboard/public/js/music.js`. `dashboard/db.js` adds `getMusicSettings` /
-  `upsertMusicSettings` / `getMusicHistory` / `getMusicPlaylists` /
-  `getMusicPlaylistTracks` / `deleteMusicPlaylist` and wires the
-  `musicSettings` / `musicHistory` / `musicPlaylists` slices into
-  `getGuildConfig`. Route `GET /guild/:guildId/music` uses
-  `guildPage({ config: [...], roles: 'all' })` (roles as plain guild roles —
-  the DJ role select only *mentions* roles).
-- **Help/docs:** `music` category in `utils/prefixHelp.js` (the Sash menu
-  auto-derives from `CATALOG`/`CATEGORY_ORDER`, so Music appears there with zero
-  extra wiring), `/music` + `/247` + `/playlist` in `commands/help.js`, and a
-  `Music` category + `music` metadata in `dashboard/commandDocs.js` (the `/docs`
-  page extracts `music` from the prefix switch automatically).
-- **Env vars:** `MUSIC_DATABASE_URL` (optional), `MUSIC_MAX_TRACK_RETRIES`
-  (default 2), `MUSIC_RECONNECT_DELAY_MS` (default 5000), `MUSIC_MAX_QUEUE`
-  (default 500), `MUSIC_RELOAD_INTERVAL_MS` (default 30000). All documented in
-  `.env.example`.
-- **Tests:** `tests/music.test.js` (15) drives the REAL `MusicManager` with a
-  mocked voice layer + provider registry (playback, track advance, empty-queue
-  stays connected, failing stream skipped with bounded retries, manual-pause
-  protection, 24/7 enable/disable + no-reconnect-after-disable, shard ownership,
-  stream-URL persistence stripping, Music page render). `musicPage` is in the
-  `redesignSmoke.test.js` guild-page loop.
+### Tree layout (mirrors Linix)
 
+    music/
+      index.js              initMusic(client) + restore247(client) — the ONLY entry point
+      config.js             Linix music config, resolved from env (see below)
+      clientBridge.js       attaches the Linix client surface (color/emoji/embed/button/logger/prefix/numb)
+      help.js               musicHelpEmbed() — $music overview card, derived from the loaded tree
+      interactions.js       slash router + the music customId pass-through set
+      prefixRunner.js       findCommand() / runPrefixCommand() — Linix's prefix execution path
+      commands/<Category>/*.js         prefix commands (Music/, Playlist/, Config/)
+      slashCommands/<Category>/*.js    slash commands (same categories)
+      events/Node/*.js                 Shoukaku node events (ready/error/close/disconnect)
+      events/Players/*.js              Kazagumo player events (9: create/start/end/empty/…)
+      loaders/loadPlayerManager.js     Kazagumo + Connectors.DiscordJS + Spotify plugin
+      loaders/loadNodes.js             binds events/Node to manager.shoukaku (once per process)
+      loaders/loadPlayers.js           binds events/Players to manager
+      loaders/loadCommands.js          loads both command trees
+      loaders/restore247.js            re-creates persisted 24/7 sessions on ready
+      schema/*, utils/*, custom/*      Linix's supporting modules (presets, vcstatus, cards)
 
-## Lavalink playback engine (MUSIC_ENGINE) — primary once a node is configured
+`music/index.js` exports only `initMusic` and `restore247`. `initMusic` is
+**idempotent** (`client.__musicInitialized`) and **inert** when no node is
+configured: it logs a warning and returns `{ enabled: false, reason:
+'no_lavalink_node' }` — PrimeBot still boots normally, and the music commands
+report the missing node instead of crashing.
 
-PrimeBot plays on-demand music through **either** its original in-process engine
-or a **Lavalink** node. The engine is chosen by `MUSIC_ENGINE`:
+### Command trees — never merged into PrimeBot's
 
-- `MUSIC_ENGINE=direct` → direct (explicit rollback).
-- `MUSIC_ENGINE=lavalink` → lavalink (falls back to direct with a loud reason if
-  the node config or the packages are unusable).
-- **unset / unknown / `auto`** → **lavalink when a node is configured**
-  (`LAVALINK_*` or the `NODE_*` aliases), otherwise direct. So an unconfigured
-  deployment is never broken and a configured one migrates automatically.
+Linix's prefix commands live in **`client.musicCommands`** and its slash commands
+in **`client.slashCommands`**. `client.commands` stays PrimeBot's own slash-command
+collection, so the two systems can never shadow each other. This is the single
+most important integration decision: do NOT move the Linix tree into
+`client.commands`.
 
-- **Resolver:** `utils/music/engines/index.js` — `resolveEngineName(env)` and
-  `createEngine(client, deps)`. An explicit `deps.voice`/`deps.providers`
-  injection **forces `direct`**, so the existing test doubles keep working.
-  Selecting `lavalink` with no usable node (or missing packages) logs the reason
-  and **falls back to `direct`** — music never breaks, and rollback is one env
-  var.
-- **Engines:** `utils/music/engines/direct.js` (thin delegate wrapping the
-  original `musicVoice` + provider registry — behaviour unchanged) and
-  `utils/music/engines/lavalink.js` (same interface, audio decoded by the node).
-  `MusicManager` talks only to `this.engine`.
-- **Lavalink subsystem:** `utils/music/lavalink/manager.js` (Kazagumo + Shoukaku
-  lifecycle: one instance per client via a `WeakMap`, node/player listeners
-  registered once, health-based node selection, bounded backoff), `nodeConfig.js`
-  (env parsing + validation + **redaction**), `nodeHealth.js` (per-node state,
-  exponential backoff with jitter, cooldown, `selectNode()` picks a HEALTHY node
-  — never the first blindly), `lavalinkProviders.js` (Lavalink → PrimeBot track
-  shape; honest Spotify metadata fallback), `lavalinkFilters.js` (PrimeBot filter
-  ids → real Lavalink filter objects).
-- **Provider-adapter parity:** `LavalinkProviders` is a drop-in for
-  `providers/registry`, so it must expose the SAME surface. It reads
-  `manager.streamableProviders()` — `LavalinkManager` MUST define it (it did not,
-  so `providers.streamable` threw `TypeError: this.manager.streamableProviders is
-  not a function`). `streamableProviders()` returns the node-advertised providers
-  (`supportsSource`) with `direct` always present, and a YouTube/SoundCloud/direct
-  baseline before any node connects. When adding a registry method, add it here
-  too.
-- **Provider routing:** commands must resolve through `utils/music/resolve.js`
-  (`resolveQuery(client, …)` / `searchQuery` / `resolveCollection`) rather than
-  requiring `providers/registry` directly — the registry bypasses the node.
-  `MusicManager.providers` is a **lazy getter** (the Lavalink adapter only exists
-  after `start()`; a pre-start caller must not silently get the direct registry).
-- **Voice updates:** Shoukaku's `Connectors.DiscordJS` subscribes to the gateway
-  `raw` stream itself and forwards `VOICE_STATE_UPDATE` / `VOICE_SERVER_UPDATE`.
-  Do **not** add a second `raw` listener — it would forward every update twice.
-- **Node registration gotcha:** the connector adds nodes on `clientReady`. If the
-  manager starts when the client is **already ready** (reconnect/hot-reload/test),
-  that event has fired and no node is ever registered —
-  `LavalinkManager._ensureNodesAdded()` covers that case and is the only place
-  `shoukaku.addNode` is called (adding in both paths would open two WebSockets).
-- **Player/queue separation:** a node death does not clear the queue.
-  `MusicManager._recoverLavalinkSession()` re-creates the player on a healthy node
-  and re-plays the current track — **audio restarts, the queue does not**. The
-  encoded Lavalink track lives only in memory (`manager.rememberEncoded` caches
-  the resolved `KazagumoTrack` OBJECT, not a bare string: `KazagumoPlayer#play()`
-  rejects a non-instance) and is never persisted.
-- **Config:** `LAVALINK_NODES` (JSON array) or `LAVALINK_HOST`/`_PORT`/
-  `_PASSWORD`/`_SECURE`/`_NAME`. **Linix-compatible aliases** `NODE_URL` /
-  `NODE_AUTH` / `NODE_NAME` / `NODE_SECURE` are also accepted (`NODE_URL` is
-  `host:port`, parsed via `normalizeNode`'s `url` path so it does not become
-  `host:port:port`); the `LAVALINK_*` names always win and the two sources are
-  never merged. Passwords are never logged or returned — `describeNodes()`
-  exposes only `hasPassword`. See `docs/lavalink-setup.md`.
-- **Env vars:** `MUSIC_ENGINE` (`direct`|`lavalink`|unset), `LAVALINK_NODES` /
-  `LAVALINK_HOST`… (or `NODE_URL`/`NODE_AUTH`/`NODE_NAME`/`NODE_SECURE`),
-  `LAVALINK_SEARCH_ENGINE` (`ytsearch`), `LAVALINK_RECONNECT_TRIES`,
-  `LAVALINK_RECONNECT_INTERVAL_MS`, `LAVALINK_REST_TIMEOUT_MS`,
-  `LAVALINK_VOICE_TIMEOUT_S`, `LAVALINK_MAX_RECONNECT_ATTEMPTS`,
-  `LAVALINK_NODE_COOLDOWN_MS`, `LAVALINK_BACKOFF_BASE_MS`/`_MAX_MS`.
-- **Dependencies:** `shoukaku ^4.3.0`, `kazagumo ^3.4.3` (Lavalink clients) and
-  `@discordjs/voice ^0.19.2` + `@snazzah/davey` (the voice-reliability fix below).
-- **Tests:** `tests/lavalink.test.js` (57) — config parsing/redaction, node
-  health/selection/backoff, player lifecycle, queue preservation across node loss,
-  lazy provider resolution, the `playerEmpty` guard, node registration when the
-  client is already ready, that node status never leaks a password,
-  `streamableProviders()` parity, the `NODE_*` aliases, and the
-  default-engine/fallback selection.
-- **UNVERIFIED:** real audio playback through a live Lavalink node (a real
-  Discord voice handshake + a real YouTube/SoundCloud stream) is **not** covered
-  by the suite — it needs a reachable node with valid credentials, which is not
-  available in CI. The Linix reference node's TLS certificate has expired and its
-  credentials are public, so it was deliberately NOT used. See the migration
-  report on the PR.
+- **Prefix dispatch:** `events/messageCreate.js` — the `switch (commandName)`
+  `default:` branch falls through to `require('../music/prefixRunner')`
+  `findCommand(client, commandName)` → `runPrefixCommand(...)`. That covers every
+  Linix alias (`$play`, `$p`, `$skip`, `$fs`, `$q`, `$v`, `$247`, `$filter`,
+  `$eq`, `$autoplay`, `$playlist`, `$pl*`, …) without adding a case per command.
+  **Exception — `$np`:** PrimeBot's developer-only no-prefix command owns `np`
+  and its top-level case runs first, so Linix's `nowplaying` ships with
+  `aliases: []`. Use `$nowplaying`, `$music nowplaying` or `/nowplaying`;
+  `tests/musicLinixReplacement.test.js` pins this.
+  `$music` with no arguments renders `musicHelpEmbed()`.
+- **Slash dispatch:** `events/interactionCreate.js` checks
+  `require('../music/interactions').isMusicSlashCommand(client, interaction)`
+  **before** its own `client.commands.get(...)` lookup and delegates to
+  `handleMusicSlash`, which reproduces Linix's `botPerms` / `userPerms` /
+  `player` / `inVoiceChannel` / `sameVoiceChannel` preconditions.
+- **Registration:** `deploy-commands.js` walks `music/slashCommands/<Category>/*.js`
+  and appends `{ name, description, options }` to the same bulk overwrite
+  PrimeBot uses. Linix commands use plain objects, not `SlashCommandBuilder`, so
+  they are converted there. Verified: 34 music commands, no name collisions with
+  PrimeBot's own, no duplicate names, all ≤32 chars.
 
-## Voice connection failure — `timed out after 20000ms (status stayed 'signalling')` (fixed)
+### Buttons, selects and the pass-through set
 
-The direct engine's voice handshake stalled forever in `signalling`. **Root
-cause:** Discord's voice gateway performs **DAVE** (E2EE) negotiation; a client
-that does not advertise `max_dave_protocol_version` in its IDENTIFY payload never
-receives the session-description frame that advances the handshake past
-`signalling`. `@discordjs/voice@0.18.x` shipped **zero** occurrences of that field
-(verified: `npm pack @discordjs/voice@0.18.0` → `grep -c
-max_dave_protocol_version` = 0); `0.19.x` advertises it via `@snazzah/davey`.
-Bumping `@discordjs/voice` to `^0.19.2` and installing `@snazzah/davey` fixes the
-stall for the direct engine, and Lavalink's own node↔Discord voice connection is
-unaffected by the bot's voice library.
+The now-playing control row, the filter select and the search select are answered
+by **collectors Linix attaches to the message that owns them** — a different
+interaction context from PrimeBot's generic button switch. `music/interactions.js`
+exports `MUSIC_CUSTOM_IDS` (the whole set: `disable_h`, `select-song`, `pause`,
+`resume`, `skip`, `stop`, `loop`, `shuffle`, and the filter values `clearbut`,
+`bassbut`, `8dbut`, `nightbut`, `pitchbut`, `lofibut`, `distortbut`, `speedbut`,
+`vapobut`) and `isMusicCustomId()`. `events/interactionCreate.js` returns early for
+those ids, so an interaction is never answered twice. **When adding a control,
+add its customId there too** — `tests/musicLinixReplacement.test.js` scans
+`events/Players/playerStart.js` and `commands/Music/search.js` for every
+`setCustomId(...)` / `case "..."` and fails if one is missing from the set.
 
-- **Do not downgrade `@discordjs/voice` below 0.19.0** and do not remove
-  `@snazzah/davey` — the handshake stalls again.
-- **Tests:** `tests/voiceDaveSupport.test.js` pins the dependency, asserts the
-  installed dist actually contains `max_dave_protocol_version`, and asserts
-  `musicVoice` joins via `joinVoiceChannel` (never a hand-rolled OP4 join).
+### Lavalink
 
+- **Env vars (Linix-compatible):** `NODE_URL` (host:port or a full ws/wss URL),
+  `NODE_AUTH` (node password), `NODE_NAME` (label), `NODE_SECURE` (`true` behind
+  TLS). The `LAVALINK_*` names (`LAVALINK_NODES` JSON array, `LAVALINK_HOST`/
+  `_PORT`/`_PASSWORD`/`_SECURE`/`_NAME`) are also accepted and **win** when both
+  are set. Credentials come from the environment only — never hardcoded.
+- **Node registration is idempotent.** Shoukaku's connector registers nodes from
+  its own `once('clientReady')` listener. PrimeBot can boot the subsystem *after*
+  that event (a standby node taking over, a reconnect, a hot reload), where the
+  listener never runs and Lavalink is never contacted. `loadPlayerManager.js`
+  wraps `connector.ready` with a once-only guard and calls it immediately when
+  `client.isReady()` — so whichever path runs first registers the node, and a
+  node is never added twice (two `addNode` calls would open two sockets).
+- **Voice routing** is Shoukaku's: `Connectors.DiscordJS` subscribes to the
+  gateway `raw` stream itself and forwards `VOICE_STATE_UPDATE` /
+  `VOICE_SERVER_UPDATE` to Lavalink, so multi-shard routing works exactly as in
+  Linix. **Do not add a second `raw` listener** — every update would be forwarded
+  twice. `events/voiceStateUpdate.js` therefore only runs the voice defense
+  (self-deafen); it does not forward voice state.
+- **Voice cache:** `index.js` keeps `VoiceStateManager: { maxSize: Infinity }`.
+  A finite/zero limit drops every voice state and makes the bot believe nobody is
+  in a channel (see the voice-cache note above).
 
-## Voice-state cache: the "bot cannot find me in a voice channel" bug (fixed)
+### Spotify
 
-`index.js` configured `makeCache` with **`VoiceStateManager: { maxSize: 0 }`**.
-In discord.js a `maxSize` of 0 makes `LimitedCollection.set()` **drop every
-entry on arrival**, so the guild's voice-state cache was permanently empty. The
-`GuildVoiceStates` *intent* was enabled, so the `voiceStateUpdate` *event* fired
-correctly — but the **cache** is what everything actually reads:
+`music/loaders/loadPlayerManager.js` enables `kazagumo-spotify` only when
+`SPOTIFY_CLIENT_ID` + `SPOTIFY_CLIENT_SECRET` are both set, passing the page/search
+limits from config. Audio itself is resolved by the **node's** Spotify source
+plugin (LavaSrc), so a Spotify link plays only when the node advertises Spotify —
+PrimeBot never claims native Spotify audio otherwise.
 
-- `GuildMember#voice` → `guild.voiceStates.cache.get(id) ?? new VoiceState(...)` — an empty VoiceState, so `member.voice.channel` is always `null`
-- `Message#member` → `guild.members.resolve(...)`, then `.voice.channel` → `null`
-- `BaseGuildVoiceChannel#members` → iterates `guild.voiceStates.cache` → empty
-- `VoiceState#member` → `guild.members.cache.get(id)`
+### Music ↔ radio
 
-**Symptom (production, reported live):** `$join` / `$music play` / `$radio start`
-replied *"Join a voice channel first"* **while the user was sitting in the
-voice channel**, and radio/music listener counts were always 0 — so the 24/7
-pause-when-empty / resume-on-join behaviour could never trigger (a bot that
-thinks the channel is always empty pauses immediately; `noSubscriber: Pause`
-also kicks in because there is no visible subscriber).
+Radio is part of the same subsystem (`/radio`, `$radio`, `music/slashCommands`),
+so music and radio share one voice connection per guild by construction and can
+never both play. The old separate `RadioManager` / `PlaybackModeRegistry` lock is
+gone with the old code.
 
-**Fix:** `VoiceStateManager: { maxSize: Infinity }`. Voice states are one small
-entry per connected member (far smaller than the 200-member cache already kept),
-so caching them is cheap and is required for any voice feature. Do **not**
-reintroduce a finite/zero limit here — the radio and music listener counts, the
-`voiceStateUpdate` pause/resume logic and every `member.voice.channel` lookup
-depend on it.
+### Env-driven display config (no Linix hardcodes)
 
-- **Diagnosis shortcut:** "the bot can't see me in voice" + a `maxSize: 0` voice
-  cache is the signature. The `voiceStateUpdate` event firing in the logs
-  (`[EVENT] Executing event: voiceStateUpdate`) proves the intent is on and is
-  *not* the problem — the event payload is not the cache.
-- **Tests:** `tests/music.test.js` — asserts the config does not zero the voice
-  cache, proves `Options.cacheWithLimits({ VoiceStateManager: { maxSize: 0 } })`
-  discards entries while `Infinity` keeps them, and drives `countListeners` with
-  a populated voice-state cache (bots ignored, uncached members counted).
+Linix's music tree hardcoded values that only make sense for **its** deployment.
+All of them are now resolved from env (`music/config.js`, exposed on the client
+surface in `music/clientBridge.js`):
 
-## Zombie voice connection: "leave/247 disable succeeds but the bot stays connected"
+- **Emojis:** Linix embeds custom-emoji ids from its own public emoji server
+  (`<:dot:1201841280577970176>`, `<:left:…>`, `<a:Playing:…>`, `<:volumehigh:…>`,
+  etc.). PrimeBot would render those as broken boxes, so `client.emoji` is now the
+  env-driven map from `resolveEmoji()` with **Unicode defaults** for every key
+  (including the extra keys the code reads but Linix's json never defined:
+  `tick`, `cross`, `dot`, `playing`, `left`, `right`, `delete`, `replay`).
+  Override any key with `MUSIC_EMOJI_<KEY>` (uppercased key, full
+  `<:name:id>`/`<a:name:id>` string or a Unicode char). `music/utils/emoji.json`
+  is kept as a parity reference only — the bridge no longer loads it.
+- **`$playlist` demo menu:** Linix showed a hardcoded, vote-gated, Arrkiii-branded
+  menu of three fixed playlists. PrimeBot ships it free + configurable: set
+  `MUSIC_PLAYLISTS` (JSON array of `{id,label,query}`) or the single-entry
+  `MUSIC_PLAYLIST_URL` + `MUSIC_PLAYLIST_LABEL`; `MUSIC_PLAYLIST_MENU_LABEL`
+  renames the select. With nothing configured, `$playlist` tells the user to
+  configure it instead of showing the dead menu.
+- **Owner avatar:** Linix called `client.users.fetch('1029065620878282792')`.
+  Removed. `client.getPlaylistAvatar(requester)` prefers `MUSIC_OWNER_ID` (cached
+  user), else the requester's own avatar — no owner fetch needed.
+- **Branding/links:** `links.power` → `MUSIC_POWERED_BY` (default `PrimeBot`),
+  `links.support` → `MUSIC_SUPPORT_URL` (default PrimeBot's `supportServer`),
+  `links.image` → `MUSIC_CARD_IMAGE`, plus `MUSIC_CARD_NAME` (default
+  `primebot-music.png`) for the generated now-playing card attachment name.
+- **NODE_URL scheme unwrap:** `NODE_URL`/`LAVALINK_NODES` entries may be a full
+  `ws://`/`wss://` (or `http(s)://`) URL. `normalizeNode` strips the scheme, uses
+  it to set `secure`, and drops any path — Shoukaku builds its own
+  `/v4/websocket`.
+- **Permission typo:** Linix's slash modules declare `botPrams`/`userPrams`
+  (typo). `music/interactions.js` and `music/prefixRunner.js` read both spellings,
+  so the permission gates actually run.
+- **Tests:** `tests/musicEnvConfig.test.js` — Unicode defaults coverage, env
+  overrides, node scheme unwrap, playlist menu config, and a static audit that no
+  Linix custom-emoji ids / owner id / CDN asset URLs / Arrkiii branding survive in
+  `music/commands`, `slashCommands`, `events`, `utils`, `loaders`, `schema`,
+  `custom`.
 
-`utils/music/musicVoice.js` and `utils/radioVoice.js` `join()` called
-`joinVoiceChannel(...)` then `entersState(connection, Ready, 20000)`. On timeout
-it **threw without destroying the connection**, and because `join()` threw before
-the caller could assign `session.connection`, the manager held **no reference** to
-it either.
+### Dependencies
 
-`@discordjs/voice` tracks every connection in a module-level registry
-(`getVoiceConnection(guildId)`). So the abandoned, permanently non-Ready
-connection stayed registered and:
-
-- every later `joinVoiceChannel()` for that guild returned **the same wedged
-  object** (`existing.state.status !== 'destroyed'` → reused), so re-joins could
-  never become Ready;
-- `/leave` and `/music 247 disable` called `voice.leave(session.connection)` with
-  `session.connection === null` → a silent no-op. The manager then cleared its own
-  state and replied **success** while the bot was still sitting in the voice
-  channel. That is the reported bug.
-
-**Reproduced** (fake adapter that never completes the handshake):
-`join threw: The operation was aborted` → `registry after failed join: STILL
-TRACKED (zombie)` → `next join returns the SAME wedged connection: true` →
-`leave() would destroy: null -> reports success but stays connected`.
-
-**Fix (three layers):**
-
-1. `join()` destroys the half-open connection in its `catch` before rethrowing, so
-   a failed handshake never leaves a tracked zombie.
-2. `leave(connection, guildId)` now also sweeps the registry via
-   `destroyGuildConnection(guildId)`, so an untracked connection (failed join on an
-   older build, restarted manager) is still disconnected. All manager
-   `this.voice.leave(...)` call sites pass `session.guildId`.
-3. `_connect()` drops any non-active connection before joining (destroy by
-   reference, else `destroyGuildConnection`), so a stale registry entry can never
-   be handed back on a reconnect.
-
-The ready timeout is now `VOICE_READY_TIMEOUT_MS` (default 20000, min 1000), read
-per call so it is tunable without a restart.
-
-- **Tests:** `tests/music.test.js` — a join that never becomes ready destroys its
-  connection and frees the guild (a fresh join then creates a new object), and
-  `leave(null, guildId)` disconnects a connection we hold no reference to.
-
-## "Voice connection did not become ready: The operation was aborted" — concurrent connect attempts
-
-Two independent causes, both fixed. The message itself is `@discordjs/voice`'s own
-timeout: `entersState(target, Ready, ms)` calls `abortAfter(ms)`, which aborts its
-internal `AbortController` when the window elapses — so an `AbortError` there means
-"never reached Ready in time", not a user cancellation.
-
-**Cause A — concurrent connects destroy the in-flight connection.** `_connect`
-assigned `session.connection` only AFTER the handshake resolved. `/join`,
-`/music 247 enable` (issued twice in the logs) and `/play` each called
-`_ensureConnected` → `_connect`, so the second attempt saw no live connection,
-destroyed the first one while it was still signalling, and the first handshake's
-`entersState` then rejected with `The operation was aborted`. Reproduced with a
-slow-handshake voice double: two `_ensureConnected` calls → `join() attempts: 2`,
-`destroyed: 1`, first caller `FAILED: aborted`.
-
-**Cause B — a join issued while the shard is not Ready is silently dropped.**
-discord.js's `Guild#voiceAdapterCreator` does `if (this.shard.status !==
-Status.Ready) return false`, and `@discordjs/voice` maps a rejected payload to
-`AdapterUnavailable` (`disconnected`) while still tracking the connection. Right
-after a node restart (the logs show sn1 + sn2 restarting) a join can therefore
-never reach Ready and only fails 20s later with the same abort.
-
-### Fix
-
-- **`utils/voiceConnectGate.js`** (`VoiceConnectGate`) — a per-guild single-flight
-  gate. `run(guildId, factory)` returns the existing promise when an attempt is
-  already in flight (so `/join` + `/play` + repeated `247 enable` share ONE
-  handshake), releases the lock in a `finally` only when the owning attempt still
-  holds it (a stale attempt can never clear a newer one's lock), and exposes
-  `isPending`/`pendingId`/`clear`.
-- **Both managers' `_connect`** (`utils/music/musicManager.js`,
-  `utils/radioManager.js`) now wrap the join in `this._connectGate.run(...)`,
-  re-check `isConnectionActive` inside the gate, log
-  `voice connect #<id> node=<n> guild=… channel=… <before> -> <after>`, and apply a
-  **stale-operation guard**: if the session was disabled/stopped while the
-  handshake was in flight, the new connection is destroyed and the attempt throws
-  instead of adopting it (so `/247 disable` during a slow connect cannot leave the
-  bot connected to a session it just deleted).
-- **`enable247` is idempotent** — a repeat for the same channel while already
-  connected or connecting skips the join entirely.
-- **`restore`/`restoreOne` are idempotent** — the reload loop calls them
-  repeatedly; a session that is already live or has an attempt pending is left
-  alone (previously every tick destroyed and recreated a healthy connection).
-- **`utils/voiceReadiness.js`** (`waitForShardReady`, `shardReadyTimeoutMs`) —
-  `join()` waits for the guild's shard to be `Ready` first
-  (`VOICE_SHARD_READY_TIMEOUT_MS`, default 15000, min 1000) and fails fast with
-  "Voice shard is not ready" instead of burning the full 20s voice timeout on a
-  handshake that was silently dropped.
-- **Diagnostics:** both `join()`s log every `stateChange` (`[VOICE] guild=…
-  <from> -> <to>`), and on failure log the real reason — `timed out after Nms
-  (status stayed 'X')` when aborted, else the original `name: message` + stack —
-  plus the connection's state before/after. The thrown error carries
-  `err.voiceState = { guildId, channelId, statusBefore, statusAfter, timeoutMs,
-  aborted }`. No tokens/credentials are logged.
-- **Duplicate `music 247 enable` was NOT a registration bug:** there is exactly one
-  `messageCreate` listener (`index.js` event loader) and one `case 'music'` in
-  `events/messageCreate.js`; the two log lines are two genuine requests (or a
-  retry). Idempotent `enable247` makes a repeat harmless either way.
-
-**Env vars:** `VOICE_READY_TIMEOUT_MS` (default 20000, min 1000),
-`VOICE_SHARD_READY_TIMEOUT_MS` (default 15000, min 1000).
-
-- **Tests:** `tests/voiceConnectionSingleFlight.test.js` (24) — concurrent
-  `_ensureConnected` share one handshake; two simultaneous `247 enable` create one
-  connection; repeated `247 enable`/`/join` don't rejoin; gate releases on success
-  AND failure; a stale attempt can't clear a newer lock; `/247 disable` mid-connect
-  leaves nothing connected; `restore` is idempotent and never reconnects a
-  disabled session; a standby node never connects a guild it doesn't own; two
-  guilds get independent connections; 24/7 stays connected with an empty queue;
-  `waitForShardReady` ready/timeout/recovering/no-shard cases; the wrapper reports
-  a descriptive timeout vs a real error and frees the guild; a shard that isn't
-  Ready aborts fast instead of hanging 20s.
-
-## Music presentation upgrade (Linix port) — filters, autoplay, lyrics, premium embeds
-
-PrimeBot's music UI was upgraded with the presentation and feature set from the
-reference bot **Linix**. Linix runs on **kazagumo/shoukaku (Lavalink)**; PrimeBot
-plays through **`@discordjs/voice` + ffmpeg** directly, so **only the features and
-presentation were adapted — the playback engine is unchanged** and no new
-dependency (Lavalink, musicard, mongoose) was added.
-
-### New files
-- **`utils/music/musicFilters.js`** — the audio-filter catalog: `FILTERS`,
-  `FILTER_LIST`, `VALID_FILTER_IDS`, `filterArgs(id)`, `isFilter(id)`,
-  `filterLabel(id)`. Every preset is a **real ffmpeg `-af` chain** (bassboost,
-  nightcore, vaporwave, 8d, karaoke, equalizer, treble, soft, plus a few more) —
-  `filterArgs` returns `['-af', '<chain>']` and `[]` for an unknown/clear id, so a
-  filter can never be an embed-text-only fake. `tests/musicPremium.test.js` asserts
-  every entry carries `-af` + a non-empty chain.
-- **`utils/music/lyricsService.js`** — `fetchLyrics({ track|query })` +
-  `splitQuery()` (splits `"Artist - Title"`). Uses **no new dependency**: it hits a
-  public lyrics API over `globalThis.fetch` with a bounded timeout
-  (`LYRICS_TIMEOUT_MS`, default 8000) and **degrades to `{ lyrics: null, reason }`**
-  — it never throws. `http()` resolves `globalThis.fetch` **per call** (never
-  cached) so a test/override is always honoured.
-
-### Filter pipeline (real audio)
-`utils/music/musicVoice.js` gained `buildTranscodeArgs(sourceUrl, { seekSeconds,
-filterArgs })` (pure + exported), `transcodeStream`, and `getPlaybackPosition(player)`.
-`createResource(url, { track, seekSeconds, filter })` builds the ffmpeg args with
-`filterArgs(filter)` so the session's filter is applied to the live stream.
-**Gotcha:** the PCM tail is `-f s16le -ar 48000 -ac 2 pipe:1` (6 items) but when a
-`-af` chain is present the `-af`/chain pair precedes it — slice the last 7.
-
-### Manager (`utils/music/musicManager.js`)
-- Session fields: `filter`, `autoplay`, `autoplaySeen` (Set of `provider:id`),
-  `positionMs`, `startedAt`.
-- **`positionMs(session)`** prefers the live voice player position; otherwise the
-  seek baseline + wall-clock since `startedAt`. `pause()` freezes the baseline and
-  `resume()` restarts it, so the progress bar never advances while paused.
-- **`setFilter(id|null)`** validates against the catalog (rejects unknown ids),
-  and re-applies to the live track so the change is audible immediately.
-- **`setAutoplay(bool)`** + `_expandAutoplay()`: when the queue empties and autoplay
-  is on (and repeat is off), it searches related tracks, rejects the seed and any
-  title whose `titleSimilarity >= 0.75` (a re-upload of the same song), and dedupes
-  via `autoplaySeen` so it can never loop.
-- **`skipTo(position)`** (1-based, discards everything before it), **`rewind(sec)`**
-  (clamps at 0), and `stop()` now clears `positionMs`/`startedAt`.
-- **`describe(guildId, { queueLimit })`** now returns `filter`, `autoplay`,
-  `positionMs`, `durationMs` and a configurable `queue` window (default 25; the
-  queue views pass 100 so pagination works).
-
-### Premium UI (`utils/music/musicEmbed.js` — rewritten)
-Artwork-first **Now Playing** (artwork in the large `setImage` field + `[title](url)`
-+ progress bar + Duration /
-Requester / Source / Volume / Repeat / Autoplay / Filter / Queue / State fields),
-`controlRow` + `secondControlRow` (≤5 buttons each; repeat/autoplay/queue/lyrics/24-7),
-a **paginated queue** (10/page, absolute numbers, total duration, prev/close/next),
-a **search select menu** (≤25 options), a **filter picker** (`filterEmbed`/`filterRow`),
-`trackInfoEmbed`, playlist embeds, `status247Embed`, `loadingEmbed`/`successEmbed`/
-`errorEmbed` and `helpEmbed`. **All Discord component limits are enforced** (≤5
-buttons/row, ≤25 select options) and asserted by tests.
-
-### Commands
-- **`commands/music.js`** gained `rewind`, `skipto`, `autoplay`, `filter`, `track`,
-  `lyrics`, `grab` (and `nowplaying` now renders the full premium embed).
-- **`events/messageCreate.js`** prefix aliases: `autoplay`/`ap`, `filter`/`filters`/`eq`,
-  `lyrics`, `grab`/`save`, `skipto`/`jump`, `rewind`, `track`.
-- **`utils/music/musicButtons.js`** routes the new buttons (`music_autoplay`,
-  `music_repeat`, `music_lyrics`, `music_queue`, `music_qpage:<n>`, `music_qclose`)
-  and the **`music_filter`** select menu; every control re-checks requester
-  protection server-side.
-- **`events/interactionCreate.js`** routes `music_filter` and `radio_station_select`.
-- Help/docs updated in `utils/prefixHelp.js`, `commands/help.js` and
-  `dashboard/commandDocs.js`; the Sash drift test's `SUBS` list in
-  `tests/sashMenu.test.js` must include any new prefix alias.
-
-### Radio (styling only — engine + station DB untouched)
-`utils/radioEmbed.js` `statusEmbed` reuses the music presentation language
-(author line, artwork thumbnail, colour-coded state, field grid); added
-`stationSelectRow` + `stationsView` (a ≤25-option station dropdown) wired into
-`/radio stations` and `$radio stations`/`$radio station` and routed by the
-`radio_station_select` customId. `stationsEmbed` keeps its old (embed-only) return
-shape for backward compatibility.
+Added: `kazagumo`, `kazagumo-spotify`, `shoukaku` (already present), `musicard`,
+`musicard-quartz`, `canvacard`, `songcard`, `moment`,
+`moment-duration-format`, `moment-timezone`, `lodash`, `axios`,
+`@flytri/lyrics-finder`. **`canvafy` is deliberately NOT included:** its hard
+`canvas` dependency is a native C++ package (needs system Cairo/Pixman headers
+to compile) and breaks cloud builds — Vercel's Node 24 cannot install it. The
+Spotify now-playing card (`music/utils/spotifyCard.js`) renders with
+`canvacard.Spotify` instead (prebuilt `@napi-rs/canvas`); all the other card
+packages (`musicard`, `musicard-quartz`, `songcard`, `canvacard`) also use
+`@napi-rs/canvas` and install cleanly.
+Removed as orphaned by the deleted direct engine: `@discordjs/voice`,
+`@distube/ytdl-core`, `ffmpeg-static`, `opusscript`, `soundcloud-core`,
+`youtube-sr`. Nothing outside `music/` referenced any of them.
 
 ### Tests
-`tests/musicPremium.test.js` (23) covers real filter chains, the transcode args,
-autoplay (refill / no-loop / dedupe), skipto/rewind, the premium embeds + component
-limits, progressBar, the lyrics service (success/404/network-failure), and the
-prefix routing of every new alias (driving the real `messageCreate` handler).
+
+`tests/musicLinixReplacement.test.js` (23) — the old modules are gone, no dangling
+imports outside `music/`, `initMusic` loads both trees + the Kazagumo manager and
+leaves `client.commands` untouched, inert/idempotent without a node, prefix
+aliases resolve, the prefix runner enforces the voice preconditions, the slash
+router owns only the music tree, every collector customId is passed through, node
+and Spotify credentials are env-only, nodes register exactly once even when music
+boots after `clientReady`, Shoukaku options are converted to Shoukaku's units,
+`messageCreate`/`interactionCreate`/`index.js`/`deploy-commands.js` are wired, and
+the dashboard has no music surface.
+
+### Persistence — MUSIC_DATABASE_URL
+
+Linix stores 24/7 sessions, playlists, presets and the voice-channel status in
+MongoDB. PrimeBot has no MongoDB, so `music/schema/_pg.js` is a **mongoose-
+compatible shim over Postgres** implementing exactly the subset the vendored code
+uses (`find`/`findOne`/`create`/`updateOne`/`new Model().save()`/`doc.deleteOne()`).
+It resolves `MUSIC_DATABASE_URL` through `server/resolveDbUrl.js` (so it falls back
+to `FALLBACK_DATABASE_URL` → `DATABASE_URL`) and self-creates its four tables
+(`music_247_sessions`, `music_playlists`, `music_presets`, `music_vcstatus`) on
+first use — no migration needed, and the vendored schema files stay unchanged.
+**Same-DB requirement:** every shard node must share it so a 24/7 session created
+on one node is restored by whichever node takes the guild over.
 
 ## Voice defense — the bot is always self-deafened (default)
 
@@ -1853,13 +1550,15 @@ cannot be pulled into voice interaction — so "defended" is the safe default.
   `selfDeaf: true`, but nothing re-asserted it. An admin toggling the bot's state
   in the Discord UI, a server undeafen, or a fresh connection could leave the bot
   undeafened. The defense closes that gap.
-- **Two layers:** (1) `events/voiceStateUpdate.js` calls
-  `voiceDefense.handleVoiceStateUpdate` **first** (before the radio/music
-  forwarders) — it only polices the BOT's own, connected state and re-asserts the
-  deafen when lost; (2) both voice layers (`utils/music/musicVoice.js`,
-  `utils/radioVoice.js`) re-assert it via `defendGuild(client, guildId)` right
-  after a successful join, and build the join from `voiceDefense.JOIN_OPTIONS` so
-  the option can never drift.
+- **Where it is enforced:** (1) `events/voiceStateUpdate.js` calls
+  `voiceDefense.handleVoiceStateUpdate` — it only polices the BOT's own,
+  connected state and re-asserts the deafen when lost; (2) the Linix music
+  commands that join voice pass `deaf: true` on `manager.send`/`join`
+  (`music/commands/Music/{join,play,search}.js`,
+  `music/commands/Playlist/{playlist,plload}.js`,
+  `music/slashCommands/Music/{join,play}.js`, `music/loaders/restore247.js`,
+  `music/events/Node/ready.js`). Voice routing itself is Shoukaku's connector,
+  not a PrimeBot voice layer.
 - **Safety:** every call is fire-and-forget and throttled per guild
   (`VOICE_DEFEND_COOLDOWN_MS`, default 30000); `setDeaf` uses discord.js
   `VoiceState#setDeaf` (which sets **server**-deafen via
@@ -1867,155 +1566,7 @@ cannot be pulled into voice interaction — so "defended" is the safe default.
   never throw into an event handler. Rejoins reset `selfDeaf` to true anyway.
 - **Env vars:** `VOICE_DEFEND_ENABLED` (default `true`), `VOICE_DEFEND_COOLDOWN_MS`
   (default `30000`). Set `VOICE_DEFEND_ENABLED=false` to opt out (not recommended).
-- **Tests:** `tests/voiceDefense.test.js` (12) — join-option defaults, no hardcoded
-  `selfDeaf:false` drift in either voice layer, post-join re-assertion, the
-  throttle/force path, only-the-bot policing, the disable switch, and the event
-  wiring order (defense before radio/music).
+- **Tests:** `tests/voiceDefense.test.js` — join-option defaults, no hardcoded
+  `selfDeaf:false` drift in the Linix join sites, the throttle/force path,
+  only-the-bot policing, and the disable switch.
 
-## Post-#127 music playback bugs (fixed) — radio require, YouTube URL, ffmpeg
-
-Three **pre-existing** bugs surfaced in production right after the Lavalink engine
-(#127) landed. None were in the Lavalink code — all three lived on `main` since
-PR #125, and the mocked test suites never exercised the real paths that break.
-Fixed in PR #128.
-
-- **`[RADIO] Restore failed … Cannot find module '../voiceReadiness'`.**
-  `utils/radioVoice.js` lives in `utils/`, so its sibling is `./voiceReadiness`
-  — **not** `../voiceReadiness`, which resolves to `<repo-root>/voiceReadiness.js`
-  (missing). `utils/music/musicVoice.js` correctly uses `../` because it sits one
-  level deeper in `utils/music/`. **Lesson:** a relative sibling require must be
-  checked against the file's own directory. `tests/radioVoiceJoin.test.js` drives
-  the REAL `radioVoice.join()` (the radio suite mocks the whole voice layer, which
-  is exactly why this shipped) and statically audits every sibling require.
-- **"Invalid video url" on a VALID YouTube URL.** `youtube.resolve()`
-  (`utils/music/providers/youtube.js`) passed a **bare video id** to youtube-sr's
-  `getVideo()`, which validates its argument as a VIDEO URL
-  (`YT.validate(id,'VIDEO') === false`) and throws `Invalid video url` **before
-  any fetch**. Fix: send the canonical `https://www.youtube.com/watch?v=<id>`.
-  Symptom that distinguishes it from a real network failure: the error is
-  `Invalid video url`, not `fetch failed`/`Failed to find any playable formats`.
-- **"song plays but no sound" (direct engine).** `musicVoice.ffmpeg()` trusted
-  `require('ffmpeg-static')` to **throw** when the binary is absent; it instead
-  returns a **path string** that does not exist, so
-  `try { ffmpegPath = require('ffmpeg-static') } catch { ffmpegPath = 'ffmpeg' }`
-  never hit the `catch` and ffmpeg was spawned at a missing path. Now it
-  `existsSync`-checks the resolved binary and falls back to the system `ffmpeg`
-  (with a one-time `[MUSIC] ffmpeg-static binary not found` warning). **Prerequisite
-  for any direct-engine sound on hosts that block npm install scripts.** The
-  Lavalink engine needs no local ffmpeg (it offloads to the node), which is one of
-  its advantages.
-- **Not fixed here:** `@distube/ytdl-core is out of date! … Failed to find any
-  playable formats` is YouTube **format extraction**, orthogonal to the above —
-  resolved by a Lavalink node with a current YouTube source plugin, or by updating
-  `@distube/ytdl-core`.
-- **Tests:** `tests/radioVoiceJoin.test.js` (3) + `tests/musicVoiceFixes.test.js` (5).
-
-## Music control buttons — attach to every playback reply
-
-The music control rows (`controlRow` + `secondControlRow` in
-`utils/music/musicEmbed.js` — `music_prev/pauseresume/skip/stop/shuffle` and
-`music_repeat/autoplay/queue/lyrics/247status`) were fully built and routed in
-`events/interactionCreate.js`, but the **play** handlers replied with a bare
-success embed and **no components** — the controls were only ever attached to
-`nowplaying` / `help` / the button-refresh path. Symptom: "no control buttons are
-showing" right after `$play`.
-
-- **Fix:** `utils/music/musicEmbed.js` exports **`nowPlayingPayload(snapshot)`** —
-  the Now Playing embed plus BOTH control rows. Use it for every reply that
-  announces playback: prefix `$play` (`events/messageCreate.js`), slash
-  `/music play` (`commands/music.js`), and the search-select handler
-  (`events/interactionCreate.js`, which previously sent `components: []`).
-- **Gotcha:** `nowPlaying()` returns only the FIRST row in `components`, so
-  `components: [components[0]]` silently drops repeat/autoplay/queue/lyrics/24-7.
-  Prefer `nowPlayingPayload()` — it cannot drop a row.
-- **Tests:** `tests/musicVoiceFixes.test.js` asserts `nowPlayingPayload()` exposes
-  all 10 control customIds and drives the REAL `$play` handler to confirm the reply
-  carries both action rows (verified failing without the fix).
-
-## Music artwork: shown in the large image field, not the corner thumbnail
-
-The Now Playing (`nowPlaying()`/`nowPlayingPayload()`) and track-info
-(`trackInfoEmbed()`) embeds render the track artwork with **`embed.setImage(...)`**
-(the large bottom image) rather than `setThumbnail(...)` (the small top-right
-corner). Both are driven by the track's `artworkUrl`, which every provider
-populates (`youtube.js` reads `v.thumbnail.url || v.thumbnail`, `soundcloud.js`
-`raw.artworkUrl`, `spotify.js` `oembed.thumbnail_url`, `lavalinkProviders.js`
-`kt.thumbnail`). **Radio** (`utils/radioEmbed.js` `statusEmbed`) still uses
-`setThumbnail` and was intentionally left unchanged. Tests:
-`tests/musicPremium.test.js` + `tests/musicVoiceFixes.test.js` assert
-`json.image.url` is set and `json.thumbnail` is absent for both embeds.
-
-### `applyArtwork()` — never let a bad artwork value break an embed (or a button)
-
-`EmbedBuilder.setImage()`/`setThumbnail()` **validate their argument and THROW**
-on anything that is not a valid URL (a bare identifier, a relative path, an
-empty string). `musicEmbed.js` therefore applies artwork through a guarded
-**`applyArtwork(embed, url)`** (`isImageUrl()` = `^https?://\S+$`), which
-silently skips a non-URL value so the embed simply carries no image. This is not
-cosmetic: every control button calls `refreshNowPlaying()` → `nowPlaying()`, so a
-single bad `artworkUrl` used to make **every** music button reply "This
-interaction failed" (the throw was swallowed by `safeExecute` and the
-interaction was never acknowledged). Never call `setImage`/`setThumbnail`
-directly on a provider-supplied URL — always go through `applyArtwork()`.
-
-### Play announcements must not replace the embed
-
-The play replies (`$play` in `events/messageCreate.js`, `/music play` in
-`commands/music.js`, and the `music_search:` select in
-`events/interactionCreate.js`) build the Now Playing payload and then override
-**only the headline** via `nowPlayingPayload(snapshot, { title })`. They used to
-do `payload.embeds = [successEmbed(...)]`, which discarded the Now Playing embed —
-including its artwork — so the image field was always empty. `nowPlayingPayload`
-also accepts `{ track }` to render a *different* track as the embed subject (used
-for the "➕ Queued" announcement, where the queued track is not the one playing)
-while the control rows still reflect the live session.
-
-## Lavalink playback lifecycle — "embed says Playing but no audio" (fixed)
-
-Three independent defects made PrimeBot show **Playing** while nothing was heard
-and the progress timer sat frozen. All three are fixed and covered by
-`tests/musicPlaybackLifecycle.test.js`.
-
-1. **Shoukaku connector identity (`shoukaku.id`) was never set when the client was
-   already ready.** Shoukaku's `Connectors.DiscordJS` sets `manager.id` **only
-   inside its `client.once('clientReady')` hook**, and `Connector.raw()` **drops
-   every `VOICE_STATE_UPDATE` whose `user_id !== manager.id`**. When the manager
-   starts after login (a reconnect, a hot reload, a failover takeover), that hook
-   never fires, `id` stays `null`, the voice `sessionId` is never captured, and
-   Lavalink can never complete the voice handshake → **no audio**. Fix:
-   `LavalinkManager._ensureNodesAdded()` restores the identity (and registers the
-   nodes) when the client is already ready — this is the ONLY place `addNode` is
-   called, so a node is never registered twice.
-2. **`KazagumoPlayer.state` never leaves CONNECTING** (Kazagumo never calls
-   `player.connect()`), so "connected" must be read from the **Shoukaku
-   Connection** — `connectionState(guildId)` requires `state === CONNECTED` **and**
-   a `sessionId` **and** a voice-server endpoint. `LavalinkEngine.isConnectionActive`
-   / `getConnectionState` now read that, not `player.state`. A track is reported
-   PLAYING only when the transport is genuinely up; otherwise **Buffering**.
-3. **Nothing refreshed the Now Playing embed**, and the position fell back to a
-   wall-clock counter that advanced even when no audio flowed. `MusicManager` now
-   has a **bounded per-session refresh timer** (`_startRefreshTimer`/`_stopRefreshTimer`,
-   one per session) driven by the **real** `voice.getPlaybackPosition()`, plus
-   **stalled-playback detection** (`_checkStalled`): while we claim PLAYING the
-   position must advance, or after `MUSIC_STALL_TICKS` (default 3) ticks the
-   session is downgraded to **Buffering** and a credential-free diagnostic line is
-   logged (`connected`, `status`, `ping`, `node`, `frameStats`).
-
-- **Honest states:** `shared/musicConstants.js` `PLAYBACK_STATES` gained
-  `buffering` / `reconnecting`; `deriveState()` returns Buffering when the
-  transport is down or the position is frozen, Reconnecting while a node/voice
-  loss is being recovered. `describe()` reports the **derived** state, never a
-  stale `session.state`. `musicEmbed.js` `stateLabel()` renders both.
-- **Recovery:** `playersLost` now marks the session Reconnecting + stops the stale
-  timer before re-creating the player on a healthy node; a guild with no healthy
-  node is left `_recoveryPending` and retried on the next node `ready`
-  (`_retryPendingRecovery`). **Audio always restarts** — a Lavalink node cannot
-  hand a live stream to another node — but the **queue and track metadata are
-  never lost**. `diagnostics(guildId)` exposes a credential-free per-guild snapshot.
-- **Playback modes (music ↔ radio mutual exclusion):** a guild has exactly ONE
-  voice connection, so `utils/playbackMode.js` `PlaybackModeRegistry` tracks the
-  active mode (`idle`/`music`/`radio`) and serialises transitions via a per-guild
-  `runExclusive` lock. `MusicManager.play()` stops the radio FIRST if it owns the
-  guild; `RadioManager.start()` stops music FIRST. `index.js` cross-links the two
-  managers. Both default to the shared registry. Only the ENTRY points take the
-  lock (the stop side is a plain internal call, so a transition can't deadlock).

@@ -146,26 +146,15 @@ module.exports = {
             }, 6000);
         }
 
-        // Restore 24/7 radio sessions: reconnect to each configured voice
-        // channel and resume (or wait for listeners). The voice connection did
-        // NOT survive the restart, so it is recreated here.
-        if (client.radioManager && typeof client.radioManager.restore === 'function') {
+        // Restore 24/7 music sessions (the Linix `247` table): re-create a
+        // player for every saved guild and re-join its voice channel. The voice
+        // connection did NOT survive the restart, so it is recreated here.
+        if (client.manager && typeof client.manager.players !== 'undefined') {
             setTimeout(() => {
-                client.radioManager.restore().catch(err =>
-                    console.error('[RADIO] Restore failed:', err.message)
-                );
-            }, 7000);
-        }
-
-        // Restore 24/7 Music sessions: reconnect to each configured voice channel
-        // (the connection did NOT survive the restart) and stay connected silently
-        // with an empty queue until a listener requests music.
-        if (client.musicManager && typeof client.musicManager.restore === 'function') {
-            setTimeout(() => {
-                client.musicManager.restore().catch(err =>
+                require('../music').restore247(client).catch(err =>
                     console.error('[MUSIC] Restore failed:', err.message)
                 );
-            }, 7500);
+            }, 7000);
         }
 
         // Anti-Nuke readiness. The manager loads its own configuration cache in
