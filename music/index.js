@@ -40,12 +40,16 @@ function initMusic(client) {
     }
 
     try {
+        // State object is created BEFORE the loaders bind the node/player
+        // events, so a node that connects (or fails) right away is tracked.
+        // `connected` flips true only from the Lavalink node `ready` event.
+        client.__musicState = { enabled: true, nodes: cfg.nodes.length, commands: null, connected: false };
         loadPlayerManager(client);
         loadNodes(client);
         loadPlayers(client);
         const commands = loadCommands(client);
-        client.__musicState = { enabled: true, nodes: cfg.nodes.length, commands };
-        client.logger.log(`Music initialized with ${cfg.nodes.length} Lavalink node(s)`, 'ready');
+        client.__musicState.commands = commands;
+        client.logger.log(`Music initialized with ${cfg.nodes.length} Lavalink node(s)`, 'log');
         return client.__musicState;
     } catch (err) {
         console.error('[MUSIC] Initialization failed:', err);

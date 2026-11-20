@@ -19,7 +19,8 @@
  *     for music custom ids).
  */
 
-const { EmbedBuilder, MessageFlags, PermissionsBitField } = require('discord.js');
+const { EmbedBuilder, MessageFlags } = require('discord.js');
+const { resolvePerms } = require('./utils/perms');
 
 /**
  * customIds owned by the Linix collectors (the now-playing control row, the
@@ -74,24 +75,24 @@ async function handleMusicSlash(client, interaction) {
     // Linix's slash modules declare the permission fields as `botPrams` /
     // `userPrams` (typo preserved from the original source). Reading both
     // spellings here means the gates actually run instead of silently passing.
+    // `resolvePerms` also maps Linix's SCREAMING_SNAKE names (EMBED_LINKS) to
+    // the camelCase flags the installed discord.js resolves — an unrecognized
+    // name must not throw and break the command.
     const commandPerms = (key) =>
         command[key] || command[key.replace(/Prams$/, 'Perms')];
 
     const botPerms = commandPerms('botPrams');
-    if (botPerms) {
-        if (!interaction.guild.members.me.permissions.has(PermissionsBitField.resolve(botPerms || []))) {
-            embed.setDescription(`I don't have **\`${botPerms}\`** permission in ${interaction.channel.toString()} to execute this **\`${command.name}\`** command.`);
-            await interaction.reply({ embeds: [embed] }).catch(() => {});
-            return true;
-        }
+    if (botPerms && !interaction.guild.members.me.permissions.has(resolvePerms(botPerms))) {
+        embed.setDescription(`I don't have **\`${botPerms}\`** permission in ${interaction.channel.toString()} to execute this **\`${command.name}\`** command.`);
+        await interaction.reply({ embeds: [embed] }).catch(() => {});
+        return true;
     }
+
     const userPerms = commandPerms('userPrams');
-    if (userPerms) {
-        if (!interaction.member.permissions.has(PermissionsBitField.resolve(userPerms || []))) {
-            embed.setDescription(`You don't have **\`${userPerms}\`** permission in ${interaction.channel.toString()} to execute this **\`${command.name}\`** command.`);
-            await interaction.reply({ embeds: [embed] }).catch(() => {});
-            return true;
-        }
+    if (userPerms && !interaction.member.permissions.has(resolvePerms(userPerms))) {
+        embed.setDescription(`You don't have **\`${userPerms}\`** permission in ${interaction.channel.toString()} to execute this **\`${command.name}\`** command.`);
+        await interaction.reply({ embeds: [embed] }).catch(() => {});
+        return true;
     }
 
     const player = client.manager && client.manager.players.get(interaction.guildId);

@@ -17,7 +17,8 @@ const path = require('node:path');
 const ROOT = path.join(__dirname, '..');
 const MUSIC = path.join(ROOT, 'music');
 
-const { getMusicConfig, resolveEmoji, resolveNodes } = require(path.join(MUSIC, 'config'));
+const { getMusicConfig, resolveEmoji, resolveNodes, resolveNodeUrl } = require(path.join(MUSIC, 'config'));
+const { resolvePerms } = require(path.join(MUSIC, 'utils', 'perms'));
 
 const SAVED_MUSIC_ENV = [
     'MUSIC_EMOJI_DOT', 'MUSIC_EMOJI_PLAY', 'MUSIC_EMOJI_PAUSE', 'MUSIC_EMOJI_SKIP',
@@ -30,7 +31,7 @@ const SAVED_MUSIC_ENV = [
     'MUSIC_EMOJI_PREVIOUS', 'MUSIC_EMOJI_WARN', 'MUSIC_EMOJI_ABOUT',
     'MUSIC_POWERED_BY', 'MUSIC_CARD_IMAGE', 'MUSIC_CARD_NAME', 'MUSIC_SUPPORT_URL',
     'MUSIC_OWNER_ID', 'MUSIC_PLAYLISTS', 'MUSIC_PLAYLIST_LABEL', 'MUSIC_PLAYLIST_URL',
-    'MUSIC_PLAYLIST_MENU_LABEL', 'NODE_URL',
+    'MUSIC_PLAYLIST_MENU_LABEL', 'NODE_URL', 'NODE_PORT', 'NODE_AUTH', 'NODE_NAME', 'NODE_SECURE',
 ];
 
 function withEnv(env, fn) {
@@ -125,6 +126,66 @@ test('no Lavalink node is configured when NODE_URL and LAVALINK_NODES are unset'
     withEnv({ NODE_URL: '', LAVALINK_NODES: '' }, () => {
         assert.deepStrictEqual(resolveNodes(), []);
     });
+});
+
+test('NODE_PORT is honoured for a bare NODE_URL host (CloudeWave config)', () => {
+    withEnv(
+        {
+            NODE_URL: 'lavalink.cloudewave.in',
+            NODE_PORT: '2336',
+            NODE_AUTH: 'cloudewave.in',
+            NODE_NAME: 'CloudeWave',
+            NODE_SECURE: 'false',
+        },
+        () => {
+            assert.strictEqual(resolveNodeUrl(), 'lavalink.cloudewave.in:2336');
+            const nodes = resolveNodes();
+            assert.strictEqual(nodes.length, 1);
+            assert.strictEqual(nodes[0].url, 'lavalink.cloudewave.in:2336');
+            assert.strictEqual(nodes[0].auth, 'cloudewave.in');
+            assert.strictEqual(nodes[0].name, 'CloudeWave');
+            assert.strictEqual(nodes[0].secure, false);
+        },
+    );
+});
+
+test('real Lavalink connection string for CloudeWave (ws + plaintext) is used by Shoukaku', () => {
+    withEnv(
+        {
+            NODE_URL: 'lavalink.cloudewave.in',
+            NODE_PORT: '2336',
+            NODE_AUTH: 'cloudewave.in',
+            NODE_SECURE: 'false',
+        },
+        () => {
+            const node = resolveNodes()[0];
+            // Shoukaku builds ws://<url>/v4/websocket when secure=false
+            assert.strictEqual(`${node.secure ? 'wss' : 'ws'}://${node.url}/v4/websocket`,
+                'ws://lavalink.cloudewave.in:2336/v4/websocket');
+        },
+    );
+});
+
+test('NODE_URL scheme forms still win over NODE_PORT for a full URL', () => {
+    withEnv({ NODE_URL: 'wss://lava.example.com:443', NODE_PORT: '9999', NODE_AUTH: 'pw' }, () => {
+        assert.strictEqual(resolveNodeUrl(), 'wss://lava.example.com:443');
+        const nodes = resolveNodes();
+        assert.strictEqual(nodes[0].url, 'lava.example.com:443');
+        assert.strictEqual(nodes[0].secure, true);
+    });
+});
+
+test('resolvePerms accepts Linix SCREAMING_SNAKE names without throwing', () => {
+    // `EMBED_LINKS` is what every Linix music command declares as botPrams;
+    // the installed discord.js resolves camelCase only, and the old
+    // PermissionsBitField.resolve(['EMBED_LINKS']) threw BitFieldInvalid.
+    assert.strictEqual(resolvePerms(['EMBED_LINKS']).toString(), '16384'); // EmbedLinks
+    assert.strictEqual(resolvePerms(['CONNECT', 'SPEAK']).toString(), '3145728');
+    assert.strictEqual(resolvePerms(['EmbedLinks']).toString(), '16384');
+    // Unknown names are dropped silently; never throws.
+    assert.strictEqual(resolvePerms(['NOT_A_FLAG', 'EMBED_LINKS']).toString(), '16384');
+    assert.strictEqual(resolvePerms([]).toString(), '0');
+    assert.strictEqual(resolvePerms(undefined).toString(), '0');
 });
 
 test('$playlist demo menu is disabled when nothing is configured', () => {
