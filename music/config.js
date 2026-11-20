@@ -59,11 +59,27 @@ function normalizeNode(node) {
     };
 }
 
+/**
+ * Build the node URL from host/port env vars (Linix's `NODE_URL` / the
+ * `LAVALINK_HOST` aliases). A bare host gets the `NODE_PORT` /
+ * `LAVALINK_PORT` (default 2333) appended — the URL is what Shoukaku
+ * connects to, so dropping the port silently routes the socket to :80.
+ */
+function resolveNodeUrl() {
+    const host = process.env.NODE_URL || process.env.LAVALINK_HOST || '';
+    if (!host) return null;
+    // A full URL (with scheme) is passed through untouched.
+    if (/^(ws|wss|http|https):\/\//i.test(host)) return host;
+    // A bare host with an explicit port already embedded is passed through;
+    // only a bare host:port-less value gets the configured port appended.
+    const hasPort = /:[0-9]+$/.test(host);
+    const port = process.env.NODE_PORT || process.env.LAVALINK_PORT || 2333;
+    return hasPort ? host : `${host}:${port}`;
+}
+
 /** Linix `config.nodes` — the authorized Lavalink node(s). */
 function resolveNodes() {
-    const url = process.env.NODE_URL || process.env.LAVALINK_HOST
-        ? (process.env.NODE_URL || `${process.env.LAVALINK_HOST}:${process.env.LAVALINK_PORT || 2333}`)
-        : null;
+    const url = resolveNodeUrl();
 
     if (process.env.LAVALINK_NODES) {
         try {
@@ -76,6 +92,9 @@ function resolveNodes() {
     if (!url) return [];
     return [normalizeNode({
         url,
+        // `LAVALINK_NAME` is the Lavalink node display name; `NODE_NAME` is
+        // PrimeBot's shard-node identity (utils/nodeIdentity.js), so it is
+        // only used as a last-resort fallback and never takes precedence.
         name: process.env.LAVALINK_NAME || process.env.NODE_NAME || 'Lavalink',
         auth: process.env.NODE_AUTH || process.env.LAVALINK_PASSWORD || '',
         secure: process.env.NODE_SECURE || process.env.LAVALINK_SECURE,
@@ -199,6 +218,7 @@ function getMusicConfig() {
 module.exports = {
     getMusicConfig,
     resolveNodes,
+    resolveNodeUrl,
     resolveNodeOptions,
     resolveEmoji,
     parseBoolean,

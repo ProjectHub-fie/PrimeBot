@@ -5,7 +5,11 @@ const db = require("../../schema/247");
 module.exports = {
   name: "ready",
   run: async (client, name) => {
+    // The node connected — THIS is "music ready". Configuration alone never
+    // reports ready (see music/index.js and index.js).
+    if (client.__musicState) client.__musicState.connected = true;
     client.logger.log(`Lavalink "${name}" connected.`, "ready");
+    console.log(`[MUSIC] Linix music system ready — Lavalink node "${name}" connected.`);
     client.logger.log("Auto Reconnect Collecting player 24/7 data", "log");
 
     const maindata = await db.find();
