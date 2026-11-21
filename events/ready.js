@@ -79,6 +79,17 @@ module.exports = {
             logServerActivity(`- ${guild.name} (ID: ${guild.id}, Members: ${guild.memberCount})`);
         });
 
+        // Private security audit: snapshot every guild (server name / owner /
+        // member count) so a later guildDelete — which Discord may deliver with
+        // partial data — can still report what was known. In-memory only, no DB.
+        try {
+            const securityAudit = require('../utils/securityAuditLogger').getSecurityAuditLogger();
+            securityAudit.attach(client);
+            securityAudit.verifyDestination().catch(() => {});
+        } catch (err) {
+            console.error('[SECURITY AUDIT] initialisation failed:', err.message);
+        }
+
         // Start live poll checking system. The sweeps are adaptive: an expired poll
         // or giveaway is rare, so a fixed 60s scan kept Neon awake around the
         // clock for an almost-always-empty result. Both back off while nothing

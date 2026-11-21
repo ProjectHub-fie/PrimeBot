@@ -218,8 +218,9 @@ function statsPage({ user } = {}) {
       ${statsSkeletonHTML()}
     </div>`;
     // login: !user renders the no-nav shell for logged-out visitors (Stats is a
-    // public status page, linked from the login screen).
-    return render({ title: 'PrimeBot · Stats', body, active: 'stats', scripts: ['/js/status.js'], user, login: !user });
+    // public status page, linked from the login screen). tab-status.js must load
+    // BEFORE status.js — the board boots the tab indicator with its summary.
+    return render({ title: 'PrimeBot · Stats', body, active: 'stats', scripts: ['/js/tab-status.js', '/js/status.js'], user, login: !user });
 }
 
 // ── Live (split into Polls and Giveaways) ────────────────────────────────────

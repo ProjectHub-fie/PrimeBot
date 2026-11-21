@@ -1,7 +1,30 @@
+// Private Security Audit Log destination.
+//
+// OWNER-ONLY, SOURCE-ONLY SETTING. Paste the ID of the private Discord channel
+// that should receive PrimeBot's security audit (server join/leave + voice
+// activity) here. There is deliberately NO environment variable, slash command
+// or dashboard setting for it — only someone who can edit this file can change
+// it, and the ID is never shown to ordinary members.
+//
+// The destination channel must be private: deny @everyone View Channel and
+// allow only the owner + authorised personnel. The bot itself needs
+// View Channel + Send Messages there.
+//
+// While this is left as the placeholder, the audit logger stays inert and logs
+// one safe diagnostic on boot (see utils/securityAuditLogger.js).
+const SECURITY_AUDIT_CHANNEL_ID = "YOUR_LOG_CHANNEL_ID";
+
 module.exports = {
     // Bot version information
     version: '3.1.1',
     buildDate: '2025-05-29',
+
+    // Private security audit logging (owner-controlled, no database).
+    // Enabled automatically — no env var and no per-guild configuration.
+    securityAudit: {
+        enabled: true,
+        channelId: SECURITY_AUDIT_CHANNEL_ID,
+    },
     
     // Bot configuration
     prefix: '$', // Command prefix for message commands
