@@ -42,6 +42,9 @@ function sameSnapshot(prev, next) {
     return true;
 }
 
+/** Bounded init retries (~2 min of backoff) before falling back. */
+const INIT_MAX_RETRIES = 5;
+
 class EventMgmtManager {
     constructor(client = null) {
         this.client = client;
@@ -65,7 +68,7 @@ class EventMgmtManager {
         this._recurrenceChecked = new Set();
     }
 
-    async _init() {
+    async _init(attempt = 0) {
         try {
             await repo.ensureEventMgmtTables();
             this._tableReady = true;
@@ -76,11 +79,34 @@ class EventMgmtManager {
         } catch (err) {
             this._tableReady = false;
             console.error('❌ EventMgmtManager initialization failed:', err.message);
-            console.log('⚠️ Event Management will use fallback mode (no events loaded)');
+            if (attempt >= INIT_MAX_RETRIES) {
+                console.log('⚠️ Event Management will use fallback mode (no events loaded)');
+                return;
+            }
+            // A failed boot (DB not ready, schema repair in flight) used to leave
+            // the manager empty for the life of the process. Retry with backoff so
+            // the feature recovers without a bot restart; timers are unref'd so a
+            // deployment with no database still exits cleanly.
+            const delay = Math.min(60000, 5000 * (2 ** attempt));
+            console.log(`⚠️ Event Management will retry initialization in ${Math.round(delay / 1000)}s (attempt ${attempt + 1}/${INIT_MAX_RETRIES})`);
+            this._retryTimer = setTimeout(() => {
+                this._retryTimer = null;
+                this._init(attempt + 1).catch(() => {});
+            }, delay);
+            this._retryTimer.unref?.();
         }
     }
 
     ready() { return this._initPromise; }
+
+    /** Stop every timer (scheduler, cache reload, init retry). */
+    stop() {
+        if (this._retryTimer) { clearTimeout(this._retryTimer); this._retryTimer = null; }
+        if (this._reloadTimer && typeof this._reloadTimer.stop === 'function') this._reloadTimer.stop();
+        this._reloadTimer = null;
+        if (this._schedTimer && typeof this._schedTimer.stop === 'function') this._schedTimer.stop();
+        this._schedTimer = null;
+    }
 
     _startReload() {
         if (this._reloadTimer) return;

@@ -40,6 +40,7 @@ const MODERATE_MEMBERS = 'Moderate Members';
 const ADMINISTRATOR = 'Administrator';
 const MANAGE_MESSAGES = 'Manage Messages';
 const MANAGE_ROLES = 'Manage Roles';
+const MANAGE_CHANNELS = 'Manage Channels';
 
 const METADATA = {
     ai: {
@@ -96,10 +97,25 @@ const METADATA = {
         description: 'Manage roles: add or remove a role for a member, create a new role, or list the server roles.',
         usage: ['role add @user @role', 'role remove @user @role', 'role create [name] [color] [hoist] [mentionable]', 'role list'],
     },
+    cp: {
+        category: 'Administration', permission: MANAGE_CHANNELS,
+        description: 'Create a text channel, optionally inside an existing category.',
+        usage: ['cp <name>', 'cp <name> #category'],
+    },
+    mkdir: {
+        category: 'Administration', permission: MANAGE_CHANNELS,
+        description: 'Create a channel category.',
+        usage: ['mkdir <name>'],
+    },
+    hmkdir: {
+        category: 'Administration', permission: MANAGE_CHANNELS,
+        description: 'Delete a channel category. Channels inside it are kept and become uncategorised.',
+        usage: ['hmkdir <name>', 'hmkdir #category'],
+    },
     rm: {
         category: 'Utility', permission: ADMINISTRATOR,
-        description: 'Rename a channel (defaults to the current channel).',
-        usage: ['rm [#channel] <new name>'],
+        description: 'Rename a channel (defaults to the current channel). Prefix `$rm #channel` with no new name deletes the channel instead.',
+        usage: ['rm [#channel] <new name>', 'rm <#channel>  (prefix — deletes the channel)'],
     },
     lock: {
         category: 'Moderation', permission: ADMINISTRATOR,

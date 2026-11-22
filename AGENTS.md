@@ -1875,3 +1875,24 @@ Tests: `tests/helpMenuNoCategoryDescriptions.test.js`,
 - **Dashboard:** tab `AI Assistant` (`render/guild.js` TABS) → `render/ai-page.js` (8 sections: overview/configuration/personality/knowledge/memory/usage/providers/permissions) + `public/js/ai.js`. API in `dashboard/server.js` (`GET/PATCH /api/guilds/:guildId/ai`, knowledge CRUD, session clearing, provider test, usage reset) all `requireAuth + requireGuildAdmin`; channel/role ids are validated against the live guild. Provider test is a stateless `callProvider` call (the dashboard has no manager process).
 - **Mention reply card:** one `ContainerBuilder` holding the text and the four Link buttons (`utils/mentionReply.js`), `flags: MessageFlags.IsComponentsV2`, no `content`/`embeds`. Link buttons must not carry a `customId` (Discord rejects it). Emojis resolve through `client.emojiManager.forComponent()` with Unicode fallbacks.
 - **Tests:** `tests/aiAssistant.test.js` (free-model guard, adapters, failover, auth-disable, quotas/cooldowns, session persistence/isolation/expiry, prompt safety, mention handler, Components V2 card, page render, route guards).
+
+## Channel admin commands ($cp / $rm / $mkdir / $hmkdir + /channel)
+
+Quick channel management without the dashboard. All four are guild-scoped (lookups only search the guild's own channel cache, so a mention or id from another guild can never resolve) and require **Manage Channels**.
+
+- `$cp <name> [#category]` (alias `createchannel`) → creates a text channel, optionally inside a category. Names are sanitised by `utils/channelAdmin.js` `sanitizeName()` (lowercase, spaces → `-`, invalid characters stripped, ≤100 chars, empty → `new-channel`).
+- `$rm <#channel>` → **deletes** the channel. This only fires when the command has exactly one channel target and no new name, so `$rm <new-name>` still renames the current channel and `$rm 42 reason` still edits an automod embed reason. Refuses the channel the command was used in, categories (pointing at `hmkdir`), and undeletable channels.
+- `$mkdir <name>` (alias `createcategory`) → creates a category.
+- `$hmkdir <name|#category>` (aliases `rmdir`, `deletecategory`) → deletes a category. Channels inside are **kept** (they become uncategorised) and the reply says how many moved out.
+- Slash parity: `/channel create|delete|category-create|category-delete` (`commands/channel.js`, `setDefaultMemberPermissions(ManageChannels)`).
+- Help/docs: the four commands live in the **Administration** help category (`utils/prefixHelp.js`) and in `/docs` (`dashboard/commandDocs.js`); `rm`'s docs entry documents both rename and prefix-delete.
+- Tests: `tests/channelAdminCommands.test.js` (sanitising, resolution, create/delete semantics, refusals, help + docs wiring).
+
+## Help menu: dedicated AI category + `$ai` shortcuts
+
+- The help menu has its own **AI Assistant** category (`utils/prefixHelp.js` `CATALOG.ai`, in `CATEGORY_ORDER` after Information) listing `ai ask / enable / channel / role / mode / language / settings / personality / knowledge / memory`. Categories may set `display` on a command row when several rows share one command name — `categoryCommandNames()`/`commandField()` prefer `display`, so the category lists subcommands instead of collapsing to a single `ai`.
+- `$ai` admin shortcuts map one-word forms onto the config settings via `parseAiShortcut()` (`utils/ai/aiCommands.js`): `enable/disable`, `channel #x`, `channels clear`, `role @r`, `roles clear`, `mode`, `language|lang`, `cooldown`, `limit`, `serverlimit`, `ttl`, `length`, `knowledge on|off`, `vision on|off`, and `settings` (shows the configuration without writing). Real subcommands are never swallowed — `knowledge add …` still runs the knowledge subcommand, `personality` keeps its custom-instructions form.
+
+## Event Management schema repair (production "recurrence_parent_id does not exist")
+
+`CREATE TABLE IF NOT EXISTS` never alters an existing table, and the recurrence index used to be created inside the same multi-statement DDL **before** the ALTERs — Postgres runs that as one implicit transaction, so an older `em_events` aborted the whole bootstrap and the manager fell back to "no events loaded". `server/eventMgmtDb.js` now runs three steps in order: **CREATE TABLE** (no indexes) → **ALTER … ADD COLUMN IF NOT EXISTS** (every column of every `em_*` table) → **CREATE INDEX**. `migrations/0037_fix_eventmgmt_schema.sql` mirrors it for managed deployments. `EventMgmtManager._init()` also retries with bounded backoff (`INIT_MAX_RETRIES`, ~2 min) instead of staying empty forever, and exposes `stop()` to clear its timers. Tests: `tests/eventMgmtSchemaUpgrade.test.js`.

@@ -12,6 +12,7 @@ const net = require("net");
 const config = require("../config");
 const nodeFailover = require("../utils/nodeFailover");
 const { scheduleComponentExpiry } = require("../utils/stabilityUtils");
+const channelAdmin = require("../utils/channelAdmin");
 
 // Measures TCP connection time (ms) to a host:port within a 3s timeout.
 // Returns null if unreachable or timed out.
@@ -647,14 +648,22 @@ module.exports = {
                     if (!message.guild) {
                         return message.reply('The AI assistant works inside a server.');
                     }
-                    const { runAiAction } = require('../utils/ai/aiCommands');
+                    const { runAiAction, parseAiShortcut } = require('../utils/ai/aiCommands');
                     const sub = (args[0] || 'help').toLowerCase();
                     const rest = args.slice(1);
                     const joined = rest.join(' ').trim();
                     const options = { sub };
                     let action = sub;
 
-                    if (sub === 'translate') {
+                    // Short admin forms: `$ai enable`, `$ai channel #x`,
+                    // `$ai mode auto`, `$ai settings` … map onto `config`.
+                    const shortcut = parseAiShortcut(args);
+                    if (shortcut) {
+                        action = 'config';
+                        options.sub = 'config';
+                        options.setting = shortcut.setting;
+                        options.value = shortcut.value;
+                    } else if (sub === 'translate') {
                         options.language = rest[0];
                         options.text = rest.slice(1).join(' ');
                     } else if (sub === 'ask') {
@@ -1120,6 +1129,20 @@ module.exports = {
 
                 case "rm":
                 case "rename": {
+                    // "$rm #channel" — one channel target and no new name — deletes
+                    // the channel. "$rm new-name" still renames the current channel.
+                    if (args.length === 1 && (channelAdmin.mentionId(args[0]) || /^\d{15,22}$/.test(args[0] || ""))) {
+                        if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
+                            return message.reply('You need the Manage Channels permission to delete channels.');
+                        }
+                        const rmDeleted = await channelAdmin.deleteChannel(message.guild, args[0], {
+                            invokerId: message.author.id,
+                            mentions: message.mentions.channels,
+                            currentChannelId: message.channel.id,
+                        });
+                        return message.reply(rmDeleted.text);
+                    }
+
                     // CID-first: "$rm 42 new reason" / "$rename 42 new reason" edits
                     // an automod embed's persisted reason (empty reason removes it).
                     if (/^\d+$/.test(args[0] || '')) {
@@ -4120,6 +4143,58 @@ module.exports = {
                     const fallTarget = devTargetAt(0);
                     if (fallTarget) return showRole(fallTarget);
                     return message.reply({ embeds: [devEmbed.helpEmbed(prefix)] });
+                }
+
+                case "cp":
+                case "createchannel": {
+                    if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
+                        return message.reply('You need the Manage Channels permission to create channels.');
+                    }
+                    const cpArgs = [...args];
+                    if (!cpArgs.length) {
+                        return message.reply(`Usage: \`${prefix}cp <channel-name> [#category]\``);
+                    }
+                    const cpCategory = cpArgs.find(a => /^<#\d{15,22}>$/.test(a)) || null;
+                    const cpName = cpArgs.filter(a => a !== cpCategory).join(' ').trim();
+                    if (!cpName) {
+                        return message.reply(`Usage: \`${prefix}cp <channel-name> [#category]\``);
+                    }
+                    const cpResult = await channelAdmin.createTextChannel(message.guild, cpName, cpCategory, {
+                        invokerId: message.author.id,
+                    });
+                    return message.reply(cpResult.text);
+                }
+
+                case "mkdir":
+                case "createcategory": {
+                    if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
+                        return message.reply('You need the Manage Channels permission to create categories.');
+                    }
+                    const mkName = args.join(' ').trim();
+                    if (!mkName) {
+                        return message.reply(`Usage: \`${prefix}mkdir <category-name>\``);
+                    }
+                    const mkResult = await channelAdmin.createCategory(message.guild, mkName, {
+                        invokerId: message.author.id,
+                    });
+                    return message.reply(mkResult.text);
+                }
+
+                case "hmkdir":
+                case "rmdir":
+                case "deletecategory": {
+                    if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
+                        return message.reply('You need the Manage Channels permission to delete categories.');
+                    }
+                    const hkTarget = args.join(' ').trim();
+                    if (!hkTarget) {
+                        return message.reply(`Usage: \`${prefix}hmkdir <category-name|#category>\``);
+                    }
+                    const hkResult = await channelAdmin.deleteCategory(message.guild, hkTarget, {
+                        invokerId: message.author.id,
+                        mentions: message.mentions.channels,
+                    });
+                    return message.reply(hkResult.text);
                 }
 
                 case "purge": {
