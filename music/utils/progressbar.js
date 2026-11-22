@@ -4,9 +4,15 @@ module.exports = {
   progressbar: function (player) {
     const size = 15;
     const line = "▬";
-    // Env-driven slider emoji — Linix hardcoded a custom emoji from its own
-    // emoji server (`<:dot:1201841280577970176>`); defaults to Unicode here.
-    const slider = getMusicConfig().emoji.dot;
+    // Slider emoji — resolved through the central catalog (custom emoji when
+    // validated, otherwise the configured Unicode fallback).
+    const configured = getMusicConfig().emoji.dot;
+    let slider = configured;
+    try {
+      const { getEmojiManager } = require("../../utils/emojiManager");
+      const manager = getEmojiManager();
+      if (manager) slider = manager.emoji("dot", configured);
+    } catch (_) { /* keep fallback */ }
 
     if (!player.queue.current) return `[ ${slider}${line.repeat(size - 1)} ]`;
     const current =

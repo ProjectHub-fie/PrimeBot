@@ -1,5 +1,7 @@
 const { EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const config = require('../config');
+const { emoji } = require('./emoji');
+const { HELP_CATEGORY_EMOJI, EMOJI_FALLBACKS } = require('../shared/emojiCatalog');
 const { scheduleComponentExpiry } = require('./stabilityUtils');
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -23,6 +25,11 @@ const { scheduleComponentExpiry } = require('./stabilityUtils');
 // `config.betaFeatures` — the same list the bot gates on at runtime.
 // ───────────────────────────────────────────────────────────────────────────
 
+function categoryIcon(category, fallback = '') {
+    const key = HELP_CATEGORY_EMOJI[category] || category;
+    return emoji(key, EMOJI_FALLBACKS[key] || fallback || '');
+}
+
 const BETA_FEATURES = Array.isArray(config.betaFeatures) ? config.betaFeatures : [];
 
 function isBeta(names) {
@@ -36,9 +43,9 @@ function isBeta(names) {
 // sub-commands), so the 🧪 badge stays accurate.
 const CATALOG = {
     general: {
-        icon: '⚡',
+        icon: 'home',
         label: 'General',
-        title: '⚡ General Commands',
+        title: 'General Commands',
         color: config.colors.primary,
         description: 'Basic bot commands and information:',
         commands: [
@@ -54,9 +61,9 @@ const CATALOG = {
     },
 
     leveling: {
-        icon: '📊',
+        icon: 'profile',
         label: 'Leveling',
-        title: '📊 Leveling System',
+        title: 'Leveling System',
         color: config.colors.success,
         description: 'XP, ranks, badges, and progression:',
         commands: [
@@ -72,9 +79,9 @@ const CATALOG = {
     },
 
     games: {
-        icon: '🎮',
+        icon: 'fun',
         label: 'Games & Activities',
-        title: '🎮 Games & Activities',
+        title: 'Games & Activities',
         color: config.colors.warning,
         description: 'Games, activities, polls, and giveaways:',
         commands: [
@@ -97,9 +104,9 @@ const CATALOG = {
     },
 
     community: {
-        icon: '🌐',
+        icon: 'extra',
         label: 'Community',
-        title: '🌐 Community — Live Polls & Giveaways',
+        title: 'Community — Live Polls & Giveaways',
         color: config.colors.success,
         description: 'Cross-server live polls and live giveaways — share a pass code to let members from any PrimeBot server join:',
         selectDesc: 'Cross-server live polls & giveaways',
@@ -110,9 +117,9 @@ const CATALOG = {
     },
 
     moderation: {
-        icon: '🛡️',
+        icon: 'moderation',
         label: 'Moderation',
-        title: '🛡️ Moderation Tools',
+        title: 'Moderation Tools',
         color: config.colors.secondary,
         description: 'Moderation, channel management, self-roles, and tickets:',
         commands: [
@@ -141,9 +148,9 @@ const CATALOG = {
     },
 
     admin: {
-        icon: '⚙️',
+        icon: 'config',
         label: 'Administration',
-        title: '⚙️ Administration',
+        title: 'Administration',
         color: config.colors.error,
         description: 'Feature configuration (Admin only):',
         commands: [
@@ -161,9 +168,9 @@ const CATALOG = {
     },
 
     tickets: {
-        icon: '🎫',
+        icon: 'utility',
         label: 'Tickets',
-        title: '🎫 Tickets',
+        title: 'Tickets',
         color: config.colors.secondary,
         description: 'Ticket support system — panels are configured from the dashboard; these commands reply with a pointer to the dashboard:',
         selectDesc: 'Ticket support system',
@@ -175,9 +182,9 @@ const CATALOG = {
     },
 
     youtube: {
-        icon: '🎬',
+        icon: 'playing',
         label: 'YouTube',
-        title: '🎬 YouTube Notifications',
+        title: 'YouTube Notifications',
         color: config.colors.error,
         description: 'YouTube upload notifications — subscribed creators and the announcement embed are configured from the dashboard; this command points you there:',
         selectDesc: 'YouTube upload notifications',
@@ -187,9 +194,9 @@ const CATALOG = {
     },
 
     music: {
-        icon: '🎵',
+        icon: 'music',
         label: 'Music',
-        title: '🎵 Music',
+        title: 'Music',
         color: config.colors.primary,
         description: 'Music and 24/7 radio powered by Lavalink — playback, filters, playlists, autoplay and 24/7 mode:',
         selectDesc: 'Music + 24/7 radio',
@@ -221,9 +228,9 @@ const CATALOG = {
     },
 
     welcome: {
-        icon: '👋',
+        icon: 'welc',
         label: 'Welcome',
-        title: '👋 Welcome System',
+        title: 'Welcome System',
         color: config.colors.success,
         description: 'Configure how PrimeBot greets new members:',
         commands: [
@@ -254,12 +261,12 @@ function categoryEmbed(category, prefix) {
     if (!cat) {
         return new EmbedBuilder()
             .setColor(config.colors.error)
-            .setTitle('❌ Unknown Category')
+            .setTitle(`${emoji('cross')} Unknown Category`)
             .setDescription(`The category "${category}" was not found. Available categories: ${CATEGORY_ORDER.join(', ')}`);
     }
     const embed = new EmbedBuilder()
         .setColor(cat.color)
-        .setTitle(cat.title)
+        .setTitle(`${categoryIcon(category)} ${cat.title}`.trim())
         .setDescription(cat.description)
         .addFields(cat.commands.map(c => commandField(prefix, c)));
 
@@ -285,7 +292,7 @@ function mainMenuEmbed(prefix, client) {
         .addFields(
             CATEGORY_ORDER.map(k => {
                 const cat = CATALOG[k];
-                return { name: `${cat.icon} ${cat.label}`, value: `\`${prefix}help ${k}\`\n${cat.description.replace(/:$/, '')}`, inline: true };
+                return { name: `${categoryIcon(k)} ${cat.label}`.trim(), value: `\`${prefix}help ${k}\`\n${cat.description.replace(/:$/, '')}`, inline: true };
             })
         )
         .setFooter({ text: `Total Commands: ${totalCommands} • Version: ${config.version}` })
@@ -308,7 +315,7 @@ function categorySelectRow(currentCategory = null) {
                         label: `${cat.label} Commands`,
                         description: desc,
                         value: k,
-                        emoji: cat.icon,
+                        emoji: categoryIcon(k) || undefined,
                         default: k === currentCategory,
                     };
                 }))
@@ -322,12 +329,12 @@ function navigationButtonsRow() {
                 .setCustomId('categories_prefix_refresh')
                 .setLabel('Refresh')
                 .setStyle(ButtonStyle.Secondary)
-                .setEmoji('🔄'),
+                .setEmoji(categoryIcon('refresh', '🔄')),
             new ButtonBuilder()
                 .setCustomId('categories_prefix_help')
                 .setLabel('Need Help?')
                 .setStyle(ButtonStyle.Primary)
-                .setEmoji('❓')
+                .setEmoji(categoryIcon('information', '❓'))
         );
 }
 
@@ -356,12 +363,12 @@ async function showPrefixCategoryMenuHelp(interaction, category, prefix) {
                 .setCustomId('categories_prefix_back')
                 .setLabel('Back to Categories')
                 .setStyle(ButtonStyle.Secondary)
-                .setEmoji('🏠'),
+                .setEmoji(categoryIcon('home', '🏠')),
             new ButtonBuilder()
                 .setCustomId('categories_prefix_help')
                 .setLabel('Need Help?')
                 .setStyle(ButtonStyle.Primary)
-                .setEmoji('❓')
+                .setEmoji(categoryIcon('information', '❓'))
         );
     try {
         await interaction.update({ embeds: [embed], components: [backSelect, navButtons] });
@@ -405,6 +412,7 @@ function getCategoryPermissionLevel(category) {
 
 module.exports = {
     CATALOG,
+    categoryIcon,
     CATEGORY_ORDER,
     BETA_FEATURES,
     isBeta,

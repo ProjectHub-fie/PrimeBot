@@ -7,6 +7,22 @@ module.exports = {
     execute(client) {
         console.log(`Logged in as ${client.user.tag}!`);
 
+        // Central custom-emoji catalog: fetch the emoji guilds + their `emoji
+        // list` channels, validate every emoji against the live guild
+        // collections, then cache. Non-blocking — a failed fetch leaves the
+        // Unicode fallbacks in place and never stops the bot from serving.
+        if (client.emojiManager && typeof client.emojiManager.start === 'function') {
+            client.emojiManager.start(client)
+                .then(() => {
+                    if (typeof client.emojiManager.summary === 'function') {
+                        console.log(client.emojiManager.summary());
+                    }
+                })
+                .catch((err) => {
+                    console.warn('[EMOJI] Startup catalog load failed:', err.message);
+                });
+        }
+
         // Giveaway checking will be started automatically by GiveawayManager after database initialization
 
         // Debug: List all registered slash commands

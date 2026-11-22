@@ -169,7 +169,10 @@ client.betaManager = betaManager;
                                  getGuildBirthdays: async () => ({ channel: null, role: null, imageUrl: null, users: new Map() }),
                                  setAnnouncementChannel: noop, setBirthdayRole: noop, setEmbedImage: noop,
                                  getGuildConfig: () => ({ announcementChannel: null, birthdayRole: null }) };
-    client.emojiManager     = { getEmoji: noop, getAllEmojis: () => [] };
+    client.emojiManager     = {
+        getEmoji: noop, getAllEmojis: () => [], emoji: (_n, f) => (f === undefined ? '' : f),
+        renderText: (t) => t, forComponent: (_n, f) => f || '', start: noopAsync,
+    };
     client.countingManager  = { isCountingChannel: () => false, processCountingMessage: noopAsync };
     client.truthDareManager = { startGame: noopAsync };
     client.levelingManager  = null;
@@ -275,6 +278,13 @@ async function initializeManagers() {
     client.livePollManager  = new LivePollManager(client);
     client.liveGiveawayManager = new LiveGiveawayManager(client);
     client.emojiManager     = new EmojiManager();
+    // Apply the validated catalog to every outgoing message payload at the
+    // REST boundary (content + embed text + component emoji fields).
+    try {
+        require('./utils/emojiTransformer').installEmojiTransformer(client, client.emojiManager);
+    } catch (err) {
+        console.error('[MANAGERS] Failed to install emoji transformer:', err.message);
+    }
     client.countingManager  = new CountingManager(client);
     client.truthDareManager = new TruthDareManager(client);
     client.snipeManager = new SnipeManager();

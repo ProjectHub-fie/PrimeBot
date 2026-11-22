@@ -1760,3 +1760,65 @@ cannot be pulled into voice interaction — so "defended" is the safe default.
   `selfDeaf:false` drift in the Linix join sites, the throttle/force path,
   only-the-bot policing, and the disable switch.
 
+
+## Custom emoji catalog (Linix emoji servers) — central EmojiManager
+
+PrimeBot now sources custom emojis from the **three existing emoji servers** Linix
+uses. No new server, no new bot, no credentials in code.
+
+- **Guilds + priority (left-to-right wins duplicate names):**
+  `1190256755096158208` → `1127600524586401792` → `1222896507838009394`.
+  Override with `EMOJI_GUILD_IDS` (comma separated). Each guild has a read-only
+  `emoji list` channel; the manager reads it (paginated) and **never writes**.
+- **Single source of truth:** `shared/emojiCatalog.js` — `DEFAULT_EMOJI_GUILDS`,
+  `EMOJI_LIST_CHANNEL_NAMES`, `LINIX_EMOJI_CATALOG` (Linix's 98 entries / 92
+  unique ids / 2 animated, reproduced verbatim from Linix `index.js`
+  `client.emoji`), `SEMANTIC_ALIASES`, `UNICODE_TO_SEMANTIC`, `EMOJI_FALLBACKS`,
+  `HELP_CATEGORY_EMOJI`. **Never invent an emoji id** — add an entry here.
+- **Manager:** `utils/emojiManager.js` (`EmojiManager`) fetches the guilds with
+  retry/backoff/timeout, fetches each `guild.emojis` collection, parses the
+  `emoji list` channels, and **validates every candidate against the live
+  collection** (`available !== false`) before it is usable. Duplicates are
+  resolved deterministically (guild priority, then channel-declared alias over
+  generic name) and recorded in `report().conflicts` — never silently
+  overwritten. Cache is in-memory, rebuilt on `emojiCreate/Delete/Update` and
+  `guildCreate/Delete` (5s debounce) + `EMOJI_CACHE_TTL_MS` (6h default). No
+  per-message API calls. `emoji(name, fallback)` falls back to Unicode.
+- **Helpers:** `utils/emoji.js` (`emoji`, `renderText`, `componentEmoji`) and the
+  module-level `require('../utils/emojiManager').emoji(...)` for pre-start code.
+  `utils/emojiManager.js` exports the class plus `getEmojiManager`, `emoji`,
+  `renderText`, `fallbackFor`, `resolveKey`, `sanitizeError`.
+- **Rendering everywhere:** `utils/emojiTransformer.js`
+  `installEmojiTransformer(client, manager)` is installed in `index.js`
+  `initializeManagers` and patches `client.rest.post/patch/put` for message
+  routes only (`/channels/:id/messages[/:id]`, `/webhooks/...`, interaction
+  callbacks). It rewrites `content`, embed title/description/fields/footer/
+  author, and component `emoji` fields (Unicode → validated emoji object).
+  It **skips code spans/fences, URLs, existing custom markup**, and does NOT
+  touch component labels (Discord does not render custom emoji markup there).
+  Reaction routes are deliberately not transformed (giveaway reaction text must
+  match the actual reaction).
+- **Startup:** `events/ready.js` calls `client.emojiManager.start(client)` and
+  logs `client.emojiManager.summary()`. A failed fetch leaves Unicode fallbacks
+  in place; the bot still boots. `initializeManagers` creates the manager and
+  installs the transformer.
+- **Help menu:** `utils/prefixHelp.js` `categoryIcon(category)` resolves
+  `HELP_CATEGORY_EMOJI`; categories render as `<custom emoji> Category` in
+  `commands/help.js`, `utils/prefixHelp.js` (main embed, drill-down title,
+  select options, nav buttons) and `events/interactionCreate.js` (help buttons +
+  Sash menu). `CATALOG[*].icon` is now a **semantic key**, not an emoji.
+- **Music:** `music/clientBridge.js` overlays `client.emoji` from the manager;
+  `music/utils/progressbar.js` resolves `dot` through it; `music/config.js`
+  `resolveEmoji()` reads `EMOJI_FALLBACKS` instead of a duplicated literal table.
+- **Legacy `$emoji` store preserved:** `EmojiManager` still owns
+  `data/emojis.json` (`addEmoji`/`removeEmoji`/`getEmoji`/`getAllEmojis`/
+  `createEmojiListEmbed`); `getEmoji` checks the user store then the catalog.
+- **Report:** `client.emojiManager.report()` (per-guild counts, `entries[]` with
+  `sourceGuildId`, `conflicts[]`, `unavailable[]`) and the static
+  `npm run emoji:report`. Full write-up: `docs/EMOJI_MIGRATION_REPORT.md`.
+- **Env:** `EMOJI_GUILD_IDS`, `EMOJI_CACHE_TTL_MS`, `EMOJI_FETCH_TIMEOUT_MS`,
+  `EMOJI_MAX_RETRIES`, `EMOJI_RETRY_BASE_MS`, `EMOJI_LIST_MAX_MESSAGES`.
+- **Tests:** `tests/emojiCatalog.test.js` (16) — catalog integrity, semantic +
+  animated resolution, live validation, priority/conflicts, channel parsing,
+  unavailable guilds, permission errors, caching, Unicode-safe rendering,
+  embeds/buttons/selects, interaction callbacks, token redaction, route filter.

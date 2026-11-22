@@ -1,15 +1,17 @@
 const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionFlagsBits } = require('discord.js');
 const config = require('../config');
 const { scheduleComponentExpiry } = require('../utils/stabilityUtils');
+const { emoji } = require('../utils/emoji');
+const { categoryIcon } = require('../utils/prefixHelp');
 
 // ── Help menu "animation" ───────────────────────────────────────────────────
 // Discord embeds can't truly animate, so we simulate a loading animation by
 // editing the reply through a short sequence of frames before revealing the
 // final menu. This gives the help menu a lively feel.
 const HELP_ANIMATION_FRAMES = [
-    { emoji: '🌌', text: 'Summoning the command menu' },
-    { emoji: '✨', text: 'Gathering all PrimeBot commands' },
-    { emoji: '📚', text: 'Almost there — organizing categories' },
+    { emoji: () => emoji('loading', '🌌'), text: 'Summoning the command menu' },
+    { emoji: () => emoji('extra', '✨'), text: 'Gathering all PrimeBot commands' },
+    { emoji: () => emoji('information', '📚'), text: 'Almost there — organizing categories' },
 ];
 
 async function playHelpAnimation(replyTarget) {
@@ -19,7 +21,7 @@ async function playHelpAnimation(replyTarget) {
         const spinner = '·'.repeat(i + 1);
         const embed = new EmbedBuilder()
             .setColor(config.colors.primary)
-            .setTitle(`${frame.emoji} Loading`)
+            .setTitle(`${frame.emoji()} Loading`)
             .setDescription(`${frame.text} ${spinner}`)
             .setFooter({ text: `PrimeBot • Version ${config.version}` });
         try {
@@ -81,15 +83,15 @@ module.exports = {
 async function showMainHelp(interaction) {
     const mainEmbed = new EmbedBuilder()
         .setColor(config.colors.primary)
-        .setTitle('📚 Command Categories')
+        .setTitle(`${emoji('information')} Command Categories`)
         .setDescription('Choose a category to explore available commands:')
         .addFields(
-            { name: '⚡ General', value: 'Basic bot commands and information', inline: true },
-            { name: '📊 Leveling', value: 'XP, ranks, and progression system', inline: true },
-            { name: '🎮 Games', value: 'Fun interactive games and activities', inline: true },
-            { name: '🛡️ Moderation', value: 'Server management and moderation tools', inline: true },
-            { name: '👥 Community', value: 'Engagement and social features', inline: true },
-            { name: '⚙️ Administration', value: 'Advanced server configuration', inline: true }
+            { name: `${categoryIcon('general', '⚡')} General`, value: 'Basic bot commands and information', inline: true },
+            { name: `${categoryIcon('leveling', '📊')} Leveling`, value: 'XP, ranks, and progression system', inline: true },
+            { name: `${categoryIcon('games', '🎮')} Games`, value: 'Fun interactive games and activities', inline: true },
+            { name: `${categoryIcon('moderation', '🛡️')} Moderation`, value: 'Server management and moderation tools', inline: true },
+            { name: `${categoryIcon('community', '👥')} Community`, value: 'Engagement and social features', inline: true },
+            { name: `${categoryIcon('admin', '⚙️')} Administration`, value: 'Advanced server configuration', inline: true }
         )
         .setFooter({ text: `Total Commands: 30+ • Version: ${config.version}` })
         .setTimestamp();
@@ -100,27 +102,27 @@ async function showMainHelp(interaction) {
                 .setCustomId('help_general')
                 .setLabel('General')
                 .setStyle(ButtonStyle.Primary)
-                .setEmoji('⚡'),
+                .setEmoji(categoryIcon('general', '⚡')),
             new ButtonBuilder()
                 .setCustomId('help_leveling')
                 .setLabel('Leveling')
                 .setStyle(ButtonStyle.Primary)
-                .setEmoji('📊'),
+                .setEmoji(categoryIcon('leveling', '📊')),
             new ButtonBuilder()
                 .setCustomId('help_games')
                 .setLabel('Games')
                 .setStyle(ButtonStyle.Primary)
-                .setEmoji('🎮'),
+                .setEmoji(categoryIcon('games', '🎮')),
             new ButtonBuilder()
                 .setCustomId('help_moderation')
                 .setLabel('Moderation')
                 .setStyle(ButtonStyle.Secondary)
-                .setEmoji('🛡️'),
+                .setEmoji(categoryIcon('moderation', '🛡️')),
             new ButtonBuilder()
                 .setCustomId('help_community')
                 .setLabel('Community')
                 .setStyle(ButtonStyle.Success)
-                .setEmoji('👥')
+                .setEmoji(categoryIcon('community', '👥'))
         );
 
     const adminButton = new ActionRowBuilder()
@@ -129,17 +131,17 @@ async function showMainHelp(interaction) {
                 .setCustomId('help_admin')
                 .setLabel('Administration')
                 .setStyle(ButtonStyle.Danger)
-                .setEmoji('⚙️'),
+                .setEmoji(categoryIcon('admin', '⚙️')),
             new ButtonBuilder()
                 .setCustomId('help_prefix')
                 .setLabel('Sash')
                 .setStyle(ButtonStyle.Secondary)
-                .setEmoji('💬'),
+                .setEmoji(categoryIcon('utility', '💬')),
             new ButtonBuilder()
                 .setLabel('Support')
                 .setStyle(ButtonStyle.Link)
                 .setURL(config.supportServer || 'https://discord.gg/primebot')
-                .setEmoji('🆘')
+                .setEmoji(categoryIcon('information', '🆘'))
         );
 
     await interaction.editReply({
@@ -160,7 +162,7 @@ async function showCategoryHelp(interaction, category) {
         case 'general':
             categoryEmbed = new EmbedBuilder()
                 .setColor(config.colors.primary)
-                .setTitle('⚡ General Commands')
+                .setTitle(`${categoryIcon('general', '⚡')} General Commands`)
                 .setDescription('Basic bot commands and information:')
                 .addFields(
                     { name: '/help', value: 'Show this command menu', inline: true },
@@ -174,7 +176,7 @@ async function showCategoryHelp(interaction, category) {
         case 'leveling':
             categoryEmbed = new EmbedBuilder()
                 .setColor(config.colors.success)
-                .setTitle('📊 Leveling System')
+                .setTitle(`${categoryIcon('leveling', '📊')} Leveling System`)
                 .setDescription('XP, ranks, and progression commands:')
                 .addFields(
                     { name: '/leveling rank', value: 'View your or another user\'s level and XP', inline: true },
@@ -193,7 +195,7 @@ async function showCategoryHelp(interaction, category) {
         case 'games':
             categoryEmbed = new EmbedBuilder()
                 .setColor(config.colors.warning)
-                .setTitle('🎮 Games & Activities')
+                .setTitle(`${categoryIcon('games', '🎮')} Games & Activities`)
                 .setDescription('Fun interactive games and entertainment:')
                 .addFields(
                     { name: '/tictactoe', value: 'Start a TicTacToe game in the channel', inline: true },
@@ -209,7 +211,7 @@ async function showCategoryHelp(interaction, category) {
         case 'moderation':
             categoryEmbed = new EmbedBuilder()
                 .setColor(config.colors.secondary)
-                .setTitle('🛡️ Moderation Tools')
+                .setTitle(`${categoryIcon('moderation', '🛡️')} Moderation Tools`)
                 .setDescription('Server management and moderation:')
                 .addFields(
                     { name: '/ticket', value: 'Ticket system (dashboard-only)', inline: true },
@@ -223,7 +225,7 @@ async function showCategoryHelp(interaction, category) {
         case 'community':
             categoryEmbed = new EmbedBuilder()
                 .setColor(config.colors.success)
-                .setTitle('👥 Community Features')
+                .setTitle(`${categoryIcon('community', '👥')} Community Features`)
                 .setDescription('Engagement and social features:')
                 .addFields(
                     { name: '/poll', value: 'Create server polls with voting options', inline: true },
@@ -244,7 +246,7 @@ async function showCategoryHelp(interaction, category) {
         case 'admin':
             categoryEmbed = new EmbedBuilder()
                 .setColor(config.colors.error)
-                .setTitle('⚙️ Administration')
+                .setTitle(`${categoryIcon('admin', '⚙️')} Administration`)
                 .setDescription('Advanced server configuration (Admin only):')
                 .addFields(
                     { name: '/antinuke', value: 'Configure Anti-Nuke protection and owner-controlled access: status / setup / progress / enable / disable / dryrun / thresholds / whitelist / unwhitelist / lockdown / restore / access / grant / revoke (access is owner-gated)', inline: false },
@@ -260,7 +262,7 @@ async function showCategoryHelp(interaction, category) {
         default:
             categoryEmbed = new EmbedBuilder()
                 .setColor(config.colors.error)
-                .setTitle('❌ Unknown Category')
+                .setTitle(`${emoji('cross')} Unknown Category`)
                 .setDescription('The requested category was not found.');
     }
     
@@ -270,7 +272,7 @@ async function showCategoryHelp(interaction, category) {
                 .setCustomId('help_back')
                 .setLabel('Back to Categories')
                 .setStyle(ButtonStyle.Secondary)
-                .setEmoji('◀️')
+                .setEmoji(emoji('left', '◀️'))
         );
     
     categoryEmbed.setFooter({ text: `Version: ${config.version}` })
