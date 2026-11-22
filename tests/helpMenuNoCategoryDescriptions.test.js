@@ -11,6 +11,7 @@ const {
     categoryEmbed,
     categorySelectRow,
     homeButtonRow,
+    categoryIcon,
 } = require('../utils/prefixHelp');
 
 const user = {
@@ -32,18 +33,19 @@ test('prefix and sash category catalogs carry no category descriptions', () => {
     }
 });
 
-test('the help main menu follows the Linix layout and has no category blurbs', () => {
+test('the help main menu is only the category lines', () => {
     const menu = mainMenuEmbed('$', client, { user, kind: 'prefix' });
-    assert.match(menu.data.description, /Prefix For This Server/);
-    assert.match(menu.data.description, /Total Commands/);
-    assert.equal(menu.data.fields.length, 1);
-    assert.match(menu.data.fields[0].name, /My Commands/);
-    for (const key of CATEGORY_ORDER) {
-        assert.ok(menu.data.fields[0].value.includes(CATALOG[key].label), `missing ${key} in My Commands`);
+    const lines = menu.data.description.split('\n');
+    assert.equal(lines.length, CATEGORY_ORDER.length);
+    for (let i = 0; i < CATEGORY_ORDER.length; i++) {
+        const key = CATEGORY_ORDER[i];
+        assert.equal(lines[i], `${categoryIcon(key)} ${CATALOG[key].label}`);
     }
-    assert.ok(!menu.data.fields[0].value.includes('Basic bot'), 'category description leaked into the menu');
-    assert.equal(menu.data.thumbnail.url, 'https://cdn.example/user.png');
-    assert.match(menu.data.footer.text, /^Loved by 1 Servers$/);
+    assert.equal(menu.data.fields, undefined);
+    assert.equal(menu.data.thumbnail, undefined);
+    assert.equal(menu.data.footer, undefined);
+    assert.equal(menu.data.image, undefined);
+    assert.ok(!menu.data.description.includes('Basic bot'), 'category description leaked into the menu');
 });
 
 test('the help main menu has no coloured side stripe', () => {
@@ -55,15 +57,15 @@ test('the category detail lists command names, not a category description', () =
     const general = categoryEmbed('general', '$', { iconURL: 'https://cdn.example/bot.png' });
     assert.match(general.data.title, /General Commands$/);
     assert.equal(general.data.fields, undefined);
+    assert.equal(general.data.footer, undefined);
     assert.ok(general.data.description.includes('`help`'));
     assert.ok(!general.data.description.includes('Basic bot'));
-    assert.equal(general.data.footer.text, 'Total 8 commands.');
     assert.equal(general.data.color, undefined);
 });
 
-test('the admin category still lists antinuke for the slash help surface', () => {
-    const admin = categoryEmbed('admin', '/');
-    assert.ok(admin.data.description.includes('`antinuke`'));
+test('the Anti-Nuke category lists antinuke for the slash help surface', () => {
+    const antinuke = categoryEmbed('antinuke', '/');
+    assert.ok(antinuke.data.description.includes('`antinuke`'));
 });
 
 test('the category select has labels and emoji but no descriptions', () => {

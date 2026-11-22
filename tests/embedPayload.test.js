@@ -57,11 +57,11 @@ test('normalizeEmbedState accepts a bare API embed object', () => {
     assert.equal(s.description, 'embed');
 });
 
-test('toApiEmbed converts state to a Discord API embed (colour as int)', () => {
+test('toApiEmbed converts state to a Discord API embed without colour', () => {
     const embed = toApiEmbed({ title: 'Title', description: 'Desc', color: '#5865F2', timestamp: true });
     assert.equal(embed.title, 'Title');
     assert.equal(embed.description, 'Desc');
-    assert.equal(embed.color, 0x5865f2);
+    assert.equal(embed.color, undefined);
     assert.ok(embed.timestamp, 'timestamp serialized');
     assert.ok(!embed.fields, 'no empty fields array');
 });

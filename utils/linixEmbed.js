@@ -1,17 +1,11 @@
 const { EmbedBuilder } = require('discord.js');
 
-// Linix uses one flat embed colour for every card. PrimeBot's help cards follow
-// Linix's layout but deliberately leave the colour unset, so Discord renders no
-// coloured side stripe. Set LINIX_EMBED_COLOR if you ever want the stripe back.
-const LINIX_COLOR = process.env.LINIX_EMBED_COLOR || null;
-const LINIX_IMAGE = process.env.LINIX_EMBED_IMAGE || null;
-
+/**
+ * Linix's chainable embed helpers, with one deliberate difference: no colour.
+ * Discord renders `color` as a coloured bar down the left edge, and PrimeBot's
+ * cards are monochrome.
+ */
 class LinixEmbed extends EmbedBuilder {
-    constructor({ color = LINIX_COLOR } = {}) {
-        super();
-        if (color) this.setColor(color);
-    }
-
     t(title) {
         this.setTitle(title);
         return this;
@@ -43,19 +37,11 @@ class LinixEmbed extends EmbedBuilder {
     }
 }
 
-function linixEmbed(options) {
-    return new LinixEmbed(options);
-}
-
-function applyLinixImage(embed, url = LINIX_IMAGE) {
-    if (url) embed.setImage(url);
-    return embed;
+function linixEmbed() {
+    return new LinixEmbed();
 }
 
 module.exports = {
-    LINIX_COLOR,
-    LINIX_IMAGE,
     LinixEmbed,
     linixEmbed,
-    applyLinixImage,
 };

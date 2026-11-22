@@ -3,7 +3,8 @@ const config = require('../config');
 const { emoji } = require('./emoji');
 const { HELP_CATEGORY_EMOJI, EMOJI_FALLBACKS } = require('../shared/emojiCatalog');
 const { scheduleComponentExpiry } = require('./stabilityUtils');
-const { linixEmbed, applyLinixImage } = require('./linixEmbed');
+const { linixEmbed } = require('./linixEmbed');
+const { buildEmbedWithButtons } = require('./embedComponentsV2');
 
 // ───────────────────────────────────────────────────────────────────────────
 // Prefix command catalog — single source of truth for `$help` / `$commands`
@@ -51,12 +52,21 @@ const CATALOG = {
         commands: [
             { names: ['help'], args: '[category]', desc: 'Show the categorized command menu' },
             { names: ['commands', 'categories'], desc: 'Browse all command categories' },
+            { names: ['echo'], args: '[message]', desc: 'Make the bot repeat a message' },
+            { names: ['prefix'], args: '[new prefix]', desc: 'View or set the server prefix (Admin)' },
+        ],
+    },
+
+    information: {
+        icon: 'information',
+        label: 'Information',
+        title: 'Bot Information',
+        color: config.colors.primary,
+        commands: [
             { names: ['about', 'ab'], desc: 'Information about the bot' },
             { names: ['stats', 'statistics'], desc: 'Bot statistics and server count' },
             { names: ['updates', 'ulog'], desc: 'Latest bot updates and features' },
             { names: ['ping'], desc: 'Check bot latency and connection status' },
-            { names: ['echo'], args: '[message]', desc: 'Make the bot repeat a message' },
-            { names: ['prefix'], args: '[new prefix]', desc: 'View or set the server prefix (Admin)' },
         ],
     },
 
@@ -97,7 +107,6 @@ const CATALOG = {
             { names: ['giveaway', 'gstart'], args: '[time] [winners] [prize]', desc: 'Create a giveaway' },
             { names: ['end', 'gend'], args: '[id]', desc: 'End a giveaway' },
             { names: ['reroll'], args: '[id]', desc: 'Reroll giveaway winners' },
-            { names: ['birthday', 'bday'], args: '<set|remove|list|check|channel|role>', desc: 'Birthday celebration system' },
         ],
     },
 
@@ -109,6 +118,16 @@ const CATALOG = {
         commands: [
             { names: ['lpoll', 'livepoll'], args: '<create|join|results|end|list>', desc: 'Cross-server live polls' },
             { names: ['lgiveway', 'lgiveaway', 'livegiveaway'], args: '<create|join|results|end|list>', desc: 'Cross-server live giveaways' },
+        ],
+    },
+
+    birthdays: {
+        icon: 'welc',
+        label: 'Birthdays',
+        title: 'Birthday Celebrations',
+        color: config.colors.success,
+        commands: [
+            { names: ['birthday', 'bday'], args: '<set|remove|list|check|channel|role>', desc: 'Birthday celebration system' },
         ],
     },
 
@@ -142,6 +161,27 @@ const CATALOG = {
         ],
     },
 
+    automation: {
+        icon: 'autoresponder',
+        label: 'Automation',
+        title: 'Automation',
+        color: config.colors.secondary,
+        commands: [
+            { names: ['autoreact', 'auto-react'], args: '<enable|disable|add|remove|list>', desc: 'Configure auto-reactions' },
+            { names: ['autoresponder', 'auto-responder', 'aresponder', 'ar'], args: '<enable|disable|add|exact|remove|list>', desc: 'Configure the auto-responder' },
+        ],
+    },
+
+    antinuke: {
+        icon: 'antinuke',
+        label: 'Anti-Nuke',
+        title: 'Anti-Nuke Protection',
+        color: config.colors.error,
+        commands: [
+            { names: ['antinuke', 'an'], args: '<status|setup|progress|enable|disable|dryrun|thresholds|whitelist|unwhitelist|lockdown|restore|access|grant|revoke>', desc: 'Configure Anti-Nuke protection and the owner-controlled access hierarchy' },
+        ],
+    },
+
     admin: {
         icon: 'config',
         label: 'Administration',
@@ -149,14 +189,11 @@ const CATALOG = {
         color: config.colors.error,
         commands: [
             { names: ['embed'], args: '<send|list>', desc: 'Send an embed saved in the dashboard Embed Builder' },
-            { names: ['autoreact', 'auto-react'], args: '<enable|disable|add|remove|list>', desc: 'Configure auto-reactions' },
-            { names: ['autoresponder', 'auto-responder', 'aresponder', 'ar'], args: '<enable|disable|add|exact|remove|list>', desc: 'Configure the auto-responder' },
             { names: ['level-enable', 'levelenable', 'leveling-enable', 'levelingon', 'leveling-on'], desc: 'Enable the leveling system' },
             { names: ['level-disable', 'leveldisable', 'leveling-disable', 'levelingoff', 'leveling-off'], desc: 'Disable the leveling system' },
             { names: ['level-channel', 'levelchannel'], args: '#channel', desc: 'Set the level-up notification channel' },
             { names: ['level-multiplier', 'levelmultiplier'], args: '[number]', desc: 'Set the XP multiplier' },
             { names: ['dev'], args: '[@user]', desc: 'PrimeBot staff-role service (owner assigns/modifies/removes roles)' },
-            { names: ['antinuke', 'an'], args: '<status|setup|progress|enable|disable|dryrun|thresholds|whitelist|unwhitelist|lockdown|restore|access|grant|revoke>', desc: 'Configure Anti-Nuke protection and the owner-controlled access hierarchy' },
             { names: ['broadcastsettings', 'bsettings'], desc: 'View broadcast settings' },
         ],
     },
@@ -229,7 +266,7 @@ const CATALOG = {
     },
 };
 
-const CATEGORY_ORDER = ['general', 'leveling', 'games', 'community', 'music', 'tickets', 'youtube', 'welcome', 'moderation', 'admin'];
+const CATEGORY_ORDER = ['general', 'information', 'leveling', 'games', 'community', 'birthdays', 'music', 'tickets', 'youtube', 'welcome', 'moderation', 'automation', 'antinuke', 'admin'];
 
 const BETA_TAG = '🧪';
 
@@ -266,36 +303,19 @@ function categoryEmbed(category, prefix, options = {}) {
     }
     const names = commandNames.map(name => `\`${name}\``);
 
-    const embed = linixEmbed()
+    return linixEmbed()
         .t(`${categoryIcon(category)} ${cat.label} Commands`)
-        .d(names.join(', ') || 'No commands found for this category.')
-        .f(`Total ${names.length} commands.`, options.iconURL);
-
-    return applyLinixImage(embed, options.image);
+        .d(names.join(', ') || 'No commands found for this category.');
 }
 
 function mainMenuEmbed(prefix, client, options = {}) {
-    const totalCommands = CATEGORY_ORDER.reduce((sum, k) => sum + CATALOG[k].commands.length, 0);
-    const slashCount = client?.commands?.size || 0;
-    const user = options.user;
-    const userAvatar = user?.displayAvatarURL?.({ dynamic: true })
-        || client?.user?.displayAvatarURL?.({ dynamic: true });
-
-    const intro = options.kind === 'slash'
-        ? `Hey ${user ? `<@${user.id}>` : 'there'}, I'm ${client?.user || 'PrimeBot'}!\n- **A complete Discord bot for your server**\n- **Providing you the best features**`
-        : `- ${options.kind === 'sash' ? 'Sash' : 'Prefix'} For This Server \`${prefix}\`\n- Total Commands \`${totalCommands}\`\n- -# Prefix: ${totalCommands}, Slash: ${slashCount}`;
-
     const categoryLines = CATEGORY_ORDER
-        .map(k => `> ${categoryIcon(k)} \`:\` **${CATALOG[k].label}**`)
+        .map(k => `${categoryIcon(k)} ${CATALOG[k].label}`)
         .join('\n');
 
-    const embed = linixEmbed()
-        .d(intro)
-        .addFields({ name: `${emoji('search', '🔎')} **__My Commands:__**`, value: categoryLines })
-        .thumb(userAvatar)
-        .f(`Loved by ${client?.guilds?.cache?.size ?? 0} Servers`, userAvatar);
-
-    return applyLinixImage(embed, options.image);
+    // Help is intentionally only the category list: no intro, no field title,
+    // no thumbnail/footer/image, and no category descriptions.
+    return linixEmbed().d(categoryLines);
 }
 
 function categorySelectRow(currentCategory = null, customId = 'help_select') {
@@ -351,10 +371,10 @@ async function showPrefixCategoryHelp(message, category, prefix) {
             iconURL: message.client?.user?.displayAvatarURL?.({ dynamic: true }),
         })] });
     }
-    const sent = await message.reply({
+    const sent = await message.reply(buildEmbedWithButtons({
         embeds: [mainMenuEmbed(prefix, message.client, { user: message.author, kind: 'prefix' })],
         components: [categorySelectRow(null, 'category_select_prefix'), homeButtonRow('categories_prefix_back')],
-    });
+    }));
     scheduleComponentExpiry(sent);
     return sent;
 }
@@ -367,11 +387,18 @@ async function showPrefixCategoryMenuHelp(interaction, category, prefix) {
     const backSelect = categorySelectRow(category, 'category_select_prefix');
     const navButtons = homeButtonRow('categories_prefix_back');
     try {
-        await interaction.update({ embeds: [embed], components: [backSelect, navButtons] });
+        await interaction.update(buildEmbedWithButtons({
+            embeds: [embed],
+            components: [backSelect, navButtons],
+        }));
         scheduleComponentExpiry(interaction.message);
     } catch (err) {
         if (!interaction.replied && !interaction.deferred) {
-            await interaction.reply({ embeds: [embed], components: [backSelect, navButtons], ephemeral: true }).catch(() => {});
+            await interaction.reply(buildEmbedWithButtons({
+                embeds: [embed],
+                components: [backSelect, navButtons],
+                ephemeral: true,
+            })).catch(() => {});
         }
     }
 }
@@ -379,14 +406,19 @@ async function showPrefixCategoryMenuHelp(interaction, category, prefix) {
 function getCategoryUsageLevel(category) {
     return {
         general: 'Beginner Friendly',
+        information: 'Beginner Friendly',
         leveling: 'Intermediate',
         games: 'Beginner Friendly',
         community: 'Beginner Friendly',
+        birthdays: 'Beginner Friendly',
         radio: 'Intermediate',
         music: 'Beginner Friendly',
         tickets: 'Beginner Friendly',
+        youtube: 'Intermediate',
         welcome: 'Intermediate',
         moderation: 'Intermediate',
+        automation: 'Intermediate',
+        antinuke: 'Advanced',
         admin: 'Advanced',
     }[category] || 'Unknown';
 }
@@ -394,14 +426,19 @@ function getCategoryUsageLevel(category) {
 function getCategoryPermissionLevel(category) {
     return {
         general: 'Everyone',
+        information: 'Everyone',
         leveling: 'Members / Mods',
         games: 'Everyone',
         community: 'Everyone',
+        birthdays: 'Everyone',
         radio: 'Everyone (Admins to configure)',
         music: 'Everyone (Admins to configure 24/7)',
         tickets: 'Everyone',
+        youtube: 'Admins',
         welcome: 'Admins',
         moderation: 'Moderators',
+        automation: 'Admins',
+        antinuke: 'Server owner',
         admin: 'Administrators',
     }[category] || 'Unknown';
 }

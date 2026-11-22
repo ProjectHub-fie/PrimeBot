@@ -517,7 +517,7 @@ test('a guild this node owns still has a stale 24/7 row pruned', async () => {
     try {
         const event = require('../music/events/Node/ready');
         const client = {
-            guilds: { cache: new Map([['g1', { id: 'g1', channels: { cache: new Map() } }]]) },
+            guilds: { cache: new Map([['g1', { id: 'g1', channels: { cache: new Map([['other', {}]]) } }]]) },
             channels: { cache: new Map() },
             logger: { log() {} },
             manager: { createPlayer: async () => { throw new Error('must not join a deleted channel'); } },

@@ -3,6 +3,7 @@ const config = require('../config');
 const { scheduleComponentExpiry } = require('../utils/stabilityUtils');
 const { emoji } = require('../utils/emoji');
 const { linixEmbed } = require('../utils/linixEmbed');
+const { buildEmbedWithButtons } = require('../utils/embedComponentsV2');
 const {
     CATALOG,
     CATEGORY_ORDER,
@@ -96,10 +97,10 @@ async function showMainHelp(interaction) {
         kind: 'slash',
     });
 
-    await interaction.editReply({
+    await interaction.editReply(buildEmbedWithButtons({
         embeds: [mainEmbed],
         components: [categorySelectRow(null, 'help_select'), helpActionRow()],
-    });
+    }));
     const sent = await interaction.fetchReply().catch(() => null);
     if (sent) scheduleComponentExpiry(sent);
 }
@@ -109,10 +110,10 @@ async function showCategoryHelp(interaction, category) {
         iconURL: interaction.client?.user?.displayAvatarURL?.({ dynamic: true }),
     });
 
-    await interaction.editReply({
+    await interaction.editReply(buildEmbedWithButtons({
         embeds: [embed],
         components: [categorySelectRow(category, 'help_select'), helpActionRow()],
-    });
+    }));
     const sent = await interaction.fetchReply().catch(() => null);
     if (sent) scheduleComponentExpiry(sent);
 }

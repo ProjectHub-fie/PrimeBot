@@ -56,7 +56,7 @@ test('ticketEditPage: Message tab renders an embed builder — fields ON the emb
     assert.ok(html.includes('id="edb-author"'), 'live author row');
     assert.ok(html.includes('id="edb-title"'), 'live title row');
     assert.ok(html.includes('id="edb-desc"'), 'live description row');
-    assert.ok(html.includes('id="edb-bar"'), 'live color bar');
+    assert.ok(!html.includes('id="edb-bar"'), 'no coloured side bar');
     assert.ok(html.includes('id="edb-button"'), 'live open-button preview');
     // Premium two-column layout: detached live preview column + separate
     // thumbnail / image / footer regions so nothing can ever overlap.

@@ -345,6 +345,9 @@ test('help menu renders category emojis in headings, fields and select options',
             makeEmoji(LINIX_EMOJI_CATALOG.welc.id, 'welc'),
             makeEmoji(LINIX_EMOJI_CATALOG.moderation.id, 'mod'),
             makeEmoji(LINIX_EMOJI_CATALOG.config.id, 'config'),
+            makeEmoji(LINIX_EMOJI_CATALOG.information.id, 'information'),
+            makeEmoji(LINIX_EMOJI_CATALOG.autoresponder.id, 'autoresponder'),
+            makeEmoji(LINIX_EMOJI_CATALOG.antinuke.id, 'antinuke'),
         ],
     });
     const manager = buildManager(makeClient([guildA]));
@@ -353,10 +356,8 @@ test('help menu renders category emojis in headings, fields and select options',
 
     const { mainMenuEmbed, categorySelectRow, categoryEmbed, CATEGORY_ORDER } = require('../utils/prefixHelp');
     const menu = mainMenuEmbed('$', null);
-    assert.equal(menu.data.fields.length, 1);
-    assert.ok(menu.data.fields[0].name.includes('My Commands'));
-    assert.ok(menu.data.fields[0].value.includes(`<:home:${LINIX_EMOJI_CATALOG.home.id}>`));
-    assert.ok(menu.data.fields[0].value.includes('**General**'));
+    assert.equal(menu.data.fields, undefined);
+    assert.ok(menu.data.description.includes(`<:home:${LINIX_EMOJI_CATALOG.home.id}> General`));
 
     const select = categorySelectRow().toJSON().components[0].options;
     assert.equal(select.length, CATEGORY_ORDER.length);

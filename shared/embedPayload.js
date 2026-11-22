@@ -159,7 +159,6 @@ function toApiEmbed(raw) {
     if (s.title) embed.title = truncate(s.title, LIMITS.TITLE);
     if (s.description) embed.description = truncate(s.description, LIMITS.DESCRIPTION);
     if (s.url && isValidHttpUrl(s.url)) embed.url = s.url;
-    embed.color = hexToInt(s.color);
     if (s.timestamp) embed.timestamp = new Date().toISOString();
     if (s.thumbnailEnabled && isValidHttpUrl(s.thumbnailUrl)) embed.thumbnail = { url: s.thumbnailUrl };
     if (s.imageEnabled && isValidHttpUrl(s.imageUrl)) embed.image = { url: s.imageUrl };
@@ -176,7 +175,7 @@ function toApiEmbed(raw) {
         }));
     if (fields.length) embed.fields = fields;
 
-    // An embed needs at least one visible component (colour alone is not enough).
+    // An embed needs at least one visible component.
     const visible = embed.title || embed.description || embed.author || embed.footer
         || embed.fields || embed.image || embed.thumbnail;
     if (!visible) return null;

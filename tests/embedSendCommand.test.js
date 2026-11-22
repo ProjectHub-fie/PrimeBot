@@ -149,7 +149,7 @@ test('/embed send posts the saved embed payload to the target channel', async ()
     assert.equal(i._sent.length, 1, 'posted once');
     assert.equal(i._sent[0].content, 'Please read');
     assert.equal(i._sent[0].embeds[0].title, 'Server Rules');
-    assert.equal(i._sent[0].embeds[0].color, 0x5865f2);
+    assert.equal(i._sent[0].embeds[0].color, undefined);
     assert.equal(i._sent[0].embeds[0].fields[0].name, 'Rule 1');
     assert.match(JSON.stringify(i._replies), /Embed sent/);
     restore();
@@ -282,7 +282,7 @@ test('prefix $embed send posts the saved embed through the real message handler'
     const r = await runPrefix('$embed send Rules');
     assert.equal(r.posted.length, 1, 'posted once');
     assert.equal(r.posted[0].embeds[0].title, 'Server Rules');
-    assert.equal(r.posted[0].embeds[0].color, 0x5865f2);
+    assert.equal(r.posted[0].embeds[0].color, undefined);
     assert.match(JSON.stringify(r.replies), /Posted \*\*Rules\*\*/);
 });
 

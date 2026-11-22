@@ -454,6 +454,33 @@ app.get('/api/session/heartbeat', requireAuthReadonly, (req, res) => {
 
 // ── API: current user ───────────────────────────────────────────────────────
 
+// Emoji catalog for dashboard pickers. The dashboard validates against the
+// live guild emoji collections (same three guilds as the bot's EmojiManager).
+app.get('/api/emojis', requireAuth, async (req, res) => {
+    try {
+        const { getEmojiCatalog, listEmojis, report } = require('./emojiCatalog');
+        const catalog = await getEmojiCatalog();
+        res.json({
+            ...report(catalog),
+            emojis: listEmojis(catalog, { q: req.query.q, limit: req.query.limit }),
+        });
+    } catch (err) {
+        console.warn('[EMOJI] dashboard catalog unavailable:', err.message);
+        res.json({ ready: false, emojis: [], guilds: [], conflicts: [], unavailable: [] });
+    }
+});
+
+app.post('/api/emojis/validate', requireAuth, async (req, res) => {
+    try {
+        const { getEmojiCatalog, normalizeConfiguredEmoji } = require('./emojiCatalog');
+        const catalog = await getEmojiCatalog();
+        const emoji = normalizeConfiguredEmoji(req.body && req.body.emoji, catalog);
+        res.json({ valid: Boolean(emoji), emoji });
+    } catch (err) {
+        res.status(503).json({ valid: false, emoji: null, error: 'emoji_catalog_unavailable' });
+    }
+});
+
 app.get('/api/me', requireAuth, async (req, res) => {
     await resolveBotSelf();
     res.json({ user: req.session.user, bot: botSelf, clientId: process.env.DISCORD_CLIENT_ID });
@@ -2886,6 +2913,37 @@ function ticketPanelMessagePayload(panel) {
     return { content: panel.content || null, embeds: [embed], components };
 }
 
+// Validate every configurable emoji on a ticket panel against the live emoji
+// guild collections. A custom emoji that disappeared degrades to the panel's
+// Unicode fallback (or null) instead of being saved as a broken token. Plain
+// Unicode input is preserved for backwards compatibility.
+async function sanitizeTicketPanelEmojis(body) {
+    const { getEmojiCatalog, normalizeConfiguredEmoji } = require('./emojiCatalog');
+    const { parseEmojiInput } = require('../shared/emojiValidation');
+    const catalog = await getEmojiCatalog();
+    const fallbacks = { buttonEmoji: '🎫', closeButtonEmoji: '🔒' };
+
+    const resolveValue = (value, fallback) => {
+        if (typeof value !== 'string' || !value.trim()) return value;
+        if (!parseEmojiInput(value)) return value;
+        const entry = normalizeConfiguredEmoji(value, catalog);
+        return entry ? entry.raw : (fallback || null);
+    };
+    const walk = (node, key) => {
+        if (Array.isArray(node)) return node.map(item => walk(item, key));
+        if (node && typeof node === 'object') {
+            const out = { ...node };
+            for (const [k, v] of Object.entries(out)) out[k] = walk(v, k);
+            return out;
+        }
+        if (typeof node === 'string' && /emoji$/i.test(key)) {
+            return resolveValue(node, fallbacks[key]);
+        }
+        return node;
+    };
+    return walk(body, null);
+}
+
 // Name-conflict errors thrown by the ticket DB helpers carry err.status = 409;
 // respond with that friendly message instead of a 500 with the raw error.
 function ticketPanelError(res, err, what) {
@@ -2906,7 +2964,7 @@ app.get('/api/guilds/:guildId/tickets', requireAuth, requireGuildAdmin, async (r
 
 app.post('/api/guilds/:guildId/tickets', requireAuth, requireGuildAdmin, async (req, res) => {
     try {
-        const body = req.body || {};
+        const body = await sanitizeTicketPanelEmojis(req.body || {});
         if (!body.name || !String(body.name).trim()) {
             return res.status(400).json({ error: 'A panel name is required.' });
         }
@@ -2936,7 +2994,7 @@ app.post('/api/guilds/:guildId/tickets/quickcreate', requireAuth, requireGuildAd
     try {
         const id = parseInt(req.params.id, 10);
         if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid panel id.' });
-        const body = req.body || {};
+        const body = await sanitizeTicketPanelEmojis(req.body || {});
         if ('name' in body && !String(body.name).trim()) {
             return res.status(400).json({ error: 'A panel name is required.' });
         }

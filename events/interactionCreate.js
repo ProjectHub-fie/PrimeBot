@@ -6,6 +6,7 @@ const betaManager = require('../utils/betaManager');
 const { isBetaFeature } = require('../utils/betaFeatureMatcher');
 const { logEvent } = require('../utils/serverLogger');
 const { emoji } = require('../utils/emoji');
+const { buildEmbedWithButtons } = require('../utils/embedComponentsV2');
 
 function helpIcon(category, fallback = '') {
     try {
@@ -35,10 +36,10 @@ async function showMainHelpUpdate(interaction) {
             .setEmoji(helpIcon('information', '🆘')),
     );
 
-    await interaction.update({
+    await interaction.update(buildEmbedWithButtons({
         embeds: [mainEmbed],
         components: [categorySelectRow(null, 'help_select'), actions],
-    });
+    }));
     scheduleComponentExpiry(interaction.message);
 }
 
@@ -111,7 +112,7 @@ async function showSashHelp(interaction, page) {
                 .setEmoji(emoji('left', '↩️'))
         ));
 
-        await interaction.update({ embeds: [mainEmbed], components: rows });
+        await interaction.update(buildEmbedWithButtons({ embeds: [mainEmbed], components: rows }));
         scheduleComponentExpiry(interaction.message);
         return;
     }
@@ -119,12 +120,12 @@ async function showSashHelp(interaction, page) {
     const cat = SASH_CATEGORIES[category];
     if (!cat) {
         const { linixEmbed } = require('../utils/linixEmbed');
-        await interaction.update({
+        await interaction.update(buildEmbedWithButtons({
             embeds: [linixEmbed()
                 .t(`${emoji('cross', '❌')} Unknown Sash Category`)
                 .d(`The sash category "${category}" was not found.`)],
             components: [backButton],
-        });
+        }));
         return;
     }
 
@@ -132,7 +133,7 @@ async function showSashHelp(interaction, page) {
         iconURL: interaction.client?.user?.displayAvatarURL?.({ dynamic: true }),
     });
 
-    await interaction.update({ embeds: [embed], components: [backButton] });
+    await interaction.update(buildEmbedWithButtons({ embeds: [embed], components: [backButton] }));
     scheduleComponentExpiry(interaction.message);
 }
 
@@ -155,10 +156,10 @@ async function showCategoryHelpUpdate(interaction, category) {
             .setEmoji(helpIcon('information', '🆘')),
     );
 
-    await interaction.update({
+    await interaction.update(buildEmbedWithButtons({
         embeds: [embed],
         components: [categorySelectRow(category, 'help_select'), actions],
-    });
+    }));
     scheduleComponentExpiry(interaction.message);
 }
 
@@ -698,10 +699,10 @@ module.exports = {
                         const { mainMenuEmbed, categorySelectRow, homeButtonRow } = require('../utils/prefixHelp');
                         const pfx = (interaction.client.serverSettingsManager?.getGuildPrefix?.(interaction.guild?.id)) || '$';
                         try {
-                            await interaction.update({
+                            await interaction.update(buildEmbedWithButtons({
                                 embeds: [mainMenuEmbed(pfx, interaction.client, { user: interaction.user, kind: 'prefix' })],
                                 components: [categorySelectRow(null, 'category_select_prefix'), homeButtonRow('categories_prefix_back')],
-                            });
+                            }));
                             scheduleComponentExpiry(interaction.message);
                         } catch (_) {}
                         return;
@@ -1018,10 +1019,10 @@ module.exports = {
                                 .setURL(config.supportServer || 'https://discord.gg/primebot')
                                 .setEmoji(helpIcon('information', '🆘')),
                         );
-                        await interaction.update({
+                        await interaction.update(buildEmbedWithButtons({
                             embeds: [embed],
                             components: [categorySelectRow(selectedCategory, 'help_select'), actions],
-                        });
+                        }));
                         scheduleComponentExpiry(interaction.message);
                         return;
                     }

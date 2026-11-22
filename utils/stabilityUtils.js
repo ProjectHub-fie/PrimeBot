@@ -192,7 +192,19 @@ function scheduleComponentExpiry(message, ttlMs = MESSAGE_COMPONENT_TTL_MS){
             if (typeof message.deleted === 'boolean' && message.deleted) return;
             const hasEditReply = typeof message.editReply === 'function';
             const edit = hasEditReply ? message.editReply.bind(message) : (typeof message.edit === 'function' ? message.edit.bind(message) : null);
-            if (edit) edit({ components: [] }).catch(() => {});
+            if (!edit) return;
+            const flags = message.flags;
+            const isV2 = flags && (typeof flags.has === 'function'
+                ? flags.has(32768)
+                : (Number(flags) & 32768) === 32768);
+            if (isV2) {
+                edit({
+                    flags: 32768,
+                    components: [{ type: 17, components: [{ type: 10, content: '-# This menu has expired.' }] }],
+                }).catch(() => {});
+            } else {
+                edit({ components: [] }).catch(() => {});
+            }
         } catch (_) {}
     }, ttlMs);
     if (typeof timer.unref === 'function') timer.unref();

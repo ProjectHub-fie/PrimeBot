@@ -1,5 +1,6 @@
 const { SlashCommandBuilder } = require('discord.js');
 const { scheduleComponentExpiry } = require('../utils/stabilityUtils');
+const { buildEmbedWithButtons } = require('../utils/embedComponentsV2');
 const {
     mainMenuEmbed,
     categoryEmbed,
@@ -24,10 +25,10 @@ async function showCategorySelector(interaction) {
         kind: 'slash',
     });
 
-    await interaction.reply({
+    await interaction.reply(buildEmbedWithButtons({
         embeds: [embed],
         components: [categorySelectRow(null, 'category_select'), homeButtonRow('categories_refresh')],
-    });
+    }));
     const sent = await interaction.fetchReply().catch(() => null);
     if (sent) scheduleComponentExpiry(sent);
 }
@@ -37,10 +38,10 @@ async function showCategoryDetails(interaction, category) {
         iconURL: interaction.client?.user?.displayAvatarURL?.({ dynamic: true }),
     });
 
-    await interaction.update({
+    await interaction.update(buildEmbedWithButtons({
         embeds: [embed],
         components: [categorySelectRow(category, 'category_select'), homeButtonRow('categories_refresh')],
-    });
+    }));
     scheduleComponentExpiry(interaction.message);
 }
 

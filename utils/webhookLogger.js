@@ -10,9 +10,8 @@ const https = require('https');
 const { URL } = require('url');
 const config = require('../config');
 
-// Palette-mapped colors (config.colors) so the failover webhook embeds match
-// every other PrimeBot embed. The webhook posts a raw embed object, so it
-// never passes through the theme layer — map here explicitly.
+// Palette constants are retained for diagnostics/tests. The webhook payload
+// itself carries no colour (PrimeBot embeds are monochrome).
 const COLORS = {
     online:  parseInt(config.colors.success.replace(/^#/, ''), 16),
     offline: parseInt(config.colors.error.replace(/^#/, ''), 16),
@@ -97,7 +96,6 @@ function send({ title, description = '', type = 'info', reason, fromNode, extraF
 
     const { name, label, priority, icon } = getNodeMeta();
     const statusIcon = STATUS_ICONS[type] ?? STATUS_ICONS.info;
-    const color      = COLORS[type]       ?? COLORS.info;
     const now        = Math.floor(Date.now() / 1000); // Unix seconds
 
     // ── Core identity fields (always shown, inline 3-col) ──────────────────
@@ -134,7 +132,6 @@ function send({ title, description = '', type = 'info', reason, fromNode, extraF
         },
         title:       title,   // caller provides the full title including any emoji
         description: description || undefined,
-        color,
         fields,
         footer: {
             text: `BOT_FAILOVER_ENABLED · role=${process.env.NODE_ROLE || 'sn1'}`,
