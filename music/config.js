@@ -123,25 +123,28 @@ function resolveNodeOptions() {
 }
 
 /**
- * Env-driven display emojis. Linix's `emoji.json` carries Discord custom-emoji
- * ids from Linix's own emoji server — on PrimeBot every one of those renders as
- * a broken box. The defaults here are plain Unicode; a deployment can replace
- * any of them with its own custom emoji via `MUSIC_EMOJI_<KEY>` (a full
- * `<a:name:id>` / `<:name:id>` string or a Unicode character).
+ * Display emojis. The custom emoji itself is resolved at runtime by
+ * `utils/emojiManager.js` (validated against the three emoji guilds) and
+ * overlaid in `music/clientBridge.js`. This function only produces the fallback
+ * map: an optional `MUSIC_EMOJI_<KEY>` override, else the shared Unicode
+ * fallback from `shared/emojiCatalog.js` — never a hardcoded custom id.
  */
 function resolveEmoji() {
-    const unicodeDefaults = {
-        mute: '🔇', volumemiddle: '🔉', volumelow: '🔈', volumehigh: '🔊',
-        stop: '⏹️', previous: '⏮️', skip: '⏭️', shuffle: '🔀', rewind: '⏪',
-        resume: '▶️', remove: '⏏️', queue: '🎶', playlist: '💽', play: '▶️',
-        pause: '⏸️', loop: '🔁', forward: '⏩', filter: '🎛️', autoplay: '♾️',
-        addsong: '🎶', music: '🎵', warn: '⚠️', join: '📥', leave: '📤',
-        about: '🔎', jump: '⏭️',
-        // extra keys the vendored code reads but Linix's json never defined.
-        tick: '✅', cross: '❌', dot: '🎵', playing: '🎵',
-        left: '◀️', right: '▶️', delete: '🗑️', replay: '🔁',
-    };
-
+    const { EMOJI_FALLBACKS } = require('../shared/emojiCatalog');
+    // One central fallback map (shared/emojiCatalog.js) — no duplicated literal
+    // emoji table here. The custom emoji itself is resolved at runtime by
+    // utils/emojiManager.js and overlaid in music/clientBridge.js.
+    const keys = [
+        'mute', 'volumemiddle', 'volumelow', 'volumehigh', 'stop', 'previous',
+        'skip', 'shuffle', 'rewind', 'resume', 'remove', 'queue', 'playlist',
+        'play', 'pause', 'loop', 'forward', 'filter', 'autoplay', 'addsong',
+        'music', 'warn', 'join', 'leave', 'about', 'jump', 'tick', 'cross',
+        'dot', 'playing', 'left', 'right', 'delete', 'replay',
+    ];
+    const unicodeDefaults = {};
+    for (const key of keys) {
+        unicodeDefaults[key] = EMOJI_FALLBACKS[key] || '';
+    }
     const emoji = {};
     for (const [key, fallback] of Object.entries(unicodeDefaults)) {
         const value = process.env[`MUSIC_EMOJI_${key.toUpperCase()}`] || fallback;

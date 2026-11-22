@@ -31,13 +31,29 @@ function installMusicClientSurface(client) {
     }
     client.embedColor = cfg.embedColor;
     /*
-     * `client.emoji` is the env-driven display map (see music/config.js
-     * `resolveEmoji`). Linix required its own public emoji server for its
-     * custom-emoji ids (`<:dot:1201841280577970176>` etc.); PrimeBot defaults
-     * to Unicode so every embed renders on any server. A deployment can supply
-     * its own custom emoji via `MUSIC_EMOJI_<KEY>`.
+     * `client.emoji` is a live view over the central catalog: each key resolves
+     * through utils/emojiManager.js on access (validated custom emoji when
+     * available, else the MUSIC_EMOJI_<KEY> override / shared Unicode
+     * fallback). Getters keep it correct even if the catalog finishes loading
+     * after the music subsystem boots. Linix's own custom-emoji ids are never
+     * hardcoded here.
      */
     client.emoji = cfg.emoji;
+    try {
+        const emojiManagerModule = require('../utils/emojiManager');
+        const resolved = {};
+        for (const [key, fallback] of Object.entries(cfg.emoji)) {
+            Object.defineProperty(resolved, key, {
+                enumerable: true,
+                configurable: true,
+                get() {
+                    const manager = emojiManagerModule.getEmojiManager();
+                    return manager ? manager.emoji(key, fallback) : fallback;
+                },
+            });
+        }
+        client.emoji = resolved;
+    } catch (_) { /* manager unavailable — keep the Unicode map */ }
     client.ownerId = cfg.ownerId;
     client.playlistMenu = cfg.playlistMenu;
     client.cardName = cfg.cardName;

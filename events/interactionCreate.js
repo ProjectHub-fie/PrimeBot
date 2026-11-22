@@ -5,6 +5,15 @@ const config = require('../config');
 const betaManager = require('../utils/betaManager');
 const { isBetaFeature } = require('../utils/betaFeatureMatcher');
 const { logEvent } = require('../utils/serverLogger');
+const { emoji } = require('../utils/emoji');
+
+function helpIcon(category, fallback = '') {
+    try {
+        return require('../utils/prefixHelp').categoryIcon(category, fallback);
+    } catch (_) {
+        return emoji(category, fallback);
+    }
+}
 
 /**
  * Helper function to show main help menu for button interactions
@@ -12,15 +21,15 @@ const { logEvent } = require('../utils/serverLogger');
 async function showMainHelpUpdate(interaction) {
     const mainEmbed = new EmbedBuilder()
         .setColor(config.colors.primary)
-        .setTitle('📚 Command Categories')
+        .setTitle(`${emoji('information')} Command Categories`)
         .setDescription('Choose a category to explore available commands:')
         .addFields(
-            { name: '⚡ General', value: 'Basic bot commands and information', inline: true },
-            { name: '📊 Leveling', value: 'XP, ranks, and progression system', inline: true },
-            { name: '🎮 Games', value: 'Fun interactive games and activities', inline: true },
-            { name: '🛡️ Moderation', value: 'Server management and moderation tools', inline: true },
-            { name: '👥 Community', value: 'Engagement and social features', inline: true },
-            { name: '⚙️ Administration', value: 'Advanced server configuration', inline: true }
+            { name: `${helpIcon('general', '⚡')} General`, value: 'Basic bot commands and information', inline: true },
+            { name: `${helpIcon('leveling', '📊')} Leveling`, value: 'XP, ranks, and progression system', inline: true },
+            { name: `${helpIcon('games', '🎮')} Games`, value: 'Fun interactive games and activities', inline: true },
+            { name: `${helpIcon('moderation', '🛡️')} Moderation`, value: 'Server management and moderation tools', inline: true },
+            { name: `${helpIcon('community', '👥')} Community`, value: 'Engagement and social features', inline: true },
+            { name: `${helpIcon('admin', '⚙️')} Administration`, value: 'Advanced server configuration', inline: true }
         )
         .setFooter({ text: `Total Commands: 25 • Version: ${config.version}` })
         .setTimestamp();
@@ -31,27 +40,27 @@ async function showMainHelpUpdate(interaction) {
                 .setCustomId('help_general')
                 .setLabel('General')
                 .setStyle(ButtonStyle.Primary)
-                .setEmoji('⚡'),
+                .setEmoji(helpIcon('general', '⚡')),
             new ButtonBuilder()
                 .setCustomId('help_leveling')
                 .setLabel('Leveling')
                 .setStyle(ButtonStyle.Primary)
-                .setEmoji('📊'),
+                .setEmoji(helpIcon('leveling', '📊')),
             new ButtonBuilder()
                 .setCustomId('help_games')
                 .setLabel('Games')
                 .setStyle(ButtonStyle.Primary)
-                .setEmoji('🎮'),
+                .setEmoji(helpIcon('games', '🎮')),
             new ButtonBuilder()
                 .setCustomId('help_moderation')
                 .setLabel('Moderation')
                 .setStyle(ButtonStyle.Secondary)
-                .setEmoji('🛡️'),
+                .setEmoji(helpIcon('moderation', '🛡️')),
             new ButtonBuilder()
                 .setCustomId('help_community')
                 .setLabel('Community')
                 .setStyle(ButtonStyle.Success)
-                .setEmoji('👥')
+                .setEmoji(helpIcon('community', '👥'))
         );
 
     const adminButton = new ActionRowBuilder()
@@ -60,17 +69,17 @@ async function showMainHelpUpdate(interaction) {
                 .setCustomId('help_admin')
                 .setLabel('Administration')
                 .setStyle(ButtonStyle.Danger)
-                .setEmoji('⚙️'),
+                .setEmoji(helpIcon('admin', '⚙️')),
             new ButtonBuilder()
                 .setCustomId('help_prefix')
                 .setLabel('Sash')
                 .setStyle(ButtonStyle.Secondary)
-                .setEmoji('💬'),
+                .setEmoji(helpIcon('utility', '💬')),
             new ButtonBuilder()
                 .setLabel('Support')
                 .setStyle(ButtonStyle.Link)
                 .setURL(config.supportServer || 'https://discord.gg/primebot')
-                .setEmoji('🆘')
+                .setEmoji(helpIcon('information', '🆘'))
         );
 
     await interaction.update({
@@ -94,15 +103,15 @@ async function showMainHelpUpdate(interaction) {
  * The button leads here from the main /help menu's "Sash" button.
  */
 function buildSashCategories(prefix) {
-    const { CATALOG, CATEGORY_ORDER } = require('../utils/prefixHelp');
+    const { CATALOG, CATEGORY_ORDER, categoryIcon } = require('../utils/prefixHelp');
     const out = {};
     for (const key of CATEGORY_ORDER) {
         const cat = CATALOG[key];
         if (!cat) continue;
         out[key] = {
-            icon: cat.icon,
+            icon: categoryIcon(key, cat.icon),
             label: cat.label,
-            title: (cat.title || '').replace(/Prefix/g, 'Sash'),
+            title: `${categoryIcon(key, cat.icon)} ${(cat.title || '').replace(/Prefix/g, 'Sash')}`.trim(),
             desc: (cat.description || '').replace(/Prefix/g, 'Sash'),
             color: cat.color,
             fields: cat.commands.map(c => {
@@ -129,14 +138,14 @@ async function showSashHelp(interaction, page) {
                 .setCustomId('help_sash')
                 .setLabel('Back to Sash Menu')
                 .setStyle(ButtonStyle.Secondary)
-                .setEmoji('◀️')
+                .setEmoji(emoji('left', '◀️'))
         );
 
     if (category === 'main' || category === 'back') {
         const total = ORDER.reduce((n, k) => n + SASH_CATEGORIES[k].fields.length, 0);
         const mainEmbed = new EmbedBuilder()
             .setColor(config.colors.primary)
-            .setTitle('💬 Sash Command Categories')
+            .setTitle(`${emoji('utility')} Sash Command Categories`)
             .setDescription(
                 `Sash commands are classic text commands you run by typing your sash (\`${prefix}\`) followed by the command name.\n\n` +
                 `**Usage:** \`${prefix}help [category]\` — choose a category below to browse its sash commands.`
@@ -172,7 +181,7 @@ async function showSashHelp(interaction, page) {
                 .setCustomId('help_back')
                 .setLabel('Back to Categories')
                 .setStyle(ButtonStyle.Secondary)
-                .setEmoji('↩️')
+                .setEmoji(emoji('left', '↩️'))
         ));
 
         await interaction.update({ embeds: [mainEmbed], components: rows });
@@ -185,7 +194,7 @@ async function showSashHelp(interaction, page) {
         await interaction.update({
             embeds: [new EmbedBuilder()
                 .setColor(config.colors.error)
-                .setTitle('❌ Unknown Sash Category')
+                .setTitle(`${emoji('cross')} Unknown Sash Category`)
                 .setDescription(`The sash category "${category}" was not found.`)],
             components: [backButton],
         });
@@ -318,7 +327,7 @@ async function showCategoryHelpUpdate(interaction, category) {
                 .setCustomId('help_back')
                 .setLabel('Back to Categories')
                 .setStyle(ButtonStyle.Secondary)
-                .setEmoji('◀️')
+                .setEmoji(emoji('left', '◀️'))
         );
 
     categoryEmbed.setFooter({ text: `Version: ${config.version}` })
