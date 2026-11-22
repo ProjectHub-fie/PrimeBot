@@ -101,7 +101,7 @@ async function showMainHelp(interaction) {
         components: [categorySelectRow(null, 'help_select'), helpActionRow()],
     });
     const sent = await interaction.fetchReply().catch(() => null);
-    scheduleComponentExpiry(sent || interaction.message || { editReply: () => {} });
+    if (sent) scheduleComponentExpiry(sent);
 }
 
 async function showCategoryHelp(interaction, category) {
@@ -114,7 +114,7 @@ async function showCategoryHelp(interaction, category) {
         components: [categorySelectRow(category, 'help_select'), helpActionRow()],
     });
     const sent = await interaction.fetchReply().catch(() => null);
-    scheduleComponentExpiry(sent || interaction.message || { editReply: () => {} });
+    if (sent) scheduleComponentExpiry(sent);
 }
 
 module.exports.showMainHelp = showMainHelp;

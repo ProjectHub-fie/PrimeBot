@@ -29,7 +29,7 @@ async function showCategorySelector(interaction) {
         components: [categorySelectRow(null, 'category_select'), homeButtonRow('categories_refresh')],
     });
     const sent = await interaction.fetchReply().catch(() => null);
-    scheduleComponentExpiry(sent || interaction.message || { editReply: () => {} });
+    if (sent) scheduleComponentExpiry(sent);
 }
 
 async function showCategoryDetails(interaction, category) {
