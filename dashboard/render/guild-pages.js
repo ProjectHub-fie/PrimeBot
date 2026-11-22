@@ -12,6 +12,8 @@ const constants = require('../constants');
 const { esc, channelOptions, roleOptions, render, svgIcon } = require('./layout');
 const { guildDataScript, guildHeaderHTML, tabNavHTML, TABS } = require('./guild');
 const eventsPageLib = require('./events-page');
+const invitePageLib = require('./invite-page');
+const aiPageLib = require('./ai-page');
 
 const { LOG_EVENTS, AUTOMOD_RULES, AUTOMOD_ACTIONS, BADGE_CATALOG } = constants;
 
@@ -1481,11 +1483,8 @@ function antiNukePage({ guild, user, view }) {
 
 // ── Events ──────────────────────────────────────────────────────────────────
 //
-// Event Management is marked `upcoming: true` in render/guild.js TABS, so the
-// page renders the "Coming Soon......" overlay for ALL servers (upcoming takes
-// priority over beta). The underlying editor markup is kept (blurred) so the
-// tab remains discoverable and the feature can be re-enabled by flipping the
-// `upcoming` flag off — no markup rewrite needed when it ships.
+// Event Management is RELEASED — the real page renders for every server.
+// The `upcoming` overlay helper still exists for future features.
 
 function eventsPage({ guild, user }) {
     // The full Event Management page lives in its own module (render/events-page.js)
@@ -1503,6 +1502,17 @@ function eventWizardPage({ guild, user, template }) {
 
 function eventManagePage({ guild, user, event, participants, activity, activeTab }) {
     const { body, scripts, title } = eventsPageLib.eventManagePage({ guild, user, event, participants, activity, activeTab });
+    return render({ title, body, active: 'servers', scripts, user });
+}
+
+// Invite Tracking — server-rendered overview + config (released, free).
+function aiPage({ guild, user }) {
+    const { body, scripts, title } = aiPageLib.aiPage({ guild, user });
+    return render({ title, body, active: 'servers', scripts, user });
+}
+
+function invitesPage({ guild, user }) {
+    const { body, scripts, title } = invitePageLib.invitesPage({ guild, user });
     return render({ title, body, active: 'servers', scripts, user });
 }
 
@@ -1830,6 +1840,8 @@ function liveGiveawaysPage({ guild, user }) {
 module.exports = {
     welcomePage, levelingPage, badgesPage, prefixPage, roleRewardsPage, autoResponderPage, reactionsPage, broadcastPage,
     birthdaysPage, embedPage, loggingPage, reactionRolesPage, ticketsPage, ticketEditPage, automodPage, antiNukePage, eventsPage,
+    invitesPage,
+    aiPage,
     youtubePage,
     eventWizardPage, eventManagePage,
     livePollsPage, liveGiveawaysPage,

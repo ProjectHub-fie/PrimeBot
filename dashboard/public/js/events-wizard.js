@@ -147,6 +147,10 @@
       embedFields: readFields(),
       embedFooter: $('#ev-embed-footer').value || null,
       reminders: $$('.ev-reminder').filter(c => c.checked).map(c => c.value),
+      recurrence: $('#ev-recurrence') ? $('#ev-recurrence').value : 'none',
+      recurrenceUntil: $('#ev-recurrence-until') && $('#ev-recurrence-until').value
+        ? new Date(`${$('#ev-recurrence-until').value}T23:59:59`).toISOString() : null,
+      syncScheduledEvent: $('#ev-sync-scheduled') ? $('#ev-sync-scheduled').checked : true,
     };
   }
 
@@ -170,7 +174,9 @@
         <div class="ev-preview-footer">${esc(d.embedFooter || 'PrimeBot Events')}</div>
       </div>
       <div class="ev-preview-buttons">
-        <span class="ev-fake-btn primary">🎟️ Join Event</span>
+        <span class="ev-fake-btn primary">✅ Going</span>
+        <span class="ev-fake-btn">⭐ Interested</span>
+        <span class="ev-fake-btn">❌ Not going</span>
         <span class="ev-fake-btn">👥 Participants</span>
         <span class="ev-fake-btn">ℹ️ Event Info</span>
         <span class="ev-fake-btn">🔔 Remind Me</span>
@@ -194,6 +200,8 @@
       ['Location', d.locationValue || d.locationType],
       ['Registration', d.registrationMode + (d.maxParticipants ? ` · max ${d.maxParticipants}` : '')],
       ['Reminders', (d.reminders || []).join(', ') || 'none'],
+      ['Repeats', d.recurrence && d.recurrence !== 'none' ? d.recurrence : 'does not repeat'],
+      ['Discord Scheduled Event', d.syncScheduledEvent ? 'yes' : 'no'],
       ['Announcement channel', d.announcementChannelId ? '#' + d.announcementChannelId : 'not set'],
     ];
     box.innerHTML = `

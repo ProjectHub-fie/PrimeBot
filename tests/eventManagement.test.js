@@ -80,11 +80,15 @@ function sampleEvent(over = {}) {
     };
 }
 
-test('announcement payload has one embed + a components row with the event buttons', () => {
+test('announcement payload has one embed + component rows with the event buttons', () => {
     const payload = M.buildAnnouncementPayload(sampleEvent(), { participants: 24 });
     assert.equal(payload.embeds.length, 1);
-    assert.equal(payload.components.length, 1);
-    const ids = payload.components[0].components.map(c => c.custom_id);
+    assert.ok(payload.components.length >= 1);
+    // Every row respects Discord's 5-buttons-per-row cap.
+    for (const row of payload.components) {
+        assert.ok(row.components.length <= 5, 'a component row exceeds 5 buttons');
+    }
+    const ids = payload.components.flatMap(r => r.components.map(c => c.custom_id));
     for (const id of ['evjoin:7', 'evleave:7', 'evparts:7', 'evinfo:7', 'evremind:7']) {
         assert.ok(ids.includes(id), `missing ${id}`);
     }
@@ -297,10 +301,9 @@ function fakeGuild(over = {}) {
     };
 }
 
-test('eventsPage renders the premium hero, stats and create button for bypass developers', () => {
+test('eventsPage renders the premium hero, stats and create button for every server (released)', () => {
     const gp = require('../dashboard/render/guild-pages');
-    // Developer/owner roles bypass the upcoming gate and see the real page.
-    const html = gp.eventsPage({ guild: fakeGuild({ _bypassUpcoming: true }), user: { username: 'u' } });
+    const html = gp.eventsPage({ guild: fakeGuild(), user: { username: 'u' } });
     assert.match(html, /Event Management/);
     assert.match(html, /Create, manage, and run Discord events with ease\./);
     assert.match(html, /Premium features in free\./);
@@ -309,30 +312,30 @@ test('eventsPage renders the premium hero, stats and create button for bypass de
     assert.match(html, /Active Events/);
     assert.match(html, /Upcoming Events/);
     assert.match(html, /Completed Events/);
-    assert.match(html, /Total Participants/);
-    assert.ok(!html.includes('upcoming-locked-wrap locked'), 'bypass users get the real editor, not the overlay');
+    assert.match(html, /Total Going/);
+    assert.ok(!html.includes('upcoming-locked-wrap locked'), 'Event Management is released — no overlay');
     assert.match(html, /<svg class="ico"/);
 });
 
-test('eventsPage renders the Coming Soon overlay for ordinary users (upcoming)', () => {
+test('eventsPage no longer shows the Coming Soon overlay (released)', () => {
     const gp = require('../dashboard/render/guild-pages');
     const html = gp.eventsPage({ guild: fakeGuild(), user: { username: 'u' } });
-    assert.match(html, /upcoming-locked-wrap locked/, 'ordinary users see the locked overlay');
-    assert.match(html, /Event Management……/, 'overlay names the feature');
+    assert.ok(!html.includes('upcoming-locked-wrap locked'), 'released for all servers');
+    assert.match(html, /Event Management/);
 });
 
-test('eventWizardPage and eventManagePage are gated for ordinary users but usable by bypass developers', () => {
+test('eventWizardPage and eventManagePage are usable by every server (released)', () => {
     const gp = require('../dashboard/render/guild-pages');
     const ev = { id: 5, guildId: '111111111111111111', name: 'Night', type: 'gaming', status: 'registration_open', registrationMode: 'open', startAt: new Date().toISOString(), maxParticipants: 50, waitlistEnabled: true, trackAttendance: true, reminders: ['1h'], eventPermissions: [], participantRoleId: null };
-    const wizardGated = gp.eventWizardPage({ guild: fakeGuild(), user: null, template: 'gaming-night' });
-    assert.match(wizardGated, /upcoming-locked-wrap locked/, 'wizard gated for ordinary users');
-    const manageGated = gp.eventManagePage({ guild: fakeGuild(), user: null, event: ev, participants: [], activity: [], activeTab: 'overview' });
-    assert.match(manageGated, /upcoming-locked-wrap locked/, 'manage page gated for ordinary users');
+    const wizard = gp.eventWizardPage({ guild: fakeGuild(), user: null, template: 'gaming-night' });
+    assert.ok(!wizard.includes('upcoming-locked-wrap locked'), 'wizard available to every server');
+    const manage = gp.eventManagePage({ guild: fakeGuild(), user: null, event: ev, participants: [], activity: [], activeTab: 'overview' });
+    assert.ok(!manage.includes('upcoming-locked-wrap locked'), 'manage page available to every server');
 
-    const wizard = gp.eventWizardPage({ guild: fakeGuild({ _bypassUpcoming: true }), user: null, template: 'gaming-night' });
-    assert.ok(!wizard.includes('upcoming-locked-wrap locked'), 'bypass users get the wizard');
-    const manage = gp.eventManagePage({ guild: fakeGuild({ _bypassUpcoming: true }), user: null, event: ev, participants: [], activity: [], activeTab: 'overview' });
-    assert.ok(!manage.includes('upcoming-locked-wrap locked'), 'bypass users get the manage page');
+    const bypassWizard = gp.eventWizardPage({ guild: fakeGuild({ _bypassUpcoming: true }), user: null, template: 'gaming-night' });
+    assert.ok(!bypassWizard.includes('upcoming-locked-wrap locked'), 'bypass users get the wizard');
+    const bypassManage = gp.eventManagePage({ guild: fakeGuild({ _bypassUpcoming: true }), user: null, event: ev, participants: [], activity: [], activeTab: 'overview' });
+    assert.ok(!bypassManage.includes('upcoming-locked-wrap locked'), 'bypass users get the manage page');
 });
 
 test('eventsPage shows the branded empty state when there are no events', () => {

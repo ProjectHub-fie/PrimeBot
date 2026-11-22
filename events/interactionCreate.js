@@ -391,7 +391,7 @@ module.exports = {
                 // Event Management buttons (customIds: evjoin:/evleave:/evcheckin:/
                 // evparts:/evinfo:/evremind: + <eventId>). The manager rejects any event
                 // that does not belong to the interaction's guild.
-                if (/^ev(join|leave|checkin|parts|info|remind):/.test(customId)) {
+                if (/^ev(join|leave|interest|checkin|parts|info|remind):/.test(customId)) {
                     const mgr = client.eventMgmtManager;
                     if (!mgr || typeof mgr.handleButton !== 'function') {
                         await safeReply(interaction, { content: 'Event system is unavailable right now.', ephemeral: true });

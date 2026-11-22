@@ -70,6 +70,11 @@ CREATE TABLE IF NOT EXISTS em_events (
     embed_footer             VARCHAR(255),
     reminders                JSONB DEFAULT '[]',
     result                   JSONB,
+    recurrence               VARCHAR(20) DEFAULT 'none',
+    recurrence_until         TIMESTAMP,
+    recurrence_parent_id     INTEGER,
+    scheduled_event_id       VARCHAR(50),
+    sync_scheduled_event     BOOLEAN DEFAULT true,
     created_at               TIMESTAMP DEFAULT NOW(),
     updated_at               TIMESTAMP DEFAULT NOW()
 );
@@ -77,6 +82,7 @@ CREATE INDEX IF NOT EXISTS em_events_guild_idx ON em_events (guild_id);
 CREATE INDEX IF NOT EXISTS em_events_status_idx ON em_events (status);
 CREATE INDEX IF NOT EXISTS em_events_start_idx ON em_events (start_at);
 CREATE INDEX IF NOT EXISTS em_events_guild_start_idx ON em_events (guild_id, start_at DESC);
+CREATE INDEX IF NOT EXISTS em_events_recurrence_parent_idx ON em_events (recurrence_parent_id);
 
 CREATE TABLE IF NOT EXISTS em_participants (
     id                SERIAL PRIMARY KEY,
@@ -137,11 +143,24 @@ CREATE INDEX IF NOT EXISTS em_activity_event_idx ON em_activity (event_id, creat
 let _tablesReady = false;
 let _ensurePromise = null;
 
+// Existing deployments created em_events before recurrence / scheduled-event
+// support existed. CREATE TABLE IF NOT EXISTS never alters an existing table, so
+// every added column is also applied with an idempotent ALTER.
+const ALTER_EVENTS_SQL = `
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS recurrence VARCHAR(20) DEFAULT 'none';
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS recurrence_until TIMESTAMP;
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS recurrence_parent_id INTEGER;
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS scheduled_event_id VARCHAR(50);
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS sync_scheduled_event BOOLEAN DEFAULT true;
+CREATE INDEX IF NOT EXISTS em_events_recurrence_parent_idx ON em_events (recurrence_parent_id);
+`;
+
 /** Create the tables (idempotent, memoized per process). */
 async function ensureEventMgmtTables() {
     if (_tablesReady) return true;
     if (!_ensurePromise) {
         _ensurePromise = eventMgmtPool.query(CREATE_TABLES_SQL)
+            .then(() => eventMgmtPool.query(ALTER_EVENTS_SQL))
             .then(() => { _tablesReady = true; return true; })
             .catch((err) => { _ensurePromise = null; throw err; });
     }

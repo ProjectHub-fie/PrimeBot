@@ -367,6 +367,53 @@ async function initializeManagers() {
         };
     }
 
+    // Invite Tracking — attributes joins to invite codes via the invite `uses`
+    // delta, persists history and exposes it to the dashboard. Free for every
+    // server; no configuration required to start collecting (disabled only if a
+    // guild explicitly opts out).
+    try {
+        const { InviteTracker } = require('./utils/inviteTracker');
+        client.inviteTracker = new InviteTracker(client);
+        console.log('[MANAGERS] InviteTracker loaded.');
+    } catch (err) {
+        console.error('[MANAGERS] Failed to load InviteTracker:', err.message);
+        client.inviteTracker = {
+            ready: async () => {}, stop: () => {},
+            getSettings: () => ({ enabled: false }),
+            isEnabled: () => false,
+            handleMemberAdd: async () => null,
+            handleMemberRemove: async () => null,
+            handleInviteCreate: async () => {},
+            handleInviteDelete: async () => {},
+            getStats: async () => ({ joins: 0, leaves: 0, net: 0, activeInvites: 0 }),
+            getLeaderboard: async () => [],
+            getTotals: async () => ({ totalJoins: 0, totalLeaves: 0, net: 0 }),
+        };
+    }
+
+    // AI Assistant — free, provider-independent (Groq -> Gemini -> OpenRouter
+    // free models). One backend shared by /ai, $ai and mention replies.
+    try {
+        const { AiManager } = require('./utils/ai/aiManager');
+        client.aiManager = new AiManager(client);
+        console.log('[MANAGERS] AiManager loaded.');
+    } catch (err) {
+        console.error('[MANAGERS] Failed to load AiManager:', err.message);
+        client.aiManager = {
+            ready: async () => {}, stop: () => {},
+            getSettings: () => ({ enabled: false, channelIds: [], roleIds: [] }),
+            isEnabled: () => false,
+            checkAccess: () => ({ ok: false, reason: 'unavailable' }),
+            chat: async () => ({ ok: false, reason: 'unavailable', message: 'AI is unavailable.' }),
+            complete: async () => ({ ok: false, reason: 'unavailable' }),
+            updateSettings: async () => ({}),
+            resetSession: async () => 0,
+            clearGuildSessions: async () => 0,
+            getProviderStatus: async () => [],
+            testProvider: async () => ({ ok: false, message: 'AI is unavailable.' }),
+        };
+    }
+
     // YouTube Notifications (Creator Hub) — public RSS feed monitoring with
     // dashboard-only configuration. Only ONE node polls at a time (DB lease),
     // and announcements are de-duplicated by a UNIQUE constraint, so it is safe

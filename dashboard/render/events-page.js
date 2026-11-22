@@ -15,21 +15,16 @@
 const { esc, channelOptions, roleOptions, svgIcon, jsonForScript } = require('./layout');
 const { guildDataScript, guildHeaderHTML, tabNavHTML } = require('./guild');
 
-// Re-use the shared "Coming Soon" overlay so Event Management matches the
-// Anti-Nuke tab exactly. Required lazily inside wrapUpcoming() to avoid a
-// circular require (guild-pages -> events-page -> guild-pages).
+// Event Management is RELEASED — it is available to every server for free.
+// The wrapper is kept so future features can reuse the same "Coming Soon"
+// presentation; it currently returns the real markup unconditionally.
 function wrapUpcoming(innerHTML, guild) {
-    // Developer/owner bot roles bypass the upcoming gate (guild._bypassUpcoming,
-    // set by requireGuildAdminPage) so the feature can be exercised before it
-    // ships — the same bypass eventsPage/Anti-Nuke honor.
-    if (guild && guild._bypassUpcoming) return innerHTML;
-    const { upcomingOverlayWrap } = require('./guild-pages');
-    return upcomingOverlayWrap(innerHTML, { icon: 'calendar', title: 'Event Management' });
+    return innerHTML;
 }
 
 const {
     EVENT_TYPES, EVENT_STATUSES, REGISTRATION_MODES, LOCATION_TYPES,
-    REMINDER_PRESETS, EVENT_PERMISSIONS, EVENT_TEMPLATES,
+    REMINDER_PRESETS, EVENT_PERMISSIONS, EVENT_TEMPLATES, RECURRENCE_OPTIONS,
     eventTypeMeta, eventStatusMeta, normalizeEventPermissions,
 } = require('../../shared/eventConstants');
 
@@ -90,7 +85,8 @@ function eventCardHTML(ev) {
         <div class="ev-card-when">${svgIcon('clock')} ${esc(fmtDate(ev.startAt))}</div>
         ${countdownHTML(ev.startAt, ev.status)}
         <div class="ev-card-participants">
-          ${svgIcon('users')} ${count == null ? '—' : count} participant${count === 1 ? '' : 's'}
+          ${svgIcon('users')} ${count == null ? '—' : count} going
+          ${ev.interestedCount ? ` · ⭐ ${ev.interestedCount} interested` : ''}
           ${progressHTML(count || 0, ev.maxParticipants)}
         </div>
       </div>
@@ -133,6 +129,7 @@ function eventsPage({ guild, user }) {
     const upcoming = events.filter(e => ['scheduled', 'registration_open', 'registration_closed'].includes(e.status)).length;
     const completed = events.filter(e => e.status === 'completed').length;
     const totalParticipants = events.reduce((sum, e) => sum + (e.participantCount || 0), 0);
+    const totalInterested = events.reduce((sum, e) => sum + (e.interestedCount || 0), 0);
 
     // Upcoming list (soonest first) for the "Upcoming Events" section.
     const upcomingList = events
@@ -168,7 +165,8 @@ function eventsPage({ guild, user }) {
         <div class="ev-stat"><div class="ev-stat-num">${active}</div><div class="ev-stat-label">${svgIcon('activity')} Active Events</div></div>
         <div class="ev-stat"><div class="ev-stat-num">${upcoming}</div><div class="ev-stat-label">${svgIcon('calendar')} Upcoming Events</div></div>
         <div class="ev-stat"><div class="ev-stat-num">${completed}</div><div class="ev-stat-label">${svgIcon('check')} Completed Events</div></div>
-        <div class="ev-stat"><div class="ev-stat-num">${totalParticipants}</div><div class="ev-stat-label">${svgIcon('users')} Total Participants</div></div>
+        <div class="ev-stat"><div class="ev-stat-num">${totalParticipants}</div><div class="ev-stat-label">${svgIcon('users')} Total Going</div></div>
+        <div class="ev-stat"><div class="ev-stat-num">${totalInterested}</div><div class="ev-stat-label">${svgIcon('star')} Interested</div></div>
       </section>
 
       <section class="ev-section">
@@ -326,6 +324,19 @@ function eventWizardPage({ guild, user, template = 'custom' }) {
             <div class="switch-label"><div class="sl-title">No end time</div><div class="sl-desc">Leave the end blank for an open-ended event.</div></div>
             <label class="switch"><input type="checkbox" id="ev-no-end" ${pre.durationMinutes ? '' : 'checked'}/><span class="slider"></span></label>
           </div>
+          <div class="form-row">
+            <div class="field"><label class="field-label" for="ev-recurrence">Repeats</label>
+              <select id="ev-recurrence" class="ev-select">
+                ${RECURRENCE_OPTIONS.map(r => `<option value="${esc(r.key)}">${esc(r.label)}</option>`).join('')}
+              </select>
+              <div class="field-hint">The next occurrence is created automatically when this one completes.</div>
+            </div>
+            <div class="field"><label class="field-label" for="ev-recurrence-until">Repeat until (optional)</label><input type="date" id="ev-recurrence-until" /></div>
+          </div>
+          <div class="switch-row">
+            <div class="switch-label"><div class="sl-title">Create a Discord Scheduled Event</div><div class="sl-desc">Mirrors this event into the server's Events tab (voice, stage and external locations).</div></div>
+            <label class="switch"><input type="checkbox" id="ev-sync-scheduled" checked/><span class="slider"></span></label>
+          </div>
           <div class="field-hint">Times are entered in the timezone above and stored in UTC. The countdown uses each viewer's local clock.</div>
         </section>
 
@@ -479,7 +490,8 @@ function participantsPanelHTML(participants, event) {
           <td class="ev-pt-name">${esc(p.username || '')} <span class="ev-muted">#${esc(p.userId)}</span></td>
           <td>${esc(p.userId)}</td>
           <td>${esc(fmtDate(p.registeredAt))}</td>
-          <td>${p.status === 'waiting' ? '<span class="ev-badge">Waiting</span>' : '<span class="ev-badge">Registered</span>'}</td>
+          <td>${p.status === 'waiting' ? '<span class="ev-badge">Waiting</span>'
+              : (p.status === 'interested' ? '<span class="ev-badge">Interested</span>' : '<span class="ev-badge">Going</span>')}</td>
           <td class="ev-pt-att">${att}</td>
           <td class="ev-pt-actions">
             <button class="btn btn-secondary ev-pt-checkin" title="Toggle attendance">${svgIcon('userCheck')}</button>
@@ -490,11 +502,13 @@ function participantsPanelHTML(participants, event) {
     }).join('');
     const registered = (participants || []).filter(p => p.status === 'registered').length;
     const waiting = (participants || []).filter(p => p.status === 'waiting').length;
+    const interested = (participants || []).filter(p => p.status === 'interested').length;
     const present = (participants || []).filter(p => p.attendanceStatus === 'present').length;
     const absent = (participants || []).filter(p => p.attendanceStatus === 'absent').length;
     return `
       <div class="ev-pt-stats">
-        <div class="ev-pt-stat"><strong>${registered}</strong><span>Registered</span></div>
+        <div class="ev-pt-stat"><strong>${registered}</strong><span>Going</span></div>
+        <div class="ev-pt-stat"><strong>${interested}</strong><span>Interested</span></div>
         <div class="ev-pt-stat"><strong>${present}</strong><span>Checked in</span></div>
         <div class="ev-pt-stat"><strong>${absent}</strong><span>Absent</span></div>
         <div class="ev-pt-stat"><strong>${waiting}</strong><span>Waiting</span></div>
@@ -503,7 +517,8 @@ function participantsPanelHTML(participants, event) {
         <div class="ev-search">${svgIcon('search')}<input type="search" id="ev-pt-search" placeholder="Search by username or ID…" /></div>
         <select id="ev-pt-filter" class="ev-select">
           <option value="">All</option>
-          <option value="registered">Registered</option>
+          <option value="registered">Going</option>
+          <option value="interested">Interested</option>
           <option value="waiting">Waiting list</option>
           <option value="present">Checked in</option>
           <option value="absent">Absent</option>
@@ -531,6 +546,8 @@ function overviewPanelHTML(event) {
         <div class="ev-ov-card"><div class="ev-ov-label">Ends</div><div class="ev-ov-value">${event.endAt ? esc(fmtDate(event.endAt)) : 'No end time'}</div></div>
         <div class="ev-ov-card"><div class="ev-ov-label">Registration</div><div class="ev-ov-value">${esc((REGISTRATION_MODES.find(r => r.key === event.registrationMode) || {}).label || 'Open')}</div></div>
         <div class="ev-ov-card"><div class="ev-ov-label">Max participants</div><div class="ev-ov-value">${event.maxParticipants || 'Unlimited'}${event.waitlistEnabled ? ' · waitlist' : ''}</div></div>
+        <div class="ev-ov-card"><div class="ev-ov-label">Repeats</div><div class="ev-ov-value">${esc((RECURRENCE_OPTIONS.find(r => r.key === (event.recurrence || 'none')) || {}).label || 'Does not repeat')}</div></div>
+        <div class="ev-ov-card"><div class="ev-ov-label">Discord Scheduled Event</div><div class="ev-ov-value">${event.scheduledEventId ? 'Linked' : (event.syncScheduledEvent !== false ? 'Will be created' : 'Disabled')}</div></div>
       </div>
       ${event.description ? `<div class="ev-ov-desc">${esc(event.description)}</div>` : ''}
       <div class="ev-ov-countdown">${countdownHTML(event.startAt, event.status)}</div>`;
@@ -586,6 +603,18 @@ function settingsPanelHTML(event) {
       <div class="switch-row">
         <div class="switch-label"><div class="sl-title">Track attendance</div><div class="sl-desc">Enable check-in for this event.</div></div>
         <label class="switch"><input type="checkbox" id="ev-s-attendance" ${event.trackAttendance ? 'checked' : ''}/><span class="slider"></span></label>
+      </div>
+      <div class="form-row">
+        <div class="field"><label class="field-label" for="ev-s-recurrence">Repeats</label>
+          <select id="ev-s-recurrence" class="ev-select">
+            ${RECURRENCE_OPTIONS.map(r => `<option value="${esc(r.key)}" ${(event.recurrence || 'none') === r.key ? 'selected' : ''}>${esc(r.label)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field"><label class="field-label" for="ev-s-recurrence-until">Repeat until</label><input type="date" id="ev-s-recurrence-until" value="${event.recurrenceUntil ? esc(new Date(event.recurrenceUntil).toISOString().slice(0, 10)) : ''}" /></div>
+      </div>
+      <div class="switch-row">
+        <div class="switch-label"><div class="sl-title">Discord Scheduled Event</div><div class="sl-desc">Mirror this event into the server's Events tab.</div></div>
+        <label class="switch"><input type="checkbox" id="ev-s-sync-scheduled" ${event.syncScheduledEvent !== false ? 'checked' : ''}/><span class="slider"></span></label>
       </div>
       <div class="form-row">
         <div class="field"><label class="field-label">Participant role</label><select id="ev-s-participant-role" data-role-select data-placeholder="— None —">${roleOptions(null, event.participantRoleId)}</select></div>

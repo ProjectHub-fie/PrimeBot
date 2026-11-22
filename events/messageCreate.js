@@ -119,110 +119,22 @@ module.exports = {
                 if (automodHit) return; // message was actioned (e.g. deleted) — stop processing
             }
 
-            // Check for ping (mention)
-            if (
-                client.user &&
-                [`<@${client.user.id}>`, `<@!${client.user.id}>`].includes(message.content.trim())
-            ) {                       // Calculate bot uptime
-                const uptime = process.uptime();
-                const uptimeString = formatUptime(uptime);
-
-                // Get guild count
-                const guildCount = client.guilds.cache.size;
-                
-                // Calculate total users across all guilds
-                const totalUsers = client.guilds.cache.reduce((acc, guild) => acc + guild.memberCount, 0);
-
-                // Get command count
-                const commandCount = 30; // Updated count
-
-                // Create ping embed
-                const inviteButton = new ButtonBuilder()
-                    .setLabel("Invite Me")
-                    .setStyle(ButtonStyle.Link)
-                    .setURL(
-                        `https://discord.com/api/oauth2/authorize?client_id=${client.user.id}&permissions=563242011339808&scope=bot%20applications.commands`,
-                    );
-                    
-                const supportServerButton = new ButtonBuilder()
-                    .setLabel("Support Server")
-                    .setStyle(ButtonStyle.Link)
-                    .setURL(config.supportServer);
-
-
-      const webButton = new ButtonBuilder()
-          .setLabel("Dashboard")
-          .setStyle(ButtonStyle.Link)
-          .setURL(config.website);
-      
-
-      const docButton = new ButtonBuilder()
-          .setLabel("Documentation")
-          .setStyle(ButtonStyle.Link)
-          .setURL(config.doc);
-      
-                const row = new ActionRowBuilder().addComponents(inviteButton, supportServerButton,webButton,docButton );
-
-                const pingEmbed = new EmbedBuilder()
-                    .setColor(config.colors.primary)
-                    .setTitle("Hello there! 👋")
-                    .setDescription(
-                        'Primiaum features in free ',
-                    )
-                    .addFields(
-                        {
-                            name: "📋 Prefix",
-                            value: `\`${prefix}\``,
-                            inline: true,
-                        },
-                        {
-                            name: "🏓 Ping",
-                            value: `${client.ws.ping}ms`,
-                            inline: true,
-                        },
-                        {
-                            name: "⏱️ Uptime",
-                            value: uptimeString,
-                            inline: true,
-                        },
-                        {
-                            name: "🌐 Servers",
-                            value: `${guildCount} servers`,
-                            inline: true,
-                        },
-                        {
-                            name: "👥 Total Users",
-                            value: `${totalUsers.toLocaleString()} users`,
-                            inline: true,
-                        },
-                        {
-                            name: "🔧 Commands",
-                            value: `Type \`${prefix}help\` to see all available commands!`,
-                        },
-                    )
-                    .setThumbnail(
-                        client.user.displayAvatarURL({ extension: 'gif', forceStatic: false }),
-                    )
-                    .setFooter({
-                        text: `Requested by ${message.author.username} • Version: ${config.version}`,
-                        iconURL: message.author.displayAvatarURL({ extension: 'gif', forceStatic: false }),
-                    })
-                    .setTimestamp();
-
-                try {
-                    await message.reply({
-                        embeds: [pingEmbed],
-                        components: [row],
-                    });
-                } catch (error) {
-                    console.error("Error handling ping:", error);
-                    try {
-                        await message.channel.send(
-                            "Sorry, I encountered an error while processing your ping. Please try again later.",
-                        );
-                    } catch (_) {}
+            // Mentions — two behaviours:
+            //  • a bare mention renders the interactive help card (Components V2)
+            //  • a mention with text (or a reply to one of the bot's answers) goes
+            //    to the AI assistant, which shares memory with /ai and $ai.
+            if (client.user && message.mentions?.has?.(client.user.id)) {
+                const bare = [`<@${client.user.id}>`, `<@!${client.user.id}>`].includes(message.content.trim());
+                if (bare) {
+                    const { sendMentionReply } = require('../utils/mentionReply');
+                    await sendMentionReply(client, message, { prefix, formatUptime });
+                    return;
                 }
-                return;
+                const { handleAiMention } = require('../utils/ai/mentionHandler');
+                if (await handleAiMention(client, message, { prefix })) return;
+            } else if (client.user && message.mentions?.repliedUser?.id === client.user.id) {
+                const { handleAiMention } = require('../utils/ai/mentionHandler');
+                if (await handleAiMention(client, message, { prefix })) return;
             }
 
             // Format uptime in a readable format
@@ -589,6 +501,15 @@ module.exports = {
                     console.error('[AUTO-RESPOND] Error processing auto-responder:', err);
                 }
 
+                // AI auto mode: answer ordinary messages in allowed channels when
+                // the server enabled it. Never reached for prefix commands.
+                try {
+                    const { handleAiMention } = require('../utils/ai/mentionHandler');
+                    if (await handleAiMention(client, message, { prefix, auto: true })) return;
+                } catch (err) {
+                    console.error('[AI] auto reply failed:', err.message);
+                }
+
                 return; // Not a command or counting-related message
             }
 
@@ -618,6 +539,211 @@ module.exports = {
                 case "music": {
                     const { musicHelpEmbed } = require('../music/help');
                     return message.reply({ embeds: [musicHelpEmbed(client, prefix)] });
+                }
+                case "invite":
+                case "invites": {
+                    const inviteRepo = require('../server/inviteRepo');
+                    const {
+                        PAGE_SIZE, statsEmbed, leaderboardEmbed, infoEmbed, configEmbed, helpEmbed,
+                    } = require('../utils/inviteEmbeds');
+                    if (!message.guild) return message.reply('Invite tracking can only be used inside a server.');
+                    const sub = (args[0] || 'stats').toLowerCase();
+                    const mentioned = message.mentions.users.first();
+                    const isAdmin = message.member?.permissions?.has('ManageGuild') === true
+                        || message.member?.id === message.guild.ownerId;
+
+                    const profile = (user) => ({
+                        id: user.id,
+                        username: user.username || user.tag || user.id,
+                        avatarUrl: typeof user.displayAvatarURL === 'function' ? user.displayAvatarURL({ size: 64 }) : null,
+                    });
+                    const statFor = async (userId) => {
+                        if (client.inviteTracker?.getStats) return client.inviteTracker.getStats(message.guild.id, userId);
+                        const stat = await inviteRepo.getInviteStat(message.guild.id, userId);
+                        const active = await inviteRepo.getActiveInviteCounts(message.guild.id);
+                        const mine = active.find(a => String(a.inviterId) === String(userId));
+                        return { ...stat, activeInvites: mine ? mine.active : 0, activeCodes: mine ? mine.codes : 0 };
+                    };
+
+                    try {
+                        if (sub === 'help' || sub === 'usage') {
+                            return message.reply({ embeds: [helpEmbed(prefix)] });
+                        }
+                        if (sub === 'leaderboard' || sub === 'top' || sub === 'lb') {
+                            const page = Math.max(1, parseInt(args[1], 10) || 1);
+                            const [rows, total] = await Promise.all([
+                                inviteRepo.getLeaderboard(message.guild.id, { limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE }),
+                                inviteRepo.countLeaderboard(message.guild.id),
+                            ]);
+                            const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+                            if (page > totalPages) return message.reply(`There are only ${totalPages} page(s).`);
+                            return message.reply({ embeds: [leaderboardEmbed({ rows, page, total, totalPages })] });
+                        }
+                        if (sub === 'info') {
+                            const user = mentioned || message.author;
+                            const [stat, recent, invited] = await Promise.all([
+                                statFor(user.id),
+                                inviteRepo.getJoinsForUser(message.guild.id, user.id, { limit: 5 }),
+                                inviteRepo.getInvitesForMember(message.guild.id, user.id, { limit: 10 }),
+                            ]);
+                            return message.reply({ embeds: [infoEmbed({ target: profile(user), stat, recent, invited })] });
+                        }
+                        if (sub === 'config') {
+                            if (!isAdmin) return message.reply('❌ You need **Manage Server** to change invite tracking configuration.');
+                            const settings = await inviteRepo.getInviteSettings(message.guild.id);
+                            const patch = {};
+                            const kv = {};
+                            for (const token of args.slice(1)) {
+                                const m = /^([a-z_]+)=(.+)$/i.exec(token);
+                                if (m) kv[m[1].toLowerCase()] = m[2];
+                            }
+                            const bool = (v) => ['on', 'true', 'yes', '1', 'enable', 'enabled'].includes(String(v || '').toLowerCase());
+                            if (kv.enabled) patch.enabled = bool(kv.enabled);
+                            if (kv.channel) {
+                                const id = (/^<#(\d+)>$/.exec(kv.channel) || [])[1];
+                                if (!id) return message.reply('Use `channel=#channel`.');
+                                patch.logChannelId = id;
+                            }
+                            if (kv.join) patch.joinNotifications = bool(kv.join);
+                            if (kv.leave) patch.leaveNotifications = bool(kv.leave);
+                            if (kv.vanity) patch.vanityTracking = bool(kv.vanity);
+                            if (kv.bots) patch.excludeBots = bool(kv.bots);
+                            if (kv.excluded) {
+                                patch.excludedUserIds = Array.from(new Set(String(kv.excluded)
+                                    .split(/[\s,]+/).filter(id => /^\d{15,22}$/.test(id)))).slice(0, 50);
+                            }
+                            const next = Object.keys(patch).length
+                                ? (client.inviteTracker?.updateSettings
+                                    ? await client.inviteTracker.updateSettings(message.guild.id, patch)
+                                    : await inviteRepo.upsertInviteSettings(message.guild.id, patch))
+                                : settings;
+                            return message.reply({ embeds: [configEmbed(next)] });
+                        }
+                        if (sub === 'reset') {
+                            if (!isAdmin) return message.reply('❌ You need **Manage Server** to reset invite statistics.');
+                            if (!/^confirm$/i.test(args[1] || '')) {
+                                return message.reply('⚠️ Reset cancelled. Run `' + prefix + 'invite reset confirm` to permanently clear this server\'s invite statistics.');
+                            }
+                            const result = await inviteRepo.resetGuildInviteStats(message.guild.id);
+                            return message.reply(`🧹 Invite statistics reset — cleared **${result.joins}** joins and **${result.stats}** inviter counters. Live invite snapshots were preserved.`);
+                        }
+                        // default: stats [@user]
+                        const user = mentioned || message.author;
+                        const stat = await statFor(user.id);
+                        const { rank, total } = await inviteRepo.getInviteRank(message.guild.id, user.id);
+                        return message.reply({
+                            embeds: [statsEmbed({ target: profile(user), stat, rank, totalTracked: total })],
+                        });
+                    } catch (err) {
+                        console.error('[INVITES CMD] prefix error:', err.message);
+                        return message.reply(`❌ ${err.message || 'Something went wrong.'}`);
+                    }
+                }
+                case "ai": {
+                    const manager = client.aiManager;
+                    if (!manager) {
+                        return message.reply('The AI assistant is not available right now.');
+                    }
+                    if (!message.guild) {
+                        return message.reply('The AI assistant works inside a server.');
+                    }
+                    const { runAiAction } = require('../utils/ai/aiCommands');
+                    const sub = (args[0] || 'help').toLowerCase();
+                    const rest = args.slice(1);
+                    const joined = rest.join(' ').trim();
+                    const options = { sub };
+                    let action = sub;
+
+                    if (sub === 'translate') {
+                        options.language = rest[0];
+                        options.text = rest.slice(1).join(' ');
+                    } else if (sub === 'ask') {
+                        options.question = joined;
+                    } else if (sub === 'chat') {
+                        options.message = joined;
+                    } else if (sub === 'explain' || sub === 'analyze') {
+                        options.text = joined;
+                    } else if (sub === 'summarize') {
+                        options.count = /^\d+$/.test(rest[0] || '') ? parseInt(rest[0], 10) : null;
+                        options.text = options.count ? rest.slice(1).join(' ') : joined;
+                    } else if (sub === 'personality') {
+                        options.preset = (rest[0] || '').toLowerCase();
+                        options.instructions = rest.slice(1).join(' ');
+                    } else if (sub === 'knowledge') {
+                        options.sub = (rest[0] || 'list').toLowerCase();
+                        if (options.sub === 'add') {
+                            const parts = rest.slice(1).join(' ').split('|');
+                            options.title = (parts[0] || '').trim();
+                            options.content = parts.slice(1).join('|').trim();
+                        } else if (options.sub === 'remove' || options.sub === 'delete') {
+                            options.id = parseInt(rest[1], 10);
+                        }
+                    } else if (sub === 'memory') {
+                        options.sub = (rest[0] || 'show').toLowerCase();
+                        options.target = message.mentions.users.first()?.id || null;
+                    } else if (sub === 'usage') {
+                        options.sub = (rest[0] || 'me').toLowerCase();
+                        options.target = message.mentions.users.first()?.id || null;
+                    } else if (sub === 'config') {
+                        options.setting = (rest[0] || '').toLowerCase();
+                        options.value = rest.slice(1).join(' ');
+                    } else if (sub !== 'reset' && sub !== 'help') {
+                        action = 'help';
+                    }
+
+                    const isAdmin = message.member?.permissions?.has('ManageGuild') === true
+                        || message.member?.id === message.guild.ownerId;
+                    const repliedMessage = message.reference
+                        ? await message.fetchReference().catch(() => null)
+                        : null;
+                    const ctx = {
+                        manager,
+                        guildId: message.guild.id,
+                        guildName: message.guild.name,
+                        channelId: message.channel.id,
+                        userId: message.author.id,
+                        username: message.author.username,
+                        member: message.member,
+                        isAdmin,
+                        prefix,
+                        message,
+                        repliedMessage,
+                        fetchRecentMessages: async (count) => Array.from(
+                            (await message.channel.messages.fetch({ limit: Math.min(count, 100) })).values()
+                        ),
+                    };
+
+                    const result = await runAiAction(action, options, ctx);
+                    await message.reply({ embeds: result.embeds, allowedMentions: { parse: [] } });
+                    for (const chunk of result.followUps || []) {
+                        await message.channel.send({ content: chunk, allowedMentions: { parse: [] } }).catch(() => {});
+                    }
+                    return;
+                }
+                case "event": {
+                    const { executeEventAction, usageEmbed, parsePrefixArgs } = require('../utils/eventCommands');
+                    const sub = (args[0] || 'help').toLowerCase();
+                    const allowed = ['create', 'edit', 'cancel', 'delete', 'list', 'info', 'join', 'leave', 'config', 'reminders'];
+                    if (!allowed.includes(sub)) {
+                        return message.reply({ embeds: [usageEmbed(prefix)] });
+                    }
+                    if (!message.guild) {
+                        return message.reply('Events can only be used inside a server.');
+                    }
+                    try {
+                        const params = parsePrefixArgs(sub, args.slice(1));
+                        const res = await executeEventAction(client, {
+                            action: sub, guild: message.guild, member: message.member, params,
+                        });
+                        return await message.reply({
+                            content: res.message || undefined,
+                            embeds: res.embed ? [res.embed] : undefined,
+                            allowedMentions: { parse: [] },
+                        });
+                    } catch (err) {
+                        console.error('[EVENT CMD] prefix error:', err.message);
+                        return message.reply(`❌ ${err.message || 'Something went wrong.'}`);
+                    }
                 }
                 case "antinuke":
                 case "an": {

@@ -2682,6 +2682,116 @@ async function getEventPolicy(guildId) {
     return { managerRoleId: null, permissions: [] };
 }
 
+// ── Invite Tracking (server/inviteRepo.js — INVITE_DATABASE_URL) ────────────
+//
+// Same lazy-wrapper pattern as Event Management: a missing pool degrades to a
+// friendly error instead of breaking unrelated pages.
+let _inviteRepo = null;
+function inviteRepo() {
+    if (_inviteRepo) return _inviteRepo;
+    try {
+        _inviteRepo = require('../server/inviteRepo');
+    } catch (err) {
+        console.error('[DASHBOARD DB] inviteRepo unavailable:', err.message);
+        _inviteRepo = { __unavailable: true };
+    }
+    return _inviteRepo;
+}
+
+async function inviteCall(method, ...args) {
+    const repo = inviteRepo();
+    if (repo.__unavailable || typeof repo[method] !== 'function') {
+        throw new Error('Invite Tracking database is not configured.');
+    }
+    return repo[method](...args);
+}
+
+async function getInviteSettings(guildId) { return inviteCall('getInviteSettings', guildId); }
+async function updateInviteSettings(guildId, patch) { return inviteCall('upsertInviteSettings', guildId, patch); }
+async function getInviteTotals(guildId) { return inviteCall('getGuildInviteTotals', guildId); }
+async function getInviteLeaderboard(guildId, opts) { return inviteCall('getLeaderboard', guildId, opts); }
+async function countInviteLeaderboard(guildId) { return inviteCall('countLeaderboard', guildId); }
+async function getInviteRank(guildId, userId) { return inviteCall('getInviteRank', guildId, userId); }
+async function getInviteStat(guildId, userId) { return inviteCall('getInviteStat', guildId, userId); }
+async function getInviteActiveCounts(guildId) { return inviteCall('getActiveInviteCounts', guildId); }
+async function getInviteRecentJoins(guildId, opts) { return inviteCall('getRecentJoins', guildId, opts); }
+async function getInviteRecentLeaves(guildId, opts) { return inviteCall('getRecentLeaves', guildId, opts); }
+async function getInviteActivity(guildId, opts) { return inviteCall('getInviteActivity', guildId, opts); }
+async function getInvitesForMember(guildId, userId, opts) { return inviteCall('getInvitesForMember', guildId, userId, opts); }
+async function getInviteJoinsForUser(guildId, userId, opts) { return inviteCall('getJoinsForUser', guildId, userId, opts); }
+async function addInviteActivity(guildId, entry) { return inviteCall('addInviteActivity', guildId, entry); }
+async function resetInviteStats(guildId) { return inviteCall('resetGuildInviteStats', guildId); }
+
+// ── AI Assistant (server/aiRepo.js — AI_DATABASE_URL) ───────────────────────
+//
+// Same lazy-wrapper pattern: a missing AI pool degrades the AI page to empty
+// state instead of breaking unrelated pages. Provider keys never pass through
+// here — only settings, sessions, usage, knowledge and provider health rows.
+let _aiRepo = null;
+function aiRepo() {
+    if (_aiRepo) return _aiRepo;
+    try {
+        _aiRepo = require('../server/aiRepo');
+    } catch (err) {
+        console.error('[DASHBOARD DB] aiRepo unavailable:', err.message);
+        _aiRepo = { __unavailable: true };
+    }
+    return _aiRepo;
+}
+
+async function aiCall(method, ...args) {
+    const repo = aiRepo();
+    if (repo.__unavailable || typeof repo[method] !== 'function') {
+        throw new Error('AI database is not configured.');
+    }
+    return repo[method](...args);
+}
+
+async function getAiSettings(guildId) { return aiCall('getAiSettings', guildId); }
+async function updateAiSettings(guildId, patch) { return aiCall('upsertAiSettings', guildId, patch); }
+async function listAiSessions(guildId, opts) { return aiCall('listSessions', guildId, opts); }
+async function countAiSessions(guildId) { return aiCall('countSessions', guildId); }
+async function deleteAiSession(guildId, userId) { return aiCall('deleteSession', guildId, userId); }
+async function clearAiSessions(guildId) { return aiCall('deleteGuildSessions', guildId); }
+async function getAiUsageToday(guildId, userId) { return aiCall('getUsageToday', guildId, userId); }
+async function getAiGuildUsageToday(guildId) { return aiCall('getGuildUsageToday', guildId); }
+async function getAiUsageSeries(guildId, days) { return aiCall('getUsageSeries', guildId, days); }
+async function getAiTopUsers(guildId, opts) { return aiCall('getTopUsers', guildId, opts); }
+async function resetAiUsage(guildId) { return aiCall('resetGuildUsage', guildId); }
+async function listAiKnowledge(guildId, opts) { return aiCall('listKnowledge', guildId, opts); }
+async function countAiKnowledge(guildId) { return aiCall('countKnowledge', guildId); }
+async function addAiKnowledge(guildId, entry) { return aiCall('addKnowledge', guildId, entry); }
+async function updateAiKnowledge(guildId, id, patch) { return aiCall('updateKnowledge', guildId, id, patch); }
+async function deleteAiKnowledge(guildId, id) { return aiCall('deleteKnowledge', guildId, id); }
+async function getAiProviderMeta() { return aiCall('getProviderMeta'); }
+async function recordAiProviderResult(provider, result) { return aiCall('recordProviderResult', provider, result); }
+
+/** Provider status for the dashboard — configured flags + masked key hints only. */
+function getAiProviderStatus() {
+    try {
+        const {
+            PROVIDER_ORDER, providerMeta, providerConfigured, resolveModel,
+            supportsVision, maskSecret,
+        } = require('../utils/ai/freeModels');
+        return PROVIDER_ORDER.map((provider) => {
+            const info = providerMeta(provider);
+            const model = resolveModel(provider);
+            return {
+                provider,
+                label: info.label,
+                configured: providerConfigured(provider),
+                keyHint: maskSecret(process.env[info.envKey]),
+                model,
+                vision: supportsVision(provider, model),
+                envKey: info.envKey,
+            };
+        });
+    } catch (err) {
+        console.error('[DASHBOARD DB] provider status failed:', err.message);
+        return [];
+    }
+}
+
 // ── Aggregated platform stats (public — shown on the login screen) ──────────
 //
 // These run simple COUNTs against the same tables the bot uses, so the numbers
@@ -4754,6 +4864,42 @@ module.exports = {
     getEventPolicy,
     setEventAnnouncementMessage,
     getEventReminderRows,
+    // Invite Tracking (INVITE_DATABASE_URL via server/inviteRepo.js)
+    getInviteSettings,
+    updateInviteSettings,
+    getInviteTotals,
+    getInviteLeaderboard,
+    countInviteLeaderboard,
+    getInviteRank,
+    // AI Assistant (AI_DATABASE_URL via server/aiRepo.js)
+    getAiSettings,
+    updateAiSettings,
+    listAiSessions,
+    countAiSessions,
+    deleteAiSession,
+    clearAiSessions,
+    getAiUsageToday,
+    getAiGuildUsageToday,
+    getAiUsageSeries,
+    getAiTopUsers,
+    resetAiUsage,
+    listAiKnowledge,
+    countAiKnowledge,
+    addAiKnowledge,
+    updateAiKnowledge,
+    deleteAiKnowledge,
+    getAiProviderMeta,
+    recordAiProviderResult,
+    getAiProviderStatus,
+    getInviteStat,
+    getInviteActiveCounts,
+    getInviteRecentJoins,
+    getInviteRecentLeaves,
+    getInviteActivity,
+    getInvitesForMember,
+    getInviteJoinsForUser,
+    addInviteActivity,
+    resetInviteStats,
     getGuildBadges,
     awardDashboardBadge,
     revokeDashboardBadge,

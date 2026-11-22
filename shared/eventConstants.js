@@ -123,16 +123,83 @@ const REMINDER_PRESETS = [
 const REMINDER_KEYS = REMINDER_PRESETS.map(r => r.key);
 
 // ── Participant statuses ────────────────────────────────────────────────────
+// `registered` and `waiting` occupy (or queue for) a capacity slot.
+// `interested` is the RSVP "Interested" state: it records interest without
+// consuming a slot, granting the participant role, or counting toward capacity.
 const PARTICIPANT_STATUSES = [
-    { key: 'registered', label: 'Registered', color: '#7B2CBF' },
-    { key: 'waiting',    label: 'Waiting list', color: '#D99A35' },
-    { key: 'removed',    label: 'Removed',     color: '#D94F5D' },
+    { key: 'registered', label: 'Going',         color: '#7B2CBF' },
+    { key: 'interested', label: 'Interested',    color: '#788493' },
+    { key: 'waiting',    label: 'Waiting list',  color: '#D99A35' },
+    { key: 'removed',    label: 'Removed',       color: '#D94F5D' },
 ];
 
 const PARTICIPANT_STATUS_KEYS = PARTICIPANT_STATUSES.map(p => p.key);
 
 function normalizeParticipantStatus(key) {
     return PARTICIPANT_STATUS_KEYS.includes(key) ? key : 'registered';
+}
+
+// ── RSVP ────────────────────────────────────────────────────────────────────
+// The three member-facing RSVP choices. "Not going" clears the RSVP entirely.
+const RSVP_OPTIONS = [
+    { key: 'going',     label: 'Going',       icon: '✅', color: '#2E9D75' },
+    { key: 'interested', label: 'Interested', icon: '⭐', color: '#788493' },
+    { key: 'not_going', label: 'Not going',   icon: '❌', color: '#929BA6' },
+];
+
+const RSVP_KEYS = RSVP_OPTIONS.map(r => r.key);
+
+function normalizeRsvp(key) {
+    return RSVP_KEYS.includes(key) ? key : 'not_going';
+}
+
+/** Maps an RSVP choice onto the participant status it is stored as. */
+function rsvpToStatus(rsvp) {
+    const key = normalizeRsvp(rsvp);
+    if (key === 'going') return 'registered';
+    if (key === 'interested') return 'interested';
+    return 'removed';
+}
+
+// ── Recurrence ──────────────────────────────────────────────────────────────
+// A recurring event spawns its next occurrence when the current one completes.
+// Spawning is guarded by `recurrence_parent_id` (one child per occurrence), so
+// a restart or a double tick can never create duplicates.
+const RECURRENCE_OPTIONS = [
+    { key: 'none',    label: 'Does not repeat', days: 0 },
+    { key: 'daily',   label: 'Every day',       days: 1 },
+    { key: 'weekly',  label: 'Every week',      days: 7 },
+    { key: 'monthly', label: 'Every month',     months: 1 },
+];
+
+const RECURRENCE_KEYS = RECURRENCE_OPTIONS.map(r => r.key);
+
+function normalizeRecurrence(key) {
+    return RECURRENCE_KEYS.includes(key) ? key : 'none';
+}
+
+function recurrenceMeta(key) {
+    return RECURRENCE_OPTIONS.find(r => r.key === normalizeRecurrence(key)) || RECURRENCE_OPTIONS[0];
+}
+
+/**
+ * The next occurrence's start date for a recurrence, or null when the series
+ * has ended. Pure so it can be tested without a database.
+ */
+function nextOccurrenceStart(startAt, recurrence, until = null) {
+    const rec = normalizeRecurrence(recurrence);
+    if (rec === 'none' || !startAt) return null;
+    const start = new Date(startAt);
+    if (Number.isNaN(start.getTime())) return null;
+    const next = new Date(start.getTime());
+    const meta = recurrenceMeta(rec);
+    if (meta.months) next.setUTCMonth(next.getUTCMonth() + meta.months);
+    else next.setUTCDate(next.getUTCDate() + meta.days);
+    if (until) {
+        const limit = new Date(until);
+        if (!Number.isNaN(limit.getTime()) && next.getTime() > limit.getTime()) return null;
+    }
+    return next;
 }
 
 // ── Attendance ──────────────────────────────────────────────────────────────
@@ -269,6 +336,8 @@ module.exports = {
     LOCATION_TYPES, LOCATION_TYPE_KEYS, normalizeLocationType,
     REMINDER_PRESETS, REMINDER_KEYS,
     PARTICIPANT_STATUSES, PARTICIPANT_STATUS_KEYS, normalizeParticipantStatus,
+    RSVP_OPTIONS, RSVP_KEYS, normalizeRsvp, rsvpToStatus,
+    RECURRENCE_OPTIONS, RECURRENCE_KEYS, normalizeRecurrence, recurrenceMeta, nextOccurrenceStart,
     ATTENDANCE_STATUSES, normalizeAttendanceStatus,
     EVENT_PERMISSIONS, EVENT_PERMISSION_KEYS, defaultEventPermissions, normalizeEventPermissions,
     EVENT_TEMPLATES, eventTemplateMeta,

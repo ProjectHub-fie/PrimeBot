@@ -16,7 +16,7 @@
  * The dashboard is the only place events are configured; the bot only reacts.
  */
 
-const { EmbedBuilder } = require('discord.js');
+const { EmbedBuilder, GuildScheduledEventPrivacyLevel, GuildScheduledEventEntityType } = require('discord.js');
 const { AdaptivePoller } = require('./adaptivePoller');
 const { getCacheScheduler } = require('./cacheScheduler');
 const repo = require('../server/eventMgmtRepo');
@@ -26,7 +26,7 @@ const {
 } = require('../shared/eventMessages');
 const {
     normalizeEventStatus, canTransition, statusAllowsRegistration,
-    eventTypeMeta, eventStatusMeta,
+    eventTypeMeta, eventStatusMeta, normalizeRsvp,
 } = require('../shared/eventConstants');
 const { SerialQueue, applyRole, DedupSender, isSendableChannel } = require('./eventDiscord');
 
@@ -60,6 +60,9 @@ class EventMgmtManager {
             onError: (err) => console.warn('[EVENTMGMT] dm queue error:', err.message),
         });
         this._initPromise = this._init();
+        // Ids whose recurring child has already been checked this process
+        // (avoids a query every scheduler tick for a completed event).
+        this._recurrenceChecked = new Set();
     }
 
     async _init() {
@@ -162,8 +165,114 @@ class EventMgmtManager {
         } catch (err) {
             console.error('[EVENTMGMT] reminder tick failed:', err.message);
         }
+        try {
+            changed = await this._spawnRecurrences() || changed;
+        } catch (err) {
+            console.error('[EVENTMGMT] recurrence spawn failed:', err.message);
+        }
+        try {
+            changed = await this._syncScheduledEvents() || changed;
+        } catch (err) {
+            console.error('[EVENTMGMT] scheduled event sync failed:', err.message);
+        }
         this._dedup.prune();
         return changed;
+    }
+
+    /**
+     * Spawn the next occurrence of a completed recurring event.
+     *
+     * Idempotent: the child carries `recurrenceParentId`, so a restart or a
+     * second tick can never create a duplicate. The in-memory guard keeps the
+     * check to ONE query per event per process.
+     */
+    async _spawnRecurrences() {
+        let changed = false;
+        for (const ev of Array.from(this._byId.values())) {
+            if (!ev.recurrence || ev.recurrence === 'none') continue;
+            if (ev.status !== 'completed') continue;
+            if (!ev.startAt) continue;
+            if (this._recurrenceChecked.has(ev.id)) continue;
+            this._recurrenceChecked.add(ev.id);
+            const created = await repo.createNextOccurrence(ev);
+            if (created) {
+                this._byId.set(created.id, created);
+                if (!this._byGuild.has(created.guildId)) this._byGuild.set(created.guildId, new Set());
+                this._byGuild.get(created.guildId).add(created.id);
+                changed = true;
+                console.log(`[EVENTMGMT] Spawned recurring occurrence #${created.id} for #${ev.id}`);
+            }
+        }
+        return changed;
+    }
+
+    /**
+     * Create the Discord Scheduled Event for upcoming events that support one
+     * (voice / stage / external). Only events without a scheduled id are
+     * created, so a restart never duplicates a scheduled event.
+     */
+    async _syncScheduledEvents() {
+        if (!this.client) return false;
+        const now = Date.now();
+        let changed = false;
+        for (const ev of Array.from(this._byId.values())) {
+            if (!ev.syncScheduledEvent || ev.scheduledEventId) continue;
+            if (!ev.startAt || new Date(ev.startAt).getTime() <= now) continue;
+            if (['cancelled', 'completed', 'draft'].includes(ev.status)) continue;
+            if (!['voice', 'stage', 'external'].includes(ev.locationType)) continue;
+            const guild = this.client.guilds.cache.get(ev.guildId)
+                || await this.client.guilds.fetch(ev.guildId).catch(() => null);
+            if (!guild || !guild.scheduledEvents) continue;
+            const created = await this._createScheduledEvent(guild, ev);
+            if (created) {
+                await repo.setScheduledEventId(ev.id, created.id);
+                ev.scheduledEventId = created.id;
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    async _createScheduledEvent(guild, event) {
+        const start = new Date(event.startAt);
+        const end = event.endAt ? new Date(event.endAt) : new Date(start.getTime() + 2 * 60 * 60 * 1000);
+        const payload = {
+            name: String(event.name).slice(0, 100),
+            description: (event.description || undefined),
+            scheduledStartTime: start,
+            scheduledEndTime: end,
+            privacyLevel: GuildScheduledEventPrivacyLevel.GuildOnly,
+        };
+        if (event.locationType === 'external') {
+            payload.entityType = GuildScheduledEventEntityType.External;
+            payload.entityMetadata = { location: String(event.locationValue || 'Online').slice(0, 100) };
+        } else {
+            payload.entityType = event.locationType === 'stage'
+                ? GuildScheduledEventEntityType.StageInstance
+                : GuildScheduledEventEntityType.Voice;
+            const channel = guild.channels.cache.get(event.locationValue)
+                || await guild.channels.fetch(event.locationValue).catch(() => null);
+            if (!channel) return null;
+            payload.channel = channel;
+        }
+        return guild.scheduledEvents.create(payload).catch(err => {
+            console.warn('[EVENTMGMT] scheduled event create failed:', err.message);
+            return null;
+        });
+    }
+
+    /** Delete the Discord Scheduled Event attached to an event (best-effort). */
+    async deleteScheduledEvent(event) {
+        if (!event || !event.scheduledEventId || !this.client) return false;
+        const guild = this.client.guilds.cache.get(event.guildId)
+            || await this.client.guilds.fetch(event.guildId).catch(() => null);
+        if (!guild || !guild.scheduledEvents) return false;
+        const ok = await guild.scheduledEvents.delete(event.scheduledEventId)
+            .then(() => true)
+            .catch(err => { console.warn('[EVENTMGMT] scheduled event delete failed:', err.message); return false; });
+        await repo.setScheduledEventId(event.id, null).catch(() => {});
+        event.scheduledEventId = null;
+        return ok;
     }
 
     /**
@@ -314,8 +423,11 @@ class EventMgmtManager {
             err.status = 400;
             throw err;
         }
-        const participants = await repo.countParticipants(event.id, 'registered');
-        const message = await channel.send(buildAnnouncementPayload(event, { participants }));
+        const participants = await repo.getParticipantCounts(event.id);
+        const message = await channel.send(buildAnnouncementPayload(event, {
+            participants: participants.registered,
+            interested: participants.interested,
+        }));
         await repo.setAnnouncementMessage(event.id, channel.id, message.id);
         event.announcementChannelId = channel.id;
         event.announcementMessageId = message.id;
@@ -333,8 +445,11 @@ class EventMgmtManager {
         if (!event) return null;
         const channel = await this._fetchChannel(event.announcementChannelId);
         if (!isSendableChannel(channel)) return null;
-        const participants = await repo.countParticipants(event.id, 'registered');
-        const payload = buildAnnouncementPayload(event, { participants });
+        const counts = await repo.getParticipantCounts(event.id);
+        const payload = buildAnnouncementPayload(event, {
+            participants: counts.registered,
+            interested: counts.interested,
+        });
         if (event.announcementMessageId) {
             const msg = await channel.messages.fetch(event.announcementMessageId).catch(() => null);
             if (msg) {
@@ -356,6 +471,7 @@ class EventMgmtManager {
         if (!event) throw new Error('Event not found.');
         if (event.status === 'cancelled') return event;
         await this._transition(event, 'cancelled', { reason, userId, username });
+        await this.deleteScheduledEvent(event).catch(() => {});
         // Best-effort announcement update (edit, never a new message).
         await this.updateAnnouncement(event.id).catch(() => {});
         if (notify) {
@@ -433,6 +549,41 @@ class EventMgmtManager {
                 ? 'This event is full — you have been added to the waiting list.'
                 : 'You are registered! See you there. 🎉',
         };
+    }
+
+    /**
+     * RSVP dispatcher used by the announcement buttons.
+     *   going      → join (capacity + waitlist rules apply)
+     *   interested → record interest WITHOUT consuming a slot or granting a role
+     *   not_going  → leave / clear the RSVP
+     */
+    async setRsvp(eventId, member, rsvp) {
+        const choice = normalizeRsvp(rsvp);
+        if (choice === 'going') return this.joinEvent(eventId, member);
+        if (choice === 'not_going') return this.leaveEvent(eventId, member);
+
+        const event = this.getEvent(eventId) || await repo.getEvent(eventId);
+        if (!event) return { ok: false, message: 'This event could not be found.' };
+        if (event.status === 'cancelled') return { ok: false, message: 'This event has been cancelled.' };
+        if (event.status === 'completed') return { ok: false, message: 'This event has already finished.' };
+
+        const existing = await repo.getParticipant(event.id, member.id);
+        if (existing && existing.status === 'registered') {
+            return { ok: true, status: 'registered', message: 'You are going to this event. Use **Not going** to change that.' };
+        }
+        if (existing && existing.status === 'interested') {
+            return { ok: true, status: 'interested', message: 'You are already marked as interested.' };
+        }
+        await repo.addParticipant(event.id, event.guildId, member.id, {
+            username: member.user ? member.user.username : null,
+            status: 'interested',
+        });
+        await repo.addActivity(event.id, event.guildId, {
+            action: 'participant_interested', userId: member.id,
+            username: member.user ? member.user.username : null,
+        });
+        this._refreshAnnouncementLater(event.id);
+        return { ok: true, status: 'interested', message: '⭐ You are marked as interested. Use **Going** to reserve a spot.' };
     }
 
     async leaveEvent(eventId, member) {
@@ -542,13 +693,19 @@ class EventMgmtManager {
 
         if (action === 'evjoin') {
             await interaction.deferReply({ ephemeral: true }).catch(() => {});
-            const res = await this.joinEvent(eventId, member);
+            const res = await this.setRsvp(eventId, member, 'going');
+            await interaction.editReply({ content: res.message }).catch(() => {});
+            return true;
+        }
+        if (action === 'evinterest') {
+            await interaction.deferReply({ ephemeral: true }).catch(() => {});
+            const res = await this.setRsvp(eventId, member, 'interested');
             await interaction.editReply({ content: res.message }).catch(() => {});
             return true;
         }
         if (action === 'evleave') {
             await interaction.deferReply({ ephemeral: true }).catch(() => {});
-            const res = await this.leaveEvent(eventId, member);
+            const res = await this.setRsvp(eventId, member, 'not_going');
             await interaction.editReply({ content: res.message }).catch(() => {});
             return true;
         }
@@ -559,15 +716,19 @@ class EventMgmtManager {
             return true;
         }
         if (action === 'evparts') {
-            const participants = await repo.getParticipants(eventId, { status: 'registered' });
+            const participants = await repo.getParticipants(eventId, {});
             await interaction.reply({ embeds: [buildParticipantsEmbed(event, participants)], ephemeral: true }).catch(() => {});
             return true;
         }
         if (action === 'evinfo') {
-            const participants = await repo.countParticipants(eventId, 'registered');
+            const counts = await repo.getParticipantCounts(eventId);
             const type = eventTypeMeta(event.type);
             await interaction.reply({
-                embeds: [buildAnnouncementPayload(event, { participants }).embeds[0]],
+                embeds: [buildAnnouncementPayload(event, {
+                    participants: counts.registered,
+                    interested: counts.interested,
+                    checkedIn: counts.present,
+                }).embeds[0]],
                 ephemeral: true,
             }).catch(() => {});
             void type;
