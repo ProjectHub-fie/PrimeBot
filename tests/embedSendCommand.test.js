@@ -332,11 +332,10 @@ test('prefix $embed send reports a database failure instead of crashing', async 
 });
 
 // ── help menus ───────────────────────────────────────────────────────────
-test('slash help menu lists /embed under the Administration category', () => {
-    const helpSrc = fs.readFileSync(path.join(ROOT, 'commands', 'help.js'), 'utf8');
-    const adminBlock = helpSrc.split("case 'admin':")[1];
-    assert.match(adminBlock, /\/embed send/);
-    assert.match(adminBlock, /\/embed list/);
+test('slash help menu lists embed under the Administration category', () => {
+    const { categoryEmbed } = require('../utils/prefixHelp');
+    const admin = categoryEmbed('admin', '/');
+    assert.ok(admin.data.description.includes('`embed`'));
 });
 
 test('prefix help catalog lists $embed under Administration', () => {

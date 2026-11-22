@@ -1834,3 +1834,39 @@ count). `CATALOG` in `utils/prefixHelp.js` no longer carries `description` or
 Command descriptions (`cmd.desc`) are unchanged. The slash `/help` button menu
 is a separate surface and still has its own category blurbs. Tests:
 `tests/helpMenuNoCategoryDescriptions.test.js`.
+
+## Help menus: Linix layout (shared builders)
+
+All help surfaces now render from one Linix-style builder set in
+`utils/prefixHelp.js`:
+
+- `mainMenuEmbed(prefix, client, { user, kind })` — Linix layout: a short intro
+  (prefix/total/prefix-vs-slash counts, or a slash greeting), one
+  `My Commands:` field listing every category as `> <emoji> \`:\` **Label**`,
+  the invoking user's avatar as the thumbnail, and a `Loved by N Servers`
+  footer. No title, no timestamp, no category blurbs.
+- `categoryEmbed(category, prefix, { commands, iconURL })` — title
+  `<emoji> <Category> Commands`, description is the comma-separated backticked
+  command names (deduped; music expands to `music play`, `music search`, …),
+  footer `Total N commands.` No fields, no category description.
+- `categorySelectRow(current, customId = 'help_select')` — emoji + label only,
+  no option descriptions.
+- `homeButtonRow(customId = 'help_back')` — emoji-only secondary home button.
+- `utils/linixEmbed.js` — Linix `t/d/thumb/img/a/f` builder. It deliberately
+  leaves the embed colour unset so there is **no side colour stripe**; set
+  `LINIX_EMBED_COLOR` only if that is ever wanted. `LINIX_EMBED_IMAGE` is the
+  optional card image.
+
+Consumers: `commands/help.js` (slash), `commands/categories.js` (legacy
+`/categories`), `utils/prefixHelp.js` (`$help`), and
+`events/interactionCreate.js` (`help_select`, `help_back`, old `help_*`
+buttons, and the Sash menu). Slash help routes `help_select`; prefix help routes
+`category_select_prefix`; the Sash menu keeps its category buttons but uses the
+same embeds. All buttons live in the same message payload as the embed
+(`components`).
+
+`music/help.js` (`$music`) was also moved to `linixEmbed` and now shows the
+music emojis (`play`, `filter`, `autoplay`, `music`) — it previously had none.
+Tests: `tests/helpMenuNoCategoryDescriptions.test.js`,
+`tests/musicHelpEmoji.test.js`, `tests/emojiCatalog.test.js`,
+`tests/sashMenu.test.js`.
