@@ -19,88 +19,31 @@ function helpIcon(category, fallback = '') {
  * Helper function to show main help menu for button interactions
  */
 async function showMainHelpUpdate(interaction) {
-    const mainEmbed = new EmbedBuilder()
-        .setColor(config.colors.primary)
-        .setTitle(`${emoji('information')} Command Categories`)
-        .setDescription('Choose a category to explore available commands:')
-        .addFields(
-            { name: `${helpIcon('general', '⚡')} General`, value: 'Basic bot commands and information', inline: true },
-            { name: `${helpIcon('leveling', '📊')} Leveling`, value: 'XP, ranks, and progression system', inline: true },
-            { name: `${helpIcon('games', '🎮')} Games`, value: 'Fun interactive games and activities', inline: true },
-            { name: `${helpIcon('moderation', '🛡️')} Moderation`, value: 'Server management and moderation tools', inline: true },
-            { name: `${helpIcon('community', '👥')} Community`, value: 'Engagement and social features', inline: true },
-            { name: `${helpIcon('admin', '⚙️')} Administration`, value: 'Advanced server configuration', inline: true }
-        )
-        .setFooter({ text: `Total Commands: 25 • Version: ${config.version}` })
-        .setTimestamp();
-
-    const categoryButtons = new ActionRowBuilder()
-        .addComponents(
-            new ButtonBuilder()
-                .setCustomId('help_general')
-                .setLabel('General')
-                .setStyle(ButtonStyle.Primary)
-                .setEmoji(helpIcon('general', '⚡')),
-            new ButtonBuilder()
-                .setCustomId('help_leveling')
-                .setLabel('Leveling')
-                .setStyle(ButtonStyle.Primary)
-                .setEmoji(helpIcon('leveling', '📊')),
-            new ButtonBuilder()
-                .setCustomId('help_games')
-                .setLabel('Games')
-                .setStyle(ButtonStyle.Primary)
-                .setEmoji(helpIcon('games', '🎮')),
-            new ButtonBuilder()
-                .setCustomId('help_moderation')
-                .setLabel('Moderation')
-                .setStyle(ButtonStyle.Secondary)
-                .setEmoji(helpIcon('moderation', '🛡️')),
-            new ButtonBuilder()
-                .setCustomId('help_community')
-                .setLabel('Community')
-                .setStyle(ButtonStyle.Success)
-                .setEmoji(helpIcon('community', '👥'))
-        );
-
-    const adminButton = new ActionRowBuilder()
-        .addComponents(
-            new ButtonBuilder()
-                .setCustomId('help_admin')
-                .setLabel('Administration')
-                .setStyle(ButtonStyle.Danger)
-                .setEmoji(helpIcon('admin', '⚙️')),
-            new ButtonBuilder()
-                .setCustomId('help_prefix')
-                .setLabel('Sash')
-                .setStyle(ButtonStyle.Secondary)
-                .setEmoji(helpIcon('utility', '💬')),
-            new ButtonBuilder()
-                .setLabel('Support')
-                .setStyle(ButtonStyle.Link)
-                .setURL(config.supportServer || 'https://discord.gg/primebot')
-                .setEmoji(helpIcon('information', '🆘'))
-        );
+    const { mainMenuEmbed, categorySelectRow, homeButtonRow } = require('../utils/prefixHelp');
+    const mainEmbed = mainMenuEmbed('/', interaction.client, { user: interaction.user, kind: 'slash' });
+    const actions = homeButtonRow('help_back');
+    actions.addComponents(
+        new ButtonBuilder()
+            .setCustomId('help_prefix')
+            .setLabel('Sash')
+            .setStyle(ButtonStyle.Secondary)
+            .setEmoji(helpIcon('utility', '💬')),
+        new ButtonBuilder()
+            .setLabel('Support')
+            .setStyle(ButtonStyle.Link)
+            .setURL(config.supportServer || 'https://discord.gg/primebot')
+            .setEmoji(helpIcon('information', '🆘')),
+    );
 
     await interaction.update({
         embeds: [mainEmbed],
-        components: [categoryButtons, adminButton]
+        components: [categorySelectRow(null, 'help_select'), actions],
     });
     scheduleComponentExpiry(interaction.message);
 }
 
 /**
- * Show the "sash" command menu. This is the prefix-command help content
- * (categorized legacy/prefix commands) but branded as "sash" — the word
- * "prefix" is replaced with "sash" everywhere it would appear so the menu
- * reads as a "Sash Commands" menu rather than a "Prefix Commands" one.
- *
- * The catalogue is derived from utils/prefixHelp.js CATALOG (the same source of
- * truth `$help` uses), so a newly added prefix command appears here with no
- * edit to this file. The old version hardcoded its own list and had drifted
- * ~33 commands behind the switch in events/messageCreate.js.
- *
- * The button leads here from the main /help menu's "Sash" button.
+ * Helper function to show category help for button interactions
  */
 function buildSashCategories(prefix) {
     const { CATALOG, CATEGORY_ORDER, categoryIcon } = require('../utils/prefixHelp');
@@ -112,7 +55,6 @@ function buildSashCategories(prefix) {
             icon: categoryIcon(key, cat.icon),
             label: cat.label,
             title: `${categoryIcon(key, cat.icon)} ${(cat.title || '').replace(/Prefix/g, 'Sash')}`.trim(),
-            desc: (cat.description || '').replace(/Prefix/g, 'Sash'),
             color: cat.color,
             fields: cat.commands.map(c => {
                 const aliases = c.names.slice(1);
@@ -131,6 +73,7 @@ async function showSashHelp(interaction, page) {
     const prefix = config.prefix;
     const SASH_CATEGORIES = buildSashCategories(prefix);
     const ORDER = Object.keys(SASH_CATEGORIES);
+    const { mainMenuEmbed, categoryEmbed } = require('../utils/prefixHelp');
 
     const backButton = new ActionRowBuilder()
         .addComponents(
@@ -142,23 +85,7 @@ async function showSashHelp(interaction, page) {
         );
 
     if (category === 'main' || category === 'back') {
-        const total = ORDER.reduce((n, k) => n + SASH_CATEGORIES[k].fields.length, 0);
-        const mainEmbed = new EmbedBuilder()
-            .setColor(config.colors.primary)
-            .setTitle(`${emoji('utility')} Sash Command Categories`)
-            .setDescription(
-                `Sash commands are classic text commands you run by typing your sash (\`${prefix}\`) followed by the command name.\n\n` +
-                `**Usage:** \`${prefix}help [category]\` — choose a category below to browse its sash commands.`
-            )
-            .addFields(
-                ORDER.map(k => ({
-                    name: `${SASH_CATEGORIES[k].icon} ${SASH_CATEGORIES[k].label}`,
-                    value: `\`${prefix}help ${k}\`\n${SASH_CATEGORIES[k].fields.length} commands`,
-                    inline: true,
-                }))
-            )
-            .setFooter({ text: `Sash: ${prefix} • Total Commands: ${total} • Version: ${config.version}` })
-            .setTimestamp();
+        const mainEmbed = mainMenuEmbed(prefix, interaction.client, { user: interaction.user, kind: 'sash' });
 
         // Discord caps 5 buttons per row — chunk the categories across rows.
         const styles = [
@@ -191,151 +118,46 @@ async function showSashHelp(interaction, page) {
 
     const cat = SASH_CATEGORIES[category];
     if (!cat) {
+        const { linixEmbed } = require('../utils/linixEmbed');
         await interaction.update({
-            embeds: [new EmbedBuilder()
-                .setColor(config.colors.error)
-                .setTitle(`${emoji('cross')} Unknown Sash Category`)
-                .setDescription(`The sash category "${category}" was not found.`)],
+            embeds: [linixEmbed()
+                .t(`${emoji('cross', '❌')} Unknown Sash Category`)
+                .d(`The sash category "${category}" was not found.`)],
             components: [backButton],
         });
         return;
     }
 
-    const embed = new EmbedBuilder()
-        .setColor(cat.color)
-        .setTitle(cat.title)
-        .setDescription(cat.desc)
-        .addFields(cat.fields.map(f => ({ ...f, inline: false })))
-        .setFooter({ text: `Sash: ${prefix} • Version: ${config.version}` })
-        .setTimestamp();
+    const embed = categoryEmbed(category, prefix, {
+        iconURL: interaction.client?.user?.displayAvatarURL?.({ dynamic: true }),
+    });
 
     await interaction.update({ embeds: [embed], components: [backButton] });
     scheduleComponentExpiry(interaction.message);
 }
 
-/**
- * Helper function to show category help for button interactions
- */
 async function showCategoryHelpUpdate(interaction, category) {
-    let categoryEmbed;
-
-    switch (category) {
-        case 'general':
-            categoryEmbed = new EmbedBuilder()
-                .setColor(config.colors.primary)
-                .setTitle('⚡ General Commands')
-                .setDescription('Basic bot commands and information:')
-                .addFields(
-                    { name: '/help', value: 'Show this command menu', inline: true },
-                    { name: '/about', value: 'Information about the bot', inline: true },
-                    { name: '/updates', value: 'Latest bot updates and features', inline: true },
-                    { name: '/ses', value: 'Bot session and status information', inline: true },
-                    { name: '/echo', value: 'Make the bot repeat a message', inline: true },
-                    { name: '/stats', value: 'Display comprehensive bot statistics', inline: true }
-                );
-            break;
-
-        case 'leveling':
-            categoryEmbed = new EmbedBuilder()
-                .setColor(config.colors.success)
-                .setTitle('📊 Leveling System')
-                .setDescription('XP, ranks, and progression commands:')
-                .addFields(
-                    { name: '/leveling rank', value: 'View your or another user\'s level and XP', inline: true },
-                    { name: '/leveling leaderboard', value: 'Server XP leaderboard with pagination', inline: true },
-                    { name: '/leveling badges', value: 'View available and earned badges', inline: true },
-                    { name: '/leveling settings', value: 'Configure leveling system (Admin)', inline: true },
-                    { name: '/leveling addrole', value: 'Add role rewards for levels (Admin)', inline: true },
-                    { name: '/leveling removerole', value: 'Remove role rewards (Admin)', inline: true },
-                    { name: '/leveling listroles', value: 'List all role rewards', inline: true },
-                    { name: '/leveling award', value: 'Award XP to users (Admin)', inline: true },
-                    { name: '/leveling awardbadge', value: 'Award badges to users (Admin)', inline: true }
-                );
-            break;
-
-        case 'games':
-            categoryEmbed = new EmbedBuilder()
-                .setColor(config.colors.warning)
-                .setTitle('🎮 Games & Activities')
-                .setDescription('Fun interactive games and entertainment:')
-                .addFields(
-                    { name: '/tictactoe', value: 'Start a TicTacToe game in the channel', inline: true },
-                    { name: '/endgame', value: 'End current TicTacToe game', inline: true },
-                    { name: '/truthdare', value: 'Interactive Truth or Dare game', inline: true },
-                    { name: '/addquestion', value: 'Add custom truth/dare questions', inline: true },
-                    { name: '/counting', value: 'Start a number counting game', inline: true },
-                    { name: '/poll', value: 'Create interactive polls with timer', inline: true },
-                    { name: '/endpoll', value: 'End a poll early', inline: true }
-                );
-            break;
-
-        case 'moderation':
-            categoryEmbed = new EmbedBuilder()
-                .setColor(config.colors.secondary || config.colors.primary)
-                .setTitle('🛡️ Moderation Tools')
-                .setDescription('Server management and moderation:')
-                .addFields(
-                    { name: '/ticket', value: 'Ticket system (dashboard-only)', inline: true },
-                    { name: '/createticket', value: 'Ticket system (dashboard-only)', inline: true },
-                    { name: '/tickethistory', value: 'Ticket system (dashboard-only)', inline: true },
-                    { name: '/move', value: 'Move members between voice channels', inline: true },
-                    { name: '/end', value: 'End giveaways and other activities', inline: true },
-                    { name: '/purge', value: 'Delete messages with messages, user, and between subcommands', inline: true }
-                );
-            break;
-
-        case 'community':
-            categoryEmbed = new EmbedBuilder()
-                .setColor(config.colors.success)
-                .setTitle('👥 Community Features')
-                .setDescription('Engagement and social features:')
-                .addFields(
-                    { name: '/poll', value: 'Create server polls with voting options', inline: true },
-                    { name: '/lpoll', value: 'Create cross-server live polls', inline: true },
-                    { name: '/endpoll', value: 'End active polls and show results', inline: true },
-                    { name: '/giveaway', value: 'Create exciting giveaways with role requirements', inline: true },
-                    { name: '/reroll', value: 'Reroll giveaway winners', inline: true },
-                    { name: '/birthday', value: 'Birthday celebration system', inline: true },
-                    { name: '/welcomeconfig', value: 'Configure welcome messages for new members', inline: true },
-                    { name: '/broadcast', value: 'Send announcements to all servers', inline: true }
-                );
-            break;
-
-        case 'admin':
-            categoryEmbed = new EmbedBuilder()
-                .setColor(config.colors.error)
-                .setTitle('⚙️ Administration')
-                .setDescription('Advanced server configuration (Admin only):')
-                .addFields(
-                    { name: '/broadcastsettings', value: 'Configure broadcast system settings', inline: true },
-                    { name: '/sync configure', value: 'Set up automatic role/badge syncing', inline: true },
-                    { name: '/leveling settings', value: 'Advanced leveling system configuration', inline: true },
-                    { name: '/welcomeconfig', value: 'Complete welcome system setup', inline: true }
-                );
-            break;
-
-        default:
-            categoryEmbed = new EmbedBuilder()
-                .setColor(config.colors.error)
-                .setTitle('❌ Unknown Category')
-                .setDescription('The requested category was not found.');
-    }
-
-    const backButton = new ActionRowBuilder()
-        .addComponents(
-            new ButtonBuilder()
-                .setCustomId('help_back')
-                .setLabel('Back to Categories')
-                .setStyle(ButtonStyle.Secondary)
-                .setEmoji(emoji('left', '◀️'))
-        );
-
-    categoryEmbed.setFooter({ text: `Version: ${config.version}` })
-                .setTimestamp();
+    const { categoryEmbed, categorySelectRow, homeButtonRow } = require('../utils/prefixHelp');
+    const embed = categoryEmbed(category, '/', {
+        iconURL: interaction.client?.user?.displayAvatarURL?.({ dynamic: true }),
+    });
+    const actions = homeButtonRow('help_back');
+    actions.addComponents(
+        new ButtonBuilder()
+            .setCustomId('help_prefix')
+            .setLabel('Sash')
+            .setStyle(ButtonStyle.Secondary)
+            .setEmoji(helpIcon('utility', '💬')),
+        new ButtonBuilder()
+            .setLabel('Support')
+            .setStyle(ButtonStyle.Link)
+            .setURL(config.supportServer || 'https://discord.gg/primebot')
+            .setEmoji(helpIcon('information', '🆘')),
+    );
 
     await interaction.update({
-        embeds: [categoryEmbed],
-        components: [backButton]
+        embeds: [embed],
+        components: [categorySelectRow(category, 'help_select'), actions],
     });
     scheduleComponentExpiry(interaction.message);
 }
@@ -873,12 +695,12 @@ module.exports = {
                             || interaction.customId === 'categories_prefix_back') {
                         // Prefix help menu: refresh / back-to-categories → re-render the
                         // main prefix category menu (embed + dropdown + nav buttons).
-                        const { mainMenuEmbed, categorySelectRow, navigationButtonsRow } = require('../utils/prefixHelp');
+                        const { mainMenuEmbed, categorySelectRow, homeButtonRow } = require('../utils/prefixHelp');
                         const pfx = (interaction.client.serverSettingsManager?.getGuildPrefix?.(interaction.guild?.id)) || '$';
                         try {
                             await interaction.update({
-                                embeds: [mainMenuEmbed(pfx, interaction.client)],
-                                components: [categorySelectRow(), navigationButtonsRow()],
+                                embeds: [mainMenuEmbed(pfx, interaction.client, { user: interaction.user, kind: 'prefix' })],
+                                components: [categorySelectRow(null, 'category_select_prefix'), homeButtonRow('categories_prefix_back')],
                             });
                             scheduleComponentExpiry(interaction.message);
                         } catch (_) {}
@@ -1175,6 +997,32 @@ module.exports = {
                         const { showPrefixCategoryMenuHelp } = require('../utils/prefixHelp');
                         const prefix = (interaction.client.serverSettingsManager?.getGuildPrefix?.(interaction.guild?.id)) || '$';
                         await showPrefixCategoryMenuHelp(interaction, selectedCategory, prefix);
+                        return;
+                    }
+                    if (interaction.customId === 'help_select') {
+                        const selectedCategory = interaction.values[0];
+                        const { categoryEmbed, categorySelectRow, homeButtonRow } = require('../utils/prefixHelp');
+                        const embed = categoryEmbed(selectedCategory, '/', {
+                            iconURL: interaction.client?.user?.displayAvatarURL?.({ dynamic: true }),
+                        });
+                        const actions = homeButtonRow('help_back');
+                        actions.addComponents(
+                            new ButtonBuilder()
+                                .setCustomId('help_prefix')
+                                .setLabel('Sash')
+                                .setStyle(ButtonStyle.Secondary)
+                                .setEmoji(helpIcon('utility', '💬')),
+                            new ButtonBuilder()
+                                .setLabel('Support')
+                                .setStyle(ButtonStyle.Link)
+                                .setURL(config.supportServer || 'https://discord.gg/primebot')
+                                .setEmoji(helpIcon('information', '🆘')),
+                        );
+                        await interaction.update({
+                            embeds: [embed],
+                            components: [categorySelectRow(selectedCategory, 'help_select'), actions],
+                        });
+                        scheduleComponentExpiry(interaction.message);
                         return;
                     }
                     if (interaction.customId === 'category_select') {

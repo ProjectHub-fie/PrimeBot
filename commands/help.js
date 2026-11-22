@@ -1,13 +1,19 @@
-const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionFlagsBits } = require('discord.js');
+const { SlashCommandBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const config = require('../config');
 const { scheduleComponentExpiry } = require('../utils/stabilityUtils');
 const { emoji } = require('../utils/emoji');
-const { categoryIcon } = require('../utils/prefixHelp');
+const { linixEmbed } = require('../utils/linixEmbed');
+const {
+    CATALOG,
+    CATEGORY_ORDER,
+    mainMenuEmbed,
+    categoryEmbed,
+    categorySelectRow,
+    homeButtonRow,
+} = require('../utils/prefixHelp');
 
-// ── Help menu "animation" ───────────────────────────────────────────────────
-// Discord embeds can't truly animate, so we simulate a loading animation by
-// editing the reply through a short sequence of frames before revealing the
-// final menu. This gives the help menu a lively feel.
+// Discord embeds cannot animate, so the loading state is a short sequence of
+// edited frames before the real menu appears (same trick Linix uses elsewhere).
 const HELP_ANIMATION_FRAMES = [
     { emoji: () => emoji('loading', '🌌'), text: 'Summoning the command menu' },
     { emoji: () => emoji('extra', '✨'), text: 'Gathering all PrimeBot commands' },
@@ -15,23 +21,36 @@ const HELP_ANIMATION_FRAMES = [
 ];
 
 async function playHelpAnimation(replyTarget) {
-    // replyTarget is the interaction (already replied) — edit through frames.
     for (let i = 0; i < HELP_ANIMATION_FRAMES.length; i++) {
         const frame = HELP_ANIMATION_FRAMES[i];
-        const spinner = '·'.repeat(i + 1);
-        const embed = new EmbedBuilder()
-            .setColor(config.colors.primary)
-            .setTitle(`${frame.emoji()} Loading`)
-            .setDescription(`${frame.text} ${spinner}`)
-            .setFooter({ text: `PrimeBot • Version ${config.version}` });
+        const embed = linixEmbed()
+            .t(`${frame.emoji()} Loading`)
+            .d(`${frame.text} ${'·'.repeat(i + 1)}`)
+            .f(`PrimeBot • Version ${config.version}`);
         try {
             await replyTarget.editReply({ embeds: [embed], components: [] });
         } catch (_) {
-            break; // reply target may no longer be editable
+            break;
         }
-        // Small delay between frames (~450ms) for a visible animation.
         await new Promise(r => setTimeout(r, 450));
     }
+}
+
+function helpActionRow() {
+    const row = homeButtonRow('help_back');
+    row.addComponents(
+        new ButtonBuilder()
+            .setCustomId('help_prefix')
+            .setLabel('Sash')
+            .setStyle(ButtonStyle.Secondary)
+            .setEmoji(emoji('utility', '💬')),
+        new ButtonBuilder()
+            .setLabel('Support')
+            .setStyle(ButtonStyle.Link)
+            .setURL(config.supportServer || 'https://discord.gg/primebot')
+            .setEmoji(emoji('information', '🆘')),
+    );
+    return row;
 }
 
 module.exports = {
@@ -44,19 +63,13 @@ module.exports = {
                 .setDescription('Choose a specific category to view')
                 .setRequired(false)
                 .addChoices(
-                    { name: 'General', value: 'general' },
-                    { name: 'Leveling', value: 'leveling' },
-                    { name: 'Games', value: 'games' },
-                    { name: 'Moderation', value: 'moderation' },
-                    { name: 'Community', value: 'community' },
-                    { name: 'Administration', value: 'admin' }
+                    ...CATEGORY_ORDER.map(key => ({ name: CATALOG[key].label, value: key })),
                 )),
-    
+
     async execute(interaction) {
         try {
             const category = interaction.options.getString('category');
 
-            // Defer so we can play the loading animation before the menu appears.
             await interaction.deferReply();
             await playHelpAnimation(interaction);
 
@@ -70,222 +83,39 @@ module.exports = {
             if (!interaction.replied && !interaction.deferred) {
                 await interaction.reply({
                     content: 'There was an error displaying the help menu. Please try again later.',
-                    ephemeral: true
+                    ephemeral: true,
                 });
             }
         }
-    }
+    },
 };
 
-/**
- * Show the main help menu with categories
- */
 async function showMainHelp(interaction) {
-    const mainEmbed = new EmbedBuilder()
-        .setColor(config.colors.primary)
-        .setTitle(`${emoji('information')} Command Categories`)
-        .setDescription('Choose a category to explore available commands:')
-        .addFields(
-            { name: `${categoryIcon('general', '⚡')} General`, value: 'Basic bot commands and information', inline: true },
-            { name: `${categoryIcon('leveling', '📊')} Leveling`, value: 'XP, ranks, and progression system', inline: true },
-            { name: `${categoryIcon('games', '🎮')} Games`, value: 'Fun interactive games and activities', inline: true },
-            { name: `${categoryIcon('moderation', '🛡️')} Moderation`, value: 'Server management and moderation tools', inline: true },
-            { name: `${categoryIcon('community', '👥')} Community`, value: 'Engagement and social features', inline: true },
-            { name: `${categoryIcon('admin', '⚙️')} Administration`, value: 'Advanced server configuration', inline: true }
-        )
-        .setFooter({ text: `Total Commands: 30+ • Version: ${config.version}` })
-        .setTimestamp();
-
-    const categoryButtons = new ActionRowBuilder()
-        .addComponents(
-            new ButtonBuilder()
-                .setCustomId('help_general')
-                .setLabel('General')
-                .setStyle(ButtonStyle.Primary)
-                .setEmoji(categoryIcon('general', '⚡')),
-            new ButtonBuilder()
-                .setCustomId('help_leveling')
-                .setLabel('Leveling')
-                .setStyle(ButtonStyle.Primary)
-                .setEmoji(categoryIcon('leveling', '📊')),
-            new ButtonBuilder()
-                .setCustomId('help_games')
-                .setLabel('Games')
-                .setStyle(ButtonStyle.Primary)
-                .setEmoji(categoryIcon('games', '🎮')),
-            new ButtonBuilder()
-                .setCustomId('help_moderation')
-                .setLabel('Moderation')
-                .setStyle(ButtonStyle.Secondary)
-                .setEmoji(categoryIcon('moderation', '🛡️')),
-            new ButtonBuilder()
-                .setCustomId('help_community')
-                .setLabel('Community')
-                .setStyle(ButtonStyle.Success)
-                .setEmoji(categoryIcon('community', '👥'))
-        );
-
-    const adminButton = new ActionRowBuilder()
-        .addComponents(
-            new ButtonBuilder()
-                .setCustomId('help_admin')
-                .setLabel('Administration')
-                .setStyle(ButtonStyle.Danger)
-                .setEmoji(categoryIcon('admin', '⚙️')),
-            new ButtonBuilder()
-                .setCustomId('help_prefix')
-                .setLabel('Sash')
-                .setStyle(ButtonStyle.Secondary)
-                .setEmoji(categoryIcon('utility', '💬')),
-            new ButtonBuilder()
-                .setLabel('Support')
-                .setStyle(ButtonStyle.Link)
-                .setURL(config.supportServer || 'https://discord.gg/primebot')
-                .setEmoji(categoryIcon('information', '🆘'))
-        );
+    const mainEmbed = mainMenuEmbed('/', interaction.client, {
+        user: interaction.user,
+        kind: 'slash',
+    });
 
     await interaction.editReply({
         embeds: [mainEmbed],
-        components: [categoryButtons, adminButton]
+        components: [categorySelectRow(null, 'help_select'), helpActionRow()],
     });
     const sent = await interaction.fetchReply().catch(() => null);
-    scheduleComponentExpiry(sent || interaction.message || { editReply: () => {} });
+    if (sent) scheduleComponentExpiry(sent);
 }
 
-/**
- * Show category-specific help
- */
 async function showCategoryHelp(interaction, category) {
-    let categoryEmbed;
-    
-    switch (category) {
-        case 'general':
-            categoryEmbed = new EmbedBuilder()
-                .setColor(config.colors.primary)
-                .setTitle(`${categoryIcon('general', '⚡')} General Commands`)
-                .setDescription('Basic bot commands and information:')
-                .addFields(
-                    { name: '/help', value: 'Show this command menu', inline: true },
-                    { name: '/about', value: 'Information about the bot', inline: true },
-                    { name: '/updates', value: 'Latest bot updates and features', inline: true },
-                    { name: '/ses', value: 'Bot session and status information', inline: true },
-                    { name: '/echo', value: 'Make the bot repeat a message', inline: true }
-                );
-            break;
-            
-        case 'leveling':
-            categoryEmbed = new EmbedBuilder()
-                .setColor(config.colors.success)
-                .setTitle(`${categoryIcon('leveling', '📊')} Leveling System`)
-                .setDescription('XP, ranks, and progression commands:')
-                .addFields(
-                    { name: '/leveling rank', value: 'View your or another user\'s level and XP', inline: true },
-                    { name: '/leveling leaderboard', value: 'Server XP leaderboard with pagination', inline: true },
-                    { name: '/leveling badges', value: 'View available and earned badges', inline: true },
-                    { name: '/leveling settings', value: 'Configure leveling system (Admin)', inline: true },
-                    { name: '/leveling addrole', value: 'Add role rewards for levels (Admin)', inline: true },
-                    { name: '/leveling removerole', value: 'Remove role rewards (Admin)', inline: true },
-                    { name: '/leveling listroles', value: 'List all role rewards', inline: true },
-                    { name: '/leveling award', value: 'Award XP to users (Admin)', inline: true },
-                    { name: '/leveling awardbadge', value: 'Award badges to users (Admin)', inline: true },
-                    { name: '/sync', value: 'Synchronize roles and badges with levels', inline: true }
-                );
-            break;
-            
-        case 'games':
-            categoryEmbed = new EmbedBuilder()
-                .setColor(config.colors.warning)
-                .setTitle(`${categoryIcon('games', '🎮')} Games & Activities`)
-                .setDescription('Fun interactive games and entertainment:')
-                .addFields(
-                    { name: '/tictactoe', value: 'Start a TicTacToe game in the channel', inline: true },
-                    { name: '/endgame', value: 'End current TicTacToe game', inline: true },
-                    { name: '/truthdare', value: 'Interactive Truth or Dare game', inline: true },
-                    { name: '/addquestion', value: 'Add custom truth/dare questions', inline: true },
-                    { name: '/counting', value: 'Start a number counting game', inline: true },
-                    { name: '/poll', value: 'Create interactive polls with timer', inline: true },
-                    { name: '/endpoll', value: 'End a poll early', inline: true }
-                );
-            break;
-            
-        case 'moderation':
-            categoryEmbed = new EmbedBuilder()
-                .setColor(config.colors.secondary)
-                .setTitle(`${categoryIcon('moderation', '🛡️')} Moderation Tools`)
-                .setDescription('Server management and moderation:')
-                .addFields(
-                    { name: '/ticket', value: 'Ticket system (dashboard-only)', inline: true },
-                    { name: '/createticket', value: 'Ticket system (dashboard-only)', inline: true },
-                    { name: '/tickethistory', value: 'Ticket system (dashboard-only)', inline: true },
-                    { name: '/move', value: 'Move members between voice channels', inline: true },
-                    { name: '/end', value: 'End giveaways and other activities', inline: true }
-                );
-            break;
-            
-        case 'community':
-            categoryEmbed = new EmbedBuilder()
-                .setColor(config.colors.success)
-                .setTitle(`${categoryIcon('community', '👥')} Community Features`)
-                .setDescription('Engagement and social features:')
-                .addFields(
-                    { name: '/poll', value: 'Create server polls with voting options', inline: true },
-                    { name: '/lpoll', value: 'Create cross-server live polls', inline: true },
-                    { name: '/endpoll', value: 'End active polls and show results', inline: true },
-                    { name: '/giveaway', value: 'Create exciting giveaways with role requirements', inline: true },
-                    { name: '/reroll', value: 'Reroll giveaway winners', inline: true },
-                    { name: '/birthday', value: 'Birthday celebration system', inline: true },
-                    { name: '/radio', value: 'Continuous 24/7 SoundCloud radio that pauses when the channel is empty (start/stop/pause/resume/skip/station/status/volume/channel)', inline: false },
-                    { name: '/music', value: 'On-demand music with an admin-controlled 24/7 voice connection (play/search/pause/resume/skip/previous/stop/seek/rewind/skipto/queue/remove/clear/shuffle/loop/autoplay/filter/nowplaying/track/lyrics/grab/volume/status/help)', inline: false },
-                    { name: '/247', value: 'Persistent 24/7 voice connection — stays connected with an empty queue and nobody listening (enable/disable/status/channel, Admin)', inline: false },
-                    { name: '/playlist', value: 'Public and personal playlists (list/create/rename/delete/view/add/remove/save/play/queue)', inline: false },
-                    { name: '/welcomeconfig', value: 'Configure welcome messages for new members', inline: true },
-                    { name: '/broadcast', value: 'Send announcements to all servers', inline: true }
-                );
-            break;
-            
-        case 'admin':
-            categoryEmbed = new EmbedBuilder()
-                .setColor(config.colors.error)
-                .setTitle(`${categoryIcon('admin', '⚙️')} Administration`)
-                .setDescription('Advanced server configuration (Admin only):')
-                .addFields(
-                    { name: '/antinuke', value: 'Configure Anti-Nuke protection and owner-controlled access: status / setup / progress / enable / disable / dryrun / thresholds / whitelist / unwhitelist / lockdown / restore / access / grant / revoke (access is owner-gated)', inline: false },
-                    { name: '/embed send', value: 'Send an embed saved in the dashboard Embed Builder (Manage Server)', inline: true },
-                    { name: '/embed list', value: 'List this server\'s saved embeds (Manage Server)', inline: true },
-                    { name: '/broadcastsettings', value: 'Configure broadcast system settings', inline: true },
-                    { name: '/sync configure', value: 'Set up automatic role/badge syncing', inline: true },
-                    { name: '/leveling settings', value: 'Advanced leveling system configuration', inline: true },
-                    { name: '/welcomeconfig', value: 'Complete welcome system setup', inline: true }
-                );
-            break;
-            
-        default:
-            categoryEmbed = new EmbedBuilder()
-                .setColor(config.colors.error)
-                .setTitle(`${emoji('cross')} Unknown Category`)
-                .setDescription('The requested category was not found.');
-    }
-    
-    const backButton = new ActionRowBuilder()
-        .addComponents(
-            new ButtonBuilder()
-                .setCustomId('help_back')
-                .setLabel('Back to Categories')
-                .setStyle(ButtonStyle.Secondary)
-                .setEmoji(emoji('left', '◀️'))
-        );
-    
-    categoryEmbed.setFooter({ text: `Version: ${config.version}` })
-                .setTimestamp();
-    
+    const embed = categoryEmbed(category, '/', {
+        iconURL: interaction.client?.user?.displayAvatarURL?.({ dynamic: true }),
+    });
+
     await interaction.editReply({
-        embeds: [categoryEmbed],
-        components: [backButton]
+        embeds: [embed],
+        components: [categorySelectRow(category, 'help_select'), helpActionRow()],
     });
     const sent = await interaction.fetchReply().catch(() => null);
-    scheduleComponentExpiry(sent || interaction.message || { editReply: () => {} });
+    if (sent) scheduleComponentExpiry(sent);
 }
 
-// Export the functions for use in interaction handling
 module.exports.showMainHelp = showMainHelp;
 module.exports.showCategoryHelp = showCategoryHelp;

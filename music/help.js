@@ -7,9 +7,11 @@
  * from the loaded tree, so it can never drift.
  */
 
-const { EmbedBuilder } = require('discord.js');
+const { linixEmbed } = require('../utils/linixEmbed');
 
 function musicHelpEmbed(client, prefix = '$') {
+    const e = (key, fallback) => client.emoji?.[key] || fallback;
+
     const names = [];
     if (client.musicCommands) {
         for (const cmd of client.musicCommands.values()) {
@@ -20,17 +22,20 @@ function musicHelpEmbed(client, prefix = '$') {
     }
     names.sort();
 
-    return new EmbedBuilder()
-        .setColor(client.color)
-        .setAuthor({ name: '| Music', iconURL: client.user ? client.user.displayAvatarURL() : undefined })
-        .setDescription(
-            `**Playback** — \`${prefix}play <song or URL>\`, \`${prefix}search\`, \`${prefix}pause\`, `
+    return linixEmbed()
+        .a('| Music', client.user ? client.user.displayAvatarURL() : undefined)
+        .d(
+            `**${e('play', '▶️')} Playback** — \`${prefix}play <song or URL>\`, \`${prefix}search\`, \`${prefix}pause\`, `
             + `\`${prefix}resume\`, \`${prefix}skip\`, \`${prefix}stop\`, \`${prefix}seek\`, \`${prefix}queue\`\n`
-            + `**Extras** — \`${prefix}filter\`, \`${prefix}autoplay\`, \`${prefix}lyrics\`, \`${prefix}grab\`, `
+            + `**${e('filter', '🎛️')} Extras** — \`${prefix}filter\`, \`${prefix}autoplay\`, \`${prefix}lyrics\`, \`${prefix}grab\`, `
             + `\`${prefix}nowplaying\`, \`${prefix}volume\`, \`${prefix}playlist\`, \`${prefix}247\`\n`
-            + `**Radio** — \`${prefix}247 enable\` keeps a station playing 24/7 in a voice channel.`,
+            + `**${e('autoplay', '♾️')} Radio** — \`${prefix}247 enable\` keeps a station playing 24/7 in a voice channel.`,
         )
-        .setFooter({ text: names.length ? `${names.length} music commands loaded` : 'Music is not configured on this deployment' });
+        .addFields({
+            name: `${e('music', '🎵')} Music Commands`,
+            value: names.length ? names.join(', ') : 'No music commands loaded',
+        })
+        .f(names.length ? `${names.length} music commands loaded` : 'Music is not configured on this deployment');
 }
 
 module.exports = { musicHelpEmbed };

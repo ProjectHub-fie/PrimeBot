@@ -1,8 +1,9 @@
-const { EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const config = require('../config');
 const { emoji } = require('./emoji');
 const { HELP_CATEGORY_EMOJI, EMOJI_FALLBACKS } = require('../shared/emojiCatalog');
 const { scheduleComponentExpiry } = require('./stabilityUtils');
+const { linixEmbed, applyLinixImage } = require('./linixEmbed');
 
 // ───────────────────────────────────────────────────────────────────────────
 // Prefix command catalog — single source of truth for `$help` / `$commands`
@@ -47,7 +48,6 @@ const CATALOG = {
         label: 'General',
         title: 'General Commands',
         color: config.colors.primary,
-        description: 'Basic bot commands and information:',
         commands: [
             { names: ['help'], args: '[category]', desc: 'Show the categorized command menu' },
             { names: ['commands', 'categories'], desc: 'Browse all command categories' },
@@ -65,7 +65,6 @@ const CATALOG = {
         label: 'Leveling',
         title: 'Leveling System',
         color: config.colors.success,
-        description: 'XP, ranks, badges, and progression:',
         commands: [
             { names: ['rank', 'level', 'exp', 'profile'], args: '[@user]', desc: 'View your or another user\'s level and XP' },
             { names: ['leaderboard', 'levels', 'lb'], args: '[page]', desc: 'Server XP leaderboard with pagination' },
@@ -83,7 +82,6 @@ const CATALOG = {
         label: 'Games & Activities',
         title: 'Games & Activities',
         color: config.colors.warning,
-        description: 'Games, activities, polls, and giveaways:',
         commands: [
             { names: ['tictactoe', 'tictactoi'], args: '@user', desc: 'Start a Tic-Tac-Toe game' },
             { names: ['move'], args: '[1-9]', desc: 'Make a move in an active Tic-Tac-Toe game' },
@@ -108,8 +106,6 @@ const CATALOG = {
         label: 'Community',
         title: 'Community — Live Polls & Giveaways',
         color: config.colors.success,
-        description: 'Cross-server live polls and live giveaways — share a pass code to let members from any PrimeBot server join:',
-        selectDesc: 'Cross-server live polls & giveaways',
         commands: [
             { names: ['lpoll', 'livepoll'], args: '<create|join|results|end|list>', desc: 'Cross-server live polls' },
             { names: ['lgiveway', 'lgiveaway', 'livegiveaway'], args: '<create|join|results|end|list>', desc: 'Cross-server live giveaways' },
@@ -121,7 +117,6 @@ const CATALOG = {
         label: 'Moderation',
         title: 'Moderation Tools',
         color: config.colors.secondary,
-        description: 'Moderation, channel management, self-roles, and tickets:',
         commands: [
             { names: ['kick'], args: '@member [reason]', desc: 'Kick a member from the server' },
             { names: ['ban'], args: '@member|userid [reason] [days]', desc: 'Ban a member from the server' },
@@ -152,7 +147,6 @@ const CATALOG = {
         label: 'Administration',
         title: 'Administration',
         color: config.colors.error,
-        description: 'Feature configuration (Admin only):',
         commands: [
             { names: ['embed'], args: '<send|list>', desc: 'Send an embed saved in the dashboard Embed Builder' },
             { names: ['autoreact', 'auto-react'], args: '<enable|disable|add|remove|list>', desc: 'Configure auto-reactions' },
@@ -172,8 +166,6 @@ const CATALOG = {
         label: 'Tickets',
         title: 'Tickets',
         color: config.colors.secondary,
-        description: 'Ticket support system — panels are configured from the dashboard; these commands reply with a pointer to the dashboard:',
-        selectDesc: 'Ticket support system',
         commands: [
             { names: ['ticket', 'thelp'], desc: 'Ticket help (dashboard-only)' },
             { names: ['tcreate', 'createt', 'createticket'], args: '[name]', desc: 'Create a ticket (dashboard-only)' },
@@ -186,8 +178,6 @@ const CATALOG = {
         label: 'YouTube',
         title: 'YouTube Notifications',
         color: config.colors.error,
-        description: 'YouTube upload notifications — subscribed creators and the announcement embed are configured from the dashboard; this command points you there:',
-        selectDesc: 'YouTube upload notifications',
         commands: [
             { names: ['youtube', 'yt'], desc: 'YouTube notifications (dashboard-only)' },
         ],
@@ -198,8 +188,6 @@ const CATALOG = {
         label: 'Music',
         title: 'Music',
         color: config.colors.primary,
-        description: 'Music and 24/7 radio powered by Lavalink — playback, filters, playlists, autoplay and 24/7 mode:',
-        selectDesc: 'Music + 24/7 radio',
         commands: [
             { names: ['music'], args: 'play <song or URL>', desc: 'Play a song or add it to the queue (`$play`/`$p` also work)' },
             { names: ['music'], args: 'search <query>', desc: 'Search and pick a result to play' },
@@ -232,7 +220,6 @@ const CATALOG = {
         label: 'Welcome',
         title: 'Welcome System',
         color: config.colors.success,
-        description: 'Configure how PrimeBot greets new members:',
         commands: [
             { names: ['welcome-enable', 'welcomeenable', 'welcome-on'], desc: 'Enable the welcome system (Admin)' },
             { names: ['welcome-disable', 'welcomedisable', 'welcome-off'], desc: 'Disable the welcome system (Admin)' },
@@ -256,69 +243,86 @@ function commandField(prefix, cmd) {
     return { name: `${name}${beta}`, value: cmd.desc, inline: true };
 }
 
-function categoryEmbed(category, prefix) {
+function categoryEmbed(category, prefix, options = {}) {
     const cat = CATALOG[category];
     if (!cat) {
-        return new EmbedBuilder()
-            .setColor(config.colors.error)
-            .setTitle(`${emoji('cross')} Unknown Category`)
-            .setDescription(`The category "${category}" was not found. Available categories: ${CATEGORY_ORDER.join(', ')}`);
+        return linixEmbed()
+            .t(`${emoji('cross', '❌')} Unknown Category`)
+            .d(`The category "${category}" was not found. Available categories: ${CATEGORY_ORDER.join(', ')}`)
+            .f('PrimeBot Help');
     }
-    const embed = new EmbedBuilder()
-        .setColor(cat.color)
-        .setTitle(`${categoryIcon(category)} ${cat.title}`.trim())
-        .setDescription(cat.description)
-        .addFields(cat.commands.map(c => commandField(prefix, c)));
 
-    const betaCount = cat.commands.filter(c => c.beta || isBeta(c.names)).length;
-    const info = [
-        `**Commands:** ${cat.commands.length}`,
-        `**Usage Level:** ${getCategoryUsageLevel(category)}`,
-        `**Permission:** ${getCategoryPermissionLevel(category)}`,
-    ];
-    if (betaCount > 0) info.push(`${BETA_TAG} **Beta:** ${betaCount}`);
-    embed.addFields({ name: '📈 Category Info', value: info.join('\n'), inline: true });
+    const commandNames = options.commands || [];
+    if (!commandNames.length) {
+        const seen = new Set();
+        for (const c of cat.commands) {
+            let name = c.names[0];
+            if (name === 'music' && c.args) name = `music ${c.args.split(' ')[0]}`;
+            if (!seen.has(name)) {
+                seen.add(name);
+                commandNames.push(name);
+            }
+        }
+    }
+    const names = commandNames.map(name => `\`${name}\``);
 
-    embed.setFooter({ text: `Use ${prefix}help to see all categories • Version: ${config.version}` }).setTimestamp();
-    return embed;
+    const embed = linixEmbed()
+        .t(`${categoryIcon(category)} ${cat.label} Commands`)
+        .d(names.join(', ') || 'No commands found for this category.')
+        .f(`Total ${names.length} commands.`, options.iconURL);
+
+    return applyLinixImage(embed, options.image);
 }
 
-function mainMenuEmbed(prefix, client) {
+function mainMenuEmbed(prefix, client, options = {}) {
     const totalCommands = CATEGORY_ORDER.reduce((sum, k) => sum + CATALOG[k].commands.length, 0);
-    const embed = new EmbedBuilder()
-        .setColor(config.colors.primary)
-        .setTitle('📚 Command Categories')
-        .setDescription(`Choose a category to explore available commands:\n\n**Usage:** \`${prefix}help [category]\`\n\n${BETA_TAG} = beta feature (gated behind the beta program)`)
-        .addFields(
-            CATEGORY_ORDER.map(k => {
-                const cat = CATALOG[k];
-                return { name: `${categoryIcon(k)} ${cat.label}`.trim(), value: `\`${prefix}help ${k}\`\n${cat.description.replace(/:$/, '')}`, inline: true };
-            })
-        )
-        .setFooter({ text: `Total Commands: ${totalCommands} • Version: ${config.version}` })
-        .setTimestamp();
-    return embed;
+    const slashCount = client?.commands?.size || 0;
+    const user = options.user;
+    const userAvatar = user?.displayAvatarURL?.({ dynamic: true })
+        || client?.user?.displayAvatarURL?.({ dynamic: true });
+
+    const intro = options.kind === 'slash'
+        ? `Hey ${user ? `<@${user.id}>` : 'there'}, I'm ${client?.user || 'PrimeBot'}!\n- **A complete Discord bot for your server**\n- **Providing you the best features**`
+        : `- ${options.kind === 'sash' ? 'Sash' : 'Prefix'} For This Server \`${prefix}\`\n- Total Commands \`${totalCommands}\`\n- -# Prefix: ${totalCommands}, Slash: ${slashCount}`;
+
+    const categoryLines = CATEGORY_ORDER
+        .map(k => `> ${categoryIcon(k)} \`:\` **${CATALOG[k].label}**`)
+        .join('\n');
+
+    const embed = linixEmbed()
+        .d(intro)
+        .addFields({ name: `${emoji('search', '🔎')} **__My Commands:__**`, value: categoryLines })
+        .thumb(userAvatar)
+        .f(`Loved by ${client?.guilds?.cache?.size ?? 0} Servers`, userAvatar);
+
+    return applyLinixImage(embed, options.image);
 }
 
-function categorySelectRow(currentCategory = null) {
+function categorySelectRow(currentCategory = null, customId = 'help_select') {
     return new ActionRowBuilder()
         .addComponents(
             new StringSelectMenuBuilder()
-                .setCustomId('category_select_prefix')
-                .setPlaceholder('Choose a category to explore...')
+                .setCustomId(customId)
+                .setPlaceholder('Select a command category')
                 .addOptions(CATEGORY_ORDER.map(k => {
                     const cat = CATALOG[k];
-                    // Select-menu descriptions are capped at 100 chars.
-                    let desc = cat.selectDesc || cat.description.replace(/:$/, '');
-                    if (desc.length > 100) desc = desc.slice(0, 97) + '...';
                     return {
-                        label: `${cat.label} Commands`,
-                        description: desc,
+                        label: cat.label,
                         value: k,
                         emoji: categoryIcon(k) || undefined,
                         default: k === currentCategory,
                     };
                 }))
+        );
+}
+
+function homeButtonRow(customId = 'help_back') {
+    return new ActionRowBuilder()
+        .addComponents(
+            new ButtonBuilder()
+                .setCustomId(customId)
+                .setStyle(ButtonStyle.Secondary)
+                .setEmoji(categoryIcon('home', '🏠'))
         );
 }
 
@@ -343,11 +347,13 @@ function navigationButtonsRow() {
 // Prefix `$help`/`$commands` (message-based). `category` optional.
 async function showPrefixCategoryHelp(message, category, prefix) {
     if (category && CATALOG[category]) {
-        return message.reply({ embeds: [categoryEmbed(category, prefix)] });
+        return message.reply({ embeds: [categoryEmbed(category, prefix, {
+            iconURL: message.client?.user?.displayAvatarURL?.({ dynamic: true }),
+        })] });
     }
     const sent = await message.reply({
-        embeds: [mainMenuEmbed(prefix, message.client)],
-        components: [categorySelectRow(), navigationButtonsRow()],
+        embeds: [mainMenuEmbed(prefix, message.client, { user: message.author, kind: 'prefix' })],
+        components: [categorySelectRow(null, 'category_select_prefix'), homeButtonRow('categories_prefix_back')],
     });
     scheduleComponentExpiry(sent);
     return sent;
@@ -355,21 +361,11 @@ async function showPrefixCategoryHelp(message, category, prefix) {
 
 // Select-menu interaction (`category_select_prefix`). Updates in place.
 async function showPrefixCategoryMenuHelp(interaction, category, prefix) {
-    const embed = categoryEmbed(category, prefix);
-    const backSelect = categorySelectRow(category);
-    const navButtons = new ActionRowBuilder()
-        .addComponents(
-            new ButtonBuilder()
-                .setCustomId('categories_prefix_back')
-                .setLabel('Back to Categories')
-                .setStyle(ButtonStyle.Secondary)
-                .setEmoji(categoryIcon('home', '🏠')),
-            new ButtonBuilder()
-                .setCustomId('categories_prefix_help')
-                .setLabel('Need Help?')
-                .setStyle(ButtonStyle.Primary)
-                .setEmoji(categoryIcon('information', '❓'))
-        );
+    const embed = categoryEmbed(category, prefix, {
+        iconURL: interaction.client?.user?.displayAvatarURL?.({ dynamic: true }),
+    });
+    const backSelect = categorySelectRow(category, 'category_select_prefix');
+    const navButtons = homeButtonRow('categories_prefix_back');
     try {
         await interaction.update({ embeds: [embed], components: [backSelect, navButtons] });
         scheduleComponentExpiry(interaction.message);
@@ -420,6 +416,7 @@ module.exports = {
     categoryEmbed,
     mainMenuEmbed,
     categorySelectRow,
+    homeButtonRow,
     navigationButtonsRow,
     showPrefixCategoryHelp,
     showPrefixCategoryMenuHelp,

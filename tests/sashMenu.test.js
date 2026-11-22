@@ -13,7 +13,7 @@ const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
 const interactionSrc = fs.readFileSync(path.join(ROOT, 'events', 'interactionCreate.js'), 'utf8');
-const { CATALOG, CATEGORY_ORDER } = require('../utils/prefixHelp');
+const { CATALOG, CATEGORY_ORDER, categoryEmbed } = require('../utils/prefixHelp');
 
 // Every command name the prefix switch in messageCreate.js accepts.
 function prefixSwitchNames() {
@@ -105,7 +105,7 @@ test('Anti-Nuke appears in the Sash menu (prefix) and the /help Administration m
         assert.ok(an.args.includes(sub), `antinuke usage must mention ${sub}`);
     }
 
-    // Slash surface: /help's Administration category lists /antinuke.
-    const helpSrc = fs.readFileSync(path.join(ROOT, 'commands', 'help.js'), 'utf8');
-    assert.match(helpSrc, /name: '\/antinuke'/, 'the /help Administration menu must list /antinuke');
+    // Slash surface: /help's Administration category lists antinuke.
+    const slashAdmin = categoryEmbed('admin', '/');
+    assert.ok(slashAdmin.data.description.includes('`antinuke`'), 'the /help Administration menu must list antinuke');
 });
