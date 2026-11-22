@@ -47,7 +47,6 @@ const CATALOG = {
         label: 'General',
         title: 'General Commands',
         color: config.colors.primary,
-        description: 'Basic bot commands and information:',
         commands: [
             { names: ['help'], args: '[category]', desc: 'Show the categorized command menu' },
             { names: ['commands', 'categories'], desc: 'Browse all command categories' },
@@ -65,7 +64,6 @@ const CATALOG = {
         label: 'Leveling',
         title: 'Leveling System',
         color: config.colors.success,
-        description: 'XP, ranks, badges, and progression:',
         commands: [
             { names: ['rank', 'level', 'exp', 'profile'], args: '[@user]', desc: 'View your or another user\'s level and XP' },
             { names: ['leaderboard', 'levels', 'lb'], args: '[page]', desc: 'Server XP leaderboard with pagination' },
@@ -83,7 +81,6 @@ const CATALOG = {
         label: 'Games & Activities',
         title: 'Games & Activities',
         color: config.colors.warning,
-        description: 'Games, activities, polls, and giveaways:',
         commands: [
             { names: ['tictactoe', 'tictactoi'], args: '@user', desc: 'Start a Tic-Tac-Toe game' },
             { names: ['move'], args: '[1-9]', desc: 'Make a move in an active Tic-Tac-Toe game' },
@@ -108,8 +105,6 @@ const CATALOG = {
         label: 'Community',
         title: 'Community — Live Polls & Giveaways',
         color: config.colors.success,
-        description: 'Cross-server live polls and live giveaways — share a pass code to let members from any PrimeBot server join:',
-        selectDesc: 'Cross-server live polls & giveaways',
         commands: [
             { names: ['lpoll', 'livepoll'], args: '<create|join|results|end|list>', desc: 'Cross-server live polls' },
             { names: ['lgiveway', 'lgiveaway', 'livegiveaway'], args: '<create|join|results|end|list>', desc: 'Cross-server live giveaways' },
@@ -121,7 +116,6 @@ const CATALOG = {
         label: 'Moderation',
         title: 'Moderation Tools',
         color: config.colors.secondary,
-        description: 'Moderation, channel management, self-roles, and tickets:',
         commands: [
             { names: ['kick'], args: '@member [reason]', desc: 'Kick a member from the server' },
             { names: ['ban'], args: '@member|userid [reason] [days]', desc: 'Ban a member from the server' },
@@ -152,7 +146,6 @@ const CATALOG = {
         label: 'Administration',
         title: 'Administration',
         color: config.colors.error,
-        description: 'Feature configuration (Admin only):',
         commands: [
             { names: ['embed'], args: '<send|list>', desc: 'Send an embed saved in the dashboard Embed Builder' },
             { names: ['autoreact', 'auto-react'], args: '<enable|disable|add|remove|list>', desc: 'Configure auto-reactions' },
@@ -172,8 +165,6 @@ const CATALOG = {
         label: 'Tickets',
         title: 'Tickets',
         color: config.colors.secondary,
-        description: 'Ticket support system — panels are configured from the dashboard; these commands reply with a pointer to the dashboard:',
-        selectDesc: 'Ticket support system',
         commands: [
             { names: ['ticket', 'thelp'], desc: 'Ticket help (dashboard-only)' },
             { names: ['tcreate', 'createt', 'createticket'], args: '[name]', desc: 'Create a ticket (dashboard-only)' },
@@ -186,8 +177,6 @@ const CATALOG = {
         label: 'YouTube',
         title: 'YouTube Notifications',
         color: config.colors.error,
-        description: 'YouTube upload notifications — subscribed creators and the announcement embed are configured from the dashboard; this command points you there:',
-        selectDesc: 'YouTube upload notifications',
         commands: [
             { names: ['youtube', 'yt'], desc: 'YouTube notifications (dashboard-only)' },
         ],
@@ -198,8 +187,6 @@ const CATALOG = {
         label: 'Music',
         title: 'Music',
         color: config.colors.primary,
-        description: 'Music and 24/7 radio powered by Lavalink — playback, filters, playlists, autoplay and 24/7 mode:',
-        selectDesc: 'Music + 24/7 radio',
         commands: [
             { names: ['music'], args: 'play <song or URL>', desc: 'Play a song or add it to the queue (`$play`/`$p` also work)' },
             { names: ['music'], args: 'search <query>', desc: 'Search and pick a result to play' },
@@ -232,7 +219,6 @@ const CATALOG = {
         label: 'Welcome',
         title: 'Welcome System',
         color: config.colors.success,
-        description: 'Configure how PrimeBot greets new members:',
         commands: [
             { names: ['welcome-enable', 'welcomeenable', 'welcome-on'], desc: 'Enable the welcome system (Admin)' },
             { names: ['welcome-disable', 'welcomedisable', 'welcome-off'], desc: 'Disable the welcome system (Admin)' },
@@ -267,7 +253,6 @@ function categoryEmbed(category, prefix) {
     const embed = new EmbedBuilder()
         .setColor(cat.color)
         .setTitle(`${categoryIcon(category)} ${cat.title}`.trim())
-        .setDescription(cat.description)
         .addFields(cat.commands.map(c => commandField(prefix, c)));
 
     const betaCount = cat.commands.filter(c => c.beta || isBeta(c.names)).length;
@@ -292,7 +277,7 @@ function mainMenuEmbed(prefix, client) {
         .addFields(
             CATEGORY_ORDER.map(k => {
                 const cat = CATALOG[k];
-                return { name: `${categoryIcon(k)} ${cat.label}`.trim(), value: `\`${prefix}help ${k}\`\n${cat.description.replace(/:$/, '')}`, inline: true };
+                return { name: `${categoryIcon(k)} ${cat.label}`.trim(), value: `\`${prefix}help ${k}\`\n${cat.commands.length} commands`, inline: true };
             })
         )
         .setFooter({ text: `Total Commands: ${totalCommands} • Version: ${config.version}` })
@@ -308,12 +293,8 @@ function categorySelectRow(currentCategory = null) {
                 .setPlaceholder('Choose a category to explore...')
                 .addOptions(CATEGORY_ORDER.map(k => {
                     const cat = CATALOG[k];
-                    // Select-menu descriptions are capped at 100 chars.
-                    let desc = cat.selectDesc || cat.description.replace(/:$/, '');
-                    if (desc.length > 100) desc = desc.slice(0, 97) + '...';
                     return {
                         label: `${cat.label} Commands`,
-                        description: desc,
                         value: k,
                         emoji: categoryIcon(k) || undefined,
                         default: k === currentCategory,

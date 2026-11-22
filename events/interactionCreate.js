@@ -112,7 +112,6 @@ function buildSashCategories(prefix) {
             icon: categoryIcon(key, cat.icon),
             label: cat.label,
             title: `${categoryIcon(key, cat.icon)} ${(cat.title || '').replace(/Prefix/g, 'Sash')}`.trim(),
-            desc: (cat.description || '').replace(/Prefix/g, 'Sash'),
             color: cat.color,
             fields: cat.commands.map(c => {
                 const aliases = c.names.slice(1);
@@ -204,7 +203,6 @@ async function showSashHelp(interaction, page) {
     const embed = new EmbedBuilder()
         .setColor(cat.color)
         .setTitle(cat.title)
-        .setDescription(cat.desc)
         .addFields(cat.fields.map(f => ({ ...f, inline: false })))
         .setFooter({ text: `Sash: ${prefix} • Version: ${config.version}` })
         .setTimestamp();

@@ -1822,3 +1822,15 @@ uses. No new server, no new bot, no credentials in code.
   animated resolution, live validation, priority/conflicts, channel parsing,
   unavailable guilds, permission errors, caching, Unicode-safe rendering,
   embeds/buttons/selects, interaction callbacks, token redaction, route filter.
+
+## Help menus: no category descriptions
+
+The prefix `$help` menu and the Sash menu no longer render category descriptions.
+Category entries show only the category emoji + label (prefix main menu also
+shows the usage line and command count; the Sash main menu shows the command
+count). `CATALOG` in `utils/prefixHelp.js` no longer carries `description` or
+`selectDesc`; `buildSashCategories` no longer copies a `desc`; and neither
+`categoryEmbed` (prefix) nor `showSashHelp` (sash) sets a category description.
+Command descriptions (`cmd.desc`) are unchanged. The slash `/help` button menu
+is a separate surface and still has its own category blurbs. Tests:
+`tests/helpMenuNoCategoryDescriptions.test.js`.
