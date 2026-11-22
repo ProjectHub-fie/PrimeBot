@@ -16,6 +16,17 @@ function helpIcon(category, fallback = '') {
     }
 }
 
+function helpCategoryLines() {
+    try {
+        const { CATALOG, CATEGORY_ORDER, categoryIcon } = require('../utils/prefixHelp');
+        return CATEGORY_ORDER
+            .map(key => `${categoryIcon(key)} ${CATALOG[key].label}`)
+            .join('\n');
+    } catch (_) {
+        return '';
+    }
+}
+
 /**
  * Helper function to show main help menu for button interactions
  */
@@ -688,7 +699,7 @@ module.exports = {
                         return;
                     } else if (interaction.customId === 'categories_help') {
                         await interaction.reply({
-                            content: 'Use the dropdown menu to browse different command categories. Each category contains specialized commands for different server needs.\n\n**Available Categories:**\n• General - Basic bot commands\n• Leveling - XP and ranking system\n• Games - Interactive games and fun\n• Moderation - Server management tools\n• Community - Social features and events\n• Administration - Advanced server config',
+                            content: `Use the dropdown menu to browse different command categories. Each category contains specialized commands for different server needs.\n\n**Available Categories:**\n${helpCategoryLines()}`,
                             ephemeral: true
                         });
                         return;
@@ -708,7 +719,7 @@ module.exports = {
                         return;
                     } else if (interaction.customId === 'categories_prefix_help') {
                         await interaction.reply({
-                            content: 'Use the dropdown menu to browse different command categories. Each category contains specialized commands for different server needs.\n\n**Available Categories:**\n• General - Basic bot commands and info\n• Leveling - XP, ranks, and badges (🧪 beta)\n• Games & Activities - Games, polls, and giveaways\n• Community - Cross-server live polls & giveaways\n• Tickets - Ticket support system\n• Welcome - Welcome system configuration\n• Moderation - Server management, roles, and tickets\n• Administration - Feature configuration',
+                            content: `Use the dropdown menu to browse different command categories. Each category contains specialized commands for different server needs.\n\n**Available Categories:**\n${helpCategoryLines()}`,
                             ephemeral: true
                         });
                         return;

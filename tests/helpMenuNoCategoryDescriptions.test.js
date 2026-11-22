@@ -93,6 +93,16 @@ test('the Sash menu builder and drill-down do not render category descriptions',
     assert.ok(!/\.setDescription\(cat\.desc\)/.test(src), 'Sash drill-down still sets a category description');
 });
 
+test('category help text is derived from the shared catalog (prefix + Sash)', () => {
+    const src = fs.readFileSync(path.join(ROOT, 'events', 'interactionCreate.js'), 'utf8');
+    assert.match(src, /helpCategoryLines\(\)/, 'the category help reply must use the shared catalog');
+    assert.ok(!src.includes('• General - Basic'), 'the old hardcoded category list must be gone');
+    assert.ok(!src.includes('• Administration - Advanced'), 'the old hardcoded category list must be gone');
+    for (const key of ['information', 'birthdays', 'automation', 'antinuke']) {
+        assert.ok(CATEGORY_ORDER.includes(key), `${key} must be a help category`);
+    }
+});
+
 test('slash help uses the shared Linix builders and routes the select menu', () => {
     const helpSrc = fs.readFileSync(path.join(ROOT, 'commands', 'help.js'), 'utf8');
     assert.match(helpSrc, /mainMenuEmbed\('\/'/);
