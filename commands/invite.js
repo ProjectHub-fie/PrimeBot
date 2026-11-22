@@ -1,5 +1,6 @@
 const { SlashCommandBuilder, EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder } = require('discord.js');
 const config = require('../config');
+const { buildEmbedWithButtons } = require('../utils/embedComponentsV2');
 
 /**
  * /invite — shows an embed with the bot's invite link so server admins can add
@@ -44,7 +45,7 @@ module.exports = {
 
             const row = new ActionRowBuilder().addComponents(inviteButton);
 
-            return interaction.reply({ embeds: [embed], components: [row] });
+            return interaction.reply(buildEmbedWithButtons({ embeds: [embed], components: [row] }));
         } catch (error) {
             console.error('[INVITE] Command failed:', error);
             if (!interaction.replied && !interaction.deferred) {

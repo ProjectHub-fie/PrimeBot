@@ -190,8 +190,8 @@ class ServerSettingsManager {
                 xpCooldown: row.xp_cooldown || 60000,
             },
             autoReactions: {
-                enabled: row.auto_reactions_enabled,
-                reactions: row.auto_reactions || [],
+                enabled: row.auto_reactions_enabled === true,
+                reactions: Array.isArray(row.auto_reactions) ? row.auto_reactions : [],
             },
             autoResponder: {
                 enabled: row.auto_responder_enabled,
@@ -708,7 +708,10 @@ class ServerSettingsManager {
         const s = this.getGuildSettings(guildId);
         if (!s.autoReactions?.enabled) return [];
         const triggered = [];
-        for (const reaction of s.autoReactions.reactions) {
+        const reactions = Array.isArray(s.autoReactions?.reactions) ? s.autoReactions.reactions : [];
+        for (const reaction of reactions) {
+            if (!reaction || typeof reaction.trigger !== 'string' || typeof reaction.emoji !== 'string') continue;
+            if (!reaction.trigger || !reaction.emoji) continue;
             let msg = content;
             let trig = reaction.trigger;
             if (!reaction.caseSensitive) { msg = msg.toLowerCase(); trig = trig.toLowerCase(); }

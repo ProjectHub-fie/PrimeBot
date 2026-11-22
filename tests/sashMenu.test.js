@@ -13,7 +13,7 @@ const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
 const interactionSrc = fs.readFileSync(path.join(ROOT, 'events', 'interactionCreate.js'), 'utf8');
-const { CATALOG, CATEGORY_ORDER } = require('../utils/prefixHelp');
+const { CATALOG, CATEGORY_ORDER, categoryEmbed } = require('../utils/prefixHelp');
 
 // Every command name the prefix switch in messageCreate.js accepts.
 function prefixSwitchNames() {
@@ -93,19 +93,17 @@ test('the Sash drill-down routes still line up with the catalog keys', () => {
     }
 });
 
-test('Anti-Nuke appears in the Sash menu (prefix) and the /help Administration menu (slash)', () => {
+test('Anti-Nuke appears in the Sash menu (prefix) and the /help Anti-Nuke category (slash)', () => {
     // Prefix surface: the Sash menu is derived from CATALOG, so the entry must
-    // be catalogued under admin with the documented subcommands.
-    const admin = CATALOG.admin;
-    assert.ok(admin, 'the admin category exists in the prefix catalog');
-    const an = admin.commands.find(c => c.names[0] === 'antinuke');
+    // be catalogued with the documented subcommands.
+    const an = CATALOG.antinuke.commands.find(c => c.names[0] === 'antinuke');
     assert.ok(an, 'antinuke must be catalogued so the Sash menu shows it');
     assert.deepEqual(an.names, ['antinuke', 'an'], 'the `an` alias is documented too');
     for (const sub of ['status', 'setup', 'enable', 'disable', 'dryrun', 'thresholds', 'whitelist', 'unwhitelist', 'lockdown', 'restore']) {
         assert.ok(an.args.includes(sub), `antinuke usage must mention ${sub}`);
     }
 
-    // Slash surface: /help's Administration category lists /antinuke.
-    const helpSrc = fs.readFileSync(path.join(ROOT, 'commands', 'help.js'), 'utf8');
-    assert.match(helpSrc, /name: '\/antinuke'/, 'the /help Administration menu must list /antinuke');
+    // Slash surface: /help's Anti-Nuke category lists antinuke.
+    const slashAntiNuke = categoryEmbed('antinuke', '/');
+    assert.ok(slashAntiNuke.data.description.includes('`antinuke`'), 'the /help Anti-Nuke menu must list antinuke');
 });

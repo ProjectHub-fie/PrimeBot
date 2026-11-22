@@ -72,7 +72,7 @@ test('colorInt parses hex colors and falls back to blurple', () => {
     assert.equal(colorInt('not-a-color'), 0x5865F2);
 });
 
-test('buildLogEmbed sets the icon-prefixed title, color, footer and fields', () => {
+test('buildLogEmbed sets the icon-prefixed title, footer and fields', () => {
     const embed = buildLogEmbed({
         type: 'memberBan',
         title: 'Member Banned',
@@ -82,16 +82,16 @@ test('buildLogEmbed sets the icon-prefixed title, color, footer and fields', () 
     const data = embed.toJSON();
 
     assert.match(data.title, /🔨 Member Banned/);
-    assert.equal(data.color, 0xED4245); // memberBan default color
+    assert.equal(data.color, undefined);
     assert.equal(data.description, 'naughty#1');
     assert.ok(data.fields.some(f => f.name === 'Reason' && f.value === 'spam'));
     assert.match(data.footer.text, /PrimeBot Logging/);
     assert.ok(data.timestamp, 'timestamp is set');
 });
 
-test('buildLogEmbed prefers an explicit color over the event default', () => {
+test('buildLogEmbed ignores colour overrides', () => {
     const data = buildLogEmbed({ type: 'memberBan', color: '#57F287' }).toJSON();
-    assert.equal(data.color, 0x57F287);
+    assert.equal(data.color, undefined);
 });
 
 test('buildLogEmbed skips fields with missing name/value', () => {
@@ -112,5 +112,6 @@ test('buildLogEmbedObject produces a plain object usable as a webhook payload', 
     const obj = buildLogEmbedObject({ type: 'memberJoin', title: 'Member Joined' });
     assert.equal(typeof obj, 'object');
     assert.ok(!Array.isArray(obj));
-    assert.ok(obj.title && obj.color != null);
+    assert.ok(obj.title);
+    assert.equal(obj.color, undefined);
 });

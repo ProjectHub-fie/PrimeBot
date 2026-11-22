@@ -21,6 +21,7 @@ const https = require('https');
 const { URL } = require('url');
 const { EmbedBuilder } = require('discord.js');
 const { isEventEnabled, metaFor } = require('./logEvents');
+const { stripEmbedColor } = require('../shared/embedStyle');
 
 // Escape a hex color like "#5865F2" -> 0x5865F2; falls back to blurple.
 function colorInt(hex) {
@@ -33,7 +34,6 @@ function colorInt(hex) {
 function buildLogEmbed({ type, title, description = '', fields = [], color, footer, timestamp, thumbnail }) {
     const meta = metaFor(type);
     const embed = new EmbedBuilder()
-        .setColor(colorInt(color || meta.color))
         .setTitle(`${meta.icon} ${title || meta.label}`)
         .setTimestamp(timestamp || new Date());
 
@@ -52,14 +52,14 @@ function buildLogEmbed({ type, title, description = '', fields = [], color, foot
 
 /** Plain-object form of buildLogEmbed, for webhook payloads and tests. */
 function buildLogEmbedObject(opts) {
-    return buildLogEmbed(opts).toJSON();
+    return stripEmbedColor(buildLogEmbed(opts).toJSON());
 }
 
 /** POST a Discord webhook payload (fire-and-forget, never throws). */
 function postWebhook(webhookUrl, payload, webhookName) {
     const body = JSON.stringify({
         username: webhookName || 'PrimeBot Logs',
-        embeds: [payload],
+        embeds: [stripEmbedColor(payload)],
     });
     try {
         const url = new URL(webhookUrl);

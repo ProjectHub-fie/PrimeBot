@@ -171,7 +171,7 @@ function welcomePage({ guild, user }) {
     return guildTab({
         guild, user, active: 'welcome',
         panelHTML: welcomePanelHTML(guild._config.welcome, guild._channels),
-        scripts: ['/js/guild-common.js', '/js/settings-basic.js'],
+        scripts: ['/js/guild-common.js', '/js/emoji-picker.js', '/js/settings-basic.js'],
     });
 }
 
@@ -431,7 +431,7 @@ function reactionRowHTML(r) {
     return `
     <div class="reaction-row" data-index="">
       <input type="text" class="r-trigger" value="${esc(r.trigger || '')}" placeholder="trigger word" />
-      <input type="text" class="r-emoji" value="${esc(r.emoji || '')}" placeholder="🎉" maxlength="30" />
+      <input type="text" class="r-emoji" data-emoji-picker value="${esc(r.emoji || '')}" placeholder="🎉" maxlength="30" />
       <button class="reaction-remove" type="button">✕</button>
     </div>`;
 }
@@ -459,7 +459,7 @@ function reactionsPage({ guild, user }) {
         <div class="field-hint">Trigger is matched as a substring of the message.</div>
       </div>
     </div>`;
-    return guildTab({ guild, user, active: 'reactions', panelHTML, scripts: ['/js/guild-common.js', '/js/settings-basic.js'] });
+    return guildTab({ guild, user, active: 'reactions', panelHTML, scripts: ['/js/guild-common.js', '/js/emoji-picker.js', '/js/settings-basic.js'] });
 }
 
 // ── Broadcasts ──────────────────────────────────────────────────────────────
@@ -645,7 +645,7 @@ function rrMappingRowHTML(m = {}) {
     const roleOpt = m.roleId ? `<option value="${esc(m.roleId)}" selected>Role</option>` : '';
     return `
     <div class="reaction-row" data-index="">
-      <input type="text" class="r-emoji" value="${esc(m.emoji || '')}" placeholder="🎉 or <:name:id>" maxlength="100" />
+      <input type="text" class="r-emoji" data-emoji-picker value="${esc(m.emoji || '')}" placeholder="🎉 or <:name:id>" maxlength="100" />
       <select class="r-role" data-role-select data-placeholder="Role">${roleOpt}</select>
       <input type="text" class="r-label" value="${esc(m.label || '')}" placeholder="label (optional)" maxlength="100" />
       <button class="reaction-remove" type="button">✕</button>
@@ -771,7 +771,7 @@ function reactionRolesPage({ guild, user }) {
         <button class="btn btn-primary" id="rr-create">Create reaction-role menu</button>
       </div>
     </div>`;
-    return guildTab({ guild, user, active: 'reactionroles', panelHTML, scripts: ['/js/guild-common.js', '/js/reactionroles.js'] });
+    return guildTab({ guild, user, active: 'reactionroles', panelHTML, scripts: ['/js/guild-common.js', '/js/emoji-picker.js', '/js/reactionroles.js'] });
 }
 
 // ── Tickets ─────────────────────────────────────────────────────────────────
@@ -945,7 +945,7 @@ function ticketEditorTabsHTML(panel, channels = []) {
             const optRows = (opts.length ? opts : [{}]).map((o, oi) => `
             <div class="reaction-row pcomp-opt-row" data-opt-idx="${oi}">
               <input type="text" class="pcomp-opt-label" placeholder="Label" value="${val(o.label)}" maxlength="80" />
-              <input type="text" class="pcomp-opt-emoji" placeholder="emoji" value="${val(o.emoji)}" maxlength="100" />
+              <input type="text" class="pcomp-opt-emoji" data-emoji-picker placeholder="emoji" value="${val(o.emoji)}" maxlength="100" />
               <input type="text" class="pcomp-opt-desc" placeholder="Option description (shown under the label)" value="${val(o.description)}" maxlength="150" />
               <input type="text" class="pcomp-opt-value" placeholder="value" value="${val(o.value)}" maxlength="100" />
               <button class="reaction-remove pcomp-opt-del" type="button" title="Remove option">${svgIcon('x')}</button>
@@ -965,7 +965,7 @@ function ticketEditorTabsHTML(panel, channels = []) {
         ${c.type === 'button'
             ? `
           <input type="text" class="pcomp-label" placeholder="Button label" value="${val(c.label)}" maxlength="80" />
-          <input type="text" class="pcomp-emoji" placeholder="emoji" value="${val(c.emoji)}" maxlength="100" />
+          <input type="text" class="pcomp-emoji" data-emoji-picker placeholder="emoji" value="${val(c.emoji)}" maxlength="100" />
           <select class="pcomp-style">
             ${TICKET_BUTTON_STYLES.map(s => `<option value="${s.value}" ${s.value === (c.style || 'Primary') ? 'selected' : ''}>${esc(s.label)}</option>`).join('')}
           </select>`
@@ -1038,7 +1038,7 @@ function ticketEditorTabsHTML(panel, channels = []) {
                   <div class="tk-btn-fields">
                     <div class="edb-duo">
                       ${ticketField('Label', `tk-btn-${c.key}-label`, `<input type="text" id="tk-btn-${c.key}-label" maxlength="80" value="${val(v.label)}" placeholder="${esc(c.label)}" />`)}
-                      ${ticketField('Emoji (optional)', `tk-btn-${c.key}-emoji`, `<input type="text" id="tk-btn-${c.key}-emoji" maxlength="100" value="${val(v.emoji)}" placeholder="${esc(tbDefaultEmoji[c.key] || '')}" />`)}
+                      ${ticketField('Emoji (optional)', `tk-btn-${c.key}-emoji`, `<input type="text" id="tk-btn-${c.key}-emoji" data-emoji-picker maxlength="100" value="${val(v.emoji)}" placeholder="${esc(tbDefaultEmoji[c.key] || '')}" />`)}
                     </div>
                     ${ticketField('Colour', `tk-btn-${c.key}-style`, `<select id="tk-btn-${c.key}-style">${styleOpts}</select>`)}
                     ${c.hint ? `<div class="field-hint">${c.hint}</div>` : ''}
@@ -1391,7 +1391,6 @@ function ticketEmbedBuilderHTML(p = {}, styleOpts) {
           <div class="edb-preview-embed-wrap">
             <div class="edb-preview-head"><span>${svgIcon('eye')} Live preview</span><span class="edb-preview-live-dot" aria-hidden="true"></span></div>
             <div class="tk-preview-embed edb-preview-embed">
-            <div class="tk-preview-embed-bar edb-region-color" id="edb-bar" style="background:${esc(color)}" aria-hidden="true"></div>
             <div class="tk-preview-embed-body">
               <div class="edb-live edb-live-author${(p.authorName || p.authorIconUrl) ? '' : ' hidden'}" id="edb-pv-author">${authorIcon.replace('id="edb-author-icon"','id="edb-pv-author-icon"')}<a id="edb-pv-author-link" ${p.authorUrl ? `href="${esc(p.authorUrl)}"` : ''}><span id="edb-pv-author-name">${esca(p.authorName || '')}</span></a></div>
               <div class="edb-live edb-live-title${p.title ? '' : ' hidden'}" id="edb-pv-title"><a id="edb-pv-title-link" ${p.titleUrl ? `href="${esc(p.titleUrl)}"` : ''}>${esca(p.title || '')}</a></div>
@@ -1415,7 +1414,7 @@ function ticketEmbedBuilderHTML(p = {}, styleOpts) {
           </div>
           <div class="edb-field">
             <label class="edb-label" for="tk-button-emoji">Emoji (optional)</label>
-            <input type="text" id="tk-button-emoji" maxlength="100" value="${esca(p.buttonEmoji)}" placeholder="🎫" />
+            <input type="text" id="tk-button-emoji" data-emoji-picker maxlength="100" value="${esca(p.buttonEmoji)}" placeholder="🎫" />
           </div>
           <div class="edb-field">
             <label class="edb-label" for="tk-button-style">Style</label>
@@ -1453,7 +1452,7 @@ function ticketEditPage({ guild, user }) {
     // The ticket editor is a dense workspace: give it a wider container than
     // the standard page so the builder + live preview can use a balanced
     // two-column layout on desktop (still capped on ultra-wide screens).
-    return guildTab({ guild, user, active: 'tickets', panelHTML: pageHTML, panel, scripts: ['/js/guild-common.js', '/js/ticket-editor.js'], containerClass: 'container--editor' });
+    return guildTab({ guild, user, active: 'tickets', panelHTML: pageHTML, panel, scripts: ['/js/guild-common.js', '/js/emoji-picker.js', '/js/ticket-editor.js'], containerClass: 'container--editor' });
 }
 
 // ── Automod ─────────────────────────────────────────────────────────────────
@@ -1611,7 +1610,6 @@ function embedPage({ guild, user }) {
             <div class="edb-preview-embed-wrap">
               <div class="edb-preview-head"><span>${svgIcon('eye')} Live preview</span><span class="edb-preview-live-dot" aria-hidden="true"></span></div>
               <div class="tk-preview-embed" id="eb-preview-embed">
-                <div class="tk-preview-embed-bar edb-region-color" id="eb-preview-bar" style="background:#5865F2" aria-hidden="true"></div>
                 <div class="tk-preview-embed-body">
                   <div class="edb-live edb-live-author hidden" id="eb-pv-author"><img id="eb-pv-author-icon" class="edb-author-icon hidden" alt=""/><a id="eb-pv-author-link"><span id="eb-pv-author-name">PrimeBot</span></a></div>
                   <div class="edb-live edb-live-title hidden" id="eb-pv-title"><a id="eb-pv-title-link"></a></div>
@@ -1661,7 +1659,7 @@ function embedPage({ guild, user }) {
 
     return guildTab({
         guild, user, active: 'embed', panelHTML,
-        scripts: ['/js/guild-common.js', '/js/embed-builder.js'],
+        scripts: ['/js/guild-common.js', '/js/emoji-picker.js', '/js/embed-builder.js'],
         containerClass: 'container--editor',
     });
 }

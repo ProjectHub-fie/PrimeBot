@@ -334,8 +334,6 @@
       time.classList.add('hidden');
     }
     // Color bar
-    const colorBar = $('#eb-preview-bar');
-    if (colorBar) colorBar.style.background = /^#[0-9a-fA-F]{6}$/.test(s.color) ? s.color : '#5865F2';
     syncSectionStates();
   }
 

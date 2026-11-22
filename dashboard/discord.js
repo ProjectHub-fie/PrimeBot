@@ -8,6 +8,8 @@
 
 const { GUILD_CHANNELS_WITH_COUNTS } = require('./constants');
 
+const { stripEmbedColors } = require('../shared/embedStyle');
+
 const API_BASE = 'https://discord.com/api/v10';
 
 // Discord REST calls must never outlive the dashboard's request budget. A
@@ -355,6 +357,16 @@ async function getGuildMemberRoles(guildId, userId) {
  * (those at/above the bot's highest role, and integration-managed roles).
  * `excludeUnassignable=true` is used by reaction-role / leveling selectors.
  */
+/** List a guild's custom emojis via REST. */
+async function getGuildEmojis(guildId) {
+    return fetchJson(`${API_BASE}/guilds/${guildId}/emojis`, { headers: botHeaders() });
+}
+
+/** Get one custom emoji from a guild via REST. */
+async function getGuildEmoji(guildId, emojiId) {
+    return fetchJson(`${API_BASE}/guilds/${guildId}/emojis/${emojiId}`, { headers: botHeaders() });
+}
+
 async function getGuildRoles(guildId, { excludeUnassignable = false } = {}) {
     const roles = await fetchJson(`${API_BASE}/guilds/${guildId}/roles`, { headers: botHeaders() });
     let list = (roles || []).filter(r => r.name !== '@everyone');
@@ -382,7 +394,7 @@ async function sendChannelMessage(channelId, payload = {}) {
     return fetchJson(`${API_BASE}/channels/${channelId}/messages`, {
         method: 'POST',
         headers: { ...botHeaders(), 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(stripEmbedColors(payload)),
     });
 }
 
@@ -391,7 +403,7 @@ async function editChannelMessage(channelId, messageId, payload = {}) {
     return fetchJson(`${API_BASE}/channels/${channelId}/messages/${messageId}`, {
         method: 'PATCH',
         headers: { ...botHeaders(), 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(stripEmbedColors(payload)),
     });
 }
 
@@ -532,6 +544,8 @@ module.exports = {
     getGuildChannelsByType,
     getGuildMemberRoles,
     getGuildRoles,
+    getGuildEmojis,
+    getGuildEmoji,
     canManageGuild,
     computeBotPermissions,
     getGuildRaw,

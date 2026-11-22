@@ -236,7 +236,7 @@ const METADATA = {
                 'music clear', 'music shuffle', 'music loop <off|track|queue>',
                 'music autoplay', 'music filter <preset>', 'music nowplaying',
                 'music lyrics [song]', 'music grab', 'music volume <1-100>',
-                'music join', 'music leave', 'music 247',
+                'music join', 'music leave', 'music 247 <enable|disable|status>',
                 'music playlist <create|delete|info|list|load|rename|share>'],
         note: 'Playback requires an authorized Lavalink node (NODE_URL / NODE_AUTH / NODE_NAME / NODE_SECURE). 24/7 mode keeps a station playing in a voice channel and requires Manage Server.',
     },

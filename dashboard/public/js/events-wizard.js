@@ -157,7 +157,7 @@
       `<div class="ev-preview-field${f.inline ? ' inline' : ''}"><strong>${esc(f.name || '\u200b')}</strong><br/>${esc(f.value || '\u200b')}</div>`).join('');
     const when = d.startAt ? new Date(d.startAt).toLocaleString() : 'Not scheduled';
     return `
-      <div class="ev-preview-embed" style="border-left-color:${esc(d.embedColor)}">
+      <div class="ev-preview-embed">
         ${d.imageUrl ? `<div class="ev-preview-img" style="background-image:url('${esc(d.imageUrl)}')"></div>` : ''}
         <div class="ev-preview-title">${esc(d.embedTitle || `${type.icon || ''} ${d.name || 'Event name'}`)}</div>
         <div class="ev-preview-desc">${esc(d.embedDescription || d.description || 'No description')}</div>

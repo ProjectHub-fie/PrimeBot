@@ -647,6 +647,21 @@ class EmojiManager {
         return Boolean(this.resolve(name));
     }
 
+    /** Resolve an entry by its Discord emoji id (validated live only). */
+    getById(id) {
+        return this.byId.get(String(id)) || null;
+    }
+
+    /** Resolve an entry by its Discord emoji name. */
+    getByName(name) {
+        return this.byName.get(String(name)) || null;
+    }
+
+    /** All validated entries (deduplicated by id). */
+    entries() {
+        return [...this.byId.values()];
+    }
+
     /**
      * The public accessor. Always returns a renderable string:
      * the custom emoji when validated, otherwise `fallback`, otherwise the

@@ -33,10 +33,24 @@ module.exports = {
       const channel = guild.channels.cache.get(data.TextId);
       const voice = guild.channels.cache.get(data.VoiceId);
 
+      // An empty channel cache means the guild is still hydrating (or the bot
+      // lost View Channel), so preserve the row and retry on the next ready.
+      // A populated cache with missing target channels means the channel was
+      // deleted — prune that stale session. The explicit `/247 stop` command
+      // remains the only user-facing disable path.
       if (!channel || !voice) {
-        await data.deleteOne();
+        if (guild.channels.cache.size > 0) {
+          await data.deleteOne();
+        } else {
+          client.logger.log(
+            `Auto Reconnect: skipping guild ${data.Guild} (channel cache not ready)`,
+            "warn",
+          );
+        }
         continue;
       }
+
+      if (client.manager.players.get(data.Guild)) continue;
 
       await client.manager.createPlayer({
         guildId: data.Guild,

@@ -558,18 +558,12 @@ module.exports = {
                         message.content
                     ) || [];
                     
-                    // Add each reaction with a small delay to avoid rate limiting
                     if (triggeredEmojis.length > 0) {
                         console.log(`[AUTO-REACT] Adding ${triggeredEmojis.length} reactions to message in ${message.guild.name}`);
-                        
-                        // Add reactions with a small delay between each
-                        triggeredEmojis.forEach((emoji, index) => {
-                            setTimeout(() => {
-                                message.react(emoji).catch(err => {
-                                    console.error(`[AUTO-REACT] Failed to react with emoji ${emoji}:`, err);
-                                });
-                            }, index * 500); // 500ms delay between reactions
-                        });
+                        const { applyAutoReactions } = require('../utils/autoReaction');
+                        applyAutoReactions(message, triggeredEmojis).catch(err =>
+                            console.error('[AUTO-REACT] apply failed:', err.message)
+                        );
                     }
                 }
 

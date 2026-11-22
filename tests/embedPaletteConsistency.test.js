@@ -73,7 +73,7 @@ test('failover webhook log colors are derived from the palette', () => {
     }
 });
 
-test('logging + ticket-logging catalog hexes are legacy presets the theme remaps', () => {
+test('logging + ticket-logging catalog hexes are legacy presets and the theme removes them', () => {
     // These catalogs feed the themed EmbedBuilder at runtime; colors must be
     // legacy presets that the theme layer maps (never arbitrary off-palette).
     const { LOG_EVENTS, metaFor } = require('../utils/logEvents');
@@ -83,12 +83,12 @@ test('logging + ticket-logging catalog hexes are legacy presets the theme remaps
     for (const e of [...LOG_EVENTS, ...TICKET_LOG_EVENTS]) {
         assert.ok(LEGACY.has(e.color.toUpperCase()), `${e.key} color ${e.color} is not a mapped legacy preset`);
     }
-    // The runtime theme maps every legacy preset onto the palette.
+    // The runtime theme serializes every embed without a colour.
     const discord = require('discord.js');
     const { installEmbedTheme } = require('../utils/embedTheme');
     installEmbedTheme(discord);
     const themed = new discord.EmbedBuilder().setColor(colorInt(metaFor('memberJoin').color)).toJSON();
-    assert.equal(themed.color, Number.parseInt(P.success.replace(/^#/, ''), 16));
+    assert.equal(themed.color, undefined);
     const themedPending = new discord.EmbedBuilder().setColor(colorInt(tMeta('created').color)).toJSON();
-    assert.equal(themedPending.color, Number.parseInt(P.success.replace(/^#/, ''), 16));
+    assert.equal(themedPending.color, undefined);
 });

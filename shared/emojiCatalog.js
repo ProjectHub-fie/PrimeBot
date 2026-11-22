@@ -349,6 +349,9 @@ const EMOJI_FALLBACKS = Object.freeze({
  */
 const HELP_CATEGORY_EMOJI = Object.freeze({
     general: 'home',
+    information: 'information',
+    automation: 'autoresponder',
+    birthdays: 'extra',
     leveling: 'profile',
     games: 'fun',
     community: 'extra',

@@ -624,7 +624,7 @@ function pcompRowHTML(type) {
         <div class="pcomp-options">
           <div class="reaction-row pcomp-opt-row" data-opt-idx="0">
             <input type="text" class="pcomp-opt-label" placeholder="Label" maxlength="80" />
-            <input type="text" class="pcomp-opt-emoji" placeholder="emoji" maxlength="100" />
+            <input type="text" class="pcomp-opt-emoji" data-emoji-picker placeholder="emoji" maxlength="100" />
             <input type="text" class="pcomp-opt-desc" placeholder="Option description (shown under the label)" maxlength="150" />
             <input type="text" class="pcomp-opt-value" placeholder="value" maxlength="100" />
             <button class="reaction-remove pcomp-opt-del" type="button" title="Remove option">${x}</button>
@@ -640,7 +640,7 @@ function pcompRowHTML(type) {
         <span class="pcomp-grip">${grip}</span>
         <span class="pcomp-type">🔘 Button</span>
         <input type="text" class="pcomp-label" placeholder="Button label" maxlength="80" />
-        <input type="text" class="pcomp-emoji" placeholder="emoji" maxlength="100" />
+        <input type="text" class="pcomp-emoji" data-emoji-picker placeholder="emoji" maxlength="100" />
         <select class="pcomp-style">
           <option value="Primary">Primary</option>
           <option value="Secondary">Secondary</option>
@@ -807,7 +807,7 @@ function bindPanelComponentsBuilder() {
       wrap.insertAdjacentHTML('beforeend', `
         <div class="reaction-row pcomp-opt-row" data-opt-idx="${idx}">
           <input type="text" class="pcomp-opt-label" placeholder="Label" maxlength="80" />
-          <input type="text" class="pcomp-opt-emoji" placeholder="emoji" maxlength="100" />
+          <input type="text" class="pcomp-opt-emoji" data-emoji-picker placeholder="emoji" maxlength="100" />
           <input type="text" class="pcomp-opt-desc" placeholder="Option description (shown under the label)" maxlength="150" />
           <input type="text" class="pcomp-opt-value" placeholder="value" maxlength="100" />
           <button class="reaction-remove pcomp-opt-del" type="button" title="Remove option">${window.svgIcon ? window.svgIcon('x') : '✕'}</button>

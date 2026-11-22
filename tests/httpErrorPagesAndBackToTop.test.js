@@ -96,14 +96,14 @@ test('server: error middleware surfaces err.status for html clients', () => {
     assert.ok(SERVER.includes('renderHttpError('), 'delegates to renderHttpError');
 });
 
-test('ticket editor: color field was moved OUT of the preview embed bar (restructured)', () => {
+test('ticket editor: color field is separate from a monochrome preview', () => {
     const html = guildPages.ticketEditPage({ guild: fakeGuild(), user: null });
     const colorRegion = html.indexOf('edb-region-color');
     const previewEmbed = html.indexOf('tk-preview-embed');
     assert.ok(colorRegion >= 0, 'color region exists');
     assert.ok(previewEmbed >= 0, 'preview embed exists');
-    assert.ok(colorRegion < previewEmbed, 'color region now sits BEFOREthe preview embed (no longer inside the bar)');
-    assert.ok(html.includes('id="edb-bar"'), 'live color bar still on the preview embed');
+    assert.ok(colorRegion < previewEmbed, 'color region sits before the preview embed');
+    assert.ok(!html.includes('id="edb-bar"'), 'preview has no coloured side bar');
     assert.ok((html.match(/id="tk-color"/g) || []).length === 1,'single tk-color input');
 });
 
@@ -125,10 +125,10 @@ test('preview embed: bar and body remain a row with min-width guards (fits page 
     assert.match(STYLES, /@media \(max-width:\s*920px\)[\s\S]*?\.edb-duo,\s*\.edb-triple \{ grid-template-columns:\s*1fr;/);
 });
 
-test('embed builder: mobile 720px rules stack the bar above the body', () => {
+test('embed builder: mobile 720px rules stack the preview body', () => {
     assert.match(STYLES, /@media \(max-width:\s*720px\)/);
     assert.match(STYLES, /\.tk-preview-embed \{\s*flex-direction:\s*column;/);
-    assert.match(STYLES, /\.tk-preview-embed-bar \{ width:\s*100%; height:\s*4px;/);
+    assert.ok(!STYLES.includes('.tk-preview-embed-bar'), 'no coloured side bar rule');
 });
 
 test('back-to-top: layout renders the button with the arrowUp SVG + inline scroll handler', () => {

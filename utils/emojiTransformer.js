@@ -11,6 +11,7 @@
  *   • message `content`
  *   • embed title / description / field names + values / footer / author name
  *   • component `emoji` fields (Unicode → validated emoji object)
+ *   • embed `color` is removed (PrimeBot cards have no coloured side stripe)
  *
  * What is NOT rewritten:
  *   • code spans and fenced code blocks (they render literally)
@@ -21,6 +22,8 @@
  *   • application-command registration and any non-message route
  */
 
+const { stripEmbedColors } = require('../shared/embedStyle');
+
 const MESSAGE_ROUTE_RE = /^\/(?:channels\/\d+\/messages(?:\/\d+)?|webhooks\/\d+\/[^/]+(?:\/messages(?:\/\d+)?)?|interactions\/\d+\/[^/]+\/callback)$/;
 
 /**
@@ -28,7 +31,7 @@ const MESSAGE_ROUTE_RE = /^\/(?:channels\/\d+\/messages(?:\/\d+)?|webhooks\/\d+\
  * Idempotent; safe when `client.rest` is absent (test doubles).
  */
 function installEmojiTransformer(client, manager) {
-    if (!client || !client.rest || !manager) return false;
+    if (!client || !client.rest) return false;
     const rest = client.rest;
     if (rest.__primebotEmojiTransformerInstalled) return true;
     rest.__primebotEmojiTransformerInstalled = true;
@@ -39,7 +42,8 @@ function installEmojiTransformer(client, manager) {
         rest[method] = function emojiAwareRequest(route, options, ...restArgs) {
             try {
                 if (MESSAGE_ROUTE_RE.test(String(route)) && options && options.body) {
-                    options = { ...options, body: manager.transformPayload(options.body) };
+                    const body = manager ? manager.transformPayload(options.body) : options.body;
+                    options = { ...options, body: stripEmbedColors(body) };
                 }
             } catch (_) {
                 // A transformer failure must never block a Discord request.

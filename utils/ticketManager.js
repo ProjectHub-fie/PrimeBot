@@ -11,7 +11,25 @@ const { tlogPool, ensureTlogTables } = require('../server/tlogDb');
 const { normalizeTicketLogging } = require('../shared/ticketLogging');
 const ticketClaimService = require('./ticketClaimService');
 const ticketPerms = require('./ticketPermissions');
+const { parseEmojiInput } = require('../shared/emojiValidation');
+const { componentEmojiFor } = require('./buttonEmoji');
 
+
+// Apply a configured emoji to a button. Custom emojis are validated against
+// the live emoji catalog; a deleted/unavailable one falls back to the supplied
+// Unicode default (or is omitted) instead of throwing.
+function applyButtonEmoji(button, value, fallback) {
+    if (value == null || value === '') {
+        if (fallback) button.setEmoji(fallback);
+        return;
+    }
+    if (parseEmojiInput(value)) {
+        const resolved = componentEmojiFor(value, fallback);
+        if (resolved) button.setEmoji(resolved);
+    } else {
+        button.setEmoji(value);
+    }
+}
 /**
  * Premium ticket panels ŌĆö configurable ONLY from the dashboard.
  *
@@ -1167,7 +1185,7 @@ class TicketPanelManager {
                 .setCustomId(`ticketpanel:open:${panel?.id ?? '0'}`)
                 .setLabel(panel?.buttonLabel || 'Open Ticket')
                 .setStyle(ButtonStyle[panel?.buttonStyle] || ButtonStyle.Primary);
-            if (panel?.buttonEmoji) openBtn.setEmoji(panel.buttonEmoji);
+            applyButtonEmoji(openBtn, panel?.buttonEmoji, '🎫');
             return [new ActionRowBuilder().addComponents(openBtn)];
         }
 
@@ -1204,13 +1222,13 @@ class TicketPanelManager {
                     .setLabel(c.label || 'Open')
                     .setStyle(ButtonStyle.Link)
                     .setURL(c.url);
-                if (c.emoji) btn.setEmoji(c.emoji);
+                applyButtonEmoji(btn, c.emoji, null);
             } else {
                 btn = new ButtonBuilder()
                     .setCustomId(`ticketpanel:${c.id}:button`)
                     .setLabel(c.label || 'Open Ticket')
                     .setStyle(ButtonStyle[c.style] || ButtonStyle.Primary);
-                if (c.emoji) btn.setEmoji(c.emoji);
+                applyButtonEmoji(btn, c.emoji, null);
             }
             return btn;
         } catch (err) {
@@ -1233,7 +1251,7 @@ class TicketPanelManager {
                     .setLabel(String(o.label || 'Option').slice(0, 100))
                     .setValue(`opt:${o.id}`);
                 if (o.description) ob.setDescription(String(o.description).slice(0, 100));
-                if (o.emoji) ob.setEmoji(o.emoji);
+                applyButtonEmoji(ob, o.emoji, null);
                 return ob;
             });
             sel.addOptions(options);
@@ -1250,7 +1268,7 @@ class TicketPanelManager {
             .setCustomId('ticketpanel:close')
             .setLabel(panel.closeButtonLabel || 'Close Ticket')
             .setStyle(ButtonStyle[panel.closeButtonStyle] || ButtonStyle.Danger);
-        if (panel.closeButtonEmoji) closeBtn.setEmoji(panel.closeButtonEmoji);
+        applyButtonEmoji(closeBtn, panel.closeButtonEmoji, '🔒');
         const rows = [new ActionRowBuilder().addComponents(closeBtn)];
         // Claim management lives in a second row — but only when the panel
         // has a claim button configured (claimButtonLabel non-empty; the dashboard
@@ -1282,7 +1300,7 @@ class TicketPanelManager {
                     .setCustomId('ticketpanel:claim')
                     .setLabel(panel.claimButtonLabel || 'Claim Ticket')
                     .setStyle(ButtonStyle[panel.claimButtonStyle] || ButtonStyle.Secondary);
-                if (panel.claimButtonEmoji) claimBtn.setEmoji(panel.claimButtonEmoji);
+                applyButtonEmoji(claimBtn, panel.claimButtonEmoji, null);
                 extra.push(claimBtn);
             }
         }
@@ -1337,12 +1355,12 @@ class TicketPanelManager {
             .setCustomId('ticketpanel:closeconfirm:yes')
             .setLabel(cf.confirmYes.label)
             .setStyle(ButtonStyle[cf.confirmYes.style] || ButtonStyle.Success);
-        if (cf.confirmYes.emoji) yes.setEmoji(cf.confirmYes.emoji);
+        applyButtonEmoji(yes, cf.confirmYes.emoji, '✅');
         const no = new ButtonBuilder()
             .setCustomId('ticketpanel:closeconfirm:no')
             .setLabel(cf.confirmNo.label)
             .setStyle(ButtonStyle[cf.confirmNo.style] || ButtonStyle.Danger);
-        if (cf.confirmNo.emoji) no.setEmoji(cf.confirmNo.emoji);
+        applyButtonEmoji(no, cf.confirmNo.emoji, '✖️');
         return [new ActionRowBuilder().addComponents(yes, no)];
     }
 
@@ -1360,7 +1378,7 @@ class TicketPanelManager {
                 .setCustomId(customId)
                 .setLabel(b.label)
                 .setStyle(ButtonStyle[b.style] || ButtonStyle.Secondary);
-            if (b.emoji) btn.setEmoji(b.emoji);
+            applyButtonEmoji(btn, b.emoji, null);
             return btn;
         };
         const row = new ActionRowBuilder().addComponents(
