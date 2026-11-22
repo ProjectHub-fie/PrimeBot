@@ -1436,32 +1436,32 @@ module.exports = {
                     // `$help [category]` / `$categories [category]` — animated
                     // category browser. Plays a short loading sequence before
                     // revealing the menu (or a specific category's commands).
-                    const { CATEGORY_ORDER, showPrefixCategoryHelp, mainMenuEmbed, categorySelectRow, navigationButtonsRow } = require('../utils/prefixHelp');
+                    const {
+                        CATEGORY_ORDER,
+                        showPrefixCategoryHelp,
+                        buildHelpPayload,
+                        mainMenuText,
+                        categorySelectRow,
+                        navigationButtonsRow,
+                    } = require('../utils/prefixHelp');
                     const requestedCategory = args[0]?.toLowerCase();
 
-                    // Loading animation: Discord embeds can't truly animate, so
-                    // we edit through a short sequence of frames first.
+                    // Loading animation: edit through a short sequence of V2 frames.
                     const HELP_ANIM = [
                         { emoji: '🌌', text: 'Summoning the command menu' },
                         { emoji: '✨', text: 'Gathering all PrimeBot commands' },
                         { emoji: '📚', text: 'Almost there — organizing categories' },
                     ];
-                    const animMsg = await message.channel.send({
-                        embeds: [new EmbedBuilder()
-                            .setColor(config.colors.primary)
-                            .setTitle(`${HELP_ANIM[0].emoji} Loading`)
-                            .setDescription(`${HELP_ANIM[0].text} ·`)
-                            .setFooter({ text: `PrimeBot • Version ${config.version}` })]
-                    }).catch(() => null);
+                    const animMsg = await message.channel.send(buildHelpPayload({
+                        title: `${HELP_ANIM[0].emoji} Loading`,
+                        text: `${HELP_ANIM[0].text} ·`,
+                    })).catch(() => null);
                     for (let i = 1; i < HELP_ANIM.length; i++) {
                         await new Promise(r => setTimeout(r, 450));
-                        await animMsg?.edit({
-                            embeds: [new EmbedBuilder()
-                                .setColor(config.colors.primary)
-                                .setTitle(`${HELP_ANIM[i].emoji} Loading`)
-                                .setDescription(`${HELP_ANIM[i].text} ${'·'.repeat(i + 1)}`)
-                                .setFooter({ text: `PrimeBot • Version ${config.version}` })]
-                        }).catch(() => {});
+                        await animMsg?.edit(buildHelpPayload({
+                            title: `${HELP_ANIM[i].emoji} Loading`,
+                            text: `${HELP_ANIM[i].text} ${'·'.repeat(i + 1)}`,
+                        })).catch(() => {});
                     }
 
                     // Specific category requested → show that category's commands.
@@ -1470,14 +1470,17 @@ module.exports = {
                         return showPrefixCategoryHelp(message, requestedCategory, prefix);
                     }
 
-                    // Otherwise show the main category menu (embed + dropdown).
-                    const menuEmbed = mainMenuEmbed(prefix, client);
+                    // Otherwise show the main category menu (V2 text + dropdown).
+                    const menuPayload = buildHelpPayload({
+                        text: mainMenuText(),
+                        rows: [categorySelectRow(), navigationButtonsRow()],
+                    });
                     if (animMsg) {
-                        await animMsg.edit({ embeds: [menuEmbed], components: [categorySelectRow(), navigationButtonsRow()] }).catch(() => {});
+                        await animMsg.edit(menuPayload).catch(() => {});
                         scheduleComponentExpiry(animMsg);
                         return;
                     }
-                    const sentHelp = await message.reply({ embeds: [menuEmbed], components: [categorySelectRow(), navigationButtonsRow()] });
+                    const sentHelp = await message.reply(menuPayload);
                     scheduleComponentExpiry(sentHelp);
                     return sentHelp;
                 }

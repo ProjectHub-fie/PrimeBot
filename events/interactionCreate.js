@@ -1,27 +1,15 @@
 const { safeReply, safeExecute, scheduleComponentExpiry } = require('../utils/stabilityUtils');
 const interactionDebugger = require('../utils/interactionDebugger');
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } = require('discord.js');
 const config = require('../config');
 const betaManager = require('../utils/betaManager');
 const { isBetaFeature } = require('../utils/betaFeatureMatcher');
 const { logEvent } = require('../utils/serverLogger');
 const { emoji } = require('../utils/emoji');
-const { buildEmbedWithButtons } = require('../utils/embedComponentsV2');
-
-function helpIcon(category, fallback = '') {
-    try {
-        return require('../utils/prefixHelp').categoryIcon(category, fallback);
-    } catch (_) {
-        return emoji(category, fallback);
-    }
-}
 
 function helpCategoryLines() {
     try {
-        const { CATALOG, CATEGORY_ORDER, categoryIcon } = require('../utils/prefixHelp');
-        return CATEGORY_ORDER
-            .map(key => `${categoryIcon(key)} ${CATALOG[key].label}`)
-            .join('\n');
+        return require('../utils/prefixHelp').mainMenuText();
     } catch (_) {
         return '';
     }
@@ -31,25 +19,10 @@ function helpCategoryLines() {
  * Helper function to show main help menu for button interactions
  */
 async function showMainHelpUpdate(interaction) {
-    const { mainMenuEmbed, categorySelectRow, homeButtonRow } = require('../utils/prefixHelp');
-    const mainEmbed = mainMenuEmbed('/', interaction.client, { user: interaction.user, kind: 'slash' });
-    const actions = homeButtonRow('help_back');
-    actions.addComponents(
-        new ButtonBuilder()
-            .setCustomId('help_prefix')
-            .setLabel('Sash')
-            .setStyle(ButtonStyle.Secondary)
-            .setEmoji(helpIcon('utility', '💬')),
-        new ButtonBuilder()
-            .setLabel('Support')
-            .setStyle(ButtonStyle.Link)
-            .setURL(config.supportServer || 'https://discord.gg/primebot')
-            .setEmoji(helpIcon('information', '🆘')),
-    );
-
-    await interaction.update(buildEmbedWithButtons({
-        embeds: [mainEmbed],
-        components: [categorySelectRow(null, 'help_select'), actions],
+    const { buildHelpPayload, mainMenuText, categorySelectRow, helpActionRow } = require('../utils/prefixHelp');
+    await interaction.update(buildHelpPayload({
+        text: mainMenuText(),
+        rows: [categorySelectRow(null, 'help_select'), helpActionRow()],
     }));
     scheduleComponentExpiry(interaction.message);
 }
@@ -58,15 +31,15 @@ async function showMainHelpUpdate(interaction) {
  * Helper function to show category help for button interactions
  */
 function buildSashCategories(prefix) {
-    const { CATALOG, CATEGORY_ORDER, categoryIcon } = require('../utils/prefixHelp');
+    const { CATALOG, CATEGORY_ORDER, categoryIcon, CATEGORY_SEPARATOR } = require('../utils/prefixHelp');
     const out = {};
     for (const key of CATEGORY_ORDER) {
         const cat = CATALOG[key];
         if (!cat) continue;
         out[key] = {
             icon: categoryIcon(key, cat.icon),
-            label: cat.label,
-            title: `${categoryIcon(key, cat.icon)} ${(cat.title || '').replace(/Prefix/g, 'Sash')}`.trim(),
+            label: `${CATEGORY_SEPARATOR} ${cat.label}`,
+            title: `${categoryIcon(key, cat.icon)} ${CATEGORY_SEPARATOR} ${cat.label}`,
             color: cat.color,
             fields: cat.commands.map(c => {
                 const aliases = c.names.slice(1);
@@ -85,7 +58,12 @@ async function showSashHelp(interaction, page) {
     const prefix = config.prefix;
     const SASH_CATEGORIES = buildSashCategories(prefix);
     const ORDER = Object.keys(SASH_CATEGORIES);
-    const { mainMenuEmbed, categoryEmbed } = require('../utils/prefixHelp');
+    const {
+        buildHelpPayload,
+        mainMenuText,
+        categoryTitle,
+        categoryText,
+    } = require('../utils/prefixHelp');
 
     const backButton = new ActionRowBuilder()
         .addComponents(
@@ -97,8 +75,6 @@ async function showSashHelp(interaction, page) {
         );
 
     if (category === 'main' || category === 'back') {
-        const mainEmbed = mainMenuEmbed(prefix, interaction.client, { user: interaction.user, kind: 'sash' });
-
         // Discord caps 5 buttons per row — chunk the categories across rows.
         const styles = [
             ButtonStyle.Primary, ButtonStyle.Primary, ButtonStyle.Primary,
@@ -123,53 +99,41 @@ async function showSashHelp(interaction, page) {
                 .setEmoji(emoji('left', '↩️'))
         ));
 
-        await interaction.update(buildEmbedWithButtons({ embeds: [mainEmbed], components: rows }));
+        await interaction.update(buildHelpPayload({ text: mainMenuText(), rows }));
         scheduleComponentExpiry(interaction.message);
         return;
     }
 
     const cat = SASH_CATEGORIES[category];
     if (!cat) {
-        const { linixEmbed } = require('../utils/linixEmbed');
-        await interaction.update(buildEmbedWithButtons({
-            embeds: [linixEmbed()
-                .t(`${emoji('cross', '❌')} Unknown Sash Category`)
-                .d(`The sash category "${category}" was not found.`)],
-            components: [backButton],
+        await interaction.update(buildHelpPayload({
+            title: `${emoji('cross', '❌')} –> Unknown Sash Category`,
+            text: `The sash category "${category}" was not found.`,
+            rows: [backButton],
         }));
         return;
     }
 
-    const embed = categoryEmbed(category, prefix, {
-        iconURL: interaction.client?.user?.displayAvatarURL?.({ dynamic: true }),
-    });
-
-    await interaction.update(buildEmbedWithButtons({ embeds: [embed], components: [backButton] }));
+    await interaction.update(buildHelpPayload({
+        title: categoryTitle(category),
+        text: categoryText(category),
+        rows: [backButton],
+    }));
     scheduleComponentExpiry(interaction.message);
 }
 
 async function showCategoryHelpUpdate(interaction, category) {
-    const { categoryEmbed, categorySelectRow, homeButtonRow } = require('../utils/prefixHelp');
-    const embed = categoryEmbed(category, '/', {
-        iconURL: interaction.client?.user?.displayAvatarURL?.({ dynamic: true }),
-    });
-    const actions = homeButtonRow('help_back');
-    actions.addComponents(
-        new ButtonBuilder()
-            .setCustomId('help_prefix')
-            .setLabel('Sash')
-            .setStyle(ButtonStyle.Secondary)
-            .setEmoji(helpIcon('utility', '💬')),
-        new ButtonBuilder()
-            .setLabel('Support')
-            .setStyle(ButtonStyle.Link)
-            .setURL(config.supportServer || 'https://discord.gg/primebot')
-            .setEmoji(helpIcon('information', '🆘')),
-    );
-
-    await interaction.update(buildEmbedWithButtons({
-        embeds: [embed],
-        components: [categorySelectRow(category, 'help_select'), actions],
+    const {
+        buildHelpPayload,
+        categoryTitle,
+        categoryText,
+        categorySelectRow,
+        helpActionRow,
+    } = require('../utils/prefixHelp');
+    await interaction.update(buildHelpPayload({
+        title: categoryTitle(category),
+        text: categoryText(category),
+        rows: [categorySelectRow(category, 'help_select'), helpActionRow()],
     }));
     scheduleComponentExpiry(interaction.message);
 }
@@ -674,7 +638,7 @@ module.exports = {
                         if (category === 'back') {
                             // Show main help menu
                             await showMainHelpUpdate(interaction);
-                        } else if (['general', 'leveling', 'games', 'moderation', 'community', 'admin'].includes(category)) {
+                        } else if (require('../utils/prefixHelp').CATEGORY_ORDER.includes(category)) {
                             // Show category help
                             await showCategoryHelpUpdate(interaction, category);
                         } else if (category === 'prefix' || category === 'sash') {
@@ -686,7 +650,7 @@ module.exports = {
                         } else if (category === 'support') {
                             await interaction.reply({
                                 content: 'For support, please join our support server or contact the bot administrators.',
-                                ephemeral: true
+                                flags: MessageFlags.Ephemeral,
                             });
                         }
                     } else if (interaction.customId === 'categories_main') {
@@ -700,19 +664,18 @@ module.exports = {
                     } else if (interaction.customId === 'categories_help') {
                         await interaction.reply({
                             content: `Use the dropdown menu to browse different command categories. Each category contains specialized commands for different server needs.\n\n**Available Categories:**\n${helpCategoryLines()}`,
-                            ephemeral: true
+                            flags: MessageFlags.Ephemeral
                         });
                         return;
                     } else if (interaction.customId === 'categories_prefix_refresh'
                             || interaction.customId === 'categories_prefix_back') {
                         // Prefix help menu: refresh / back-to-categories → re-render the
                         // main prefix category menu (embed + dropdown + nav buttons).
-                        const { mainMenuEmbed, categorySelectRow, homeButtonRow } = require('../utils/prefixHelp');
-                        const pfx = (interaction.client.serverSettingsManager?.getGuildPrefix?.(interaction.guild?.id)) || '$';
+                        const { buildHelpPayload, mainMenuText, categorySelectRow, homeButtonRow } = require('../utils/prefixHelp');
                         try {
-                            await interaction.update(buildEmbedWithButtons({
-                                embeds: [mainMenuEmbed(pfx, interaction.client, { user: interaction.user, kind: 'prefix' })],
-                                components: [categorySelectRow(null, 'category_select_prefix'), homeButtonRow('categories_prefix_back')],
+                            await interaction.update(buildHelpPayload({
+                                text: mainMenuText(),
+                                rows: [categorySelectRow(null, 'category_select_prefix'), homeButtonRow('categories_prefix_back')],
                             }));
                             scheduleComponentExpiry(interaction.message);
                         } catch (_) {}
@@ -720,7 +683,7 @@ module.exports = {
                     } else if (interaction.customId === 'categories_prefix_help') {
                         await interaction.reply({
                             content: `Use the dropdown menu to browse different command categories. Each category contains specialized commands for different server needs.\n\n**Available Categories:**\n${helpCategoryLines()}`,
-                            ephemeral: true
+                            flags: MessageFlags.Ephemeral
                         });
                         return;
                     } else if (interaction.customId === 'broadcast_confirm') {
@@ -1013,26 +976,17 @@ module.exports = {
                     }
                     if (interaction.customId === 'help_select') {
                         const selectedCategory = interaction.values[0];
-                        const { categoryEmbed, categorySelectRow, homeButtonRow } = require('../utils/prefixHelp');
-                        const embed = categoryEmbed(selectedCategory, '/', {
-                            iconURL: interaction.client?.user?.displayAvatarURL?.({ dynamic: true }),
-                        });
-                        const actions = homeButtonRow('help_back');
-                        actions.addComponents(
-                            new ButtonBuilder()
-                                .setCustomId('help_prefix')
-                                .setLabel('Sash')
-                                .setStyle(ButtonStyle.Secondary)
-                                .setEmoji(helpIcon('utility', '💬')),
-                            new ButtonBuilder()
-                                .setLabel('Support')
-                                .setStyle(ButtonStyle.Link)
-                                .setURL(config.supportServer || 'https://discord.gg/primebot')
-                                .setEmoji(helpIcon('information', '🆘')),
-                        );
-                        await interaction.update(buildEmbedWithButtons({
-                            embeds: [embed],
-                            components: [categorySelectRow(selectedCategory, 'help_select'), actions],
+                        const {
+                            buildHelpPayload,
+                            categoryTitle,
+                            categoryText,
+                            categorySelectRow,
+                            helpActionRow,
+                        } = require('../utils/prefixHelp');
+                        await interaction.update(buildHelpPayload({
+                            title: categoryTitle(selectedCategory),
+                            text: categoryText(selectedCategory),
+                            rows: [categorySelectRow(selectedCategory, 'help_select'), helpActionRow()],
                         }));
                         scheduleComponentExpiry(interaction.message);
                         return;
@@ -1050,7 +1004,7 @@ module.exports = {
                     if (!interaction.replied && !interaction.deferred) {
                         await interaction.reply({
                             content: 'There was an error processing your selection. Please try again.',
-                            ephemeral: true
+                            flags: MessageFlags.Ephemeral,
                         }).catch(console.error);
                     }
                 }

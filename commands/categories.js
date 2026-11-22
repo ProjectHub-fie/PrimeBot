@@ -1,9 +1,10 @@
 const { SlashCommandBuilder } = require('discord.js');
 const { scheduleComponentExpiry } = require('../utils/stabilityUtils');
-const { buildEmbedWithButtons } = require('../utils/embedComponentsV2');
 const {
-    mainMenuEmbed,
-    categoryEmbed,
+    buildHelpPayload,
+    mainMenuText,
+    categoryTitle,
+    categoryText,
     categorySelectRow,
     homeButtonRow,
 } = require('../utils/prefixHelp');
@@ -20,27 +21,19 @@ module.exports = {
 };
 
 async function showCategorySelector(interaction) {
-    const embed = mainMenuEmbed('/', interaction.client, {
-        user: interaction.user,
-        kind: 'slash',
-    });
-
-    await interaction.reply(buildEmbedWithButtons({
-        embeds: [embed],
-        components: [categorySelectRow(null, 'category_select'), homeButtonRow('categories_refresh')],
+    await interaction.reply(buildHelpPayload({
+        text: mainMenuText(),
+        rows: [categorySelectRow(null, 'category_select'), homeButtonRow('categories_refresh')],
     }));
     const sent = await interaction.fetchReply().catch(() => null);
     if (sent) scheduleComponentExpiry(sent);
 }
 
 async function showCategoryDetails(interaction, category) {
-    const embed = categoryEmbed(category, '/', {
-        iconURL: interaction.client?.user?.displayAvatarURL?.({ dynamic: true }),
-    });
-
-    await interaction.update(buildEmbedWithButtons({
-        embeds: [embed],
-        components: [categorySelectRow(category, 'category_select'), homeButtonRow('categories_refresh')],
+    await interaction.update(buildHelpPayload({
+        title: categoryTitle(category),
+        text: categoryText(category),
+        rows: [categorySelectRow(category, 'category_select'), homeButtonRow('categories_refresh')],
     }));
     scheduleComponentExpiry(interaction.message);
 }

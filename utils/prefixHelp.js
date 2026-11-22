@@ -1,10 +1,18 @@
-const { ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const {
+    ActionRowBuilder,
+    StringSelectMenuBuilder,
+    ButtonBuilder,
+    ButtonStyle,
+    ContainerBuilder,
+    SeparatorBuilder,
+    TextDisplayBuilder,
+    MessageFlags,
+} = require('discord.js');
 const config = require('../config');
 const { emoji } = require('./emoji');
 const { HELP_CATEGORY_EMOJI, EMOJI_FALLBACKS } = require('../shared/emojiCatalog');
 const { scheduleComponentExpiry } = require('./stabilityUtils');
 const { linixEmbed } = require('./linixEmbed');
-const { buildEmbedWithButtons } = require('./embedComponentsV2');
 
 // ───────────────────────────────────────────────────────────────────────────
 // Prefix command catalog — single source of truth for `$help` / `$commands`
@@ -280,16 +288,27 @@ function commandField(prefix, cmd) {
     return { name: `${name}${beta}`, value: cmd.desc, inline: true };
 }
 
-function categoryEmbed(category, prefix, options = {}) {
-    const cat = CATALOG[category];
-    if (!cat) {
-        return linixEmbed()
-            .t(`${emoji('cross', '❌')} Unknown Category`)
-            .d(`The category "${category}" was not found. Available categories: ${CATEGORY_ORDER.join(', ')}`)
-            .f('PrimeBot Help');
-    }
+const CATEGORY_SEPARATOR = '–>';
 
-    const commandNames = options.commands || [];
+function categoryLine(key) {
+    const cat = CATALOG[key];
+    return cat ? `${categoryIcon(key)} ${CATEGORY_SEPARATOR} ${cat.label}` : '';
+}
+
+function mainMenuText() {
+    return CATEGORY_ORDER.map(categoryLine).filter(Boolean).join('\n');
+}
+
+function categoryTitle(category) {
+    const cat = CATALOG[category];
+    if (!cat) return `${emoji('cross', '❌')} ${CATEGORY_SEPARATOR} Unknown Category`;
+    return `${categoryIcon(category)} ${CATEGORY_SEPARATOR} ${cat.label}`;
+}
+
+function categoryCommandNames(category, options = {}) {
+    const cat = CATALOG[category];
+    if (!cat) return [];
+    const commandNames = Array.isArray(options.commands) ? [...options.commands] : [];
     if (!commandNames.length) {
         const seen = new Set();
         for (const c of cat.commands) {
@@ -301,21 +320,31 @@ function categoryEmbed(category, prefix, options = {}) {
             }
         }
     }
-    const names = commandNames.map(name => `\`${name}\``);
+    return commandNames;
+}
+
+function categoryText(category, options = {}) {
+    const names = categoryCommandNames(category, options).map(name => `\`${name}\``);
+    return names.join(', ') || 'No commands found for this category.';
+}
+
+function categoryEmbed(category, prefix, options = {}) {
+    if (!CATALOG[category]) {
+        return linixEmbed()
+            .t(categoryTitle(category))
+            .d(`The category "${category}" was not found. Available categories: ${CATEGORY_ORDER.join(', ')}`)
+            .f('PrimeBot Help');
+    }
 
     return linixEmbed()
-        .t(`${categoryIcon(category)} ${cat.label} Commands`)
-        .d(names.join(', ') || 'No commands found for this category.');
+        .t(categoryTitle(category))
+        .d(categoryText(category, options));
 }
 
 function mainMenuEmbed(prefix, client, options = {}) {
-    const categoryLines = CATEGORY_ORDER
-        .map(k => `${categoryIcon(k)} ${CATALOG[k].label}`)
-        .join('\n');
-
     // Help is intentionally only the category list: no intro, no field title,
     // no thumbnail/footer/image, and no category descriptions.
-    return linixEmbed().d(categoryLines);
+    return linixEmbed().d(mainMenuText());
 }
 
 function categorySelectRow(currentCategory = null, customId = 'help_select') {
@@ -327,7 +356,9 @@ function categorySelectRow(currentCategory = null, customId = 'help_select') {
                 .addOptions(CATEGORY_ORDER.map(k => {
                     const cat = CATALOG[k];
                     return {
-                        label: cat.label,
+                        // The select renders its emoji before the label, so the
+                        // visible text is "<emoji> –> Category".
+                        label: `${CATEGORY_SEPARATOR} ${cat.label}`,
                         value: k,
                         emoji: categoryIcon(k) || undefined,
                         default: k === currentCategory,
@@ -346,6 +377,23 @@ function homeButtonRow(customId = 'help_back') {
         );
 }
 
+function helpActionRow() {
+    const row = homeButtonRow('help_back');
+    row.addComponents(
+        new ButtonBuilder()
+            .setCustomId('help_prefix')
+            .setLabel('Sash')
+            .setStyle(ButtonStyle.Secondary)
+            .setEmoji(categoryIcon('utility', '💬')),
+        new ButtonBuilder()
+            .setLabel('Support')
+            .setStyle(ButtonStyle.Link)
+            .setURL(config.supportServer || 'https://discord.gg/primebot')
+            .setEmoji(categoryIcon('information', '🆘')),
+    );
+    return row;
+}
+
 function navigationButtonsRow() {
     return new ActionRowBuilder()
         .addComponents(
@@ -362,18 +410,39 @@ function navigationButtonsRow() {
         );
 }
 
+/**
+ * Build the Help menu as a true Components V2 payload. It deliberately has no
+ * `embeds` or `content` keys: Discord rejects either one alongside
+ * MessageFlags.IsComponentsV2 (error 50035).
+ */
+function buildHelpPayload({ title, text, rows = [] } = {}) {
+    const container = new ContainerBuilder();
+    if (title) container.addTextDisplayComponents(new TextDisplayBuilder().setContent(title));
+    if (title && text) container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+    if (text) container.addTextDisplayComponents(new TextDisplayBuilder().setContent(text));
+    for (const row of rows) {
+        if (row) container.addActionRowComponents(row);
+    }
+    return {
+        components: [container.toJSON()],
+        flags: MessageFlags.IsComponentsV2,
+    };
+}
+
 // ── Renderers for the two entry points ──────────────────────────────────────
 
 // Prefix `$help`/`$commands` (message-based). `category` optional.
 async function showPrefixCategoryHelp(message, category, prefix) {
     if (category && CATALOG[category]) {
-        return message.reply({ embeds: [categoryEmbed(category, prefix, {
-            iconURL: message.client?.user?.displayAvatarURL?.({ dynamic: true }),
-        })] });
+        return message.reply(buildHelpPayload({
+            title: categoryTitle(category),
+            text: categoryText(category),
+            rows: [categorySelectRow(category, 'category_select_prefix'), homeButtonRow('categories_prefix_back')],
+        }));
     }
-    const sent = await message.reply(buildEmbedWithButtons({
-        embeds: [mainMenuEmbed(prefix, message.client, { user: message.author, kind: 'prefix' })],
-        components: [categorySelectRow(null, 'category_select_prefix'), homeButtonRow('categories_prefix_back')],
+    const sent = await message.reply(buildHelpPayload({
+        text: mainMenuText(),
+        rows: [categorySelectRow(null, 'category_select_prefix'), homeButtonRow('categories_prefix_back')],
     }));
     scheduleComponentExpiry(sent);
     return sent;
@@ -381,24 +450,20 @@ async function showPrefixCategoryHelp(message, category, prefix) {
 
 // Select-menu interaction (`category_select_prefix`). Updates in place.
 async function showPrefixCategoryMenuHelp(interaction, category, prefix) {
-    const embed = categoryEmbed(category, prefix, {
-        iconURL: interaction.client?.user?.displayAvatarURL?.({ dynamic: true }),
+    const payload = buildHelpPayload({
+        title: categoryTitle(category),
+        text: categoryText(category),
+        rows: [categorySelectRow(category, 'category_select_prefix'), homeButtonRow('categories_prefix_back')],
     });
-    const backSelect = categorySelectRow(category, 'category_select_prefix');
-    const navButtons = homeButtonRow('categories_prefix_back');
     try {
-        await interaction.update(buildEmbedWithButtons({
-            embeds: [embed],
-            components: [backSelect, navButtons],
-        }));
+        await interaction.update(payload);
         scheduleComponentExpiry(interaction.message);
     } catch (err) {
         if (!interaction.replied && !interaction.deferred) {
-            await interaction.reply(buildEmbedWithButtons({
-                embeds: [embed],
-                components: [backSelect, navButtons],
-                ephemeral: true,
-            })).catch(() => {});
+            await interaction.reply({
+                ...payload,
+                flags: payload.flags | MessageFlags.Ephemeral,
+            }).catch(() => {});
         }
     }
 }
@@ -445,7 +510,13 @@ function getCategoryPermissionLevel(category) {
 
 module.exports = {
     CATALOG,
+    CATEGORY_SEPARATOR,
     categoryIcon,
+    categoryLine,
+    categoryTitle,
+    categoryText,
+    mainMenuText,
+    buildHelpPayload,
     CATEGORY_ORDER,
     BETA_FEATURES,
     isBeta,
@@ -454,6 +525,7 @@ module.exports = {
     mainMenuEmbed,
     categorySelectRow,
     homeButtonRow,
+    helpActionRow,
     navigationButtonsRow,
     showPrefixCategoryHelp,
     showPrefixCategoryMenuHelp,

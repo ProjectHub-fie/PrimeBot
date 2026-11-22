@@ -357,14 +357,16 @@ test('help menu renders category emojis in headings, fields and select options',
     const { mainMenuEmbed, categorySelectRow, categoryEmbed, CATEGORY_ORDER } = require('../utils/prefixHelp');
     const menu = mainMenuEmbed('$', null);
     assert.equal(menu.data.fields, undefined);
-    assert.ok(menu.data.description.includes(`<:home:${LINIX_EMOJI_CATALOG.home.id}> General`));
+    assert.ok(menu.data.description.includes(`<:home:${LINIX_EMOJI_CATALOG.home.id}> –> General`));
 
     const select = categorySelectRow().toJSON().components[0].options;
     assert.equal(select.length, CATEGORY_ORDER.length);
     assert.ok(select.every(o => o.emoji && o.emoji.id));
+    assert.equal(select[0].label, '–> General');
 
     const general = categoryEmbed('general', '$');
     assert.match(general.data.title, /^<:home:/);
+    assert.ok(general.data.title.endsWith('–> General'));
     assert.ok(general.data.description.includes('`help`'));
 
     delete globalThis.__primebotEmojiManager;
