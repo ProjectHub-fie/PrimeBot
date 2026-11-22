@@ -8,6 +8,13 @@ module.exports = {
     name: 'guildMemberAdd',
     async execute(member, client) {
         try {
+            // Invite Tracking: attribute this join from the invite `uses` delta.
+            // Fire-and-forget so a slow invite fetch never delays welcome.
+            if (client.inviteTracker?.handleMemberAdd) {
+                client.inviteTracker.handleMemberAdd(member).catch(err =>
+                    console.error('[INVITE] join tracking failed:', err.message));
+            }
+
             // Log the join event (no-op unless logging is enabled for this guild).
             logEvent(client, member.guild.id, {
                 type: 'memberJoin',

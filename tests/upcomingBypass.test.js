@@ -1,7 +1,7 @@
-// Event Management renders the "Coming Soon" overlay for everyone
-// (`upcoming: true` in render/guild.js TABS). Users holding a developer/owner bot
-// role bypass the gate: the dashboard sets guild._bypassUpcoming
-// (dashboard/auth.js) and the page then renders the real editor.
+// Event Management is RELEASED (`upcoming` removed from render/guild.js TABS):
+// every server gets the real page. The `_bypassUpcoming` flag is still set by
+// the dashboard for developer/owner bot roles and is honored by the shared
+// overlay helper, but no page currently uses it.
 //
 // Anti-Nuke is RELEASED (`upcoming` removed from render/guild.js TABS). It does
 // NOT use the shared upcoming overlay — it has its own owner-controlled access
@@ -34,13 +34,13 @@ function fakeGuild(bypass) {
     };
 }
 
-test('eventsPage renders the Coming Soon overlay for ordinary users (upcoming)', () => {
+test('eventsPage renders the real Event Management page for every admin (released)', () => {
     const html = guildPages.eventsPage({ guild: fakeGuild(false), user: null });
-    assert.ok(html.includes('upcoming-locked-wrap locked'), 'ordinary users get the overlay');
-    assert.ok(html.includes('Event Management'), 'the feature is named in the overlay');
+    assert.ok(!html.includes('upcoming-locked-wrap locked'), 'released feature is never wrapped in the overlay');
+    assert.ok(html.includes('Create Event'), 'the real create button renders');
 });
 
-test('eventsPage renders the real Event Management page for bypass users', () => {
+test('eventsPage renders the real Event Management page for bypass users too', () => {
     const html = guildPages.eventsPage({ guild: fakeGuild(true), user: null });
     assert.ok(!html.includes('upcoming-locked-wrap locked'), 'overlay should be skipped for bypass users');
     assert.ok(html.includes('Create Event'), 'the real create button renders for bypass users');
@@ -92,7 +92,7 @@ test('ticketsPage renders the real panel list for bypass users too', () => {
     assert.ok(html.includes('id="tk-create-open"'), 'create button renders');
 });
 
-test('Anti-Nuke and Tickets are released (no `upcoming` flag); Events is still upcoming', () => {
+test('Anti-Nuke, Tickets and Events are all released (no `upcoming` flag)', () => {
     const { TABS } = require('../dashboard/render/guild');
     const flag = (key) => {
         const tab = TABS.find(t => t.key === key);
@@ -101,11 +101,11 @@ test('Anti-Nuke and Tickets are released (no `upcoming` flag); Events is still u
     };
     assert.equal(flag('antinuke'), false, 'Anti-Nuke is released — no SOON badge, no upcoming gate');
     assert.equal(flag('tickets'), false, 'Tickets is released');
-    assert.equal(flag('events'), true, 'Event Management is still upcoming');
+    assert.equal(flag('events'), false, 'Event Management is released — free for every server');
     // The nav renders the SOON badge for upcoming tabs only.
     const { tabNavHTML } = require('../dashboard/render/guild');
     const nav = tabNavHTML({ active: 'antinuke', guildId: '1' });
     const after = (label) => nav.slice(nav.indexOf(label), nav.indexOf(label) + 160);
     assert.ok(!after('Anti-Nuke').includes('soon-badge'), 'Anti-Nuke shows no SOON badge');
-    assert.ok(after('Event Management').includes('soon-badge'), 'Events keeps its SOON badge');
+    assert.ok(!after('Event Management').includes('soon-badge'), 'Events shows no SOON badge');
 });

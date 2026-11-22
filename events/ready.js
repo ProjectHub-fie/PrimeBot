@@ -153,6 +153,27 @@ module.exports = {
             }, 7500);
         }
 
+        // Invite Tracking: load settings + invite baselines (persisted, so a
+        // restart keeps history and never re-attributes an old join).
+        if (client.inviteTracker && typeof client.inviteTracker.ready === 'function') {
+            setTimeout(() => {
+                client.inviteTracker.ready().catch(err =>
+                    console.error('[INVITE] Restore failed:', err.message)
+                );
+            }, 7000);
+        }
+
+        // AI Assistant: ensure the tables/settings cache are ready and purge
+        // expired sessions. Sessions themselves are persisted, so a restart
+        // keeps an in-progress conversation.
+        if (client.aiManager && typeof client.aiManager.ready === 'function') {
+            setTimeout(() => {
+                client.aiManager.ready().catch(err =>
+                    console.error('[AI] Restore failed:', err.message)
+                );
+            }, 6500);
+        }
+
         // Re-apply roles for persistent reaction-role menus so they survive
         // bot restarts and Discord reaction-cache evictions.
         if (client.reactionRoleManager && typeof client.reactionRoleManager.restorePersistentMenus === 'function') {

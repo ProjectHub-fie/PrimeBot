@@ -71,6 +71,7 @@ const CATALOG = {
         title: 'Bot Information',
         color: config.colors.primary,
         commands: [
+            { names: ['ai'], args: '<ask|chat|summarize|translate|explain|analyze|personality|knowledge|memory|config|usage|reset|help>', desc: 'AI assistant — free for every server (also works by mentioning the bot)' },
             { names: ['about', 'ab'], desc: 'Information about the bot' },
             { names: ['stats', 'statistics'], desc: 'Bot statistics and server count' },
             { names: ['updates', 'ulog'], desc: 'Latest bot updates and features' },
@@ -124,6 +125,8 @@ const CATALOG = {
         title: 'Community — Live Polls & Giveaways',
         color: config.colors.success,
         commands: [
+            { names: ['event'], args: '<create|edit|cancel|delete|list|info|join|leave|config|reminders>', desc: 'Create, join and manage community events' },
+            { names: ['invite', 'invites'], args: '[stats|leaderboard|info|config|reset]', desc: 'Invite tracking — who brought each member to the server' },
             { names: ['lpoll', 'livepoll'], args: '<create|join|results|end|list>', desc: 'Cross-server live polls' },
             { names: ['lgiveway', 'lgiveaway', 'livegiveaway'], args: '<create|join|results|end|list>', desc: 'Cross-server live giveaways' },
         ],

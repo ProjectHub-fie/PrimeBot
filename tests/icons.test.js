@@ -108,13 +108,19 @@ test('server-rendered tab nav uses SVG icons + keeps beta/soon badges', () => {
     const { tabNavHTML, TABS } = require('../dashboard/render/guild');
     const html = tabNavHTML('123', 'welcome');
     assert.match(html, /<svg class="ico"/);
-    // beta + upcoming badges still rendered for the relevant tabs.
+    // beta badges still rendered for the relevant tabs.
     const betaTab = TABS.find(t => t.beta);
-    const soonTab = TABS.find(t => t.upcoming);
     const betaHTML = tabNavHTML('123', betaTab.key);
-    const soonHTML = tabNavHTML('123', soonTab.key);
     assert.match(betaHTML, /beta-badge/);
-    assert.match(soonHTML, /soon-badge/);
+    // An upcoming tab renders the SOON badge when one exists; every feature is
+    // currently released, so the absence of the flag is the expected state.
+    const soonTab = TABS.find(t => t.upcoming);
+    if (soonTab) {
+        const soonHTML = tabNavHTML('123', soonTab.key);
+        assert.match(soonHTML, /soon-badge/);
+    } else {
+        assert.doesNotMatch(html, /soon-badge/);
+    }
     // menu-item now wraps label in a span (so icon + label align).
     assert.match(html, /<span class="menu-item-label">/);
 });

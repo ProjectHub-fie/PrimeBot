@@ -16,7 +16,7 @@ const {
     normalizeRegistrationMode, normalizeLocationType,
     REMINDER_PRESETS, REMINDER_KEYS,
     normalizeParticipantStatus, normalizeAttendanceStatus,
-    normalizeEventPermissions,
+    normalizeEventPermissions, normalizeRecurrence, nextOccurrenceStart,
 } = require('../shared/eventConstants');
 
 const MAX_NAME = 100;
@@ -123,6 +123,14 @@ function normalizeEventConfig(data, existing = null) {
         embedFields: has('embedFields') ? normalizeEmbedFields(src.embedFields) : (base.embedFields || []),
         embedFooter: has('embedFooter') ? (src.embedFooter == null ? null : String(src.embedFooter).slice(0, 255)) : (base.embedFooter || null),
         reminders: has('reminders') ? normalizeReminders(src.reminders) : (base.reminders || []),
+        recurrence: has('recurrence') ? normalizeRecurrence(src.recurrence) : (base.recurrence || 'none'),
+        recurrenceUntil: has('recurrenceUntil') ? toDate(src.recurrenceUntil) : (base.recurrenceUntil || null),
+        // Only ever set by the recurring-spawn path (server-side); a client
+        // cannot attach an event to another occurrence chain.
+        recurrenceParentId: base.recurrenceParentId != null
+            ? base.recurrenceParentId
+            : (Number.isFinite(Number(src.recurrenceParentId)) ? Number(src.recurrenceParentId) : null),
+        syncScheduledEvent: has('syncScheduledEvent') ? src.syncScheduledEvent !== false : (base.syncScheduledEvent !== false),
     };
     return out;
 }
@@ -165,8 +173,14 @@ function rowToEvent(row) {
         embedFooter: row.embed_footer || null,
         reminders: Array.isArray(row.reminders) ? row.reminders : [],
         result: row.result || null,
+        recurrence: row.recurrence || 'none',
+        recurrenceUntil: row.recurrence_until ? new Date(row.recurrence_until).toISOString() : null,
+        recurrenceParentId: row.recurrence_parent_id == null ? null : Number(row.recurrence_parent_id),
+        scheduledEventId: row.scheduled_event_id || null,
+        syncScheduledEvent: row.sync_scheduled_event !== false,
         // Only populated by getGuildEvents (list query); null elsewhere.
         participantCount: row.participation_count == null ? null : Number(row.participation_count),
+        interestedCount: row.interested_count == null ? null : Number(row.interested_count),
         createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
         updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
     };
@@ -208,7 +222,8 @@ const EVENT_COLUMNS = [
     'registration_deadline', 'track_attendance', 'announcement_channel_id', 'participant_role_id',
     'staff_role_id', 'winner_role_id', 'attendance_role_id', 'event_manager_role_id', 'event_permissions',
     'image_url', 'thumbnail_url', 'embed_title', 'embed_description', 'embed_color', 'embed_fields',
-    'embed_footer', 'reminders',
+    'embed_footer', 'reminders', 'recurrence', 'recurrence_until', 'recurrence_parent_id',
+    'scheduled_event_id', 'sync_scheduled_event',
 ];
 
 function configToValues(guildId, cfg, creatorId) {
@@ -219,7 +234,8 @@ function configToValues(guildId, cfg, creatorId) {
         cfg.participantRoleId, cfg.staffRoleId, cfg.winnerRoleId, cfg.attendanceRoleId, cfg.eventManagerRoleId,
         JSON.stringify(cfg.eventPermissions || []), cfg.imageUrl, cfg.thumbnailUrl, cfg.embedTitle,
         cfg.embedDescription, cfg.embedColor, JSON.stringify(cfg.embedFields || []), cfg.embedFooter,
-        JSON.stringify(cfg.reminders || []),
+        JSON.stringify(cfg.reminders || []), cfg.recurrence || 'none', cfg.recurrenceUntil || null,
+        cfg.recurrenceParentId || null, null, cfg.syncScheduledEvent !== false,
     ];
 }
 
@@ -272,7 +288,11 @@ async function getGuildEvents(guildId, { status = null, search = null, sort = 's
         `SELECT e.*, (
              SELECT COUNT(*)::int FROM em_participants p
              WHERE p.event_id = e.id AND p.status = 'registered'
-         ) AS participation_count
+         ) AS participation_count,
+         (
+             SELECT COUNT(*)::int FROM em_participants p
+             WHERE p.event_id = e.id AND p.status = 'interested'
+         ) AS interested_count
          FROM em_events e
          ${whereSql}
          ORDER BY ${orderSql}
@@ -339,6 +359,10 @@ async function updateEvent(id, patch) {
     push('embed_fields', JSON.stringify(cfg.embedFields || []));
     push('embed_footer', cfg.embedFooter);
     push('reminders', JSON.stringify(cfg.reminders || []));
+    push('recurrence', cfg.recurrence || 'none');
+    push('recurrence_until', cfg.recurrenceUntil || null);
+    push('recurrence_parent_id', cfg.recurrenceParentId || null);
+    push('sync_scheduled_event', cfg.syncScheduledEvent !== false);
     if (patch && patch.result !== undefined) push('result', patch.result ? JSON.stringify(patch.result) : null);
 
     params.push(id);
@@ -377,6 +401,92 @@ async function duplicateEvent(id, creatorId = null) {
     const created = await createEvent(src.guildId, copy, creatorId);
     await addActivity(created.id, src.guildId, { action: 'event_duplicated', detail: `Duplicated from #${src.id}` });
     return created;
+}
+
+/**
+ * Store the Discord Scheduled Event id created for this event (or null to
+ * clear it). Kept separate from updateEvent so a config save never clobbers it.
+ */
+async function setScheduledEventId(id, scheduledEventId) {
+    await ensureEventMgmtTables();
+    await eventMgmtPool.query(
+        'UPDATE em_events SET scheduled_event_id = $2, updated_at = NOW() WHERE id = $1',
+        [id, scheduledEventId || null]
+    );
+}
+
+/** The occurrence spawned from this event, if one already exists. */
+async function getChildOccurrence(parentId) {
+    await ensureEventMgmtTables();
+    const res = await eventMgmtPool.query(
+        'SELECT * FROM em_events WHERE recurrence_parent_id = $1 ORDER BY id ASC LIMIT 1',
+        [parentId]
+    );
+    return rowToEvent(res.rows[0]);
+}
+
+/**
+ * Spawn the next occurrence of a recurring event.
+ *
+ * The child copies the parent's configuration (never participants or results),
+ * starts at the next recurrence boundary, and carries `recurrenceParentId` so
+ * the spawn can only ever happen once per occurrence. Returns the new event, or
+ * null when the series has ended / the child already exists.
+ */
+async function createNextOccurrence(parent, creatorId = null) {
+    if (!parent || !parent.startAt) return null;
+    const existing = await getChildOccurrence(parent.id);
+    if (existing) return existing;
+    const nextStart = nextOccurrenceStart(parent.startAt, parent.recurrence, parent.recurrenceUntil);
+    if (!nextStart) return null;
+
+    let nextEnd = null;
+    if (parent.endAt) {
+        const duration = new Date(parent.endAt).getTime() - new Date(parent.startAt).getTime();
+        if (duration > 0) nextEnd = new Date(nextStart.getTime() + duration);
+    }
+
+    const copy = {
+        ...parent,
+        status: parent.registrationMode === 'open' ? 'registration_open' : 'scheduled',
+        startAt: nextStart,
+        endAt: nextEnd,
+        registrationDeadline: null,
+        result: null,
+        recurrenceParentId: parent.id,
+        scheduledEventId: null,
+    };
+    const created = await createEvent(parent.guildId, copy, creatorId || parent.creatorId || null);
+    await addActivity(parent.id, parent.guildId, {
+        action: 'recurrence_spawned',
+        detail: `Next occurrence #${created.id} scheduled for ${nextStart.toISOString()}`,
+    });
+    await addActivity(created.id, parent.guildId, {
+        action: 'recurrence_created',
+        detail: `Recurring occurrence of #${parent.id}`,
+    });
+    return created;
+}
+
+/** All participant counts in one grouped query (registered / interested / …). */
+async function getParticipantCounts(eventId) {
+    await ensureEventMgmtTables();
+    const res = await eventMgmtPool.query(
+        `SELECT status, attendance_status, COUNT(*)::int AS n
+         FROM em_participants WHERE event_id = $1
+         GROUP BY status, attendance_status`,
+        [eventId]
+    );
+    const counts = { registered: 0, interested: 0, waiting: 0, present: 0, absent: 0, total: 0 };
+    for (const row of res.rows) {
+        if (row.status === 'registered') counts.registered += row.n;
+        if (row.status === 'interested') counts.interested += row.n;
+        if (row.status === 'waiting') counts.waiting += row.n;
+        if (row.attendance_status === 'present') counts.present += row.n;
+        if (row.attendance_status === 'absent') counts.absent += row.n;
+        counts.total += row.n;
+    }
+    return counts;
 }
 
 // ── Participants ────────────────────────────────────────────────────────────
@@ -630,7 +740,8 @@ module.exports = {
     normalizeEventConfig,
     rowToEvent, rowToParticipant, rowToActivity,
     createEvent, getEvent, getGuildEvents, getAllGuildEvents, updateEvent, deleteEvent,
-    duplicateEvent, setAnnouncementMessage,
+    duplicateEvent, setAnnouncementMessage, setScheduledEventId,
+    getChildOccurrence, createNextOccurrence, getParticipantCounts,
     getParticipants, countParticipants, getParticipant, addParticipant,
     updateParticipant, removeParticipant, getNextWaiting, promoteNextWaiting,
     replaceReminderRows, getDueReminders, markReminderSent, getEventReminders,

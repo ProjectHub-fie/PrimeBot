@@ -31,11 +31,13 @@ const TABS = [
   { key: 'embed',          label: 'Embed',           icon: 'message' },
   { key: 'logging',        label: 'Logging',         icon: 'scroll' },
   { key: 'automod',        label: 'Automod',         icon: 'shield' },
+  { key: 'ai',             label: 'AI Assistant',    icon: 'sparkles' },
   { key: 'antinuke',       label: 'Anti-Nuke',       icon: 'shieldAlert' },
   { key: 'tickets',        label: 'Tickets',         icon: 'ticket' },
   { key: 'live/polls',     label: 'Live Polls',      icon: 'barChart' },
   { key: 'live/giveaways', label: 'Live Giveaways',  icon: 'gift' },
-  { key: 'events',         label: 'Event Management', icon: 'calendar', upcoming: true },
+  { key: 'events',         label: 'Event Management', icon: 'calendar' },
+  { key: 'invites',        label: 'Invite Tracking',  icon: 'userPlus' },
 ];
 
 // The inlined channel/role <option> data + guild id. Pages embed this so the

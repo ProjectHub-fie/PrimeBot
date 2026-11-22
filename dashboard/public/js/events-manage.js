@@ -190,6 +190,11 @@
       eventManagerRoleId: $('#ev-s-manager-role') ? ($('#ev-s-manager-role').value || null) : undefined,
       eventPermissions: $$('.ev-perm').filter(c => c.checked).map(c => c.value),
       reminders: $$('.ev-manage-reminder').filter(c => c.checked).map(c => c.value),
+      recurrence: $('#ev-s-recurrence') ? $('#ev-s-recurrence').value : undefined,
+      recurrenceUntil: $('#ev-s-recurrence-until')
+        ? ($('#ev-s-recurrence-until').value ? new Date(`${$('#ev-s-recurrence-until').value}T23:59:59`).toISOString() : null)
+        : undefined,
+      syncScheduledEvent: $('#ev-s-sync-scheduled') ? $('#ev-s-sync-scheduled').checked : undefined,
     };
   }
 

@@ -3220,6 +3220,340 @@ app.get('/api/guilds/:guildId/live/giveaways', requireAuth, requireGuildAdmin, a
     }
 });
 
+// ── API: AI Assistant (AI_DATABASE_URL via server/aiRepo.js) ─────────────────
+//
+// requireAuth + requireGuildAdmin on every route. Guild ids always come from
+// the authenticated route param, so a client-supplied id can never touch
+// another server. Provider API keys are never returned — only `configured` and
+// a masked hint.
+
+const AI_KNOWLEDGE_LIMIT = 50;
+
+async function buildAiPageData(guildId) {
+    const { DEFAULT_AI_SETTINGS } = require('../shared/aiConstants');
+    const safe = (promise, fallback) => promise.catch(() => fallback);
+
+    const [settings, sessions, sessionTotal, knowledge, today, guildToday, series, topUsers, providerMeta] = await Promise.all([
+        safe(dashboardDb.getAiSettings(guildId), { ...DEFAULT_AI_SETTINGS }),
+        safe(dashboardDb.listAiSessions(guildId, { limit: 25 }), []),
+        safe(dashboardDb.countAiSessions(guildId), 0),
+        safe(dashboardDb.listAiKnowledge(guildId, { limit: AI_KNOWLEDGE_LIMIT }), []),
+        safe(dashboardDb.getAiUsageToday(guildId, null), { requests: 0, tokens: 0 }),
+        safe(dashboardDb.getAiGuildUsageToday(guildId), { requests: 0, tokens: 0 }),
+        safe(dashboardDb.getAiUsageSeries(guildId, 14), []),
+        safe(dashboardDb.getAiTopUsers(guildId, { days: 30, limit: 10 }), []),
+        safe(dashboardDb.getAiProviderMeta(), []),
+    ]);
+
+    const metaByProvider = new Map(providerMeta.map(m => [m.provider, m]));
+    const now = Date.now();
+    const providers = dashboardDb.getAiProviderStatus().map((p) => {
+        const meta = metaByProvider.get(p.provider) || {};
+        const cooldown = meta.cooldown_until ? new Date(meta.cooldown_until).getTime() : 0;
+        return {
+            ...p,
+            active: p.configured && !(cooldown && cooldown > now),
+            cooldownUntil: cooldown && cooldown > now ? new Date(cooldown).toISOString() : null,
+            requests: Number(meta.requests) || 0,
+            failures: Number(meta.failures) || 0,
+            lastError: meta.last_error || null,
+        };
+    });
+
+    return {
+        settings,
+        sessions,
+        sessionTotal,
+        knowledge,
+        knowledgeLimit: AI_KNOWLEDGE_LIMIT,
+        usage: { today, guildToday, series, topUsers },
+        providers,
+        providerMeta,
+    };
+}
+
+app.get('/api/guilds/:guildId/ai', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        res.json(await buildAiPageData(req.guild.id));
+    } catch (err) {
+        console.error('[API] get AI settings error:', err.message);
+        res.status(500).json({ error: 'Failed to load AI settings.' });
+    }
+});
+
+app.patch('/api/guilds/:guildId/ai', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const body = req.body || {};
+        const { normalizeAiSettings } = require('../shared/aiConstants');
+
+        // Validate channel/role ids against the live guild (never trust input).
+        if (Array.isArray(body.channelIds) && body.channelIds.length) {
+            const channels = await discord.getGuildChannels(req.guild.id).catch(() => []);
+            const known = new Set(channels.map(c => String(c.id)));
+            body.channelIds = body.channelIds.map(String).filter(id => known.has(id)).slice(0, 25);
+        }
+        if (Array.isArray(body.roleIds) && body.roleIds.length) {
+            const roles = await discord.getGuildRoles(req.guild.id).catch(() => []);
+            const known = new Set((roles || []).map(r => String(r.id)));
+            body.roleIds = body.roleIds.map(String).filter(id => known.has(id)).slice(0, 25);
+        }
+
+        const settings = await dashboardDb.updateAiSettings(
+            req.guild.id,
+            normalizeAiSettings(body)
+        );
+        await recordWebsiteLog(req, `Updated AI settings (${Object.keys(body).slice(0, 8).join(', ') || 'no fields'})`);
+        res.json({ settings });
+    } catch (err) {
+        console.error('[API] update AI settings error:', err.message);
+        res.status(500).json({ error: 'Failed to save AI settings.' });
+    }
+});
+
+app.post('/api/guilds/:guildId/ai/knowledge', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const { AI_LIMITS } = require('../shared/aiConstants');
+        const title = String(req.body?.title || '').trim().slice(0, AI_LIMITS.maxKnowledgeTitle);
+        const content = String(req.body?.content || '').trim().slice(0, AI_LIMITS.maxKnowledgeContent);
+        const tags = String(req.body?.tags || '').trim().slice(0, 120);
+        if (!title || !content) return res.status(400).json({ error: 'A title and content are required.' });
+        const count = await dashboardDb.countAiKnowledge(req.guild.id);
+        if (count >= AI_KNOWLEDGE_LIMIT) {
+            return res.status(400).json({ error: `The knowledge base is full (${AI_KNOWLEDGE_LIMIT} entries).` });
+        }
+        await dashboardDb.addAiKnowledge(req.guild.id, { title, content, tags, createdBy: req.user.id });
+        await recordWebsiteLog(req, `Added AI knowledge: ${title}`);
+        res.json({ knowledge: await dashboardDb.listAiKnowledge(req.guild.id, { limit: AI_KNOWLEDGE_LIMIT }) });
+    } catch (err) {
+        console.error('[API] add AI knowledge error:', err.message);
+        res.status(500).json({ error: 'Failed to add the knowledge entry.' });
+    }
+});
+
+app.patch('/api/guilds/:guildId/ai/knowledge/:id', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const id = parseInt(req.params.id, 10);
+        if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid entry id.' });
+        const patch = {};
+        if (typeof req.body?.title === 'string') patch.title = req.body.title.trim().slice(0, 120);
+        if (typeof req.body?.content === 'string') patch.content = req.body.content.trim().slice(0, 2000);
+        if (typeof req.body?.tags === 'string') patch.tags = req.body.tags.trim().slice(0, 120);
+        const row = await dashboardDb.updateAiKnowledge(req.guild.id, id, patch);
+        if (!row) return res.status(404).json({ error: 'Knowledge entry not found.' });
+        res.json({ knowledge: await dashboardDb.listAiKnowledge(req.guild.id, { limit: AI_KNOWLEDGE_LIMIT }) });
+    } catch (err) {
+        console.error('[API] update AI knowledge error:', err.message);
+        res.status(500).json({ error: 'Failed to update the knowledge entry.' });
+    }
+});
+
+app.delete('/api/guilds/:guildId/ai/knowledge/:id', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const id = parseInt(req.params.id, 10);
+        if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid entry id.' });
+        const removed = await dashboardDb.deleteAiKnowledge(req.guild.id, id);
+        if (!removed) return res.status(404).json({ error: 'Knowledge entry not found.' });
+        await recordWebsiteLog(req, `Deleted AI knowledge entry #${id}`);
+        res.json({ ok: true });
+    } catch (err) {
+        console.error('[API] delete AI knowledge error:', err.message);
+        res.status(500).json({ error: 'Failed to delete the knowledge entry.' });
+    }
+});
+
+app.delete('/api/guilds/:guildId/ai/sessions/:userId', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const userId = String(req.params.userId || '');
+        if (!/^\d{15,22}$/.test(userId)) return res.status(400).json({ error: 'Invalid member id.' });
+        await dashboardDb.deleteAiSession(req.guild.id, userId);
+        res.json({ ok: true });
+    } catch (err) {
+        console.error('[API] clear AI session error:', err.message);
+        res.status(500).json({ error: 'Failed to clear the session.' });
+    }
+});
+
+app.post('/api/guilds/:guildId/ai/sessions/clear', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const removed = await dashboardDb.clearAiSessions(req.guild.id);
+        await recordWebsiteLog(req, `Cleared ${removed} AI session(s)`);
+        res.json({ ok: true, removed });
+    } catch (err) {
+        console.error('[API] clear AI sessions error:', err.message);
+        res.status(500).json({ error: 'Failed to clear sessions.' });
+    }
+});
+
+app.post('/api/guilds/:guildId/ai/providers/:provider/test', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const provider = String(req.params.provider || '').toLowerCase();
+        const { PROVIDER_ORDER, providerConfigured, providerMeta } = require('../utils/ai/freeModels');
+        if (!PROVIDER_ORDER.includes(provider)) return res.status(400).json({ error: 'Unknown provider.' });
+        if (!providerConfigured(provider)) {
+            return res.status(400).json({ ok: false, message: `${providerMeta(provider).label} is not configured.` });
+        }
+        // The dashboard runs as its own process, so the test is a single stateless
+        // request through the same adapter the bot uses (no manager required).
+        const { callProvider } = require('../utils/ai/providers');
+        const started = Date.now();
+        const result = await callProvider(provider, {
+            messages: [
+                { role: 'system', content: 'You are a health check. Reply with exactly: OK' },
+                { role: 'user', content: 'ping' },
+            ],
+            maxTokens: 16,
+            timeoutMs: 20000,
+        });
+        await dashboardDb.recordAiProviderResult(provider, result.ok
+            ? { ok: true }
+            : { ok: false, error: result.message }).catch(() => {});
+        res.json(result.ok
+            ? { ok: true, provider, model: result.model, latencyMs: Date.now() - started }
+            : { ok: false, provider, kind: result.kind, message: result.message });
+    } catch (err) {
+        console.error('[API] AI provider test error:', err.message);
+        res.status(500).json({ error: 'Provider test failed.' });
+    }
+});
+
+app.post('/api/guilds/:guildId/ai/usage/reset', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        if (req.body?.confirm !== true) {
+            return res.status(400).json({ error: 'Reset requires explicit confirmation (confirm: true).' });
+        }
+        const removed = await dashboardDb.resetAiUsage(req.guild.id);
+        await recordWebsiteLog(req, `Reset AI usage (${removed} row(s))`);
+        res.json({ ok: true, removed });
+    } catch (err) {
+        console.error('[API] reset AI usage error:', err.message);
+        res.status(500).json({ error: 'Failed to reset usage.' });
+    }
+});
+
+// ── API: Invite Tracking (INVITE_DATABASE_URL via server/inviteRepo.js) ─────
+//
+// Every route is guarded by requireAuth + requireGuildAdmin (proves the caller
+// manages the guild and the bot is present). Reads and resets are scoped to the
+// authenticated guild id — a client-supplied id can never reach another guild.
+
+const INVITE_PAGE_SIZE = 10;
+
+/** Honest bot-permission diagnostics (Manage Server is required to read invites). */
+async function inviteDiagnostics(guildId) {
+    try {
+        const perms = await discord.computeBotPermissions(guildId);
+        if (perms == null) return { ok: false, unknown: true, reason: 'permissions_unavailable' };
+        const p = BigInt(perms);
+        const ADMIN = 0x8n;
+        const MANAGE_GUILD = 0x20n;
+        const ok = (p & ADMIN) !== 0n || (p & MANAGE_GUILD) !== 0n;
+        return { ok, manageGuild: ok, unknown: false };
+    } catch (err) {
+        return { ok: false, unknown: true, reason: err.message };
+    }
+}
+
+async function buildInviteOverview(guildId, page = 1, limit = INVITE_PAGE_SIZE) {
+    const offset = (page - 1) * limit;
+    const [settings, totals, leaderboard, total, recentJoins, recentLeaves, activity, diagnostics] = await Promise.all([
+        dashboardDb.getInviteSettings(guildId).catch(() => ({ enabled: true, excludedUserIds: [] })),
+        dashboardDb.getInviteTotals(guildId).catch(() => ({ totalJoins: 0, totalLeaves: 0, net: 0 })),
+        dashboardDb.getInviteLeaderboard(guildId, { limit, offset }).catch(() => []),
+        dashboardDb.countInviteLeaderboard(guildId).catch(() => 0),
+        dashboardDb.getInviteRecentJoins(guildId, { limit: 10 }).catch(() => []),
+        dashboardDb.getInviteRecentLeaves(guildId, { limit: 10 }).catch(() => []),
+        dashboardDb.getInviteActivity(guildId, { limit: 25 }).catch(() => []),
+        inviteDiagnostics(guildId),
+    ]);
+    return {
+        settings, totals, leaderboard, total, page,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+        recentJoins, recentLeaves, activity, diagnostics,
+    };
+}
+
+app.get('/api/guilds/:guildId/invites', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+        const limit = Math.min(50, Math.max(5, parseInt(req.query.limit, 10) || INVITE_PAGE_SIZE));
+        res.json(await buildInviteOverview(req.guild.id, page, limit));
+    } catch (err) {
+        console.error('[API] get invites error:', err.message);
+        res.status(500).json({ error: 'Failed to load invite tracking.' });
+    }
+});
+
+app.get('/api/guilds/:guildId/invites/member/:userId', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const userId = String(req.params.userId || '');
+        if (!/^\d{15,22}$/.test(userId)) return res.status(400).json({ error: 'Invalid member id.' });
+        const [stat, invited, history, rank] = await Promise.all([
+            dashboardDb.getInviteStat(req.guild.id, userId),
+            dashboardDb.getInvitesForMember(req.guild.id, userId, { limit: 25 }),
+            dashboardDb.getInviteJoinsForUser(req.guild.id, userId, { limit: 10 }),
+            dashboardDb.getInviteRank(req.guild.id, userId),
+        ]);
+        const active = await dashboardDb.getInviteActiveCounts(req.guild.id).catch(() => []);
+        const mine = active.find(a => String(a.inviterId) === String(userId));
+        res.json({
+            stat: { ...stat, activeInvites: mine ? mine.active : 0, activeCodes: mine ? mine.codes : 0 },
+            invited, history, rank,
+        });
+    } catch (err) {
+        console.error('[API] invite member error:', err.message);
+        res.status(500).json({ error: 'Failed to load invite member details.' });
+    }
+});
+
+app.patch('/api/guilds/:guildId/invites', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        const body = req.body || {};
+        const patch = {};
+        if (typeof body.enabled === 'boolean') patch.enabled = body.enabled;
+        if (typeof body.joinNotifications === 'boolean') patch.joinNotifications = body.joinNotifications;
+        if (typeof body.leaveNotifications === 'boolean') patch.leaveNotifications = body.leaveNotifications;
+        if (typeof body.vanityTracking === 'boolean') patch.vanityTracking = body.vanityTracking;
+        if (typeof body.excludeBots === 'boolean') patch.excludeBots = body.excludeBots;
+        if ('logChannelId' in body) {
+            patch.logChannelId = body.logChannelId
+                ? await assertGuildChannel(req.guild.id, body.logChannelId)
+                : null;
+        }
+        if (Array.isArray(body.excludedUserIds)) {
+            patch.excludedUserIds = Array.from(new Set(body.excludedUserIds
+                .map(String)
+                .filter(id => /^\d{15,22}$/.test(id)))).slice(0, 50);
+        }
+        if (!Object.keys(patch).length) {
+            return res.status(400).json({ error: 'No valid settings were provided.' });
+        }
+        const settings = await dashboardDb.updateInviteSettings(req.guild.id, patch);
+        await dashboardDb.addInviteActivity(req.guild.id, {
+            type: 'config', userId: req.user.id, username: req.user.username,
+            detail: `Updated: ${Object.keys(patch).join(', ')}`,
+        }).catch(() => {});
+        await recordWebsiteLog(req, `Updated invite tracking (${Object.keys(patch).join(', ')})`);
+        res.json({ settings });
+    } catch (err) {
+        console.error('[API] update invites error:', err.message);
+        res.status(err.status || 500).json({ error: err.message || 'Failed to save invite settings.' });
+    }
+});
+
+app.post('/api/guilds/:guildId/invites/reset', requireAuth, requireGuildAdmin, async (req, res) => {
+    try {
+        if (!req.body || req.body.confirm !== true) {
+            return res.status(400).json({ error: 'Reset requires explicit confirmation (confirm: true).' });
+        }
+        const result = await dashboardDb.resetInviteStats(req.guild.id);
+        await recordWebsiteLog(req, `Reset invite statistics (${result.joins} joins, ${result.stats} inviters)`);
+        res.json({ ok: true, ...result });
+    } catch (err) {
+        console.error('[API] reset invites error:', err.message);
+        res.status(500).json({ error: 'Failed to reset invite statistics.' });
+    }
+});
+
 // ── API: Event Management (📅 Event Management tab) ───────────────────────────
 //
 // All routes require requireAuth + requireGuildAdmin (proves the caller manages
@@ -3229,11 +3563,10 @@ app.get('/api/guilds/:guildId/live/giveaways', requireAuth, requireGuildAdmin, a
 // The bot mirrors every write: it re-reads the tables on its cache poll and
 // performs the Discord side-effects (announcements, reminders, roles).
 
-// Event Management is an "upcoming" feature: its write endpoints are gated by
-// requireUpcoming (403 { reason: 'upcoming' } for ordinary users; developer/owner
-// bot roles bypass it so the feature can be exercised). Reads stay open so the
-// page can render behind the Coming Soon overlay.
-const eventPerm = (p) => [requireAuth, requireGuildAdmin, requireUpcoming, eventAuth.requireEventPermission(p)];
+// Event Management is RELEASED (free for every server). Write endpoints are
+// guarded by requireAuth + requireGuildAdmin + a granular event permission.
+// Reads stay open so the page renders for every admin.
+const eventPerm = (p) => [requireAuth, requireGuildAdmin, eventAuth.requireEventPermission(p)];
 
 // List events (search / filter / sort + server-side pagination).
 app.get('/api/guilds/:guildId/events', requireAuth, requireGuildAdmin, async (req, res) => {
@@ -3699,6 +4032,31 @@ app.get('/guild/:guildId/broadcast', requireAuth, guildPage({ config: ['server']
     res.type('html').send(guildPages.broadcastPage({ guild: req.guild, user: req.user })));
 app.get('/guild/:guildId/birthdays', requireAuth, guildPage({ config: ['birthdaySettings'] }), (req, res) =>
     res.type('html').send(guildPages.birthdaysPage({ guild: req.guild, user: req.user })));
+// AI Assistant — server-rendered console (8 sections, preloaded data).
+app.get('/guild/:guildId/ai', requireAuth, guildPage({ config: [] }), async (req, res) => {
+    try {
+        const data = await buildAiPageData(req.guild.id);
+        req.guild._config = { ...(req.guild._config || {}), ai: data };
+        res.type('html').send(guildPages.aiPage({ guild: req.guild, user: req.user }));
+    } catch (err) {
+        console.error('[ROUTE] ai page error:', err.message);
+        const body = `<div class="card"><div class="alert alert-error">Failed to load the AI assistant.</div><p><a href="/guild/${L.esc(req.params.guildId)}">← Back</a></p></div>`;
+        res.status(500).type('html').send(L.render({ title: 'PrimeBot · Error', body, user: req.session && req.session.user }));
+    }
+});
+
+// Invite Tracking — server-rendered overview (no extra API round-trip on load).
+app.get('/guild/:guildId/invites', requireAuth, guildPage({ config: [] }), async (req, res) => {
+    try {
+        const overview = await buildInviteOverview(req.guild.id, 1, INVITE_PAGE_SIZE);
+        req.guild._config = { ...(req.guild._config || {}), invites: overview };
+        res.type('html').send(guildPages.invitesPage({ guild: req.guild, user: req.user }));
+    } catch (err) {
+        console.error('[ROUTE] invites page error:', err.message);
+        const body = `<div class="card"><div class="alert alert-error">Failed to load invite tracking.</div><p><a href="/guild/${L.esc(req.params.guildId)}">← Back</a></p></div>`;
+        res.status(500).type('html').send(L.render({ title: 'PrimeBot · Error', body, user: req.session && req.session.user }));
+    }
+});
 // YouTube Notifications (Creator Hub) — dashboard-only feature.
 app.get('/guild/:guildId/youtube', requireAuth, guildPage({ config: ['youtubeSubscriptions', 'youtubeAnnouncements', 'youtubeStats'], roles: 'all' }), (req, res) =>
     res.type('html').send(guildPages.youtubePage({ guild: req.guild, user: req.user })));

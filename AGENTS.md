@@ -1863,3 +1863,15 @@ Tests: `tests/helpMenuNoCategoryDescriptions.test.js`,
 `tests/sashMenu.test.js`.
 
 `music/help.js` (`$music`) uses `linixEmbed` and shows the music emojis (`play`, `filter`, `autoplay`, `music`).
+
+## AI Assistant — free providers, shared by every entry point
+
+`/ai`, `$ai` and mention/reply handling all call the same backend, so memory, quotas and provider failover are identical. Free for every server; the bot owner configures the provider keys once.
+
+- **Provider order:** `GROQ_API_KEY` → `GEMINI_API_KEY` → `OPENROUTER_API_KEY`. Only free-tier models are allowed (`utils/ai/freeModels.js` `isFreeModel()`); a non-free `AI_MODEL_*` override is ignored so a paid model can never be billed. Keys are env-only and never stored, logged or rendered (the dashboard shows `configured` + a masked hint).
+- **Modules:** `shared/aiConstants.js` (settings/limits/personalities/languages), `server/aiDb.js` (`AI_DATABASE_URL` → `FALLBACK_DATABASE_URL` → `DATABASE_URL`), `server/aiRepo.js` (lazy DDL + queries), `utils/ai/providers.js` (OpenAI-compatible Groq/OpenRouter + Gemini adapter), `utils/ai/freeModels.js`, `utils/ai/promptSafety.js` (sanitize, wrap user text as untrusted, chunk), `utils/ai/aiManager.js` (`AdaptivePoller`-backed settings cache, quotas, cooldowns, sessions, failover), `utils/ai/aiEmbeds.js`, `utils/ai/aiCommands.js` (shared action logic), `utils/ai/mentionHandler.js`.
+- **Entry points:** `commands/ai.js` (13 subcommands), prefix `case "ai"` in `events/messageCreate.js`, bare mention → `utils/mentionReply.js`, mention-with-text or reply-to-bot → `mentionHandler`. Auto mode (`settings.mode = 'auto'`) runs in the non-command block, after auto-reactions/responder.
+- **Storage:** `ai_settings`, `ai_sessions`, `ai_messages`, `ai_usage`, `ai_knowledge`, `ai_provider_meta` (migration `0036`, self-created). Sessions are per `(guild, user)`, persist across restarts and expire (`sessionTtlMinutes`). Usage is one row per `(guild, user, day)`.
+- **Dashboard:** tab `AI Assistant` (`render/guild.js` TABS) → `render/ai-page.js` (8 sections: overview/configuration/personality/knowledge/memory/usage/providers/permissions) + `public/js/ai.js`. API in `dashboard/server.js` (`GET/PATCH /api/guilds/:guildId/ai`, knowledge CRUD, session clearing, provider test, usage reset) all `requireAuth + requireGuildAdmin`; channel/role ids are validated against the live guild. Provider test is a stateless `callProvider` call (the dashboard has no manager process).
+- **Mention reply card:** one `ContainerBuilder` holding the text and the four Link buttons (`utils/mentionReply.js`), `flags: MessageFlags.IsComponentsV2`, no `content`/`embeds`. Link buttons must not carry a `customId` (Discord rejects it). Emojis resolve through `client.emojiManager.forComponent()` with Unicode fallbacks.
+- **Tests:** `tests/aiAssistant.test.js` (free-model guard, adapters, failover, auth-disable, quotas/cooldowns, session persistence/isolation/expiry, prompt safety, mention handler, Components V2 card, page render, route guards).

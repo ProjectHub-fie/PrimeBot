@@ -42,6 +42,25 @@ const MANAGE_MESSAGES = 'Manage Messages';
 const MANAGE_ROLES = 'Manage Roles';
 
 const METADATA = {
+    ai: {
+        category: 'Utility', permission: null,
+        description: 'AI assistant — ask questions, chat with memory, summarize, translate, explain code or errors and analyse images. Free for every server: the bot owner configures the free provider keys once, servers need nothing. Works as `/ai`, `$ai` and by mentioning PrimeBot (or replying to one of its answers). Admins manage personality, knowledge, channels/roles and limits with `/ai config`.',
+        usage: [
+            'ai ask <question>',
+            'ai chat [message]',
+            'ai summarize [count]',
+            'ai translate <language> <text>',
+            'ai explain <topic|code|error>',
+            'ai analyze [image]',
+            'ai personality <preset|instructions> (Manage Server)',
+            'ai knowledge <add|remove|list> (Manage Server)',
+            'ai memory [show|clear]',
+            'ai config <setting> <value> (Manage Server)',
+            'ai usage [server]',
+            'ai reset',
+            'ai help',
+        ],
+    },
     prefix: {
         category: 'Configuration', permission: ADMINISTRATOR,
         description: "View the server's current text prefix or change it.",
@@ -226,6 +245,30 @@ const METADATA = {
         description: 'Set your birthday, check someone\u2019s, or list upcoming birthdays. Admins can also set the announcement channel and the birthday role.',
         usage: ['birthday set <MM/DD/YYYY>', 'birthday remove', 'birthday list',
                 'birthday check [@user]', 'birthday channel [#channel]', 'birthday role [@role]'],
+    },
+    event: {
+        category: 'Engagement',
+        description: 'Create, join and manage community events. RSVP Going / Interested / Not going with buttons, automatic reminders, a waiting list, recurring schedules and optional Discord Scheduled Events. Free for every server.',
+        usage: [
+            'event create <name> <start> [duration] [type]',
+            'event edit <id> [name=] [start=] [duration=]',
+            'event cancel <id> [reason]', 'event delete <id>',
+            'event list [status]', 'event info [id]',
+            'event join [id]', 'event leave [id]',
+            'event config [id] [channel=#channel] [role=@role]',
+            'event reminders <id> 24h,1h',
+        ],
+        note: 'Everything can also be configured visually in the dashboard → Event Management.',
+    },
+    invite: {
+        category: 'Engagement',
+        description: 'Invite tracking: see who brought each member to the server. Counts joins, leaves and net invites per inviter, keeps a leaderboard and a per-member history. When Discord does not expose which invite was used, the inviter is recorded as Unknown instead of guessing.',
+        usage: [
+            'invite [stats] [@user]', 'invite leaderboard [page]', 'invite info @user',
+            'invite config enabled=on channel=#logs join=on leave=on',
+            'invite reset confirm',
+        ],
+        note: 'Everything can also be configured visually in the dashboard → Invite Tracking.',
     },
     music: {
         category: 'Music',

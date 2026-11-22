@@ -7,6 +7,13 @@ module.exports = {
         try {
             if (!member || !member.guild) return;
 
+            // Invite Tracking: close the member's open join row and count the
+            // leave against the inviter. Fire-and-forget.
+            if (client.inviteTracker?.handleMemberRemove) {
+                client.inviteTracker.handleMemberRemove(member).catch(err =>
+                    console.error('[INVITE] leave tracking failed:', err.message));
+            }
+
             logEvent(client, member.guild.id, {
                 type: 'memberLeave',
                 title: 'Member Left',

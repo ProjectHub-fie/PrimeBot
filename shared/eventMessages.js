@@ -15,9 +15,24 @@
  * customIds are ≤100 chars (numeric ids only), so this is always safe.
  */
 
-const { eventTypeMeta, eventStatusMeta } = require('./eventConstants');
+const { eventTypeMeta, eventStatusMeta, recurrenceMeta } = require('./eventConstants');
 
 const BRAND_FOOTER = 'PrimeBot Events';
+
+let componentEmojiFor = null;
+try {
+    ({ componentEmojiFor } = require('../utils/buttonEmoji'));
+} catch { /* emoji manager unavailable (tests) — Unicode fallbacks are used */ }
+
+/**
+ * A component `emoji` value from the centralized EmojiManager, falling back to
+ * the Unicode character. Discord accepts either `{ id, name }` or `{ name }`.
+ */
+function rsvpEmoji(key, fallback) {
+    const resolved = componentEmojiFor ? componentEmojiFor(key, fallback) : fallback;
+    if (!resolved) return undefined;
+    return typeof resolved === 'string' ? { name: resolved } : resolved;
+}
 
 function colorToInt(hex) {
     if (typeof hex === 'number' && Number.isFinite(hex)) return hex & 0xffffff;
@@ -91,12 +106,19 @@ function buildEventEmbed(event, stats = {}) {
 
     if (stats.participants != null) {
         const max = event.maxParticipants ? ` / ${event.maxParticipants}` : '';
-        fields.push({ name: '👥 Participants', value: `${stats.participants}${max}`, inline: true });
+        fields.push({ name: '👥 Going', value: `${stats.participants}${max}`, inline: true });
+    }
+    if (stats.interested != null) {
+        fields.push({ name: '⭐ Interested', value: String(stats.interested), inline: true });
     }
     if (event.trackAttendance && stats.checkedIn != null) {
         fields.push({ name: '✅ Checked in', value: String(stats.checkedIn), inline: true });
     }
     fields.push({ name: '🎟️ Registration', value: registrationLabel(event), inline: true });
+    const rec = recurrenceMeta(event.recurrence);
+    if (rec && rec.key !== 'none') {
+        fields.push({ name: '🔁 Repeats', value: rec.label, inline: true });
+    }
 
     if (Array.isArray(event.embedFields)) {
         for (const f of event.embedFields.slice(0, 25 - fields.length)) {
@@ -115,29 +137,41 @@ function buildEventEmbed(event, stats = {}) {
 
 /**
  * Build the interactive component rows for an announcement.
- * Returns [] when the event is cancelled/completed (nothing to interact with).
+ *
+ * RSVP buttons (Going / Interested / Not going) are always available while the
+ * event is live or upcoming; "Going" disappears once registration is closed or
+ * the event is full-with-no-waitlist. Custom emojis resolve through the central
+ * EmojiManager and degrade to Unicode, so a missing emoji never breaks a button.
  */
 function buildEventComponents(event) {
     const id = String(event.id);
+    const terminal = event.status === 'cancelled' || event.status === 'completed';
     const joinable = event.registrationMode !== 'closed'
-        && event.status !== 'cancelled'
-        && event.status !== 'completed';
+        && !terminal;
 
-    const row1 = [];
+    const rsvpRow = [];
     if (joinable) {
-        row1.push({ type: 2, style: 3, custom_id: `evjoin:${id}`, label: 'Join Event', emoji: { name: '🎟️' } });
-        row1.push({ type: 2, style: 2, custom_id: `evleave:${id}`, label: 'Leave', emoji: { name: '🚪' } });
+        rsvpRow.push({ type: 2, style: 3, custom_id: `evjoin:${id}`, label: 'Going', emoji: rsvpEmoji('tick', '✅') });
     }
+    if (!terminal) {
+        rsvpRow.push({ type: 2, style: 2, custom_id: `evinterest:${id}`, label: 'Interested', emoji: rsvpEmoji('star', '⭐') });
+        rsvpRow.push({ type: 2, style: 2, custom_id: `evleave:${id}`, label: 'Not going', emoji: rsvpEmoji('cross', '❌') });
+    }
+
+    const infoRow = [];
     if (event.trackAttendance && event.status === 'live') {
-        row1.push({ type: 2, style: 1, custom_id: `evcheckin:${id}`, label: 'Check In', emoji: { name: '✅' } });
+        infoRow.push({ type: 2, style: 1, custom_id: `evcheckin:${id}`, label: 'Check In', emoji: rsvpEmoji('tick', '✅') });
     }
-    row1.push({ type: 2, style: 2, custom_id: `evparts:${id}`, label: 'Participants', emoji: { name: '👥' } });
-    row1.push({ type: 2, style: 2, custom_id: `evinfo:${id}`, label: 'Event Info', emoji: { name: 'ℹ️' } });
-    row1.push({ type: 2, style: 2, custom_id: `evremind:${id}`, label: 'Remind Me', emoji: { name: '🔔' } });
+    infoRow.push({ type: 2, style: 2, custom_id: `evparts:${id}`, label: 'Participants', emoji: rsvpEmoji('staff', '👥') });
+    infoRow.push({ type: 2, style: 2, custom_id: `evinfo:${id}`, label: 'Event Info', emoji: rsvpEmoji('information', 'ℹ️') });
+    infoRow.push({ type: 2, style: 2, custom_id: `evremind:${id}`, label: 'Remind Me', emoji: rsvpEmoji('bell', '🔔') });
 
     const rows = [];
-    for (let i = 0; i < row1.length; i += 5) {
-        rows.push({ type: 1, components: row1.slice(i, i + 5) });
+    for (const row of [rsvpRow, infoRow]) {
+        const components = row.filter(Boolean);
+        for (let i = 0; i < components.length; i += 5) {
+            rows.push({ type: 1, components: components.slice(i, i + 5) });
+        }
     }
     return rows;
 }
@@ -167,19 +201,29 @@ function buildReminderPayload(event, minutes) {
 function buildParticipantsEmbed(event, participants = []) {
     const type = eventTypeMeta(event.type);
     const registered = participants.filter(p => p.status === 'registered');
+    const interested = participants.filter(p => p.status === 'interested');
+    const waiting = participants.filter(p => p.status === 'waiting');
     const lines = registered.slice(0, 50).map((p, i) => {
         const check = p.attendanceStatus === 'present' ? ' ✅' : (p.attendanceStatus === 'absent' ? ' ❌' : '');
         return `${i + 1}. <@${p.userId}>${check}`;
     });
+    const fields = [];
+    if (event.maxParticipants) {
+        fields.push({ name: 'Slots', value: `${registered.length} / ${event.maxParticipants}`, inline: true });
+    }
+    if (waiting.length) {
+        fields.push({ name: 'Waiting list', value: waiting.slice(0, 15).map(p => `<@${p.userId}>`).join('\n'), inline: false });
+    }
+    if (interested.length) {
+        fields.push({ name: 'Interested', value: interested.slice(0, 15).map(p => `<@${p.userId}>`).join('\n'), inline: false });
+    }
     const embed = {
         title: truncate(`👥 ${event.name} — Participants`, 256),
         color: colorToInt(type.color),
         description: lines.join('\n') || 'No one has registered yet.',
         footer: { text: BRAND_FOOTER },
     };
-    if (event.maxParticipants) {
-        embed.fields = [{ name: 'Slots', value: `${registered.length} / ${event.maxParticipants}`, inline: true }];
-    }
+    if (fields.length) embed.fields = fields;
     return embed;
 }
 
