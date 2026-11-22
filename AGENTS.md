@@ -1823,50 +1823,43 @@ uses. No new server, no new bot, no credentials in code.
   unavailable guilds, permission errors, caching, Unicode-safe rendering,
   embeds/buttons/selects, interaction callbacks, token redaction, route filter.
 
-## Help menus: no category descriptions
+## Help menus: exact category format + Components V2
 
-The prefix `$help` menu and the Sash menu no longer render category descriptions.
-Category entries show only the category emoji + label (prefix main menu also
-shows the usage line and command count; the Sash main menu shows the command
-count). `CATALOG` in `utils/prefixHelp.js` no longer carries `description` or
-`selectDesc`; `buildSashCategories` no longer copies a `desc`; and neither
-`categoryEmbed` (prefix) nor `showSashHelp` (sash) sets a category description.
-Command descriptions (`cmd.desc`) are unchanged. The slash `/help` button menu
-is a separate surface and still has its own category blurbs. Tests:
-`tests/helpMenuNoCategoryDescriptions.test.js`.
+Every Help surface renders categories as:
 
-## Help menus: Linix layout (shared builders)
+```text
+<custom emoji> –> Category
+```
 
-All help surfaces now render from one Linix-style builder set in
-`utils/prefixHelp.js`:
+- `CATEGORY_SEPARATOR = '–>'` and `categoryLine(key)` live in
+  `utils/prefixHelp.js`; use them instead of hardcoding the separator.
+- `mainMenuText()` is the single main-menu category list. `categoryTitle(category)`
+  is the category heading and `categoryText(category)` is the comma-separated
+  backticked command-name list. No category descriptions and no command
+  descriptions are rendered.
+- `categorySelectRow()` labels are `–> Category`; Discord renders the option's
+  custom emoji before that label, producing `<emoji> –> Category`. Sash category
+  buttons use the same separator.
+- `buildHelpPayload({ title, text, rows })` is the only Help message builder. It
+  returns a true Components V2 payload: `{ components: [ContainerBuilder JSON],
+  flags: MessageFlags.IsComponentsV2 }` with **no `embeds` and no `content`**.
+  `title`/`text` become `TextDisplayBuilder` children, a `SeparatorBuilder`
+  separates the title from the body, and each row is an `ActionRowBuilder`.
+- Consumers: `commands/help.js` (slash), `commands/categories.js` (`/categories`),
+  `utils/prefixHelp.js` (`$help`/`$commands`, prefix select updates), and
+  `events/interactionCreate.js` (`help_select`, `help_back`, `help_*` buttons,
+  the Sash menu). `events/messageCreate.js` renders `$help` through the same
+  builder.
+- **Do not add `embeds` or `content` to a Help update.** A message that already
+  has `MessageFlags.IsComponentsV2` rejects either field with Discord API
+  `50035 MESSAGE_CANNOT_USE_LEGACY_FIELDS_WITH_COMPONENTS_V2`.
+- Help replies that need to be private use `flags: MessageFlags.Ephemeral`, not
+  the deprecated `ephemeral: true` option.
+- `categoryEmbed`/`mainMenuEmbed` remain for compatibility/tests, but the live
+  Help flow uses `buildHelpPayload`.
 
-- `mainMenuEmbed(prefix, client, { user, kind })` — Linix layout: a short intro
-  (prefix/total/prefix-vs-slash counts, or a slash greeting), one
-  `My Commands:` field listing every category as `> <emoji> \`:\` **Label**`,
-  the invoking user's avatar as the thumbnail, and a `Loved by N Servers`
-  footer. No title, no timestamp, no category blurbs.
-- `categoryEmbed(category, prefix, { commands, iconURL })` — title
-  `<emoji> <Category> Commands`, description is the comma-separated backticked
-  command names (deduped; music expands to `music play`, `music search`, …),
-  footer `Total N commands.` No fields, no category description.
-- `categorySelectRow(current, customId = 'help_select')` — emoji + label only,
-  no option descriptions.
-- `homeButtonRow(customId = 'help_back')` — emoji-only secondary home button.
-- `utils/linixEmbed.js` — Linix `t/d/thumb/img/a/f` builder. It deliberately
-  leaves the embed colour unset so there is **no side colour stripe**; set
-  `LINIX_EMBED_COLOR` only if that is ever wanted. `LINIX_EMBED_IMAGE` is the
-  optional card image.
-
-Consumers: `commands/help.js` (slash), `commands/categories.js` (legacy
-`/categories`), `utils/prefixHelp.js` (`$help`), and
-`events/interactionCreate.js` (`help_select`, `help_back`, old `help_*`
-buttons, and the Sash menu). Slash help routes `help_select`; prefix help routes
-`category_select_prefix`; the Sash menu keeps its category buttons but uses the
-same embeds. All buttons live in the same message payload as the embed
-(`components`).
-
-`music/help.js` (`$music`) was also moved to `linixEmbed` and now shows the
-music emojis (`play`, `filter`, `autoplay`, `music`) — it previously had none.
 Tests: `tests/helpMenuNoCategoryDescriptions.test.js`,
 `tests/musicHelpEmoji.test.js`, `tests/emojiCatalog.test.js`,
 `tests/sashMenu.test.js`.
+
+`music/help.js` (`$music`) uses `linixEmbed` and shows the music emojis (`play`, `filter`, `autoplay`, `music`).

@@ -1,16 +1,15 @@
-const { SlashCommandBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
-const config = require('../config');
+const { SlashCommandBuilder, MessageFlags } = require('discord.js');
 const { scheduleComponentExpiry } = require('../utils/stabilityUtils');
 const { emoji } = require('../utils/emoji');
-const { linixEmbed } = require('../utils/linixEmbed');
-const { buildEmbedWithButtons } = require('../utils/embedComponentsV2');
 const {
     CATALOG,
     CATEGORY_ORDER,
-    mainMenuEmbed,
-    categoryEmbed,
+    buildHelpPayload,
+    mainMenuText,
+    categoryTitle,
+    categoryText,
     categorySelectRow,
-    homeButtonRow,
+    helpActionRow,
 } = require('../utils/prefixHelp');
 
 // Discord embeds cannot animate, so the loading state is a short sequence of
@@ -24,34 +23,16 @@ const HELP_ANIMATION_FRAMES = [
 async function playHelpAnimation(replyTarget) {
     for (let i = 0; i < HELP_ANIMATION_FRAMES.length; i++) {
         const frame = HELP_ANIMATION_FRAMES[i];
-        const embed = linixEmbed()
-            .t(`${frame.emoji()} Loading`)
-            .d(`${frame.text} ${'·'.repeat(i + 1)}`)
-            .f(`PrimeBot • Version ${config.version}`);
         try {
-            await replyTarget.editReply({ embeds: [embed], components: [] });
+            await replyTarget.editReply(buildHelpPayload({
+                title: `${frame.emoji()} Loading`,
+                text: `${frame.text} ${'·'.repeat(i + 1)}`,
+            }));
         } catch (_) {
             break;
         }
         await new Promise(r => setTimeout(r, 450));
     }
-}
-
-function helpActionRow() {
-    const row = homeButtonRow('help_back');
-    row.addComponents(
-        new ButtonBuilder()
-            .setCustomId('help_prefix')
-            .setLabel('Sash')
-            .setStyle(ButtonStyle.Secondary)
-            .setEmoji(emoji('utility', '💬')),
-        new ButtonBuilder()
-            .setLabel('Support')
-            .setStyle(ButtonStyle.Link)
-            .setURL(config.supportServer || 'https://discord.gg/primebot')
-            .setEmoji(emoji('information', '🆘')),
-    );
-    return row;
 }
 
 module.exports = {
@@ -84,7 +65,7 @@ module.exports = {
             if (!interaction.replied && !interaction.deferred) {
                 await interaction.reply({
                     content: 'There was an error displaying the help menu. Please try again later.',
-                    ephemeral: true,
+                    flags: MessageFlags.Ephemeral,
                 });
             }
         }
@@ -92,27 +73,19 @@ module.exports = {
 };
 
 async function showMainHelp(interaction) {
-    const mainEmbed = mainMenuEmbed('/', interaction.client, {
-        user: interaction.user,
-        kind: 'slash',
-    });
-
-    await interaction.editReply(buildEmbedWithButtons({
-        embeds: [mainEmbed],
-        components: [categorySelectRow(null, 'help_select'), helpActionRow()],
+    await interaction.editReply(buildHelpPayload({
+        text: mainMenuText(),
+        rows: [categorySelectRow(null, 'help_select'), helpActionRow()],
     }));
     const sent = await interaction.fetchReply().catch(() => null);
     if (sent) scheduleComponentExpiry(sent);
 }
 
 async function showCategoryHelp(interaction, category) {
-    const embed = categoryEmbed(category, '/', {
-        iconURL: interaction.client?.user?.displayAvatarURL?.({ dynamic: true }),
-    });
-
-    await interaction.editReply(buildEmbedWithButtons({
-        embeds: [embed],
-        components: [categorySelectRow(category, 'help_select'), helpActionRow()],
+    await interaction.editReply(buildHelpPayload({
+        title: categoryTitle(category),
+        text: categoryText(category),
+        rows: [categorySelectRow(category, 'help_select'), helpActionRow()],
     }));
     const sent = await interaction.fetchReply().catch(() => null);
     if (sent) scheduleComponentExpiry(sent);

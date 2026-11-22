@@ -12,6 +12,12 @@ const {
     categorySelectRow,
     homeButtonRow,
     categoryIcon,
+    CATEGORY_SEPARATOR,
+    mainMenuText,
+    categoryTitle,
+    categoryText,
+    buildHelpPayload,
+    helpActionRow,
 } = require('../utils/prefixHelp');
 
 const user = {
@@ -39,7 +45,7 @@ test('the help main menu is only the category lines', () => {
     assert.equal(lines.length, CATEGORY_ORDER.length);
     for (let i = 0; i < CATEGORY_ORDER.length; i++) {
         const key = CATEGORY_ORDER[i];
-        assert.equal(lines[i], `${categoryIcon(key)} ${CATALOG[key].label}`);
+        assert.equal(lines[i], `${categoryIcon(key)} ${CATEGORY_SEPARATOR} ${CATALOG[key].label}`);
     }
     assert.equal(menu.data.fields, undefined);
     assert.equal(menu.data.thumbnail, undefined);
@@ -55,7 +61,7 @@ test('the help main menu has no coloured side stripe', () => {
 
 test('the category detail lists command names, not a category description', () => {
     const general = categoryEmbed('general', '$', { iconURL: 'https://cdn.example/bot.png' });
-    assert.match(general.data.title, /General Commands$/);
+    assert.equal(general.data.title, `${categoryIcon('general')} ${CATEGORY_SEPARATOR} General`);
     assert.equal(general.data.fields, undefined);
     assert.equal(general.data.footer, undefined);
     assert.ok(general.data.description.includes('`help`'));
@@ -72,7 +78,7 @@ test('the category select has labels and emoji but no descriptions', () => {
     const options = categorySelectRow().toJSON().components[0].options;
     assert.equal(options.length, CATEGORY_ORDER.length);
     for (const option of options) {
-        assert.ok(option.label);
+        assert.match(option.label, /^–> /);
         assert.ok(option.emoji);
         assert.equal(option.description, undefined);
     }
@@ -103,12 +109,95 @@ test('category help text is derived from the shared catalog (prefix + Sash)', ()
     }
 });
 
-test('slash help uses the shared Linix builders and routes the select menu', () => {
+test('slash help uses the shared V2 builders and routes the select menu', () => {
     const helpSrc = fs.readFileSync(path.join(ROOT, 'commands', 'help.js'), 'utf8');
-    assert.match(helpSrc, /mainMenuEmbed\('\/'/);
+    assert.match(helpSrc, /buildHelpPayload\(/);
+    assert.match(helpSrc, /mainMenuText\(\)/);
     assert.match(helpSrc, /categorySelectRow\(null, 'help_select'\)/);
-    assert.match(helpSrc, /homeButtonRow\('help_back'\)/);
+    assert.match(helpSrc, /helpActionRow\(\)/);
+    assert.ok(!/embeds:/.test(helpSrc), 'slash help still sends a legacy embed field');
 
     const interactionSrc = fs.readFileSync(path.join(ROOT, 'events', 'interactionCreate.js'), 'utf8');
     assert.match(interactionSrc, /interaction\.customId === 'help_select'/);
+    assert.match(interactionSrc, /buildHelpPayload\(/);
+});
+
+test('the help payload is Components V2 with no legacy embeds or content', () => {
+    const payload = buildHelpPayload({
+        text: mainMenuText(),
+        rows: [categorySelectRow(null, 'help_select'), helpActionRow()],
+    });
+    assert.deepEqual(Object.keys(payload).sort(), ['components', 'flags']);
+    assert.equal(payload.embeds, undefined);
+    assert.equal(payload.content, undefined);
+    assert.ok(payload.flags & require('discord.js').MessageFlags.IsComponentsV2);
+    assert.equal(payload.components[0].type, 17);
+
+    const json = JSON.stringify(payload);
+    assert.ok(!json.includes('"embeds"'), 'payload must not contain an embeds key');
+});
+
+test('slash help emits V2 payloads for the main menu and every category', async () => {
+    const helpCommand = require('../commands/help');
+    const captured = [];
+    const interaction = {
+        editReply: async payload => { captured.push(payload); },
+        fetchReply: async () => null,
+    };
+
+    await helpCommand.showMainHelp(interaction);
+    await helpCommand.showCategoryHelp(interaction, 'general');
+
+    assert.equal(captured.length, 2);
+    for (const payload of captured) {
+        assert.deepEqual(Object.keys(payload).sort(), ['components', 'flags']);
+        assert.equal(payload.embeds, undefined);
+        assert.equal(payload.content, undefined);
+        assert.ok(payload.flags & require('discord.js').MessageFlags.IsComponentsV2);
+        assert.ok(!JSON.stringify(payload).includes('"embeds"'));
+    }
+    assert.equal(captured[1].components[0].components[0].content, `${categoryIcon('general')} –> General`);
+});
+
+test('every help update path uses V2 payloads, never legacy embeds', () => {
+    const src = fs.readFileSync(path.join(ROOT, 'events', 'interactionCreate.js'), 'utf8');
+    const start = src.indexOf('async function showMainHelpUpdate');
+    const end = src.indexOf('function parseAppealCustomId');
+    const helpRegion = src.slice(start, end);
+    assert.ok(start >= 0 && end > start);
+    assert.match(helpRegion, /buildHelpPayload\(/);
+    assert.ok(!/embeds\s*:/.test(helpRegion), 'an interaction help path still sends legacy embeds');
+
+    const messageSrc = fs.readFileSync(path.join(ROOT, 'events', 'messageCreate.js'), 'utf8');
+    const blockStart = messageSrc.indexOf('case "help":');
+    const blockEnd = messageSrc.indexOf('case "giveaway":');
+    const helpBlock = messageSrc.slice(blockStart, blockEnd);
+    assert.ok(blockStart >= 0 && blockEnd > blockStart);
+    assert.match(helpBlock, /buildHelpPayload\(/);
+    assert.ok(!/embeds\s*:/.test(helpBlock), 'the prefix help path still sends legacy embeds');
+});
+
+test('every help category builds a valid V2 payload with the exact format', () => {
+    for (const key of CATEGORY_ORDER) {
+        const payload = buildHelpPayload({
+            title: categoryTitle(key),
+            text: categoryText(key),
+            rows: [categorySelectRow(key, 'help_select'), helpActionRow()],
+        });
+        assert.deepEqual(Object.keys(payload).sort(), ['components', 'flags'], `${key} has legacy fields`);
+        assert.ok(payload.flags & require('discord.js').MessageFlags.IsComponentsV2);
+        assert.equal(payload.components[0].type, 17);
+        const title = payload.components[0].components[0].content;
+        assert.ok(title.includes('–>'), `${key} title is missing the separator`);
+        assert.ok(title.endsWith(CATALOG[key].label), `${key} title is missing the category name`);
+        const select = payload.components[0].components.find(c => c.type === 1);
+        assert.ok(select, `${key} is missing its select row`);
+    }
+});
+
+test('category titles and lines use the exact –> separator', () => {
+    assert.equal(CATEGORY_SEPARATOR, '–>');
+    assert.equal(categoryTitle('general'), `${categoryIcon('general')} –> General`);
+    assert.equal(mainMenuText().split('\n')[0], `${categoryIcon('general')} –> General`);
+    assert.match(categoryText('general'), /`help`/);
 });
