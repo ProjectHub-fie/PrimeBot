@@ -1,6 +1,8 @@
 /**
- * AI Assistant embeds — shared by slash, prefix and the dashboard previews.
- * Brand palette only (config.colors) and no secrets in any field.
+ * AI Assistant message builders — shared by slash, prefix, mention and the dashboard.
+ *
+ * The chat answer is sent as plain message text (`answerText`, no embed). Every
+ * other message (help, status, usage, errors, warnings) keeps its embed.
  */
 
 const { EmbedBuilder } = require('discord.js');
@@ -8,13 +10,23 @@ const config = require('../../config');
 const { AI_PERSONALITIES, AI_MODES, AI_LANGUAGES } = require('../../shared/aiConstants');
 
 const FOOTER = 'PrimeBot AI • free providers';
+const MAX_CONTENT = 2000;
 
-function answerEmbed(result) {
-    const provider = result.provider ? ` • ${result.provider}` : '';
-    return new EmbedBuilder()
-        .setColor(config.colors.primary)
-        .setDescription(result.text)
-        .setFooter({ text: `${FOOTER}${provider}` });
+function clip(text, max = MAX_CONTENT) {
+    const value = String(text ?? '');
+    return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
+}
+
+function footerLine(provider) {
+    return provider ? `${FOOTER} • ${provider}` : FOOTER;
+}
+
+/** The chat answer itself: plain text, never an embed. */
+function answerText({ text, provider } = {}) {
+    const body = String(text ?? '');
+    const tail = `\n\n-# ${footerLine(provider)}`;
+    if (!body.trim()) return `-# ${footerLine(provider)}`;
+    return `${clip(body, MAX_CONTENT - tail.length)}${tail}`;
 }
 
 function infoEmbed(title, description, fields = []) {
@@ -59,18 +71,8 @@ function helpEmbed(prefix = '$') {
         `\`${prefix}ai memory\` — show your session  •  \`${prefix}ai reset\` — clear it`,
         `\`${prefix}ai usage\` — your daily usage`,
         '',
-        '**Admin — one-word shortcuts**',
-        `\`${prefix}ai enable\` · \`${prefix}ai disable\` — turn the assistant on/off`,
-        `\`${prefix}ai channel #general\` · \`${prefix}ai channels clear\``,
-        `\`${prefix}ai role @Member\` · \`${prefix}ai roles clear\``,
-        `\`${prefix}ai mode mention|auto\` · \`${prefix}ai language es\``,
-        `\`${prefix}ai cooldown 5\` · \`${prefix}ai limit 60\` · \`${prefix}ai serverlimit 600\``,
-        `\`${prefix}ai ttl 60\` · \`${prefix}ai length 1800\``,
-        `\`${prefix}ai knowledge on|off\` · \`${prefix}ai vision on|off\``,
-        `\`${prefix}ai settings\` — show the current configuration`,
-        `\`${prefix}ai config <setting> <value>\` — full form (same settings)`,
-        '',
-        '**Admin — other**',
+        '**Admin**',
+        `\`${prefix}ai config <setting> <value>\` — enable, mode, language, personality, channel, role, limits`,
         `\`${prefix}ai personality <preset|instructions>\` — set the assistant tone`,
         `\`${prefix}ai knowledge add|remove|list …\` — manage server knowledge`,
         `\`${prefix}ai memory clear @member\` — clear a member's session`,
@@ -96,7 +98,7 @@ const PROVIDER_STATE_LABEL = {
 
 function statusEmbed(settings, providerStatus = []) {
     const active = providerStatus.filter(p => p.configured && p.active).map(p => p.label);
-    const configured = providerStatus.map((p) => {
+    const providers = providerStatus.map((p) => {
         const state = PROVIDER_STATE_LABEL[p.status] || (p.active ? 'ready' : 'unavailable');
         return p.configured
             ? `${p.label} — \`${p.model || 'no model'}\` • ${state}`
@@ -110,7 +112,7 @@ function statusEmbed(settings, providerStatus = []) {
         { name: 'Channels', value: settings.channelIds.length ? settings.channelIds.map(id => `<#${id}>`).join(', ') : 'Any channel', inline: false },
         { name: 'Roles', value: settings.roleIds.length ? settings.roleIds.map(id => `<@&${id}>`).join(', ') : 'Everyone', inline: false },
         { name: 'Limits', value: `Max ${settings.maxResponseChars} chars • ${settings.sessionTtlMinutes} min sessions • ${settings.cooldownSeconds}s cooldown\n${settings.dailyUserRequests}/user/day • ${settings.dailyGuildRequests}/server/day`, inline: false },
-        { name: 'Providers', value: configured.length ? configured.join('\n') : 'No provider configured', inline: false },
+        { name: 'Providers', value: providers.length ? providers.join('\n') : 'No provider configured', inline: false },
         { name: 'Available now', value: active.length ? active.join(', ') : 'None (busy or not configured)', inline: false },
     ]);
 }
@@ -131,7 +133,8 @@ function usageEmbed(userUsage, guildUsage, settings, { isServer = false } = {}) 
 
 module.exports = {
     FOOTER,
-    answerEmbed,
+    MAX_CONTENT,
+    answerText,
     infoEmbed,
     errorEmbed,
     warnEmbed,

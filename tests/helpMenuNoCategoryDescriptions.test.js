@@ -6,6 +6,7 @@ const path = require('node:path');
 const ROOT = path.join(__dirname, '..');
 const {
     CATALOG,
+    hasBetaCommands,
     CATEGORY_ORDER,
     mainMenuEmbed,
     categoryEmbed,
@@ -39,13 +40,17 @@ test('prefix and sash category catalogs carry no category descriptions', () => {
     }
 });
 
-test('the help main menu is only the category lines', () => {
+test('the help main menu is the stats line plus the category lines', () => {
     const menu = mainMenuEmbed('$', client, { user, kind: 'prefix' });
     const lines = menu.data.description.split('\n');
-    assert.equal(lines.length, CATEGORY_ORDER.length);
+    assert.match(lines[0], /\*\*Prefix\*\* `\$`/, 'the stats line must come first');
+    assert.match(lines[0], /\*\*Commands\*\* \d+ \(\d+ with aliases\)/);
+    assert.equal(lines[1], '', 'a blank line separates the stats line from the categories');
+    const betaLegendLines = hasBetaCommands() ? 2 : 0;
+    assert.equal(lines.length, CATEGORY_ORDER.length + 2 + betaLegendLines);
     for (let i = 0; i < CATEGORY_ORDER.length; i++) {
         const key = CATEGORY_ORDER[i];
-        assert.equal(lines[i], `${categoryIcon(key)} ${CATEGORY_SEPARATOR} ${CATALOG[key].label}`);
+        assert.equal(lines[i + 2], `${categoryIcon(key)} ${CATEGORY_SEPARATOR} ${CATALOG[key].label}`);
     }
     assert.equal(menu.data.fields, undefined);
     assert.equal(menu.data.thumbnail, undefined);
@@ -101,7 +106,7 @@ test('the Sash menu builder and drill-down do not render category descriptions',
 
 test('category help text is derived from the shared catalog (prefix + Sash)', () => {
     const src = fs.readFileSync(path.join(ROOT, 'events', 'interactionCreate.js'), 'utf8');
-    assert.match(src, /helpCategoryLines\(\)/, 'the category help reply must use the shared catalog');
+    assert.match(src, /helpCategoryLines\(/, 'the category help reply must use the shared catalog');
     assert.ok(!src.includes('• General - Basic'), 'the old hardcoded category list must be gone');
     assert.ok(!src.includes('• Administration - Advanced'), 'the old hardcoded category list must be gone');
     for (const key of ['information', 'birthdays', 'automation', 'antinuke']) {
@@ -112,7 +117,7 @@ test('category help text is derived from the shared catalog (prefix + Sash)', ()
 test('slash help uses the shared V2 builders and routes the select menu', () => {
     const helpSrc = fs.readFileSync(path.join(ROOT, 'commands', 'help.js'), 'utf8');
     assert.match(helpSrc, /buildHelpPayload\(/);
-    assert.match(helpSrc, /mainMenuText\(\)/);
+    assert.match(helpSrc, /mainMenuText\(\{/);
     assert.match(helpSrc, /categorySelectRow\(null, 'help_select'\)/);
     assert.match(helpSrc, /helpActionRow\(\)/);
     assert.ok(!/embeds:/.test(helpSrc), 'slash help still sends a legacy embed field');
@@ -198,6 +203,7 @@ test('every help category builds a valid V2 payload with the exact format', () =
 test('category titles and lines use the exact –> separator', () => {
     assert.equal(CATEGORY_SEPARATOR, '–>');
     assert.equal(categoryTitle('general'), `${categoryIcon('general')} –> General`);
-    assert.equal(mainMenuText().split('\n')[0], `${categoryIcon('general')} –> General`);
+    const menuLines = mainMenuText().split('\n');
+    assert.equal(menuLines[2], `${categoryIcon('general')} –> General`);
     assert.match(categoryText('general'), /`help`/);
 });

@@ -22,7 +22,7 @@ module.exports = {
 
 async function showCategorySelector(interaction) {
     await interaction.reply(buildHelpPayload({
-        text: mainMenuText(),
+        text: mainMenuText({ prefix: '/', client: interaction.client }),
         rows: [categorySelectRow(null, 'category_select'), homeButtonRow('categories_refresh')],
     }));
     const sent = await interaction.fetchReply().catch(() => null);
@@ -32,7 +32,7 @@ async function showCategorySelector(interaction) {
 async function showCategoryDetails(interaction, category) {
     await interaction.update(buildHelpPayload({
         title: categoryTitle(category),
-        text: categoryText(category),
+        text: categoryText(category, { prefix: '/', client: interaction.client }),
         rows: [categorySelectRow(category, 'category_select'), homeButtonRow('categories_refresh')],
     }));
     scheduleComponentExpiry(interaction.message);

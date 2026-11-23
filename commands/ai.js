@@ -152,7 +152,9 @@ module.exports = {
         }
 
         const result = await runAiAction(action, options, ctx);
+        // Answers are plain text; help/status/usage/errors keep their embeds.
         await interaction.editReply({
+            content: result.content,
             embeds: result.embeds,
             allowedMentions: { parse: [] },
         });

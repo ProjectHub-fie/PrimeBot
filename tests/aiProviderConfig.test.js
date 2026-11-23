@@ -424,7 +424,8 @@ test('mention, prefix and slash AI all run through the same manager', async () =
             fetchRecentMessages: async () => [],
         };
         const prefixReply = await runAiAction('ask', { question: 'hi' }, prefixCtx);
-        assert.ok(prefixReply.embeds?.length || prefixReply.content, 'prefix produced a reply');
+        assert.equal(prefixReply.embeds, undefined, 'chat answers are plain text');
+        assert.match(prefixReply.content, /shared answer/);
 
         const slash = require('../commands/ai');
         const edits = [];
