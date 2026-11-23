@@ -26,35 +26,40 @@ test('commandStats counts canonical commands and every alias', () => {
     assert.equal(stats.categories, help.CATEGORY_ORDER.length);
 });
 
-test('the stats line shows prefix, commands (with aliases) and servers', () => {
+test('the stats line shows prefix, total commands and servers on separate lines', () => {
     const stats = help.commandStats();
-    const line = help.helpStatsLine({ prefix: '!', servers: 51 });
-    assert.match(line, /^\*\*Prefix\*\* `!`/);
-    assert.ok(line.includes(`**Commands** ${stats.commands} (${stats.withAliases} with aliases)`));
-    assert.ok(line.includes('**Servers** 51'));
+    const lines = help.helpStatsLine({ prefix: '!', servers: 51 }).split('\n');
+    assert.deepEqual(lines, [
+        '**Prefix**: `!`',
+        `**Commands**: ${stats.withAliases}`,
+        '**Servers**: 51',
+    ]);
+    assert.ok(!lines.join('\n').includes('with aliases'), 'no alias wording in the menu');
 });
 
 test('the server count comes from the client guild cache', () => {
     const client = { guilds: { cache: new Map([['1', {}], ['2', {}], ['3', {}]]) } };
     const line = help.helpStatsLine({ prefix: '$', client });
-    assert.ok(line.includes('**Servers** 3'));
+    assert.ok(line.includes('**Servers**: 3'));
 });
 
 test('servers is omitted when no client or count is available', () => {
     const line = help.helpStatsLine({ prefix: '$' });
     assert.ok(!line.includes('**Servers**'), 'no fake server count');
-    assert.ok(line.includes('**Commands**'));
+    assert.ok(line.includes('**Commands**:'));
 });
 
 test('the main menu and every category page start with the stats line', () => {
     const options = { prefix: '$', servers: 7 };
-    const expected = help.helpStatsLine(options);
-    assert.equal(help.mainMenuText(options).split('\n')[0], expected);
+    const expected = help.helpStatsLine(options).split('\n');
+    const menu = help.mainMenuText(options).split('\n');
+    assert.deepEqual(menu.slice(0, expected.length), expected);
+    assert.equal(menu[expected.length], '', 'blank line before the categories');
 
     for (const key of help.CATEGORY_ORDER) {
-        const text = help.categoryText(key, options);
-        assert.equal(text.split('\n')[0], expected, `${key} is missing the stats line`);
-        assert.ok(text.includes('\n\n'), `${key} needs a blank line before the command list`);
+        const lines = help.categoryText(key, options).split('\n');
+        assert.deepEqual(lines.slice(0, expected.length), expected, `${key} is missing the stats block`);
+        assert.equal(lines[expected.length], '', `${key} needs a blank line before the command list`);
     }
 });
 
@@ -82,6 +87,7 @@ test('the stats line survives the V2 payload builder', () => {
     });
     assert.deepEqual(Object.keys(payload).sort(), ['components', 'flags']);
     const text = payload.components[0].components[0].content;
-    assert.ok(text.startsWith('**Prefix** `$`'));
-    assert.ok(text.includes('**Servers** 12'));
+    assert.ok(text.startsWith('**Prefix**: `$`'));
+    assert.ok(text.includes('**Commands**: '));
+    assert.ok(text.includes('**Servers**: 12'));
 });

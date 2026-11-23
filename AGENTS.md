@@ -1864,6 +1864,24 @@ Tests: `tests/helpMenuNoCategoryDescriptions.test.js`,
 
 `music/help.js` (`$music`) uses `linixEmbed` and shows the music emojis (`play`, `filter`, `autoplay`, `music`).
 
+### Help menu summary block (prefix · commands · servers)
+
+Every help surface starts with a three-line block built by `utils/prefixHelp.js` `helpStatsLine()`:
+
+```text
+**Prefix**: `$`
+**Commands**: 175
+**Servers**: 51
+```
+
+- `commandStats()` counts canonical catalog entries (`commands`) and every usable name (`withAliases`, i.e. entries + aliases). The block prints `withAliases` as one plain number — never "with aliases" wording.
+- `mainMenuText(options)` renders the block, a blank line, then the category list; `categoryText(category, options)` renders it above that category's command list. Both accept `{ prefix, client, servers }`; `servers` falls back to `client.guilds.cache.size` and the line is omitted entirely when neither is available (never a fake 0).
+- Call sites pass real values: `/help` + `/categories` → `{ prefix: '/', client: interaction.client }`; `$help` → `{ prefix, client: message.client }`; Sash buttons → `config.prefix`; slash help buttons → `'/'`. Tests: `tests/helpStatsLine.test.js`.
+
+### Server info — `/si` + `$si`
+
+`/si` (`commands/serverinfo.js`, guild-only) and the prefix `$si` / `$serverinfo` / `$server` (`events/messageCreate.js`) both render `utils/serverInfoEmbed.js` `buildServerInfoEmbed(guild)`: owner, member count, roles, channel split (text/voice/categories), boosts + tier, verification level, creation date, vanity URL and emoji/sticker counts, with the guild id in the footer. The builder tolerates plain Map caches and a missing `iconURL`/`createdTimestamp`. It is listed in the **Information** help category (`names: ['si', 'serverinfo', 'server']`) and in `/docs` (`dashboard/commandDocs.js` `METADATA.si`). Tests: `tests/serverInfoCommand.test.js`.
+
 ## AI Assistant — free providers, shared by every entry point
 
 `/ai`, `$ai` and mention/reply handling all call the same backend, so memory, quotas and provider failover are identical. Free for every server; the bot owner configures the provider keys once.
