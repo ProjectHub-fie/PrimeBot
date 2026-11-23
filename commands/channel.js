@@ -9,8 +9,12 @@ module.exports = {
         .setDMPermission(false)
         .addSubcommand(sub => sub
             .setName('create')
-            .setDescription('Create a text channel')
+            .setDescription('Create a text or voice channel')
             .addStringOption(o => o.setName('name').setDescription('Channel name').setRequired(true).setMaxLength(100))
+            .addStringOption(o => o.setName('type').setDescription('Text or voice channel (default: text)')
+                .addChoices({ name: 'Text', value: 'text' }, { name: 'Voice', value: 'voice' }).setRequired(false))
+            .addStringOption(o => o.setName('visibility').setDescription('Public or private (default: public)')
+                .addChoices({ name: 'Public', value: 'public' }, { name: 'Private', value: 'private' }).setRequired(false))
             .addChannelOption(o => o.setName('category').setDescription('Category to place it in')
                 .addChannelTypes(ChannelType.GuildCategory).setRequired(false)))
         .addSubcommand(sub => sub
@@ -38,11 +42,15 @@ module.exports = {
         let result;
         if (sub === 'create') {
             const category = interaction.options.getChannel('category');
-            result = await channelAdmin.createTextChannel(
+            const visibility = interaction.options.getString('visibility') === 'private' ? 'private' : 'public';
+            const create = interaction.options.getString('type') === 'voice'
+                ? channelAdmin.createVoiceChannel
+                : channelAdmin.createTextChannel;
+            result = await create(
                 guild,
                 interaction.options.getString('name', true),
                 category ? category.id : null,
-                { invokerId },
+                { invokerId, visibility },
             );
         } else if (sub === 'delete') {
             const channel = interaction.options.getChannel('channel', true);

@@ -99,8 +99,13 @@ const METADATA = {
     },
     cp: {
         category: 'Administration', permission: MANAGE_CHANNELS,
-        description: 'Create a text channel, optionally inside an existing category.',
-        usage: ['cp <name>', 'cp <name> #category'],
+        description: 'Create a text channel — public or private, optionally inside an existing category.',
+        usage: ['cp <name>', 'cp <name> private', 'cp <name> public <category>'],
+    },
+    cv: {
+        category: 'Administration', permission: MANAGE_CHANNELS,
+        description: 'Create a voice channel — public or private, optionally inside an existing category.',
+        usage: ['cv <name>', 'cv <name> private', 'cv <name> public <category>'],
     },
     mkdir: {
         category: 'Administration', permission: MANAGE_CHANNELS,
@@ -110,7 +115,7 @@ const METADATA = {
     hmkdir: {
         category: 'Administration', permission: MANAGE_CHANNELS,
         description: 'Delete a channel category. Channels inside it are kept and become uncategorised.',
-        usage: ['hmkdir <name>', 'hmkdir #category'],
+        usage: ['hmkdir <category-name>'],
     },
     rm: {
         category: 'Utility', permission: ADMINISTRATOR,

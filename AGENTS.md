@@ -1880,12 +1880,13 @@ Tests: `tests/helpMenuNoCategoryDescriptions.test.js`,
 
 Quick channel management without the dashboard. All four are guild-scoped (lookups only search the guild's own channel cache, so a mention or id from another guild can never resolve) and require **Manage Channels**.
 
-- `$cp <name> [#category]` (alias `createchannel`) → creates a text channel, optionally inside a category. Names are sanitised by `utils/channelAdmin.js` `sanitizeName()` (lowercase, spaces → `-`, invalid characters stripped, ≤100 chars, empty → `new-channel`).
+- `$cp <name> [private|public] [category]` (alias `createchannel`) → creates a text channel; `$cv <name> [private|public] [category]` (alias `createvoice`) → creates a voice channel. `private` denies `ViewChannel` to `@everyone`; `public` is the default. **Categories are not `#`-prefixed in Discord**, so the category is a plain name — the last word is treated as a category only when it matches an existing one (a `<#id>` mention also works). Names are sanitised by `utils/channelAdmin.js` `sanitizeName()` (lowercase, spaces → `-`, invalid characters stripped, ≤100 chars, empty → `new-channel`).
 - `$rm <#channel>` → **deletes** the channel. This only fires when the command has exactly one channel target and no new name, so `$rm <new-name>` still renames the current channel and `$rm 42 reason` still edits an automod embed reason. Refuses the channel the command was used in, categories (pointing at `hmkdir`), and undeletable channels.
 - `$mkdir <name>` (alias `createcategory`) → creates a category.
-- `$hmkdir <name|#category>` (aliases `rmdir`, `deletecategory`) → deletes a category. Channels inside are **kept** (they become uncategorised) and the reply says how many moved out.
-- Slash parity: `/channel create|delete|category-create|category-delete` (`commands/channel.js`, `setDefaultMemberPermissions(ManageChannels)`).
-- Help/docs: the four commands live in the **Administration** help category (`utils/prefixHelp.js`) and in `/docs` (`dashboard/commandDocs.js`); `rm`'s docs entry documents both rename and prefix-delete.
+- `$hmkdir <category-name>` (aliases `rmdir`, `deletecategory`) → deletes a category. Channels inside are **kept** (they become uncategorised) and the reply says how many moved out.
+- Slash parity: `/channel create` (`type: text|voice`, `visibility: public|private`, optional category), `delete`, `category-create`, `category-delete` (`commands/channel.js`, `setDefaultMemberPermissions(ManageChannels)`).
+- Help/docs: the five commands live in the **Administration** help category (`utils/prefixHelp.js`) and in `/docs` (`dashboard/commandDocs.js`); `rm`'s docs entry documents both rename and prefix-delete.
+- **Beta marking:** `categoryCommandNames()` appends `🧪` for any command whose entry has `beta: true` or whose name is in `config.betaFeatures`, and `mainMenuText()` adds the legend "🧪 = beta feature — the server must be in the beta program". `categoryLines()` is the pure list `mainMenuEmbed` uses (the legend would break its line-count invariant).
 - Tests: `tests/channelAdminCommands.test.js` (sanitising, resolution, create/delete semantics, refusals, help + docs wiring).
 
 ## Help menu: dedicated AI category + `$ai` shortcuts

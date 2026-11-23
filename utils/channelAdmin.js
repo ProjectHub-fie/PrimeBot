@@ -10,6 +10,8 @@
 const { ChannelType } = require('discord.js');
 
 const NAME_MAX = 100;
+const PRIVATE_WORDS = new Set(['private', 'priv', 'hidden', 'secret']);
+const PUBLIC_WORDS = new Set(['public', 'pub', 'open', 'visible']);
 const MENTION_RE = /^<#(\d{15,22})>$/;
 const ID_RE = /^\d{15,22}$/;
 
@@ -24,6 +26,21 @@ function sanitizeName(input, fallback = 'new-channel') {
         .replace(/^[-_]+|[-_]+$/g, '')
         .slice(0, NAME_MAX);
     return cleaned || fallback;
+}
+
+/** `private`/`public` (with a few synonyms), or null when the token is neither. */
+function parseVisibility(arg) {
+    const value = String(arg == null ? '' : arg).trim().toLowerCase();
+    if (PRIVATE_WORDS.has(value)) return 'private';
+    if (PUBLIC_WORDS.has(value)) return 'public';
+    return null;
+}
+
+function permissionOverwrites(guild, visibility) {
+    if (visibility !== 'private') return undefined;
+    const everyone = guild && guild.roles && guild.roles.everyone;
+    if (!everyone) return undefined;
+    return [{ id: everyone.id, deny: ['ViewChannel'] }];
 }
 
 function mentionId(arg) {
@@ -68,28 +85,38 @@ function findChannel(guild, arg, mentions = null) {
         || null;
 }
 
-async function createTextChannel(guild, rawName, rawCategory, { invokerId } = {}) {
-    const name = sanitizeName(rawName);
+async function createChannelOfType(guild, type, rawName, rawCategory, { invokerId, visibility = 'public', command = 'cp' } = {}) {
+    const name = sanitizeName(rawName, type === ChannelType.GuildVoice ? 'new-voice' : 'new-channel');
     let parent = null;
     if (rawCategory) {
         parent = findCategory(guild, rawCategory);
         if (!parent) return { ok: false, text: `I could not find a category matching **${rawCategory}**.` };
     }
+    const kind = type === ChannelType.GuildVoice ? 'voice channel' : 'channel';
     try {
         const channel = await guild.channels.create({
             name,
-            type: ChannelType.GuildText,
+            type,
             ...(parent ? { parent: parent.id } : {}),
-            reason: `Created by ${invokerId || 'a moderator'} (cp)`,
+            ...(permissionOverwrites(guild, visibility) ? { permissionOverwrites: permissionOverwrites(guild, visibility) } : {}),
+            reason: `Created by ${invokerId || 'a moderator'} (${command})`,
         });
         return {
             ok: true,
             channel,
-            text: `Created ${channel}${parent ? ` under **${parent.name}**` : ''}.`,
+            text: `Created ${visibility === 'private' ? 'private ' : ''}${kind} ${channel}${parent ? ` under **${parent.name}**` : ''}.`,
         };
     } catch (err) {
-        return { ok: false, error: err, text: `I could not create that channel: ${err.message}` };
+        return { ok: false, error: err, text: `I could not create that ${kind}: ${err.message}` };
     }
+}
+
+function createTextChannel(guild, rawName, rawCategory, options = {}) {
+    return createChannelOfType(guild, ChannelType.GuildText, rawName, rawCategory, { ...options, command: 'cp' });
+}
+
+function createVoiceChannel(guild, rawName, rawCategory, options = {}) {
+    return createChannelOfType(guild, ChannelType.GuildVoice, rawName, rawCategory, { ...options, command: 'cv' });
 }
 
 async function deleteChannel(guild, target, { invokerId, mentions = null, currentChannelId = null } = {}) {
@@ -151,10 +178,13 @@ async function deleteCategory(guild, target, { invokerId, mentions = null } = {}
 module.exports = {
     NAME_MAX,
     sanitizeName,
+    parseVisibility,
     mentionId,
     findCategory,
     findChannel,
     createTextChannel,
+    createVoiceChannel,
+    createChannelOfType,
     deleteChannel,
     createCategory,
     deleteCategory,

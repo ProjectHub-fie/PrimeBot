@@ -217,10 +217,11 @@ const CATALOG = {
         title: 'Administration',
         color: config.colors.error,
         commands: [
-            { names: ['cp', 'createchannel'], args: '<name> [#category]', desc: 'Create a text channel (optionally inside a category)' },
+            { names: ['cp', 'createchannel'], args: '<name> [private|public] [category]', desc: 'Create a text channel — public or private, optionally inside a category' },
+            { names: ['cv', 'createvoice'], args: '<name> [private|public] [category]', desc: 'Create a voice channel — public or private, optionally inside a category' },
             { names: ['rm'], args: '<#channel>', desc: 'Delete a channel — with a new name instead it renames' },
             { names: ['mkdir', 'createcategory'], args: '<name>', desc: 'Create a channel category' },
-            { names: ['hmkdir', 'rmdir', 'deletecategory'], args: '<name|#category>', desc: 'Delete a channel category (channels inside are kept)' },
+            { names: ['hmkdir', 'rmdir', 'deletecategory'], args: '<category-name>', desc: 'Delete a channel category (channels inside are kept)' },
             { names: ['embed'], args: '<send|list>', desc: 'Send an embed saved in the dashboard Embed Builder' },
             { names: ['level-enable', 'levelenable', 'leveling-enable', 'levelingon', 'leveling-on'], desc: 'Enable the leveling system' },
             { names: ['level-disable', 'leveldisable', 'leveling-disable', 'levelingoff', 'leveling-off'], desc: 'Disable the leveling system' },
@@ -320,8 +321,20 @@ function categoryLine(key) {
     return cat ? `${categoryIcon(key)} ${CATEGORY_SEPARATOR} ${cat.label}` : '';
 }
 
+function hasBetaCommands() {
+    return CATEGORY_ORDER.some(key => (CATALOG[key]?.commands || [])
+        .some(c => c.beta || isBeta(c.names)));
+}
+
+// Pure category list (embeds use this; the beta legend would break their line count).
+function categoryLines() {
+    return CATEGORY_ORDER.map(categoryLine).filter(Boolean);
+}
+
 function mainMenuText() {
-    return CATEGORY_ORDER.map(categoryLine).filter(Boolean).join('\n');
+    const text = categoryLines().join('\n');
+    if (!hasBetaCommands()) return text;
+    return `${text}\n\n${BETA_TAG} = beta feature — the server must be in the beta program`;
 }
 
 function categoryTitle(category) {
@@ -341,7 +354,8 @@ function categoryCommandNames(category, options = {}) {
             if (!c.display && name === 'music' && c.args) name = `music ${c.args.split(' ')[0]}`;
             if (!seen.has(name)) {
                 seen.add(name);
-                commandNames.push(name);
+                const beta = (c.beta || isBeta(c.names)) ? ` ${BETA_TAG}` : '';
+                commandNames.push(`${name}${beta}`);
             }
         }
     }
@@ -369,7 +383,7 @@ function categoryEmbed(category, prefix, options = {}) {
 function mainMenuEmbed(prefix, client, options = {}) {
     // Help is intentionally only the category list: no intro, no field title,
     // no thumbnail/footer/image, and no category descriptions.
-    return linixEmbed().d(mainMenuText());
+    return linixEmbed().d(categoryLines().join('\n'));
 }
 
 function categorySelectRow(currentCategory = null, customId = 'help_select') {
@@ -540,7 +554,9 @@ module.exports = {
     categoryLine,
     categoryTitle,
     categoryText,
+    hasBetaCommands,
     mainMenuText,
+    categoryLines,
     buildHelpPayload,
     CATEGORY_ORDER,
     BETA_FEATURES,

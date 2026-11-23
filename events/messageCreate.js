@@ -4152,17 +4152,63 @@ module.exports = {
                     }
                     const cpArgs = [...args];
                     if (!cpArgs.length) {
-                        return message.reply(`Usage: \`${prefix}cp <channel-name> [#category]\``);
+                        return message.reply(`Usage: \`${prefix}cp <channel-name> [private|public] [category]\``);
                     }
-                    const cpCategory = cpArgs.find(a => /^<#\d{15,22}>$/.test(a)) || null;
-                    const cpName = cpArgs.filter(a => a !== cpCategory).join(' ').trim();
+                    const cpVisibility = cpArgs.map(a => channelAdmin.parseVisibility(a)).find(Boolean) || 'public';
+                    const cpParts = cpArgs.filter(a => !channelAdmin.parseVisibility(a));
+                    // Categories are not #-prefixed in Discord, so the last word is
+                    // treated as a category only when it matches an existing one.
+                    let cpCategory = cpParts.find(a => /^<#\d{15,22}>$/.test(a)) || null;
+                    if (cpCategory) {
+                        cpParts.splice(cpParts.indexOf(cpCategory), 1);
+                    } else if (cpParts.length > 1) {
+                        const maybe = cpParts[cpParts.length - 1];
+                        if (channelAdmin.findCategory(message.guild, maybe)) {
+                            cpCategory = maybe;
+                            cpParts.pop();
+                        }
+                    }
+                    const cpName = cpParts.join(' ').trim();
                     if (!cpName) {
-                        return message.reply(`Usage: \`${prefix}cp <channel-name> [#category]\``);
+                        return message.reply(`Usage: \`${prefix}cp <channel-name> [private|public] [category]\``);
                     }
                     const cpResult = await channelAdmin.createTextChannel(message.guild, cpName, cpCategory, {
                         invokerId: message.author.id,
+                        visibility: cpVisibility,
                     });
                     return message.reply(cpResult.text);
+                }
+
+                case "cv":
+                case "createvoice": {
+                    if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
+                        return message.reply('You need the Manage Channels permission to create voice channels.');
+                    }
+                    const cvArgs = [...args];
+                    if (!cvArgs.length) {
+                        return message.reply(`Usage: \`${prefix}cv <channel-name> [private|public] [category]\``);
+                    }
+                    const cvVisibility = cvArgs.map(a => channelAdmin.parseVisibility(a)).find(Boolean) || 'public';
+                    const cvParts = cvArgs.filter(a => !channelAdmin.parseVisibility(a));
+                    let cvCategory = cvParts.find(a => /^<#\d{15,22}>$/.test(a)) || null;
+                    if (cvCategory) {
+                        cvParts.splice(cvParts.indexOf(cvCategory), 1);
+                    } else if (cvParts.length > 1) {
+                        const maybe = cvParts[cvParts.length - 1];
+                        if (channelAdmin.findCategory(message.guild, maybe)) {
+                            cvCategory = maybe;
+                            cvParts.pop();
+                        }
+                    }
+                    const cvName = cvParts.join(' ').trim();
+                    if (!cvName) {
+                        return message.reply(`Usage: \`${prefix}cv <channel-name> [private|public] [category]\``);
+                    }
+                    const cvResult = await channelAdmin.createVoiceChannel(message.guild, cvName, cvCategory, {
+                        invokerId: message.author.id,
+                        visibility: cvVisibility,
+                    });
+                    return message.reply(cvResult.text);
                 }
 
                 case "mkdir":
@@ -4188,7 +4234,7 @@ module.exports = {
                     }
                     const hkTarget = args.join(' ').trim();
                     if (!hkTarget) {
-                        return message.reply(`Usage: \`${prefix}hmkdir <category-name|#category>\``);
+                        return message.reply(`Usage: \`${prefix}hmkdir <category-name>\``);
                     }
                     const hkResult = await channelAdmin.deleteCategory(message.guild, hkTarget, {
                         invokerId: message.author.id,

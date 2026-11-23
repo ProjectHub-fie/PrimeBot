@@ -27,6 +27,7 @@ function fakeGuild(channels = []) {
     const map = new Map(channels.map(c => [c.id, c]));
     const guild = {
         id: 'guild-1',
+        roles: { everyone: { id: 'everyone-role' } },
         created: [],
         channels: {
             cache: map,
@@ -94,6 +95,49 @@ test('$cp creates a text channel, optionally inside a category', async () => {
     assert.equal(guild.created.length, 2, 'a failed lookup must not create anything');
 });
 
+test('$cp / $cv create public or private channels', async () => {
+    const guild = fakeGuild([]);
+
+    const publicText = await admin.createTextChannel(guild, 'general', null, { invokerId: 'u1', visibility: 'public' });
+    assert.equal(publicText.ok, true);
+    assert.equal(guild.created[0].opts.type, ChannelType.GuildText);
+    assert.equal(guild.created[0].opts.permissionOverwrites, undefined);
+    assert.doesNotMatch(publicText.text, /private/);
+
+    const privateText = await admin.createTextChannel(guild, 'staff', null, { invokerId: 'u1', visibility: 'private' });
+    assert.equal(privateText.ok, true);
+    assert.deepEqual(guild.created[1].opts.permissionOverwrites, [
+        { id: 'everyone-role', deny: ['ViewChannel'] },
+    ]);
+    assert.match(privateText.text, /private channel/);
+
+    const publicVoice = await admin.createVoiceChannel(guild, 'Lounge', null, { invokerId: 'u1', visibility: 'public' });
+    assert.equal(publicVoice.ok, true);
+    assert.equal(guild.created[2].opts.type, ChannelType.GuildVoice);
+    assert.equal(guild.created[2].opts.name, 'lounge');
+    assert.equal(guild.created[2].opts.permissionOverwrites, undefined);
+
+    const privateVoice = await admin.createVoiceChannel(guild, 'Admin VC', null, { invokerId: 'u1', visibility: 'private' });
+    assert.equal(privateVoice.ok, true);
+    assert.equal(guild.created[3].opts.type, ChannelType.GuildVoice);
+    assert.deepEqual(guild.created[3].opts.permissionOverwrites, [
+        { id: 'everyone-role', deny: ['ViewChannel'] },
+    ]);
+    assert.match(privateVoice.text, /private voice channel/);
+    assert.match(guild.created[3].opts.reason, /\(cv\)/);
+});
+
+test('visibility words are parsed with common synonyms', () => {
+    assert.equal(admin.parseVisibility('private'), 'private');
+    assert.equal(admin.parseVisibility('PRIV'), 'private');
+    assert.equal(admin.parseVisibility('hidden'), 'private');
+    assert.equal(admin.parseVisibility('public'), 'public');
+    assert.equal(admin.parseVisibility('pub'), 'public');
+    assert.equal(admin.parseVisibility('open'), 'public');
+    assert.equal(admin.parseVisibility('general'), null);
+    assert.equal(admin.parseVisibility(''), null);
+});
+
 test('$rm deletes a channel but refuses the current one, categories and undeletable channels', async () => {
     const current = fakeChannel({ id: '111111111111111111', name: 'general' });
     const other = fakeChannel({ id: '333333333333333333', name: 'old-chat' });
@@ -144,11 +188,13 @@ test('$mkdir and $hmkdir manage categories without deleting their channels', asy
 
 test('the prefix switch wires cp / rm / mkdir / hmkdir', () => {
     const src = fs.readFileSync(path.join(ROOT, 'events/messageCreate.js'), 'utf8');
-    for (const name of ['cp', 'mkdir', 'hmkdir']) {
+    for (const name of ['cp', 'cv', 'mkdir', 'hmkdir']) {
         assert.match(src, new RegExp(`case "${name}":`), `missing case "${name}"`);
     }
     assert.match(src, /channelAdmin\.deleteChannel\(message\.guild/);
     assert.match(src, /channelAdmin\.createTextChannel\(message\.guild/);
+    assert.match(src, /channelAdmin\.createVoiceChannel\(message\.guild/);
+    assert.match(src, /channelAdmin\.parseVisibility/);
     assert.match(src, /channelAdmin\.createCategory\(message\.guild/);
     assert.match(src, /channelAdmin\.deleteCategory\(message\.guild/);
     assert.match(src, /ManageChannels/);
@@ -157,7 +203,7 @@ test('the prefix switch wires cp / rm / mkdir / hmkdir', () => {
 test('the help menu lists the channel commands in Administration', () => {
     const help = require('../utils/prefixHelp');
     const text = help.categoryText('admin');
-    for (const name of ['cp', 'rm', 'mkdir', 'hmkdir']) {
+    for (const name of ['cp', 'cv', 'rm', 'mkdir', 'hmkdir']) {
         assert.ok(text.includes(name), `admin help missing ${name}: ${text}`);
     }
     const adminCat = help.CATALOG.admin.commands;
@@ -166,6 +212,14 @@ test('the help menu lists the channel commands in Administration', () => {
     assert.match(cp.desc, /Create a text channel/);
     const hm = adminCat.find(c => c.names[0] === 'hmkdir');
     assert.ok(hm.names.includes('rmdir'), 'hmkdir should also answer to rmdir');
+    const cv = adminCat.find(c => c.names[0] === 'cv');
+    assert.ok(cv, 'cv entry missing');
+    assert.match(cv.args, /private\|public/);
+    assert.match(cv.desc, /voice channel/);
+    // Categories are not #-prefixed in Discord, so help args must not show '#category'.
+    assert.doesNotMatch(cv.args, /#/);
+    assert.doesNotMatch(cp.args, /#/);
+    assert.doesNotMatch(hm.args, /#/);
 });
 
 test('the /channel slash group mirrors the prefix commands', () => {
@@ -173,6 +227,8 @@ test('the /channel slash group mirrors the prefix commands', () => {
     assert.equal(command.data.name, 'channel');
     const subs = command.data.options.map(o => o.name);
     assert.deepEqual(subs, ['create', 'delete', 'category-create', 'category-delete']);
+    const createOpts = command.data.options.find(o => o.name === 'create').options.map(o => o.name);
+    assert.deepEqual(createOpts, ['name', 'type', 'visibility', 'category']);
     assert.ok(command.data.default_member_permissions !== undefined);
 });
 
@@ -180,8 +236,34 @@ test('the docs page documents cp / mkdir / hmkdir and the new rm behaviour', () 
     const { buildCommandDocs } = require('../dashboard/commandDocs');
     const docs = buildCommandDocs();
     const byName = new Map(docs.commands.map(c => [c.name, c]));
-    for (const name of ['cp', 'mkdir', 'hmkdir', 'rm']) {
+    for (const name of ['cp', 'cv', 'mkdir', 'hmkdir', 'rm']) {
         assert.ok(byName.has(name), `${name} missing from /docs`);
     }
+    assert.match(byName.get('cp').description, /public or private/);
+    assert.match(byName.get('cv').description, /voice channel/);
     assert.match(byName.get('rm').description, /deletes the channel/);
+});
+
+test('beta commands are marked with the beta tag in the help menu', () => {
+    const help = require('../utils/prefixHelp');
+    assert.equal(help.hasBetaCommands(), true);
+    assert.match(help.categoryText('leveling'), /🧪/);
+    assert.match(help.mainMenuText(), /🧪 = beta feature/);
+    // Non-beta entries are not tagged.
+    assert.doesNotMatch(help.categoryText('admin'), /🧪/);
+});
+
+test('cp / cv accept a plain category name (no # prefix)', async () => {
+    const category = fakeChannel({ id: '222222222222222222', name: 'Staff Area', type: ChannelType.GuildCategory });
+    const guild = fakeGuild([category]);
+
+    const byName = await admin.createTextChannel(guild, 'private-log', 'staff area', { invokerId: 'u1', visibility: 'private' });
+    assert.equal(byName.ok, true);
+    assert.equal(guild.created[0].opts.parent, category.id);
+    assert.match(byName.text, /Staff Area/);
+
+    const voice = await admin.createVoiceChannel(guild, 'meeting', 'Staff Area', { invokerId: 'u1' });
+    assert.equal(voice.ok, true);
+    assert.equal(guild.created[1].opts.type, ChannelType.GuildVoice);
+    assert.equal(guild.created[1].opts.parent, category.id);
 });
