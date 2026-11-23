@@ -314,7 +314,7 @@ async function handleConfig(ctx, options) {
 
     // `$ai config` / `$ai settings` with no value shows the current configuration.
     if (!setting || setting === 'show' || setting === 'status') {
-        return { embeds: [E.statusEmbed(settings, await ctx.manager.getProviderStatus())], ephemeral: true };
+        return { content: E.statusText(settings, await ctx.manager.getProviderStatus()), ephemeral: true };
     }
 
     const patch = {};

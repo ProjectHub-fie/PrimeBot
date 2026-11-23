@@ -820,7 +820,8 @@ test('$ai settings shows the current configuration without writing', async () =>
         manager, guildId: 'g1', guildName: 'G', userId: 'u1', isAdmin: true, prefix: '$',
     });
     assert.equal(wrote, false, 'showing settings must not write');
-    assert.match(JSON.stringify(result.embeds[0]), /AI configuration/);
+    assert.match(result.content, /AI configuration/);
+    assert.equal(result.embeds, undefined, 'settings are plain text');
 });
 
 // ── Help menu ───────────────────────────────────────────────────────────────
