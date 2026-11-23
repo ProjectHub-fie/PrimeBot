@@ -71,11 +71,29 @@ const CATALOG = {
         title: 'Bot Information',
         color: config.colors.primary,
         commands: [
-            { names: ['ai'], args: '<ask|chat|summarize|translate|explain|analyze|personality|knowledge|memory|config|usage|reset|help>', desc: 'AI assistant — free for every server (also works by mentioning the bot)' },
             { names: ['about', 'ab'], desc: 'Information about the bot' },
             { names: ['stats', 'statistics'], desc: 'Bot statistics and server count' },
             { names: ['updates', 'ulog'], desc: 'Latest bot updates and features' },
             { names: ['ping'], desc: 'Check bot latency and connection status' },
+        ],
+    },
+
+    ai: {
+        icon: 'extra',
+        label: 'AI Assistant',
+        title: 'AI Assistant — free for every server',
+        color: config.colors.primary,
+        commands: [
+            { names: ['ai'], display: 'ai ask', args: 'ask|chat|explain|translate|summarize|analyze <text>', desc: 'Ask, chat with memory, explain, translate, summarize or analyse an image' },
+            { names: ['ai'], display: 'ai enable', args: 'enable|disable', desc: 'Turn the assistant on or off (Manage Server)' },
+            { names: ['ai'], display: 'ai channel', args: 'channel #channel|channels clear', desc: 'Restrict the assistant to specific channels' },
+            { names: ['ai'], display: 'ai role', args: 'role @role|roles clear', desc: 'Restrict the assistant to specific roles' },
+            { names: ['ai'], display: 'ai mode', args: 'mode mention|auto', desc: 'Mention-only replies, or answer every message in allowed channels' },
+            { names: ['ai'], display: 'ai language', args: 'language <code> · cooldown <s> · limit <n> · serverlimit <n> · ttl <min> · length <chars>', desc: 'Language, cooldown, daily limits, session expiry and response length' },
+            { names: ['ai'], display: 'ai settings', args: 'settings · config <setting> <value>', desc: 'Show the current configuration, or set any value with the full form' },
+            { names: ['ai'], display: 'ai personality', args: 'personality <preset|instructions>', desc: 'Set the assistant tone' },
+            { names: ['ai'], display: 'ai knowledge', args: 'knowledge add|remove|list', desc: 'Server knowledge the assistant may use' },
+            { names: ['ai'], display: 'ai memory', args: 'memory [clear] · usage [server] · reset', desc: 'Conversation memory, usage stats and reset' },
         ],
     },
 
@@ -199,6 +217,11 @@ const CATALOG = {
         title: 'Administration',
         color: config.colors.error,
         commands: [
+            { names: ['cp', 'createchannel'], args: '<name> [private|public] [category]', desc: 'Create a text channel — public or private, optionally inside a category' },
+            { names: ['cv', 'createvoice'], args: '<name> [private|public] [category]', desc: 'Create a voice channel — public or private, optionally inside a category' },
+            { names: ['rm'], args: '<#channel>', desc: 'Delete a channel — with a new name instead it renames' },
+            { names: ['mkdir', 'createcategory'], args: '<name>', desc: 'Create a channel category' },
+            { names: ['hmkdir', 'rmdir', 'deletecategory'], args: '<category-name>', desc: 'Delete a channel category (channels inside are kept)' },
             { names: ['embed'], args: '<send|list>', desc: 'Send an embed saved in the dashboard Embed Builder' },
             { names: ['level-enable', 'levelenable', 'leveling-enable', 'levelingon', 'leveling-on'], desc: 'Enable the leveling system' },
             { names: ['level-disable', 'leveldisable', 'leveling-disable', 'levelingoff', 'leveling-off'], desc: 'Disable the leveling system' },
@@ -277,12 +300,12 @@ const CATALOG = {
     },
 };
 
-const CATEGORY_ORDER = ['general', 'information', 'leveling', 'games', 'community', 'birthdays', 'music', 'tickets', 'youtube', 'welcome', 'moderation', 'automation', 'antinuke', 'admin'];
+const CATEGORY_ORDER = ['general', 'information', 'ai', 'leveling', 'games', 'community', 'birthdays', 'music', 'tickets', 'youtube', 'welcome', 'moderation', 'automation', 'antinuke', 'admin'];
 
 const BETA_TAG = '🧪';
 
 function commandField(prefix, cmd) {
-    const primary = cmd.names[0];
+    const primary = cmd.display || cmd.names[0];
     const aliases = cmd.names.slice(1);
     const name = aliases.length
         ? `${prefix}${primary}${cmd.args ? ' ' + cmd.args : ''} *(${aliases.map(a => prefix + a).join(', ')})*`
@@ -298,8 +321,20 @@ function categoryLine(key) {
     return cat ? `${categoryIcon(key)} ${CATEGORY_SEPARATOR} ${cat.label}` : '';
 }
 
+function hasBetaCommands() {
+    return CATEGORY_ORDER.some(key => (CATALOG[key]?.commands || [])
+        .some(c => c.beta || isBeta(c.names)));
+}
+
+// Pure category list (embeds use this; the beta legend would break their line count).
+function categoryLines() {
+    return CATEGORY_ORDER.map(categoryLine).filter(Boolean);
+}
+
 function mainMenuText() {
-    return CATEGORY_ORDER.map(categoryLine).filter(Boolean).join('\n');
+    const text = categoryLines().join('\n');
+    if (!hasBetaCommands()) return text;
+    return `${text}\n\n${BETA_TAG} = beta feature — the server must be in the beta program`;
 }
 
 function categoryTitle(category) {
@@ -315,11 +350,12 @@ function categoryCommandNames(category, options = {}) {
     if (!commandNames.length) {
         const seen = new Set();
         for (const c of cat.commands) {
-            let name = c.names[0];
-            if (name === 'music' && c.args) name = `music ${c.args.split(' ')[0]}`;
+            let name = c.display || c.names[0];
+            if (!c.display && name === 'music' && c.args) name = `music ${c.args.split(' ')[0]}`;
             if (!seen.has(name)) {
                 seen.add(name);
-                commandNames.push(name);
+                const beta = (c.beta || isBeta(c.names)) ? ` ${BETA_TAG}` : '';
+                commandNames.push(`${name}${beta}`);
             }
         }
     }
@@ -347,7 +383,7 @@ function categoryEmbed(category, prefix, options = {}) {
 function mainMenuEmbed(prefix, client, options = {}) {
     // Help is intentionally only the category list: no intro, no field title,
     // no thumbnail/footer/image, and no category descriptions.
-    return linixEmbed().d(mainMenuText());
+    return linixEmbed().d(categoryLines().join('\n'));
 }
 
 function categorySelectRow(currentCategory = null, customId = 'help_select') {
@@ -518,7 +554,9 @@ module.exports = {
     categoryLine,
     categoryTitle,
     categoryText,
+    hasBetaCommands,
     mainMenuText,
+    categoryLines,
     buildHelpPayload,
     CATEGORY_ORDER,
     BETA_FEATURES,

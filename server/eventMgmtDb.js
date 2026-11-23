@@ -78,11 +78,6 @@ CREATE TABLE IF NOT EXISTS em_events (
     created_at               TIMESTAMP DEFAULT NOW(),
     updated_at               TIMESTAMP DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS em_events_guild_idx ON em_events (guild_id);
-CREATE INDEX IF NOT EXISTS em_events_status_idx ON em_events (status);
-CREATE INDEX IF NOT EXISTS em_events_start_idx ON em_events (start_at);
-CREATE INDEX IF NOT EXISTS em_events_guild_start_idx ON em_events (guild_id, start_at DESC);
-CREATE INDEX IF NOT EXISTS em_events_recurrence_parent_idx ON em_events (recurrence_parent_id);
 
 CREATE TABLE IF NOT EXISTS em_participants (
     id                SERIAL PRIMARY KEY,
@@ -98,9 +93,6 @@ CREATE TABLE IF NOT EXISTS em_participants (
     updated_at        TIMESTAMP DEFAULT NOW(),
     UNIQUE (event_id, user_id)
 );
-CREATE INDEX IF NOT EXISTS em_participants_event_idx ON em_participants (event_id);
-CREATE INDEX IF NOT EXISTS em_participants_user_idx ON em_participants (user_id);
-CREATE INDEX IF NOT EXISTS em_participants_event_status_idx ON em_participants (event_id, status);
 
 CREATE TABLE IF NOT EXISTS em_reminders (
     id             SERIAL PRIMARY KEY,
@@ -113,8 +105,6 @@ CREATE TABLE IF NOT EXISTS em_reminders (
     created_at     TIMESTAMP DEFAULT NOW(),
     UNIQUE (event_id, key)
 );
-CREATE INDEX IF NOT EXISTS em_reminders_due_idx ON em_reminders (send_at) WHERE sent_at IS NULL;
-CREATE INDEX IF NOT EXISTS em_reminders_event_idx ON em_reminders (event_id);
 
 CREATE TABLE IF NOT EXISTS em_user_reminders (
     id         SERIAL PRIMARY KEY,
@@ -124,8 +114,6 @@ CREATE TABLE IF NOT EXISTS em_user_reminders (
     created_at TIMESTAMP DEFAULT NOW(),
     UNIQUE (event_id, user_id)
 );
-CREATE INDEX IF NOT EXISTS em_user_reminders_event_idx ON em_user_reminders (event_id);
-CREATE INDEX IF NOT EXISTS em_user_reminders_user_idx ON em_user_reminders (user_id);
 
 CREATE TABLE IF NOT EXISTS em_activity (
     id         SERIAL PRIMARY KEY,
@@ -137,21 +125,104 @@ CREATE TABLE IF NOT EXISTS em_activity (
     detail     TEXT,
     created_at TIMESTAMP DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS em_activity_event_idx ON em_activity (event_id, created_at DESC);
 `;
 
 let _tablesReady = false;
 let _ensurePromise = null;
 
-// Existing deployments created em_events before recurrence / scheduled-event
-// support existed. CREATE TABLE IF NOT EXISTS never alters an existing table, so
-// every added column is also applied with an idempotent ALTER.
+// Existing deployments created these tables at different points in the
+// feature's life. CREATE TABLE IF NOT EXISTS never alters an existing table, so
+// every column is also applied with an idempotent ALTER — and every index is
+// created only AFTER those ALTERs. Creating an index on a column the old table
+// lacks aborts the whole multi-statement query (Postgres runs it in an implicit
+// transaction), which is exactly how "column recurrence_parent_id does not
+// exist" used to stop Event Management from loading at all.
 const ALTER_EVENTS_SQL = `
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS guild_id VARCHAR(50);
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS creator_id VARCHAR(50);
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS name VARCHAR(100);
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS description TEXT;
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS type VARCHAR(30) DEFAULT 'custom';
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS status VARCHAR(30) DEFAULT 'draft';
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS start_at TIMESTAMP;
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS end_at TIMESTAMP;
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS timezone VARCHAR(64) DEFAULT 'UTC';
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS location_type VARCHAR(20) DEFAULT 'none';
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS location_value VARCHAR(500);
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS registration_mode VARCHAR(20) DEFAULT 'open';
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS max_participants INTEGER;
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS waitlist_enabled BOOLEAN DEFAULT true;
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS registration_deadline TIMESTAMP;
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS track_attendance BOOLEAN DEFAULT false;
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS announcement_channel_id VARCHAR(50);
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS announcement_message_id VARCHAR(50);
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS participant_role_id VARCHAR(50);
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS staff_role_id VARCHAR(50);
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS winner_role_id VARCHAR(50);
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS attendance_role_id VARCHAR(50);
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS event_manager_role_id VARCHAR(50);
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS event_permissions JSONB DEFAULT '[]';
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS image_url TEXT;
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS thumbnail_url TEXT;
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS embed_title VARCHAR(256);
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS embed_description TEXT;
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS embed_color VARCHAR(20) DEFAULT '#5865F2';
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS embed_fields JSONB DEFAULT '[]';
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS embed_footer VARCHAR(255);
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS reminders JSONB DEFAULT '[]';
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS result JSONB;
 ALTER TABLE em_events ADD COLUMN IF NOT EXISTS recurrence VARCHAR(20) DEFAULT 'none';
 ALTER TABLE em_events ADD COLUMN IF NOT EXISTS recurrence_until TIMESTAMP;
 ALTER TABLE em_events ADD COLUMN IF NOT EXISTS recurrence_parent_id INTEGER;
 ALTER TABLE em_events ADD COLUMN IF NOT EXISTS scheduled_event_id VARCHAR(50);
 ALTER TABLE em_events ADD COLUMN IF NOT EXISTS sync_scheduled_event BOOLEAN DEFAULT true;
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();
+ALTER TABLE em_events ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
+
+ALTER TABLE em_participants ADD COLUMN IF NOT EXISTS guild_id VARCHAR(50);
+ALTER TABLE em_participants ADD COLUMN IF NOT EXISTS user_id VARCHAR(50);
+ALTER TABLE em_participants ADD COLUMN IF NOT EXISTS username VARCHAR(100);
+ALTER TABLE em_participants ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'registered';
+ALTER TABLE em_participants ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'participant';
+ALTER TABLE em_participants ADD COLUMN IF NOT EXISTS attendance_status VARCHAR(20) DEFAULT 'unknown';
+ALTER TABLE em_participants ADD COLUMN IF NOT EXISTS checked_in_at TIMESTAMP;
+ALTER TABLE em_participants ADD COLUMN IF NOT EXISTS registered_at TIMESTAMP DEFAULT NOW();
+ALTER TABLE em_participants ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
+
+ALTER TABLE em_reminders ADD COLUMN IF NOT EXISTS guild_id VARCHAR(50);
+ALTER TABLE em_reminders ADD COLUMN IF NOT EXISTS key VARCHAR(10);
+ALTER TABLE em_reminders ADD COLUMN IF NOT EXISTS offset_minutes INTEGER;
+ALTER TABLE em_reminders ADD COLUMN IF NOT EXISTS send_at TIMESTAMP;
+ALTER TABLE em_reminders ADD COLUMN IF NOT EXISTS sent_at TIMESTAMP;
+ALTER TABLE em_reminders ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();
+
+ALTER TABLE em_user_reminders ADD COLUMN IF NOT EXISTS guild_id VARCHAR(50);
+ALTER TABLE em_user_reminders ADD COLUMN IF NOT EXISTS user_id VARCHAR(50);
+ALTER TABLE em_user_reminders ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();
+
+ALTER TABLE em_activity ADD COLUMN IF NOT EXISTS guild_id VARCHAR(50);
+ALTER TABLE em_activity ADD COLUMN IF NOT EXISTS user_id VARCHAR(50);
+ALTER TABLE em_activity ADD COLUMN IF NOT EXISTS username VARCHAR(100);
+ALTER TABLE em_activity ADD COLUMN IF NOT EXISTS action VARCHAR(50);
+ALTER TABLE em_activity ADD COLUMN IF NOT EXISTS detail TEXT;
+ALTER TABLE em_activity ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();
+`;
+
+// Indexes run LAST, after every column exists.
+const CREATE_INDEXES_SQL = `
+CREATE INDEX IF NOT EXISTS em_events_guild_idx ON em_events (guild_id);
+CREATE INDEX IF NOT EXISTS em_events_status_idx ON em_events (status);
+CREATE INDEX IF NOT EXISTS em_events_start_idx ON em_events (start_at);
+CREATE INDEX IF NOT EXISTS em_events_guild_start_idx ON em_events (guild_id, start_at DESC);
+CREATE INDEX IF NOT EXISTS em_events_recurrence_parent_idx ON em_events (recurrence_parent_id);
+CREATE INDEX IF NOT EXISTS em_participants_event_idx ON em_participants (event_id);
+CREATE INDEX IF NOT EXISTS em_participants_user_idx ON em_participants (user_id);
+CREATE INDEX IF NOT EXISTS em_participants_event_status_idx ON em_participants (event_id, status);
+CREATE INDEX IF NOT EXISTS em_reminders_due_idx ON em_reminders (send_at) WHERE sent_at IS NULL;
+CREATE INDEX IF NOT EXISTS em_reminders_event_idx ON em_reminders (event_id);
+CREATE INDEX IF NOT EXISTS em_user_reminders_event_idx ON em_user_reminders (event_id);
+CREATE INDEX IF NOT EXISTS em_user_reminders_user_idx ON em_user_reminders (user_id);
+CREATE INDEX IF NOT EXISTS em_activity_event_idx ON em_activity (event_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS em_events_recurrence_parent_idx ON em_events (recurrence_parent_id);
 `;
 
@@ -161,6 +232,7 @@ async function ensureEventMgmtTables() {
     if (!_ensurePromise) {
         _ensurePromise = eventMgmtPool.query(CREATE_TABLES_SQL)
             .then(() => eventMgmtPool.query(ALTER_EVENTS_SQL))
+            .then(() => eventMgmtPool.query(CREATE_INDEXES_SQL))
             .then(() => { _tablesReady = true; return true; })
             .catch((err) => { _ensurePromise = null; throw err; });
     }
@@ -180,4 +252,7 @@ async function testEventMgmtConnection() {
     }
 }
 
-module.exports = { eventMgmtPool, ensureEventMgmtTables, testEventMgmtConnection, CREATE_TABLES_SQL };
+module.exports = {
+    eventMgmtPool, ensureEventMgmtTables, testEventMgmtConnection,
+    CREATE_TABLES_SQL, ALTER_EVENTS_SQL, CREATE_INDEXES_SQL,
+};

@@ -719,3 +719,81 @@ test('no AI module logs or returns a provider key', () => {
         assert.ok(!/process\.env\.DATABASE_URL/.test(src), `${file} reads DATABASE_URL directly`);
     }
 });
+
+// ── Prefix shortcuts ────────────────────────────────────────────────────────
+test('one-word prefix shortcuts map onto the config settings', () => {
+    const { parseAiShortcut } = require('../utils/ai/aiCommands');
+    const cases = [
+        [['enable'], { setting: 'enabled', value: 'true' }],
+        [['on'], { setting: 'enabled', value: 'true' }],
+        [['disable'], { setting: 'enabled', value: 'false' }],
+        [['off'], { setting: 'enabled', value: 'false' }],
+        [['mode', 'auto'], { setting: 'mode', value: 'auto' }],
+        [['lang', 'es'], { setting: 'language', value: 'es' }],
+        [['channel', '#general'], { setting: 'channel', value: '#general' }],
+        [['channels', 'clear'], { setting: 'clear_channels', value: null }],
+        [['role', '<@&123>'], { setting: 'role', value: '<@&123>' }],
+        [['roles', 'reset'], { setting: 'clear_roles', value: null }],
+        [['cooldown', '5'], { setting: 'cooldown', value: '5' }],
+        [['limit', '60'], { setting: 'daily_user', value: '60' }],
+        [['serverlimit', '600'], { setting: 'daily_guild', value: '600' }],
+        [['ttl', '60'], { setting: 'session_ttl', value: '60' }],
+        [['length', '1800'], { setting: 'max_length', value: '1800' }],
+        [['knowledge', 'off'], { setting: 'knowledge', value: 'off' }],
+        [['vision', 'on'], { setting: 'vision', value: 'on' }],
+        [['settings'], { setting: 'show', value: null }],
+    ];
+    for (const [args, expected] of cases) {
+        assert.deepEqual(parseAiShortcut(args), expected, `shortcut ${args.join(' ')}`);
+    }
+    // Real subcommands are never swallowed by the shortcut table.
+    assert.equal(parseAiShortcut(['ask', 'hello']), null);
+    assert.equal(parseAiShortcut(['knowledge', 'add', 'Rules', '|', 'Be nice']), null);
+    assert.equal(parseAiShortcut(['personality', 'teacher']), null, 'personality keeps its custom-instructions subcommand');
+    assert.equal(parseAiShortcut(['memory']), null);
+});
+
+test('$ai settings shows the current configuration without writing', async () => {
+    const { runAiAction } = require('../utils/ai/aiCommands');
+    let wrote = false;
+    const manager = {
+        getSettings: () => ({
+            enabled: true, mode: 'mention', language: 'auto', personality: 'balanced',
+            channelIds: [], roleIds: [], dailyGuildRequests: 600, dailyUserRequests: 60,
+            cooldownSeconds: 5, sessionTtlMinutes: 60, maxResponseChars: 1800,
+        }),
+        getProviderStatus: async () => [],
+        updateSettings: async () => { wrote = true; return {}; },
+    };
+    const result = await runAiAction('config', { setting: 'show' }, {
+        manager, guildId: 'g1', guildName: 'G', userId: 'u1', isAdmin: true, prefix: '$',
+    });
+    assert.equal(wrote, false, 'showing settings must not write');
+    assert.match(JSON.stringify(result.embeds[0]), /AI configuration/);
+});
+
+// ── Help menu ───────────────────────────────────────────────────────────────
+test('the AI category is part of the help menu and lists its subcommands', () => {
+    const help = require('../utils/prefixHelp');
+    assert.ok(help.CATALOG.ai, 'AI category missing');
+    assert.ok(help.CATEGORY_ORDER.includes('ai'), 'AI category missing from the menu order');
+    assert.match(help.categoryLine('ai'), /AI Assistant/);
+    const text = help.categoryText('ai');
+    for (const label of ['ai ask', 'ai enable', 'ai channel', 'ai mode', 'ai settings', 'ai knowledge']) {
+        assert.ok(text.includes(label), `category text missing ${label}: ${text}`);
+    }
+    // Event + Invite remain discoverable in Community.
+    const community = help.categoryText('community');
+    assert.ok(community.includes('event'));
+    assert.ok(community.includes('invite'));
+    // The main menu (and therefore the Sash menu) lists the AI category.
+    assert.ok(help.mainMenuText().includes('AI Assistant'));
+});
+
+test('the prefix handler routes short admin forms through the shortcut parser', () => {
+    const src = fs.readFileSync(path.join(ROOT, 'events/messageCreate.js'), 'utf8');
+    assert.match(src, /parseAiShortcut/);
+    assert.match(src, /options\.setting = shortcut\.setting/);
+    const embeds = fs.readFileSync(path.join(ROOT, 'utils/ai/aiEmbeds.js'), 'utf8');
+    assert.match(embeds, /one-word shortcuts/);
+});

@@ -311,6 +311,12 @@ async function handleConfig(ctx, options) {
     const setting = String(options.setting || '').toLowerCase();
     const raw = options.value;
     const settings = ctx.manager.getSettings(ctx.guildId);
+
+    // `$ai config` / `$ai settings` with no value shows the current configuration.
+    if (!setting || setting === 'show' || setting === 'status') {
+        return { embeds: [E.statusEmbed(settings, await ctx.manager.getProviderStatus())], ephemeral: true };
+    }
+
     const patch = {};
 
     switch (setting) {
@@ -450,9 +456,72 @@ async function runAiAction(action, options, ctx) {
     }
 }
 
+// ── Prefix shortcuts ────────────────────────────────────────────────────────
+//
+// `$ai config <setting> <value>` is precise but long. These short forms map to
+// the same settings so everyday configuration is one word:
+//   $ai enable · $ai disable · $ai channel #general · $ai channels clear
+//   $ai role @Member · $ai roles clear · $ai mode auto · $ai language es
+//   $ai cooldown 5 · $ai limit 60 · $ai serverlimit 600 · $ai ttl 60
+//   $ai length 1800 · $ai knowledge on · $ai vision off · $ai settings
+const CONFIG_SHORTCUTS = Object.freeze({
+    enable: 'enabled', on: 'enabled', disable: 'enabled', off: 'enabled',
+    mode: 'mode',
+    language: 'language', lang: 'language',
+    channel: 'channel', channels: 'channel',
+    role: 'role', roles: 'role',
+    cooldown: 'cooldown',
+    limit: 'daily_user', userlimit: 'daily_user',
+    serverlimit: 'daily_guild', guildlimit: 'daily_guild',
+    ttl: 'session_ttl', sessionttl: 'session_ttl',
+    length: 'max_length', maxlength: 'max_length',
+    knowledge: 'knowledge', vision: 'vision',
+});
+
+const CLEAR_WORDS = new Set(['clear', 'none', 'off', 'reset', 'remove']);
+
+/**
+ * Translate a short prefix form into `{ setting, value }`.
+ * Returns null when the input is not a shortcut (so normal subcommands run).
+ */
+function parseAiShortcut(args = []) {
+    const key = String(args[0] || '').toLowerCase();
+    if (!key) return null;
+    if (key === 'settings' || key === 'status') return { setting: 'show', value: null };
+
+    const setting = CONFIG_SHORTCUTS[key];
+    if (!setting) return null;
+
+    const rest = args.slice(1);
+    const value = rest.join(' ').trim();
+
+    if (setting === 'enabled') {
+        return { setting, value: (key === 'enable' || key === 'on') ? 'true' : 'false' };
+    }
+
+    if (setting === 'channel' || setting === 'role') {
+        if (!value) return null;
+        if (CLEAR_WORDS.has(value.toLowerCase())) {
+            return { setting: setting === 'channel' ? 'clear_channels' : 'clear_roles', value: null };
+        }
+        return { setting, value };
+    }
+
+    // `knowledge`/`vision` are also subcommands (`$ai knowledge add …`), so only
+    // treat them as the toggle when the value is clearly a boolean.
+    if (setting === 'knowledge' || setting === 'vision') {
+        return parseBool(value) == null ? null : { setting, value };
+    }
+
+    if (!value) return null;
+    return { setting, value };
+}
+
 module.exports = {
     ACTIONS,
     runAiAction,
+    parseAiShortcut,
+    CONFIG_SHORTCUTS,
     parseBool,
     parseId,
     parseLanguage,
