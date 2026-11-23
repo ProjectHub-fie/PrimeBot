@@ -66,10 +66,24 @@ function statCard(label, value, icon, id) {
     </div>`;
 }
 
+const PROVIDER_STATES = {
+    ok: ['Ready', 'on'],
+    unconfigured: ['Not configured', 'off'],
+    invalid_key: ['Invalid API key', 'off'],
+    invalid_model: ['Model unavailable', 'off'],
+    rate_limited: ['Rate limited', 'warn'],
+};
+
 function providerCard(p, meta = {}) {
     const configured = p.configured === true;
-    const state = !configured ? 'Not configured' : (meta.active === false ? 'Cooling down' : 'Ready');
-    const tone = !configured ? 'off' : (meta.active === false ? 'warn' : 'on');
+    const [state, tone] = PROVIDER_STATES[p.status]
+        || (!configured ? PROVIDER_STATES.unconfigured : PROVIDER_STATES.ok);
+    const source = p.modelSource === 'env' ? 'env override'
+        : p.modelSource === 'discovered' ? 'live catalog'
+            : p.modelSource === 'static' ? 'built-in fallback' : '—';
+    const discovery = p.discovery && p.discovery.ok
+        ? `${p.discovery.count} free models listed`
+        : (p.discovery && p.discovery.error ? `List unavailable (${p.discovery.error})` : 'Not checked yet');
     return `<article class="ai-provider" data-provider="${esc(p.provider)}">
         <header>
             <span class="ai-provider-name">${svgIcon('server')} ${esc(p.label)}</span>
@@ -77,8 +91,10 @@ function providerCard(p, meta = {}) {
         </header>
         <dl class="ai-provider-meta">
             <div><dt>Model</dt><dd><code>${esc(p.model || '—')}</code></dd></div>
-            <div><dt>Free tier</dt><dd>${p.model ? 'Yes (allowlisted)' : '—'}</dd></div>
+            <div><dt>Model source</dt><dd>${esc(source)}</dd></div>
+            <div><dt>Free tier</dt><dd>${p.model ? 'Yes (free only)' : '—'}</dd></div>
             <div><dt>Vision</dt><dd>${p.vision ? 'Supported' : 'Not supported'}</dd></div>
+            <div><dt>Model list</dt><dd>${esc(discovery)}</dd></div>
             <div><dt>Key</dt><dd>${configured ? `<code>${esc(p.keyHint || '••••')}</code>` : `<code>${esc(p.envKey)}</code> not set`}</dd></div>
             <div><dt>Requests</dt><dd>${Number(meta.requests) || 0}</dd></div>
             <div><dt>Failures</dt><dd>${Number(meta.failures) || 0}</dd></div>

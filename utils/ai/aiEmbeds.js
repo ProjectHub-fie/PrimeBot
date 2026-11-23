@@ -76,9 +76,22 @@ function helpEmbed(prefix = '$') {
     return infoEmbed('AI Assistant', lines.join('\n'));
 }
 
+const PROVIDER_STATE_LABEL = {
+    ok: 'ready',
+    unconfigured: 'not configured',
+    invalid_key: 'invalid API key',
+    invalid_model: 'model unavailable',
+    rate_limited: 'rate limited',
+};
+
 function statusEmbed(settings, providerStatus = []) {
     const active = providerStatus.filter(p => p.configured && p.active).map(p => p.label);
-    const configured = providerStatus.filter(p => p.configured).map(p => `${p.label} (\`${p.model}\`)`);
+    const configured = providerStatus.map((p) => {
+        const state = PROVIDER_STATE_LABEL[p.status] || (p.active ? 'ready' : 'unavailable');
+        return p.configured
+            ? `${p.label} — \`${p.model || 'no model'}\` • ${state}`
+            : `${p.label} — not configured`;
+    });
     return infoEmbed('AI configuration', 'Current AI settings for this server.', [
         { name: 'Enabled', value: settings.enabled ? 'Yes' : 'No', inline: true },
         { name: 'Mode', value: settings.mode, inline: true },
