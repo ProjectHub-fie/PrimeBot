@@ -723,7 +723,7 @@ module.exports = {
                     };
 
                     const result = await runAiAction(action, options, ctx);
-                    await message.reply({ embeds: result.embeds, allowedMentions: { parse: [] } });
+                    await message.reply({ content: result.content, allowedMentions: { parse: [] } });
                     for (const chunk of result.followUps || []) {
                         await message.channel.send({ content: chunk, allowedMentions: { parse: [] } }).catch(() => {});
                     }

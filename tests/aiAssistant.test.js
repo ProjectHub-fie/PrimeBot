@@ -555,6 +555,57 @@ test('mention handler answers a real mention through the shared manager', async 
     assert.match(JSON.stringify(message.replies[0]), /Answer/);
 });
 
+test('AI replies are plain text — no embeds on any surface', async () => {
+    const E = require('../utils/ai/aiEmbeds');
+    const { answerText, infoText, errorText, warnText, helpText, statusText, usageText } = E;
+
+    assert.ok(answerText({ text: 'hello', provider: 'groq' }).includes('hello'));
+    assert.ok(answerText({ text: 'hello' }).endsWith('# PrimeBot AI • free providers'));
+    assert.ok(answerText({ text: 'x'.repeat(5000) }).length <= 2000, 'answer is clipped to 2000 chars');
+    assert.ok(infoText('Title', 'desc', [{ name: 'A', value: '1' }]).includes('**A** · 1'));
+    assert.ok(errorText('nope').startsWith('❌'));
+    assert.ok(warnText('careful').startsWith('⚠️'));
+    assert.ok(helpText('$').includes('$ai ask'));
+    const settings = {
+        enabled: true, mode: 'mention', language: 'auto', personality: 'balanced',
+        channelIds: [], roleIds: [], maxResponseChars: 1800, sessionTtlMinutes: 60,
+        cooldownSeconds: 0, dailyUserRequests: 60, dailyGuildRequests: 600,
+    };
+    assert.ok(statusText(settings, [{ provider: 'groq', label: 'Groq', configured: true, model: 'm', status: 'ok', active: true }]).includes('Groq'));
+    assert.ok(usageText({ requests: 1, tokens: 2 }, { requests: 3, tokens: 4 }, settings).includes('1 / 60'));
+
+    for (const value of [answerText({ text: 'a' }), infoText('t', 'd'), errorText('e'), warnText('w'),
+        helpText('/'), statusText(settings, []), usageText({ requests: 0, tokens: 0 }, { requests: 0, tokens: 0 }, settings)]) {
+        assert.equal(typeof value, 'string');
+        assert.ok(value.length <= 2000);
+    }
+});
+
+test('prefix, slash and mention AI replies carry content and never embeds', async () => {
+    const { runAiAction } = require('../utils/ai/aiCommands');
+    const manager = fakeManager({
+        chat: async () => ({ ok: true, text: 'plain answer', chunks: ['plain answer'], provider: 'groq' }),
+        getProviderStatus: async () => [],
+    });
+    const ctx = {
+        manager, guildId: 'g1', guildName: 'G', channelId: 'c1', userId: 'u1',
+        username: 'u', member: null, isAdmin: false, prefix: '$', message: null,
+        repliedMessage: null, fetchRecentMessages: async () => [],
+    };
+    for (const action of ['ask', 'chat', 'help', 'usage', 'config', 'memory']) {
+        const payload = await runAiAction(action, { question: 'hi', message: 'hi', sub: 'show' }, ctx);
+        assert.equal(payload.embeds, undefined, `${action} must not send an embed`);
+        assert.equal(typeof payload.content, 'string', `${action} must send content`);
+        assert.ok(payload.content.length > 0 && payload.content.length <= 2000);
+    }
+
+    const { handleAiMention } = require('../utils/ai/mentionHandler');
+    const message = fakeMessage();
+    await handleAiMention({ user: { id: 'bot' }, aiManager: manager }, message, {});
+    assert.equal(message.replies[0].embeds, undefined, 'mention reply is plain text');
+    assert.match(message.replies[0].content, /plain answer/);
+});
+
 test('mention handler explains a channel/role block only for an explicit mention', async () => {
     const { handleAiMention } = require('../utils/ai/mentionHandler');
     const manager = fakeManager({ checkAccess: () => ({ ok: false, reason: 'channel' }) });

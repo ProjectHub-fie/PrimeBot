@@ -1,49 +1,55 @@
 /**
- * AI Assistant embeds — shared by slash, prefix and the dashboard previews.
- * Brand palette only (config.colors) and no secrets in any field.
+ * AI Assistant reply text — shared by slash, prefix, mention and the dashboard.
+ *
+ * AI replies are plain messages: no embeds anywhere in this subsystem. Text is
+ * clipped to Discord's 2000-character content limit; long answers are already
+ * chunked by the manager and sent as follow-up messages.
  */
 
-const { EmbedBuilder } = require('discord.js');
-const config = require('../../config');
 const { AI_PERSONALITIES, AI_MODES, AI_LANGUAGES } = require('../../shared/aiConstants');
 
 const FOOTER = 'PrimeBot AI • free providers';
+const MAX_CONTENT = 2000;
 
-function answerEmbed(result) {
-    const provider = result.provider ? ` • ${result.provider}` : '';
-    return new EmbedBuilder()
-        .setColor(config.colors.primary)
-        .setDescription(result.text)
-        .setFooter({ text: `${FOOTER}${provider}` });
+function clip(text, max = MAX_CONTENT) {
+    const value = String(text ?? '');
+    return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
 }
 
-function infoEmbed(title, description, fields = []) {
-    const embed = new EmbedBuilder()
-        .setColor(config.colors.primary)
-        .setTitle(title)
-        .setDescription(description)
-        .setFooter({ text: FOOTER });
-    if (fields.length) embed.addFields(fields);
-    return embed;
+function footerLine(provider) {
+    return provider ? `${FOOTER} • ${provider}` : FOOTER;
 }
 
-function errorEmbed(description) {
-    return new EmbedBuilder()
-        .setColor(config.colors.error)
-        .setTitle('AI Assistant')
-        .setDescription(description)
-        .setFooter({ text: FOOTER });
+function answerText({ text, provider } = {}) {
+    const body = String(text ?? '');
+    const tail = `\n\n-# ${footerLine(provider)}`;
+    if (!body.trim()) return `-# ${footerLine(provider)}`;
+    return `${clip(body, MAX_CONTENT - tail.length)}${tail}`;
 }
 
-function warnEmbed(description) {
-    return new EmbedBuilder()
-        .setColor(config.colors.warning)
-        .setTitle('AI Assistant')
-        .setDescription(description)
-        .setFooter({ text: FOOTER });
+function renderFields(fields = []) {
+    return fields
+        .filter(f => f && f.name && f.value != null && String(f.value).length)
+        .map(f => `**${f.name}** · ${f.value}`);
 }
 
-function helpEmbed(prefix = '$') {
+function infoText(title, description = '', fields = []) {
+    const lines = [`**${title}**`];
+    if (description) lines.push(description);
+    const rendered = renderFields(fields);
+    if (rendered.length) lines.push(rendered.join('\n'));
+    return clip(lines.join('\n'));
+}
+
+function errorText(message) {
+    return clip(`❌ ${message}`);
+}
+
+function warnText(message) {
+    return clip(`⚠️ ${message}`);
+}
+
+function helpText(prefix = '$') {
     const lines = [
         `**Slash:** \`/ai <action>\`  •  **Prefix:** \`${prefix}ai <action>\`  •  **Mention:** \`@PrimeBot <question>\``,
         '',
@@ -83,7 +89,7 @@ function helpEmbed(prefix = '$') {
             '  •  **Personalities:** ' + AI_PERSONALITIES.map(p => `\`${p.key}\``).join(', '),
         '**Languages:** ' + AI_LANGUAGES.map(l => `\`${l.key}\``).join(', '),
     ];
-    return infoEmbed('AI Assistant', lines.join('\n'));
+    return clip(`**AI Assistant**\n${lines.join('\n')}`);
 }
 
 const PROVIDER_STATE_LABEL = {
@@ -94,48 +100,49 @@ const PROVIDER_STATE_LABEL = {
     rate_limited: 'rate limited',
 };
 
-function statusEmbed(settings, providerStatus = []) {
+function statusText(settings, providerStatus = []) {
     const active = providerStatus.filter(p => p.configured && p.active).map(p => p.label);
-    const configured = providerStatus.map((p) => {
+    const providers = providerStatus.map((p) => {
         const state = PROVIDER_STATE_LABEL[p.status] || (p.active ? 'ready' : 'unavailable');
         return p.configured
-            ? `${p.label} — \`${p.model || 'no model'}\` • ${state}`
-            : `${p.label} — not configured`;
+            ? `• ${p.label} — \`${p.model || 'no model'}\` · ${state}`
+            : `• ${p.label} — not configured`;
     });
-    return infoEmbed('AI configuration', 'Current AI settings for this server.', [
-        { name: 'Enabled', value: settings.enabled ? 'Yes' : 'No', inline: true },
-        { name: 'Mode', value: settings.mode, inline: true },
-        { name: 'Language', value: settings.language, inline: true },
-        { name: 'Personality', value: settings.personality, inline: true },
-        { name: 'Channels', value: settings.channelIds.length ? settings.channelIds.map(id => `<#${id}>`).join(', ') : 'Any channel', inline: false },
-        { name: 'Roles', value: settings.roleIds.length ? settings.roleIds.map(id => `<@&${id}>`).join(', ') : 'Everyone', inline: false },
-        { name: 'Limits', value: `Max ${settings.maxResponseChars} chars • ${settings.sessionTtlMinutes} min sessions • ${settings.cooldownSeconds}s cooldown\n${settings.dailyUserRequests}/user/day • ${settings.dailyGuildRequests}/server/day`, inline: false },
-        { name: 'Providers', value: configured.length ? configured.join('\n') : 'No provider configured', inline: false },
-        { name: 'Available now', value: active.length ? active.join(', ') : 'None (busy or not configured)', inline: false },
+    return infoText('AI configuration', 'Current AI settings for this server.', [
+        { name: 'Enabled', value: settings.enabled ? 'Yes' : 'No' },
+        { name: 'Mode', value: settings.mode },
+        { name: 'Language', value: settings.language },
+        { name: 'Personality', value: settings.personality },
+        { name: 'Channels', value: settings.channelIds.length ? settings.channelIds.map(id => `<#${id}>`).join(', ') : 'Any channel' },
+        { name: 'Roles', value: settings.roleIds.length ? settings.roleIds.map(id => `<@&${id}>`).join(', ') : 'Everyone' },
+        { name: 'Limits', value: `Max ${settings.maxResponseChars} chars • ${settings.sessionTtlMinutes} min sessions • ${settings.cooldownSeconds}s cooldown • ${settings.dailyUserRequests}/user/day • ${settings.dailyGuildRequests}/server/day` },
+        { name: 'Providers', value: providers.length ? providers.join('\n') : 'No provider configured' },
+        { name: 'Available now', value: active.length ? active.join(', ') : 'None (busy or not configured)' },
     ]);
 }
 
-function usageEmbed(userUsage, guildUsage, settings, { isServer = false } = {}) {
+function usageText(userUsage, guildUsage, settings, { isServer = false } = {}) {
     const fields = isServer
         ? [
-            { name: 'Server today', value: `${guildUsage.requests} / ${settings.dailyGuildRequests} requests`, inline: true },
-            { name: 'Tokens today', value: String(guildUsage.tokens || 0), inline: true },
+            { name: 'Server today', value: `${guildUsage.requests} / ${settings.dailyGuildRequests} requests` },
+            { name: 'Tokens today', value: String(guildUsage.tokens || 0) },
         ]
         : [
-            { name: 'Your usage today', value: `${userUsage.requests} / ${settings.dailyUserRequests} requests`, inline: true },
-            { name: 'Your tokens today', value: String(userUsage.tokens || 0), inline: true },
-            { name: 'Server today', value: `${guildUsage.requests} / ${settings.dailyGuildRequests} requests`, inline: true },
+            { name: 'Your usage today', value: `${userUsage.requests} / ${settings.dailyUserRequests} requests` },
+            { name: 'Your tokens today', value: String(userUsage.tokens || 0) },
+            { name: 'Server today', value: `${guildUsage.requests} / ${settings.dailyGuildRequests} requests` },
         ];
-    return infoEmbed('AI usage', 'Free-tier usage is shared by every server, so daily limits keep it fair.', fields);
+    return infoText('AI usage', 'Free-tier usage is shared by every server, so daily limits keep it fair.', fields);
 }
 
 module.exports = {
     FOOTER,
-    answerEmbed,
-    infoEmbed,
-    errorEmbed,
-    warnEmbed,
-    helpEmbed,
-    statusEmbed,
-    usageEmbed,
+    MAX_CONTENT,
+    answerText,
+    infoText,
+    errorText,
+    warnText,
+    helpText,
+    statusText,
+    usageText,
 };

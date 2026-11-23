@@ -147,13 +147,13 @@ module.exports = {
             const access = manager.checkAccess({ guildId: ctx.guildId, channelId: ctx.channelId, member: ctx.member });
             if (!access.ok) {
                 const payload = aiError({ reason: access.reason });
-                return interaction.editReply({ embeds: payload.embeds });
+                return interaction.editReply({ content: payload.content });
             }
         }
 
         const result = await runAiAction(action, options, ctx);
         await interaction.editReply({
-            embeds: result.embeds,
+            content: result.content,
             allowedMentions: { parse: [] },
         });
         for (const chunk of result.followUps || []) {

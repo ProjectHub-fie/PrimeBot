@@ -5,7 +5,7 @@
  * with the same canonical `options` object, so the behaviour, permissions,
  * cooldowns, quotas and memory are identical across every entry point. The
  * command layers only translate their transport (interaction vs message) into
- * this shape and send the returned embeds.
+ * this shape and send the returned plain-text content.
  */
 
 const config = require('../../config');
@@ -28,7 +28,7 @@ function isAdminCtx(ctx) {
 }
 
 function adminRequired() {
-    return { embeds: [E.warnEmbed('You need the **Manage Server** permission to use this AI action.')], ephemeral: true };
+    return { content: E.warnText('You need the **Manage Server** permission to use this AI action.'), ephemeral: true };
 }
 
 function aiError(result) {
@@ -47,13 +47,13 @@ function aiError(result) {
         unavailable: 'The AI assistant is temporarily unavailable — all free providers are busy. Please try again shortly.',
         vision_unavailable: 'Image analysis is temporarily unavailable — no free vision model is available right now.',
     };
-    return { embeds: [E.errorEmbed(messages[result.reason] || result.message || 'The AI request failed.')], ephemeral: true };
+    return { content: E.errorText(messages[result.reason] || result.message || 'The AI request failed.'), ephemeral: true };
 }
 
 function answer(result) {
-    const first = E.answerEmbed({ text: result.chunks?.[0] || result.text, provider: result.provider });
+    const first = E.answerText({ text: result.chunks?.[0] || result.text, provider: result.provider });
     const followUps = (result.chunks || []).slice(1);
-    return { embeds: [first], followUps };
+    return { content: first, followUps };
 }
 
 function parseBool(value) {
@@ -110,7 +110,7 @@ function imageUrls(ctx, options = {}) {
 async function handleAsk(ctx, options, { useSession }) {
     const prompt = sanitizeUserText(options.question || options.text || options.message || '');
     if (!prompt) {
-        return { embeds: [E.warnEmbed(`Usage: \`${ctx.prefix || '/'}ai ${useSession ? 'chat' : 'ask'} <question>\``)], ephemeral: true };
+        return { content: E.warnText(`Usage: \`${ctx.prefix || '/'}ai ${useSession ? 'chat' : 'ask'} <question>\``), ephemeral: true };
     }
     const images = imageUrls(ctx, options);
     const result = await ctx.manager.chat({
@@ -133,7 +133,7 @@ async function handleSummarize(ctx, options) {
         const count = Math.min(50, Math.max(5, parseInt(options.count, 10) || 25));
         text = await recentTranscript(ctx, count);
     }
-    if (!text) return { embeds: [E.warnEmbed('There is nothing to summarize here yet.')], ephemeral: true };
+    if (!text) return { content: E.warnText('There is nothing to summarize here yet.'), ephemeral: true };
     const result = await ctx.manager.complete({
         guildId: ctx.guildId,
         guildName: ctx.guildName,
@@ -148,7 +148,7 @@ async function handleTranslate(ctx, options) {
     const language = parseLanguage(options.language);
     const text = sanitizeUserText(options.text || '');
     if (!language || !text) {
-        return { embeds: [E.warnEmbed(`Usage: \`${ctx.prefix || '/'}ai translate <language> <text>\``)], ephemeral: true };
+        return { content: E.warnText(`Usage: \`${ctx.prefix || '/'}ai translate <language> <text>\``), ephemeral: true };
     }
     const result = await ctx.manager.complete({
         guildId: ctx.guildId,
@@ -163,7 +163,7 @@ async function handleTranslate(ctx, options) {
 async function handleExplain(ctx, options) {
     const text = sanitizeUserText(options.text || options.question || '');
     if (!text) {
-        return { embeds: [E.warnEmbed(`Usage: \`${ctx.prefix || '/'}ai explain <topic, code or error>\``)], ephemeral: true };
+        return { content: E.warnText(`Usage: \`${ctx.prefix || '/'}ai explain <topic, code or error>\``), ephemeral: true };
     }
     const result = await ctx.manager.complete({
         guildId: ctx.guildId,
@@ -180,7 +180,7 @@ async function handleAnalyze(ctx, options) {
     const text = sanitizeUserText(options.text || options.question || '');
     if (!images.length && !text) {
         return {
-            embeds: [E.warnEmbed(`Attach an image, reply to an image, or add text.\nUsage: \`${ctx.prefix || '/'}ai analyze [text] [image]\``)],
+            content: E.warnText(`Attach an image, reply to an image, or add text.\nUsage: \`${ctx.prefix || '/'}ai analyze [text] [image]\``),
             ephemeral: true,
         };
     }
@@ -207,20 +207,20 @@ async function handlePersonality(ctx, options) {
     if (preset === 'custom') {
         const instructions = sanitizeUserText(options.instructions || '', AI_LIMITS.maxInstructions);
         if (!instructions) {
-            return { embeds: [E.warnEmbed(`Usage: \`${ctx.prefix || '/'}ai personality custom <instructions>\``)], ephemeral: true };
+            return { content: E.warnText(`Usage: \`${ctx.prefix || '/'}ai personality custom <instructions>\``), ephemeral: true };
         }
         const settings = await ctx.manager.updateSettings(ctx.guildId, { personality: 'custom', customInstructions: instructions });
-        return { embeds: [E.statusEmbed(settings, await ctx.manager.getProviderStatus())], ephemeral: true };
+        return { content: E.statusText(settings, await ctx.manager.getProviderStatus()), ephemeral: true };
     }
     if (!AI_PERSONALITIES.some(p => p.key === preset)) {
         return {
-            embeds: [E.warnEmbed('Choose one of: ' + AI_PERSONALITIES.map(p => `\`${p.key}\``).join(', '))],
+            content: E.warnText('Choose one of: ' + AI_PERSONALITIES.map(p => `\`${p.key}\``).join(', ')),
             ephemeral: true,
         };
     }
     await ctx.manager.updateSettings(ctx.guildId, { personality: preset });
     return {
-        embeds: [E.infoEmbed('AI personality updated', `The assistant now uses the **${preset}** personality.\n\n_${personalityPrompt(preset)}_`)],
+        content: E.infoText('AI personality updated', `The assistant now uses the **${preset}** personality.\n\n_${personalityPrompt(preset)}_`),
         ephemeral: true,
     };
 }
@@ -234,26 +234,26 @@ async function handleKnowledge(ctx, options) {
         const title = sanitizeUserText(options.title || '', AI_LIMITS.maxKnowledgeTitle);
         const content = sanitizeUserText(options.content || '', AI_LIMITS.maxKnowledgeContent);
         if (!title || !content) {
-            return { embeds: [E.warnEmbed(`Usage: \`${ctx.prefix || '/'}ai knowledge add <title> | <content>\``)], ephemeral: true };
+            return { content: E.warnText(`Usage: \`${ctx.prefix || '/'}ai knowledge add <title> | <content>\``), ephemeral: true };
         }
         const count = await repo.countKnowledge(guildId);
         if (count >= AI_LIMITS.maxKnowledgeEntries) {
-            return { embeds: [E.warnEmbed(`The knowledge base is full (${AI_LIMITS.maxKnowledgeEntries} entries). Remove one first.`)], ephemeral: true };
+            return { content: E.warnText(`The knowledge base is full (${AI_LIMITS.maxKnowledgeEntries} entries). Remove one first.`), ephemeral: true };
         }
         const row = await repo.addKnowledge(guildId, {
             title, content,
             tags: sanitizeUserText(options.tags || '', 120),
             createdBy: ctx.userId,
         });
-        return { embeds: [E.infoEmbed('Knowledge saved', `**${row.title}** was added to the server knowledge base.`)], ephemeral: true };
+        return { content: E.infoText('Knowledge saved', `**${row.title}** was added to the server knowledge base.`), ephemeral: true };
     }
 
     if (sub === 'remove' || sub === 'delete') {
         const id = parseInt(options.id, 10);
-        if (!Number.isFinite(id)) return { embeds: [E.warnEmbed(`Usage: \`${ctx.prefix || '/'}ai knowledge remove <id>\``)], ephemeral: true };
+        if (!Number.isFinite(id)) return { content: E.warnText(`Usage: \`${ctx.prefix || '/'}ai knowledge remove <id>\``), ephemeral: true };
         const removed = await repo.deleteKnowledge(guildId, id);
         return {
-            embeds: [removed ? E.infoEmbed('Knowledge removed', `Entry #${id} was deleted.`) : E.warnEmbed(`No knowledge entry #${id}.`)],
+            content: removed ? E.infoText('Knowledge removed', `Entry #${id} was deleted.`) : E.warnText(`No knowledge entry #${id}.`),
             ephemeral: true,
         };
     }
@@ -261,12 +261,12 @@ async function handleKnowledge(ctx, options) {
     const entries = await repo.listKnowledge(guildId, { limit: AI_LIMITS.maxKnowledgeEntries });
     if (!entries.length) {
         return {
-            embeds: [E.infoEmbed('Knowledge base', `No entries yet.\nAdd one with \`${ctx.prefix || '/'}ai knowledge add <title> | <content>\`.`)],
+            content: E.infoText('Knowledge base', `No entries yet.\nAdd one with \`${ctx.prefix || '/'}ai knowledge add <title> | <content>\`.`),
             ephemeral: true,
         };
     }
     const lines = entries.map(e => `**#${e.id}** ${e.title}${e.tags ? ` _(${e.tags})_` : ''}\n${e.content.slice(0, 140)}${e.content.length > 140 ? '…' : ''}`);
-    return { embeds: [E.infoEmbed('Server knowledge', lines.join('\n\n').slice(0, 3800))], ephemeral: true };
+    return { content: E.infoText('Server knowledge', lines.join('\n\n').slice(0, 3800)), ephemeral: true };
 }
 
 async function handleMemory(ctx, options) {
@@ -277,31 +277,31 @@ async function handleMemory(ctx, options) {
         if (sub === 'clear-all') {
             if (!isAdminCtx(ctx)) return adminRequired();
             const removed = await ctx.manager.clearGuildSessions(ctx.guildId);
-            return { embeds: [E.infoEmbed('Memory cleared', `Removed **${removed}** conversation session(s) for this server.`)], ephemeral: true };
+            return { content: E.infoText('Memory cleared', `Removed **${removed}** conversation session(s) for this server.`), ephemeral: true };
         }
         if (targetId && targetId !== ctx.userId) {
             if (!isAdminCtx(ctx)) return adminRequired();
             await ctx.manager.resetSession(ctx.guildId, targetId);
-            return { embeds: [E.infoEmbed('Memory cleared', `Cleared <@${targetId}>'s AI conversation.`)], ephemeral: true };
+            return { content: E.infoText('Memory cleared', `Cleared <@${targetId}>'s AI conversation.`), ephemeral: true };
         }
         await ctx.manager.resetSession(ctx.guildId, ctx.userId);
-        return { embeds: [E.infoEmbed('Memory cleared', 'Your AI conversation was reset.')], ephemeral: true };
+        return { content: E.infoText('Memory cleared', 'Your AI conversation was reset.'), ephemeral: true };
     }
 
     const session = await repo.getSession(ctx.guildId, ctx.userId);
     if (!session) {
         return {
-            embeds: [E.infoEmbed('AI memory', 'You have no active conversation. Start one with `/ai chat` or by mentioning the bot.')],
+            content: E.infoText('AI memory', 'You have no active conversation. Start one with `/ai chat` or by mentioning the bot.'),
             ephemeral: true,
         };
     }
     const messages = await repo.getMessages(session.id, 6);
     const preview = messages.map(m => `**${m.role === 'assistant' ? 'PrimeBot' : 'You'}:** ${String(m.content).slice(0, 120)}`).join('\n');
     return {
-        embeds: [E.infoEmbed('Your AI conversation', preview || 'No messages stored yet.', [
+        content: E.infoText('Your AI conversation', preview || 'No messages stored yet.', [
             { name: 'Messages', value: String(session.messageCount), inline: true },
             { name: 'Expires', value: `<t:${Math.floor(new Date(session.expiresAt).getTime() / 1000)}:R>`, inline: true },
-        ])],
+        ]),
         ephemeral: true,
     };
 }
@@ -322,31 +322,31 @@ async function handleConfig(ctx, options) {
     switch (setting) {
         case 'enabled': {
             const v = parseBool(raw);
-            if (v == null) return { embeds: [E.warnEmbed('Usage: `/ai config enabled true|false`')], ephemeral: true };
+            if (v == null) return { content: E.warnText('Usage: `/ai config enabled true|false`'), ephemeral: true };
             patch.enabled = v;
             break;
         }
         case 'mode': {
             const v = String(raw || '').toLowerCase();
-            if (!AI_MODES.some(m => m.key === v)) return { embeds: [E.warnEmbed('Mode must be `mention` or `auto`.')], ephemeral: true };
+            if (!AI_MODES.some(m => m.key === v)) return { content: E.warnText('Mode must be `mention` or `auto`.'), ephemeral: true };
             patch.mode = v;
             break;
         }
         case 'language': {
             const v = parseLanguage(raw);
-            if (!v) return { embeds: [E.warnEmbed('Provide a language (e.g. `en`, `es`, `auto`).')], ephemeral: true };
+            if (!v) return { content: E.warnText('Provide a language (e.g. `en`, `es`, `auto`).'), ephemeral: true };
             patch.language = v;
             break;
         }
         case 'personality': {
             const v = String(raw || '').toLowerCase();
-            if (!AI_PERSONALITIES.some(p => p.key === v)) return { embeds: [E.warnEmbed('Unknown personality.')], ephemeral: true };
+            if (!AI_PERSONALITIES.some(p => p.key === v)) return { content: E.warnText('Unknown personality.'), ephemeral: true };
             patch.personality = v;
             break;
         }
         case 'channel': {
             const id = parseId(raw);
-            if (!id) return { embeds: [E.warnEmbed('Mention a channel or provide its id.')], ephemeral: true };
+            if (!id) return { content: E.warnText('Mention a channel or provide its id.'), ephemeral: true };
             const list = new Set(settings.channelIds);
             if (String(raw).startsWith('-')) list.delete(id); else list.add(id);
             patch.channelIds = Array.from(list);
@@ -354,7 +354,7 @@ async function handleConfig(ctx, options) {
         }
         case 'role': {
             const id = parseId(raw);
-            if (!id) return { embeds: [E.warnEmbed('Mention a role or provide its id.')], ephemeral: true };
+            if (!id) return { content: E.warnText('Mention a role or provide its id.'), ephemeral: true };
             const list = new Set(settings.roleIds);
             if (String(raw).startsWith('-')) list.delete(id); else list.add(id);
             patch.roleIds = Array.from(list);
@@ -369,25 +369,25 @@ async function handleConfig(ctx, options) {
         case 'daily_guild': patch.dailyGuildRequests = raw; break;
         case 'knowledge': {
             const v = parseBool(raw);
-            if (v == null) return { embeds: [E.warnEmbed('Usage: `/ai config knowledge true|false`')], ephemeral: true };
+            if (v == null) return { content: E.warnText('Usage: `/ai config knowledge true|false`'), ephemeral: true };
             patch.knowledgeEnabled = v;
             break;
         }
         case 'vision': {
             const v = parseBool(raw);
-            if (v == null) return { embeds: [E.warnEmbed('Usage: `/ai config vision true|false`')], ephemeral: true };
+            if (v == null) return { content: E.warnText('Usage: `/ai config vision true|false`'), ephemeral: true };
             patch.visionEnabled = v;
             break;
         }
         default:
             return {
-                embeds: [E.warnEmbed('Unknown setting. Use one of: `enabled`, `mode`, `language`, `personality`, `channel`, `role`, `clear_channels`, `clear_roles`, `max_length`, `session_ttl`, `cooldown`, `daily_user`, `daily_guild`, `knowledge`, `vision`.')],
+                content: E.warnText('Unknown setting. Use one of: `enabled`, `mode`, `language`, `personality`, `channel`, `role`, `clear_channels`, `clear_roles`, `max_length`, `session_ttl`, `cooldown`, `daily_user`, `daily_guild`, `knowledge`, `vision`.'),
                 ephemeral: true,
             };
     }
 
     const next = await ctx.manager.updateSettings(ctx.guildId, patch);
-    return { embeds: [E.statusEmbed(next, await ctx.manager.getProviderStatus())], ephemeral: true };
+    return { content: E.statusText(next, await ctx.manager.getProviderStatus()), ephemeral: true };
 }
 
 async function handleUsage(ctx, options) {
@@ -402,23 +402,23 @@ async function handleUsage(ctx, options) {
         if (targetId) {
             const userUsage = await repo.getUsageToday(ctx.guildId, targetId);
             return {
-                embeds: [E.infoEmbed('AI usage', `<@${targetId}> used **${userUsage.requests}** request(s) today.`, [
+                content: E.infoText('AI usage', `<@${targetId}> used **${userUsage.requests}** request(s) today.`, [
                     { name: 'Server today', value: `${guildUsage.requests} / ${settings.dailyGuildRequests}`, inline: true },
                     { name: 'Tokens', value: String(userUsage.tokens || 0), inline: true },
-                ])],
+                ]),
                 ephemeral: true,
             };
         }
-        return { embeds: [E.usageEmbed(null, guildUsage, settings, { isServer: true })], ephemeral: true };
+        return { content: E.usageText(null, guildUsage, settings, { isServer: true }), ephemeral: true };
     }
 
     const userUsage = await repo.getUsageToday(ctx.guildId, ctx.userId);
-    return { embeds: [E.usageEmbed(userUsage, guildUsage, settings)], ephemeral: true };
+    return { content: E.usageText(userUsage, guildUsage, settings), ephemeral: true };
 }
 
 async function handleReset(ctx) {
     await ctx.manager.resetSession(ctx.guildId, ctx.userId);
-    return { embeds: [E.infoEmbed('Conversation reset', 'Your AI conversation memory was cleared. The next message starts fresh.')], ephemeral: true };
+    return { content: E.infoText('Conversation reset', 'Your AI conversation memory was cleared. The next message starts fresh.'), ephemeral: true };
 }
 
 /**
@@ -430,7 +430,7 @@ async function handleReset(ctx) {
 async function runAiAction(action, options, ctx) {
     const act = String(action || 'help').toLowerCase();
     if (!ACTIONS.includes(act)) {
-        return { embeds: [E.warnEmbed(`Unknown action \`${act}\`. Try \`${ctx.prefix || '/'}ai help\`.`)], ephemeral: true };
+        return { content: E.warnText(`Unknown action \`${act}\`. Try \`${ctx.prefix || '/'}ai help\`.`), ephemeral: true };
     }
     try {
         switch (act) {
@@ -448,11 +448,11 @@ async function runAiAction(action, options, ctx) {
             case 'reset': return await handleReset(ctx);
             case 'help':
             default:
-                return { embeds: [E.helpEmbed(ctx.prefix || '/')] };
+                return { content: E.helpText(ctx.prefix || '/') };
         }
     } catch (err) {
         console.error('[AI] action failed:', err.message);
-        return { embeds: [E.errorEmbed('Something went wrong while handling that AI request.')], ephemeral: true };
+        return { content: E.errorText('Something went wrong while handling that AI request.'), ephemeral: true };
     }
 }
 

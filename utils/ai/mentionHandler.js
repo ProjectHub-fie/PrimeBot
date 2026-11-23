@@ -7,7 +7,7 @@
  */
 
 const { sanitizeUserText } = require('./promptSafety');
-const { answerEmbed, helpEmbed } = require('./aiEmbeds');
+const { answerText, helpText } = require('./aiEmbeds');
 const { aiError } = require('./aiCommands');
 
 function stripMention(client, content) {
@@ -49,7 +49,7 @@ async function handleAiMention(client, message, { prefix = '$', auto = false } =
         // Only explain a channel/role block when the member explicitly asked.
         if (!auto && (access.reason === 'channel' || access.reason === 'role')) {
             const payload = aiError({ reason: access.reason });
-            await message.reply({ embeds: payload.embeds, allowedMentions: { parse: [] } }).catch(() => {});
+            await message.reply({ content: payload.content, allowedMentions: { parse: [] } }).catch(() => {});
             return true;
         }
         return false;
@@ -60,7 +60,7 @@ async function handleAiMention(client, message, { prefix = '$', auto = false } =
 
     if (!prompt && !images.length) {
         if (!auto) {
-            await message.reply({ embeds: [helpEmbed(prefix)], allowedMentions: { parse: [] } }).catch(() => {});
+            await message.reply({ content: helpText(prefix), allowedMentions: { parse: [] } }).catch(() => {});
             return true;
         }
         return false;
@@ -83,14 +83,14 @@ async function handleAiMention(client, message, { prefix = '$', auto = false } =
 
     if (!result.ok) {
         const payload = aiError(result);
-        await message.reply({ embeds: payload.embeds, allowedMentions: { parse: [] } }).catch(() => {});
+        await message.reply({ content: payload.content, allowedMentions: { parse: [] } }).catch(() => {});
         return true;
     }
 
     const chunks = result.chunks || [result.text];
     try {
         await message.reply({
-            embeds: [answerEmbed({ text: chunks[0], provider: result.provider })],
+            content: answerText({ text: chunks[0], provider: result.provider }),
             allowedMentions: { parse: [] },
         });
         for (const chunk of chunks.slice(1)) {
