@@ -349,19 +349,22 @@ function commandStats() {
 }
 
 /**
- * One-line summary shown above the category list and on every category page:
- *   **Prefix** `$` • **Commands** 120 (318 with aliases) • **Servers** 51
- * `servers` is omitted when the caller has no client to count guilds from.
+ * Summary shown above the category list and on every category page:
+ *   **Prefix**: `$`
+ *   **Commands**: 175
+ *   **Servers**: 51
+ * Commands is the total number of usable command names (entries + aliases).
+ * `Servers` is omitted when the caller has no client to count guilds from.
  */
 function helpStatsLine({ prefix = config.prefix || '$', client = null, servers = null } = {}) {
-    const { commands, withAliases } = commandStats();
+    const { withAliases } = commandStats();
     const guildCount = Number.isFinite(servers) ? servers : client?.guilds?.cache?.size;
-    const parts = [
-        `**Prefix** \`${prefix}\``,
-        `**Commands** ${commands} (${withAliases} with aliases)`,
+    const lines = [
+        `**Prefix**: \`${prefix}\``,
+        `**Commands**: ${withAliases}`,
     ];
-    if (Number.isFinite(guildCount)) parts.push(`**Servers** ${guildCount}`);
-    return parts.join(' • ');
+    if (Number.isFinite(guildCount)) lines.push(`**Servers**: ${guildCount}`);
+    return lines.join('\n');
 }
 
 function mainMenuText(options = {}) {

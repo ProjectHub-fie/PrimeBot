@@ -43,14 +43,15 @@ test('prefix and sash category catalogs carry no category descriptions', () => {
 test('the help main menu is the stats line plus the category lines', () => {
     const menu = mainMenuEmbed('$', client, { user, kind: 'prefix' });
     const lines = menu.data.description.split('\n');
-    assert.match(lines[0], /\*\*Prefix\*\* `\$`/, 'the stats line must come first');
-    assert.match(lines[0], /\*\*Commands\*\* \d+ \(\d+ with aliases\)/);
-    assert.equal(lines[1], '', 'a blank line separates the stats line from the categories');
+    assert.match(lines[0], /^\*\*Prefix\*\*: `\$`/, 'the stats block must come first');
+    assert.match(lines[1], /^\*\*Commands\*\*: \d+$/);
+    assert.match(lines[2], /^\*\*Servers\*\*: \d+$/);
+    assert.equal(lines[3], '', 'a blank line separates the stats block from the categories');
     const betaLegendLines = hasBetaCommands() ? 2 : 0;
-    assert.equal(lines.length, CATEGORY_ORDER.length + 2 + betaLegendLines);
+    assert.equal(lines.length, CATEGORY_ORDER.length + 4 + betaLegendLines);
     for (let i = 0; i < CATEGORY_ORDER.length; i++) {
         const key = CATEGORY_ORDER[i];
-        assert.equal(lines[i + 2], `${categoryIcon(key)} ${CATEGORY_SEPARATOR} ${CATALOG[key].label}`);
+        assert.equal(lines[i + 4], `${categoryIcon(key)} ${CATEGORY_SEPARATOR} ${CATALOG[key].label}`);
     }
     assert.equal(menu.data.fields, undefined);
     assert.equal(menu.data.thumbnail, undefined);
@@ -204,6 +205,7 @@ test('category titles and lines use the exact –> separator', () => {
     assert.equal(CATEGORY_SEPARATOR, '–>');
     assert.equal(categoryTitle('general'), `${categoryIcon('general')} –> General`);
     const menuLines = mainMenuText().split('\n');
-    assert.equal(menuLines[2], `${categoryIcon('general')} –> General`);
+    const firstCategory = menuLines.indexOf('') + 1;
+    assert.equal(menuLines[firstCategory], `${categoryIcon('general')} –> General`);
     assert.match(categoryText('general'), /`help`/);
 });
