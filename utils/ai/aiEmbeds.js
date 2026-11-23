@@ -17,10 +17,11 @@ function clip(text, max = MAX_CONTENT) {
     return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
 }
 
+/*
 function footerLine(provider) {
     return provider ? `${FOOTER} • ${provider}` : FOOTER;
 }
-
+*/
 /** The chat answer itself: plain text, never an embed. */
 function answerText({ text, provider } = {}) {
     const body = String(text ?? '');
