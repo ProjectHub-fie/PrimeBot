@@ -2766,30 +2766,50 @@ async function deleteAiKnowledge(guildId, id) { return aiCall('deleteKnowledge',
 async function getAiProviderMeta() { return aiCall('getProviderMeta'); }
 async function recordAiProviderResult(provider, result) { return aiCall('recordProviderResult', provider, result); }
 
-/** Provider status for the dashboard — configured flags + masked key hints only. */
+/**
+ * Provider status for the dashboard — configured flags, the resolved model and
+ * a masked key hint only (never a key). Models come from the live provider
+ * catalog when it has been discovered, otherwise from the static fallback.
+ */
 function getAiProviderStatus() {
     try {
-        const {
-            PROVIDER_ORDER, providerMeta, providerConfigured, resolveModel,
-            supportsVision, maskSecret,
-        } = require('../utils/ai/freeModels');
+        const { PROVIDER_ORDER } = require('../utils/ai/freeModels');
+        const modelCatalog = require('../utils/ai/modelCatalog');
         return PROVIDER_ORDER.map((provider) => {
-            const info = providerMeta(provider);
-            const model = resolveModel(provider);
+            const health = modelCatalog.providerHealth(provider);
+            let status = 'ok';
+            if (!health.configured) status = 'unconfigured';
+            else if (!health.model) status = 'invalid_model';
             return {
                 provider,
-                label: info.label,
-                configured: providerConfigured(provider),
-                keyHint: maskSecret(process.env[info.envKey]),
-                model,
-                vision: supportsVision(provider, model),
-                envKey: info.envKey,
+                label: health.label,
+                configured: health.configured,
+                keyHint: health.keyHint,
+                envKey: health.keySource,
+                model: health.model,
+                modelSource: health.modelSource,
+                vision: health.vision,
+                discovery: health.discovery,
+                status,
             };
         });
     } catch (err) {
         console.error('[DASHBOARD DB] provider status failed:', err.message);
         return [];
     }
+}
+
+/** Same as `getAiProviderStatus`, but refreshes each provider's model list first. */
+async function refreshAiProviderStatus({ timeoutMs = 6000 } = {}) {
+    try {
+        const { PROVIDER_ORDER, providerConfigured } = require('../utils/ai/freeModels');
+        const modelCatalog = require('../utils/ai/modelCatalog');
+        await modelCatalog.ensureDiscovered(
+            PROVIDER_ORDER.filter(providerConfigured),
+            { timeoutMs },
+        ).catch(() => {});
+    } catch (_) { /* fall through to the static view */ }
+    return getAiProviderStatus();
 }
 
 // ── Aggregated platform stats (public — shown on the login screen) ──────────
@@ -4891,6 +4911,7 @@ module.exports = {
     getAiProviderMeta,
     recordAiProviderResult,
     getAiProviderStatus,
+    refreshAiProviderStatus,
     getInviteStat,
     getInviteActiveCounts,
     getInviteRecentJoins,

@@ -10,7 +10,11 @@
  * the request URL (Gemini carries its key in the query string).
  */
 
-const { providerMeta, resolveModel, supportsVision } = require('./freeModels');
+const { providerMeta, readProviderKey } = require('./freeModels');
+const modelCatalog = require('./modelCatalog');
+
+const resolveModel = (provider, opts) => modelCatalog.resolveModel(provider, opts);
+const supportsVision = (provider, model) => modelCatalog.supportsVision(provider, model);
 
 const MAX_IMAGE_BYTES = 6 * 1024 * 1024;
 
@@ -33,6 +37,19 @@ function sanitizeErrorText(value) {
         .slice(0, 240) || null;
 }
 
+const INVALID_MODEL_RE = /(does not exist|not found|no longer available|is not supported|unsupported|deprecated|retired|decommissioned|invalid model)/i;
+const MODEL_WORD_RE = /\bmodels?\b/i;
+const MISSING_AUTH_RE = /(missing authentication|no auth|unauthori[sz]ed|invalid api key|incorrect api key|api key not valid|authentication header)/i;
+const QUOTA_RE = /(insufficient_quota|quota|billing|credit|exceeded your current)/i;
+
+/**
+ * Normalize a provider failure. `kind` drives the manager:
+ *   auth          → provider is unusable for this process (never retried)
+ *   invalid_model → rediscover the model list once, then disable if still bad
+ *   quota         → long cooldown (free quota exhausted)
+ *   rate_limit    → short cooldown, then the next provider
+ *   timeout/server/network → bounded retry
+ */
 function classify(status, body, err) {
     const detail = sanitizeErrorText(
         body?.error?.message || body?.message || body?.error || (err && err.message) || null
@@ -41,13 +58,22 @@ function classify(status, body, err) {
         return { kind: 'timeout', status: 0, message: 'The provider took too long to respond.' };
     }
     if (!status) return { kind: 'network', status: 0, message: detail || 'Network error.' };
-    if (status === 401 || status === 403) return { kind: 'auth', status, message: detail || 'Authentication failed.' };
+    if (status === 401 || status === 403) {
+        return { kind: 'auth', status, message: detail || 'Authentication failed.' };
+    }
+    if (status === 400 && detail && MISSING_AUTH_RE.test(detail)) {
+        return { kind: 'auth', status, message: detail };
+    }
     if (status === 402) return { kind: 'quota', status, message: detail || 'Free quota exhausted.' };
     if (status === 429) {
         const retry = Number(body?.retry_after ?? body?.error?.retry_after ?? body?.error?.details?.find?.(d => d.retryDelay)?.retryDelay) || null;
-        return { kind: 'rate_limit', status, retryAfter: retry, message: detail || 'Rate limited.' };
+        const kind = detail && QUOTA_RE.test(detail) ? 'quota' : 'rate_limit';
+        return { kind, status, retryAfter: retry, message: detail || 'Rate limited.' };
     }
-    if (status === 400 || status === 404 || status === 422) return { kind: 'bad_request', status, message: detail || 'The provider rejected the request.' };
+    if (status === 404 || (status === 400 && detail && MODEL_WORD_RE.test(detail) && INVALID_MODEL_RE.test(detail))) {
+        return { kind: 'invalid_model', status, message: detail || 'That model is not available.' };
+    }
+    if (status === 400 || status === 422) return { kind: 'bad_request', status, message: detail || 'The provider rejected the request.' };
     if (status >= 500) return { kind: 'server', status, message: detail || 'The provider is having trouble.' };
     return { kind: 'unknown', status, message: detail || 'The provider returned an unexpected response.' };
 }
@@ -81,9 +107,10 @@ function toOpenAiMessages(messages, images = []) {
 
 async function callOpenAiCompatible(provider, { messages, images = [], maxTokens, timeoutMs = 30000 }) {
     const meta = providerMeta(provider);
-    const key = process.env[meta.envKey];
+    const key = readProviderKey(provider);
     const model = resolveModel(provider);
     if (!key) return { ok: false, kind: 'config', status: 0, message: `${meta.label} is not configured.` };
+    if (!model) return { ok: false, kind: 'invalid_model', status: 0, message: `${meta.label} offers no usable free model right now.` };
     if (images.length && !supportsVision(provider, model)) {
         return { ok: false, kind: 'capability', status: 0, message: `${meta.label} cannot analyse images.` };
     }
@@ -137,10 +164,11 @@ async function callOpenAiCompatible(provider, { messages, images = [], maxTokens
 
 async function callGemini({ messages, images = [], maxTokens, timeoutMs = 30000 }) {
     const meta = providerMeta('gemini');
-    const key = process.env[meta.envKey];
-    const model = resolveModel('gemini');
+    const key = readProviderKey('gemini');
+    const model = resolveModel('gemini', { vision: images.length > 0 });
     if (!key) return { ok: false, kind: 'config', status: 0, message: 'Google Gemini is not configured.' };
-    if (images.length && !supportsVision('gemini', model)) {
+    if (!model) return { ok: false, kind: 'invalid_model', status: 0, message: 'Gemini offers no usable free model right now.' };
+    if (images.length && !modelCatalog.supportsVision('gemini', model)) {
         return { ok: false, kind: 'capability', status: 0, message: 'The selected Gemini model cannot analyse images.' };
     }
 

@@ -140,16 +140,52 @@ function errorResponse(status, body = {}) {
 }
 
 let fetchCalls = [];
-function stubFetch(handler) {
-    fetchCalls = [];
-    global.fetch = async (url, opts) => {
-        fetchCalls.push({ url: String(url), opts });
-        return handler(String(url), opts);
+function isModelListRequest(url) {
+    if (/openai\/v1\/models$/.test(url)) return true;
+    if (url.includes('generativelanguage.googleapis.com/v1beta/models') && !url.includes(':generateContent')) return true;
+    return /openrouter\.ai\/api\/v1\/models$/.test(url);
+}
+
+function modelListResponse(url) {
+    if (url.includes('groq')) {
+        return { ok: true, status: 200, json: async () => ({ data: [{ id: 'openai/gpt-oss-120b' }, { id: 'llama-3.1-8b-instant' }] }) };
+    }
+    if (url.includes('generativelanguage')) {
+        return {
+            ok: true, status: 200,
+            json: async () => ({
+                models: [
+                    { name: 'models/gemini-2.5-flash', supportedGenerationMethods: ['generateContent'] },
+                    { name: 'models/gemini-2.5-flash-lite', supportedGenerationMethods: ['generateContent'] },
+                ],
+            }),
+        };
+    }
+    return {
+        ok: true, status: 200,
+        json: async () => ({
+            data: [{
+                id: 'google/gemma-4-31b-it:free',
+                pricing: { prompt: '0', completion: '0' },
+                architecture: { input_modalities: ['text', 'image'], output_modalities: ['text'] },
+            }],
+        }),
     };
 }
 
-beforeEach(() => { resetEnv(); });
-afterEach(() => { resetEnv(); delete global.fetch; });
+function stubFetch(handler) {
+    fetchCalls = [];
+    global.fetch = async (url, opts) => {
+        const target = String(url);
+        fetchCalls.push({ url: target, opts });
+        if (isModelListRequest(target)) return modelListResponse(target);
+        return handler(target, opts);
+    };
+}
+
+const modelCatalog = require('../utils/ai/modelCatalog');
+beforeEach(() => { resetEnv(); modelCatalog.invalidate(); });
+afterEach(() => { resetEnv(); modelCatalog.invalidate(); delete global.fetch; });
 
 // ── Free-model guard ────────────────────────────────────────────────────────
 test('free-model guard rejects paid ids and ignores a paid env override', () => {
@@ -158,11 +194,11 @@ test('free-model guard rejects paid ids and ignores a paid env override', () => 
     assert.equal(F.isFreeModel('openrouter', 'meta-llama/llama-3.3-70b-instruct'), false, 'missing :free suffix');
     assert.equal(F.isFreeModel('openrouter', 'meta-llama/llama-3.3-70b-instruct:free'), true);
     assert.equal(F.isFreeModel('groq', 'gpt-4o'), false);
-    assert.equal(F.isFreeModel('groq', 'llama-3.3-70b-versatile'), true);
-    assert.equal(F.isFreeModel('gemini', 'gemini-2.0-flash'), true);
+    assert.equal(F.isFreeModel('groq', 'openai/gpt-oss-120b'), true);
+    assert.equal(F.isFreeModel('gemini', 'gemini-2.5-flash'), true);
 
     process.env.AI_MODEL_GROQ = 'gpt-4o';
-    assert.equal(F.resolveModel('groq'), 'llama-3.3-70b-versatile', 'paid override must be ignored');
+    assert.equal(F.resolveModel('groq'), 'openai/gpt-oss-120b', 'paid override must be ignored');
     process.env.AI_MODEL_GROQ = 'llama-3.1-8b-instant';
     assert.equal(F.resolveModel('groq'), 'llama-3.1-8b-instant', 'free override is honoured');
 });
@@ -177,7 +213,7 @@ test('provider status masks the key and never exposes it', () => {
 
 // ── Provider adapters ───────────────────────────────────────────────────────
 test('groq adapter sends an OpenAI-compatible request and extracts the text', async () => {
-    process.env.GROQ_API_KEY = 'gsk_test';
+    process.env.GROQ_API_KEY = 'gsk_test_abcdefghijklmnop';
     stubFetch(() => groqResponse('Groq answer'));
     const { callProvider } = require('../utils/ai/providers');
     const res = await callProvider('groq', {
@@ -185,15 +221,15 @@ test('groq adapter sends an OpenAI-compatible request and extracts the text', as
     });
     assert.equal(res.ok, true);
     assert.equal(res.text, 'Groq answer');
-    assert.equal(res.model, 'llama-3.3-70b-versatile');
+    assert.equal(res.model, 'openai/gpt-oss-120b');
     assert.equal(fetchCalls[0].url, 'https://api.groq.com/openai/v1/chat/completions');
-    assert.equal(fetchCalls[0].opts.headers.Authorization, 'Bearer gsk_test');
+    assert.equal(fetchCalls[0].opts.headers.Authorization, 'Bearer gsk_test_abcdefghijklmnop');
     const body = JSON.parse(fetchCalls[0].opts.body);
     assert.equal(body.messages[1].content, 'hi');
 });
 
 test('gemini adapter maps system/user turns and reads the candidate text', async () => {
-    process.env.GEMINI_API_KEY = 'gm_test';
+    process.env.GEMINI_API_KEY = 'gm_test_abcdefghijklmnop';
     stubFetch(() => geminiResponse('Gemini answer'));
     const { callProvider } = require('../utils/ai/providers');
     const res = await callProvider('gemini', {
@@ -201,8 +237,8 @@ test('gemini adapter maps system/user turns and reads the candidate text', async
     });
     assert.equal(res.ok, true);
     assert.equal(res.text, 'Gemini answer');
-    assert.ok(fetchCalls[0].url.includes('gemini-2.0-flash:generateContent'));
-    assert.equal(fetchCalls[0].opts.headers['x-goog-api-key'], 'gm_test');
+    assert.ok(fetchCalls[0].url.includes('gemini-2.5-flash:generateContent'));
+    assert.equal(fetchCalls[0].opts.headers['x-goog-api-key'], 'gm_test_abcdefghijklmnop');
     const body = JSON.parse(fetchCalls[0].opts.body);
     assert.equal(body.systemInstruction.parts[0].text, 'be nice');
     assert.equal(body.contents[0].role, 'user');
@@ -232,8 +268,8 @@ function enabledSettings(over = {}) {
 }
 
 test('Groq failure falls over to Gemini and records the provider', async () => {
-    process.env.GROQ_API_KEY = 'gsk_test';
-    process.env.GEMINI_API_KEY = 'gm_test';
+    process.env.GROQ_API_KEY = 'gsk_test_abcdefghijklmnop';
+    process.env.GEMINI_API_KEY = 'gm_test_abcdefghijklmnop';
     const { repo, state } = makeRepoStub();
     state.settings.set('g1', enabledSettings());
     const { manager, restore } = loadManager(repo);
@@ -248,8 +284,8 @@ test('Groq failure falls over to Gemini and records the provider', async () => {
 });
 
 test('an auth failure disables the provider instead of retrying it', async () => {
-    process.env.GROQ_API_KEY = 'gsk_bad';
-    process.env.GEMINI_API_KEY = 'gm_test';
+    process.env.GROQ_API_KEY = 'gsk_bad_abcdefghijklmnop';
+    process.env.GEMINI_API_KEY = 'gm_test_abcdefghijklmnop';
     const { repo, state } = makeRepoStub();
     state.settings.set('g1', enabledSettings());
     const { manager, restore } = loadManager(repo);
@@ -258,16 +294,20 @@ test('an auth failure disables the provider instead of retrying it', async () =>
         stubFetch((url) => (url.includes('groq') ? errorResponse(401, { error: { message: 'invalid key' } }) : geminiResponse()));
         const first = await manager.chat({ guildId: 'g1', userId: 'u1', prompt: 'hi' });
         assert.equal(first.provider, 'gemini');
-        assert.equal(manager._disabled.has('groq'), true);
+        assert.equal(manager._disabled.get('groq'), 'auth');
 
-        const groqCalls = fetchCalls.filter(c => c.url.includes('groq')).length;
+        const groqCalls = fetchCalls.filter(c => c.url.includes('groq') && !isModelListRequest(c.url)).length;
         await manager.chat({ guildId: 'g1', userId: 'u1', prompt: 'again' });
-        assert.equal(fetchCalls.filter(c => c.url.includes('groq')).length, groqCalls, 'disabled provider is not retried');
+        assert.equal(
+            fetchCalls.filter(c => c.url.includes('groq') && !isModelListRequest(c.url)).length,
+            groqCalls,
+            'disabled provider is not retried',
+        );
     } finally { restore(); }
 });
 
 test('with every provider failing the manager returns a friendly unavailable result', async () => {
-    process.env.GROQ_API_KEY = 'gsk_test';
+    process.env.GROQ_API_KEY = 'gsk_test_abcdefghijklmnop';
     const { repo, state } = makeRepoStub();
     state.settings.set('g1', enabledSettings());
     const { manager, restore } = loadManager(repo);
@@ -294,7 +334,7 @@ test('no configured provider returns not_configured (never a crash)', async () =
 });
 
 test('image analysis routes to a vision-capable free provider only', async () => {
-    process.env.GROQ_API_KEY = 'gsk_test';
+    process.env.GROQ_API_KEY = 'gsk_test_abcdefghijklmnop';
     const { repo, state } = makeRepoStub();
     state.settings.set('g1', enabledSettings());
     const first = loadManager(repo);
@@ -307,13 +347,16 @@ test('image analysis routes to a vision-capable free provider only', async () =>
         });
         assert.equal(res.ok, false);
         assert.equal(res.reason, 'vision_unavailable');
-        assert.equal(fetchCalls.length, 0, 'no text model is used for an image');
+        assert.equal(
+            fetchCalls.filter(c => !isModelListRequest(c.url)).length, 0,
+            'no text model is used for an image',
+        );
     } finally { first.restore(); }
 });
 
 // ── Sessions, quotas, cooldowns ─────────────────────────────────────────────
 test('conversation memory persists, is isolated per member and survives a restart', async () => {
-    process.env.GROQ_API_KEY = 'gsk_test';
+    process.env.GROQ_API_KEY = 'gsk_test_abcdefghijklmnop';
     const { repo, state } = makeRepoStub();
     state.settings.set('g1', enabledSettings());
     const first = loadManager(repo);
@@ -340,7 +383,7 @@ test('conversation memory persists, is isolated per member and survives a restar
 });
 
 test('an expired session is discarded before the next turn', async () => {
-    process.env.GROQ_API_KEY = 'gsk_test';
+    process.env.GROQ_API_KEY = 'gsk_test_abcdefghijklmnop';
     const { repo, state } = makeRepoStub();
     state.settings.set('g1', enabledSettings());
     const { manager, restore } = loadManager(repo);
@@ -356,7 +399,7 @@ test('an expired session is discarded before the next turn', async () => {
 });
 
 test('daily per-user quota blocks further requests', async () => {
-    process.env.GROQ_API_KEY = 'gsk_test';
+    process.env.GROQ_API_KEY = 'gsk_test_abcdefghijklmnop';
     const { repo, state } = makeRepoStub();
     state.settings.set('g1', enabledSettings({ dailyUserRequests: 2 }));
     state.usage.set('g1:u1', { requests: 2, tokens: 0 });
@@ -372,7 +415,7 @@ test('daily per-user quota blocks further requests', async () => {
 });
 
 test('per-user cooldown blocks rapid repeats', async () => {
-    process.env.GROQ_API_KEY = 'gsk_test';
+    process.env.GROQ_API_KEY = 'gsk_test_abcdefghijklmnop';
     const { repo, state } = makeRepoStub();
     state.settings.set('g1', enabledSettings({ cooldownSeconds: 60 }));
     const { manager, restore } = loadManager(repo);
@@ -389,7 +432,7 @@ test('per-user cooldown blocks rapid repeats', async () => {
 });
 
 test('disabled server and channel gate refuse before any provider call', async () => {
-    process.env.GROQ_API_KEY = 'gsk_test';
+    process.env.GROQ_API_KEY = 'gsk_test_abcdefghijklmnop';
     const { repo, state } = makeRepoStub();
     state.settings.set('g1', enabledSettings({ enabled: false }));
     state.settings.set('g2', enabledSettings({ channelIds: ['222222222222222222'] }));
@@ -407,7 +450,7 @@ test('disabled server and channel gate refuse before any provider call', async (
 });
 
 test('reset clears only the caller\'s session', async () => {
-    process.env.GROQ_API_KEY = 'gsk_test';
+    process.env.GROQ_API_KEY = 'gsk_test_abcdefghijklmnop';
     const { repo, state } = makeRepoStub();
     state.settings.set('g1', enabledSettings());
     const { manager, restore } = loadManager(repo);

@@ -16,9 +16,10 @@ const repo = require('../../server/aiRepo');
 const { AdaptivePoller } = require('../adaptivePoller');
 const { AI_LIMITS, aiChannelAllowed, aiRoleAllowed } = require('../../shared/aiConstants');
 const {
-    PROVIDER_ORDER, providerMeta, resolveModel, providerConfigured,
-    supportsVision, supportsChat, maskSecret,
+    PROVIDER_ORDER, providerMeta, providerConfigured,
+    readProviderKey, supportsChat, maskSecret,
 } = require('./freeModels');
+const modelCatalog = require('./modelCatalog');
 const { callProvider } = require('./providers');
 const {
     sanitizeUserText, buildSystemPrompt, wrapUserContent, chunkText,
@@ -41,7 +42,7 @@ class AiManager {
         this.client = client;
         this._settings = new Map();
         this._tableReady = false;
-        this._disabled = new Set();        // provider ids disabled for this process (auth errors)
+        this._disabled = new Map();        // provider -> 'auth' | 'model' (never retried)
         this._cooldowns = new Map();       // provider -> epoch ms
         this._lastRequest = new Map();     // `${guildId}:${userId}` -> epoch ms
         this._global = { day: this._today(), requests: 0 };
@@ -186,10 +187,19 @@ class AiManager {
         const until = this._cooldowns.get(provider);
         if (until && until > Date.now()) return false;
         if (!supportsChat(provider)) return false;
-        const model = resolveModel(provider);
+        const model = modelCatalog.resolveModel(provider, { vision });
         if (!model) return false;
-        if (vision && !supportsVision(provider, model)) return false;
+        if (vision && !modelCatalog.supportsVision(provider, model)) return false;
         return true;
+    }
+
+    _disable(provider, reason) {
+        if (this._disabled.get(provider) === reason) return;
+        this._disabled.set(provider, reason);
+        const label = providerMeta(provider)?.label || provider;
+        console.warn(reason === 'auth'
+            ? `[AI] ${label} disabled for this process — the API key was rejected.`
+            : `[AI] ${label} disabled for this process — no usable free model.`);
     }
 
     /**
@@ -203,10 +213,17 @@ class AiManager {
             return { ok: false, reason: 'not_configured', message: 'No AI provider is configured.' };
         }
 
+        // Ask each provider what it actually serves before choosing a model.
+        // Best effort: a discovery failure keeps the static catalog in play.
+        await modelCatalog.ensureDiscovered(configured, {
+            timeoutMs: envInt('AI_MODEL_DISCOVERY_TIMEOUT_MS', 6000),
+        }).catch(() => {});
+
         let lastError = null;
         for (const provider of PROVIDER_ORDER) {
             if (!this._providerReady(provider, { vision })) continue;
-            const model = resolveModel(provider);
+            let model = modelCatalog.resolveModel(provider, { vision });
+            let rediscovered = false;
 
             for (let attempt = 0; attempt < MAX_PROVIDER_ATTEMPTS; attempt++) {
                 const res = await callProvider(provider, {
@@ -224,8 +241,25 @@ class AiManager {
                 console.warn(`[AI] ${provider} failed (${res.kind}): ${res.message}`);
 
                 if (res.kind === 'auth') {
-                    this._disabled.add(provider);
+                    this._disable(provider, 'auth');
                     repo.recordProviderResult(provider, { ok: false, error: 'auth failed' }).catch(() => {});
+                    break;
+                }
+                if (res.kind === 'invalid_model') {
+                    // The provider retired the model: refresh its list once and
+                    // retry with whatever it reports now. Never loop on the id.
+                    if (!rediscovered) {
+                        rediscovered = true;
+                        await modelCatalog.discoverModels(provider, { force: true }).catch(() => null);
+                        const next = modelCatalog.resolveModel(provider, { vision });
+                        if (next && next !== model) {
+                            model = next;
+                            attempt -= 1;
+                            continue;
+                        }
+                    }
+                    this._disable(provider, 'model');
+                    repo.recordProviderResult(provider, { ok: false, error: `invalid model: ${model}` }).catch(() => {});
                     break;
                 }
                 if (res.kind === 'rate_limit' || res.kind === 'quota') {
@@ -436,19 +470,35 @@ class AiManager {
         return PROVIDER_ORDER.map(provider => {
             const info = providerMeta(provider);
             const row = byProvider.get(provider) || {};
-            const model = resolveModel(provider);
+            const health = modelCatalog.providerHealth(provider);
+            const model = health.model;
             const cooldownUntil = this._cooldowns.get(provider) || (row.cooldown_until ? new Date(row.cooldown_until).getTime() : 0);
+            const cooling = cooldownUntil > Date.now();
+            const disabledReason = this._disabled.get(provider) || null;
+            const active = this._providerReady(provider, { vision: false });
+
+            let status = 'ok';
+            if (!health.configured) status = 'unconfigured';
+            else if (disabledReason === 'auth') status = 'invalid_key';
+            else if (disabledReason === 'model' || !model) status = 'invalid_model';
+            else if (cooling) status = 'rate_limited';
+
             return {
                 provider,
                 label: info.label,
-                configured: providerConfigured(provider),
-                keyHint: maskSecret(process.env[info.envKey]),
+                configured: health.configured,
+                envKey: health.keySource,
+                keyHint: maskSecret(readProviderKey(provider)),
                 model,
+                modelSource: health.modelSource,
                 modelIsFree: Boolean(model),
-                vision: supportsVision(provider, model),
-                active: this._providerReady(provider, { vision: false }),
-                disabled: this._disabled.has(provider),
-                cooldownUntil: cooldownUntil && cooldownUntil > Date.now() ? new Date(cooldownUntil).toISOString() : null,
+                vision: health.vision,
+                discovery: health.discovery,
+                status,
+                active,
+                disabled: Boolean(disabledReason),
+                disabledReason,
+                cooldownUntil: cooling ? new Date(cooldownUntil).toISOString() : null,
                 requests: Number(row.requests) || 0,
                 failures: Number(row.failures) || 0,
                 lastOkAt: row.last_ok_at || null,
@@ -463,20 +513,43 @@ class AiManager {
         if (!providerMeta(provider)) return { ok: false, message: 'Unknown provider.' };
         if (!providerConfigured(provider)) return { ok: false, message: `${providerMeta(provider).label} is not configured.` };
         const started = Date.now();
-        const res = await callProvider(provider, {
-            messages: [
-                { role: 'system', content: 'You are a health check. Reply with exactly: OK' },
-                { role: 'user', content: 'ping' },
-            ],
-            maxTokens: 16,
-            timeoutMs: envInt('AI_TIMEOUT_MS', 20000),
+        const messages = [
+            { role: 'system', content: 'You are a health check. Reply with exactly: OK' },
+            { role: 'user', content: 'ping' },
+        ];
+        await modelCatalog.discoverModels(provider, { force: true }).catch(() => null);
+
+        let res = await callProvider(provider, {
+            messages, maxTokens: 16, timeoutMs: envInt('AI_TIMEOUT_MS', 20000),
         });
-        if (res.ok) {
-            repo.recordProviderResult(provider, { ok: true }).catch(() => {});
-            return { ok: true, provider, model: res.model, latencyMs: Date.now() - started };
+        if (!res.ok && res.kind === 'invalid_model') {
+            await modelCatalog.discoverModels(provider, { force: true }).catch(() => null);
+            res = await callProvider(provider, {
+                messages, maxTokens: 16, timeoutMs: envInt('AI_TIMEOUT_MS', 20000),
+            });
         }
+        if (res.ok) {
+            this._disabled.delete(provider);
+            this._cooldowns.delete(provider);
+            repo.recordProviderResult(provider, { ok: true }).catch(() => {});
+            return {
+                ok: true,
+                provider,
+                model: res.model,
+                modelSource: modelCatalog.modelSource(provider),
+                latencyMs: Date.now() - started,
+            };
+        }
+        if (res.kind === 'auth') this._disable(provider, 'auth');
+        if (res.kind === 'invalid_model') this._disable(provider, 'model');
         repo.recordProviderResult(provider, { ok: false, error: res.message }).catch(() => {});
-        return { ok: false, provider, kind: res.kind, message: res.message };
+        return {
+            ok: false,
+            provider,
+            kind: res.kind,
+            model: modelCatalog.resolveModel(provider),
+            message: res.message,
+        };
     }
 }
 

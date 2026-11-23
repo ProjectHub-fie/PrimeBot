@@ -3247,16 +3247,23 @@ async function buildAiPageData(guildId) {
 
     const metaByProvider = new Map(providerMeta.map(m => [m.provider, m]));
     const now = Date.now();
-    const providers = dashboardDb.getAiProviderStatus().map((p) => {
+    const providers = (await dashboardDb.refreshAiProviderStatus()).map((p) => {
         const meta = metaByProvider.get(p.provider) || {};
         const cooldown = meta.cooldown_until ? new Date(meta.cooldown_until).getTime() : 0;
+        const lastError = meta.last_error || null;
+        const cooling = cooldown > now;
+        let status = p.status;
+        if (p.configured && cooling) status = 'rate_limited';
+        else if (p.configured && lastError && /auth|api key|unauthori[sz]ed/i.test(lastError)) status = 'invalid_key';
+        else if (p.configured && lastError && /invalid model|does not exist|no longer available/i.test(lastError)) status = 'invalid_model';
         return {
             ...p,
-            active: p.configured && !(cooldown && cooldown > now),
-            cooldownUntil: cooldown && cooldown > now ? new Date(cooldown).toISOString() : null,
+            status,
+            active: p.configured && !cooling,
+            cooldownUntil: cooling ? new Date(cooldown).toISOString() : null,
             requests: Number(meta.requests) || 0,
             failures: Number(meta.failures) || 0,
-            lastError: meta.last_error || null,
+            lastError,
         };
     });
 
@@ -3395,21 +3402,24 @@ app.post('/api/guilds/:guildId/ai/providers/:provider/test', requireAuth, requir
         // The dashboard runs as its own process, so the test is a single stateless
         // request through the same adapter the bot uses (no manager required).
         const { callProvider } = require('../utils/ai/providers');
+        const modelCatalog = require('../utils/ai/modelCatalog');
+        const messages = [
+            { role: 'system', content: 'You are a health check. Reply with exactly: OK' },
+            { role: 'user', content: 'ping' },
+        ];
         const started = Date.now();
-        const result = await callProvider(provider, {
-            messages: [
-                { role: 'system', content: 'You are a health check. Reply with exactly: OK' },
-                { role: 'user', content: 'ping' },
-            ],
-            maxTokens: 16,
-            timeoutMs: 20000,
-        });
+        await modelCatalog.discoverModels(provider, { force: true }).catch(() => null);
+        let result = await callProvider(provider, { messages, maxTokens: 16, timeoutMs: 20000 });
+        if (!result.ok && result.kind === 'invalid_model') {
+            await modelCatalog.discoverModels(provider, { force: true }).catch(() => null);
+            result = await callProvider(provider, { messages, maxTokens: 16, timeoutMs: 20000 });
+        }
         await dashboardDb.recordAiProviderResult(provider, result.ok
             ? { ok: true }
             : { ok: false, error: result.message }).catch(() => {});
         res.json(result.ok
-            ? { ok: true, provider, model: result.model, latencyMs: Date.now() - started }
-            : { ok: false, provider, kind: result.kind, message: result.message });
+            ? { ok: true, provider, model: result.model, modelSource: modelCatalog.modelSource(provider), latencyMs: Date.now() - started }
+            : { ok: false, provider, kind: result.kind, model: modelCatalog.resolveModel(provider), message: result.message });
     } catch (err) {
         console.error('[API] AI provider test error:', err.message);
         res.status(500).json({ error: 'Provider test failed.' });
