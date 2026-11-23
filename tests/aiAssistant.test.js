@@ -555,6 +555,72 @@ test('mention handler answers a real mention through the shared manager', async 
     assert.match(JSON.stringify(message.replies[0]), /Answer/);
 });
 
+test('the AI chat answer is plain text — no embed', async () => {
+    const E = require('../utils/ai/aiEmbeds');
+    const answer = E.answerText({ text: 'hello', provider: 'groq' });
+    assert.ok(answer.startsWith('hello'));
+    assert.ok(answer.endsWith('# PrimeBot AI • free providers • groq'));
+    assert.ok(E.answerText({ text: 'x'.repeat(5000) }).length <= 2000, 'answer is clipped to 2000 chars');
+    assert.equal(E.answerText({ text: 'hi' }).includes('**AI Assistant**'), false);
+
+    // Every other AI message keeps its embed.
+    for (const embed of [
+        E.infoEmbed('Title', 'desc', [{ name: 'A', value: '1' }]),
+        E.errorEmbed('nope'),
+        E.warnEmbed('careful'),
+        E.helpEmbed('$'),
+        E.statusEmbed({
+            enabled: true, mode: 'mention', language: 'auto', personality: 'balanced',
+            channelIds: [], roleIds: [], maxResponseChars: 1800, sessionTtlMinutes: 60,
+            cooldownSeconds: 0, dailyUserRequests: 60, dailyGuildRequests: 600,
+        }, []),
+        E.usageEmbed({ requests: 1, tokens: 2 }, { requests: 3, tokens: 4 }, {
+            dailyUserRequests: 60, dailyGuildRequests: 600,
+        }),
+    ]) {
+        assert.equal(typeof embed.toJSON, 'function', 'helper returns an embed');
+        assert.ok(embed.toJSON().title || embed.toJSON().description);
+    }
+});
+
+test('chat answers carry content; help/status/usage keep their embeds', async () => {
+    const { runAiAction } = require('../utils/ai/aiCommands');
+    const manager = fakeManager({
+        chat: async () => ({ ok: true, text: 'plain answer', chunks: ['plain answer'], provider: 'groq' }),
+        getProviderStatus: async () => [],
+    });
+    const ctx = {
+        manager, guildId: 'g1', guildName: 'G', channelId: 'c1', userId: 'u1',
+        username: 'u', member: null, isAdmin: false, prefix: '$', message: null,
+        repliedMessage: null, fetchRecentMessages: async () => [],
+    };
+
+    for (const action of ['ask', 'chat']) {
+        const payload = await runAiAction(action, { question: 'hi', message: 'hi' }, ctx);
+        assert.equal(payload.embeds, undefined, `${action} answer must not send an embed`);
+        assert.equal(typeof payload.content, 'string', `${action} answer must send content`);
+        assert.match(payload.content, /plain answer/);
+        assert.ok(payload.content.length <= 2000);
+    }
+
+    for (const action of ['help', 'usage', 'config', 'memory']) {
+        const payload = await runAiAction(action, { sub: 'show', setting: 'show' }, ctx);
+        assert.equal(payload.content, undefined, `${action} must stay an embed`);
+        assert.ok(payload.embeds?.length, `${action} must send an embed`);
+    }
+
+    const { handleAiMention } = require('../utils/ai/mentionHandler');
+    const message = fakeMessage();
+    await handleAiMention({ user: { id: 'bot' }, aiManager: manager }, message, {});
+    assert.equal(message.replies[0].embeds, undefined, 'mention answer is plain text');
+    assert.match(message.replies[0].content, /plain answer/);
+
+    const blocked = fakeMessage();
+    const blockedManager = fakeManager({ checkAccess: () => ({ ok: false, reason: 'channel' }) });
+    await handleAiMention({ user: { id: 'bot' }, aiManager: blockedManager }, blocked, {});
+    assert.ok(blocked.replies[0].embeds?.length, 'block explanation keeps its embed');
+});
+
 test('mention handler explains a channel/role block only for an explicit mention', async () => {
     const { handleAiMention } = require('../utils/ai/mentionHandler');
     const manager = fakeManager({ checkAccess: () => ({ ok: false, reason: 'channel' }) });
@@ -794,6 +860,7 @@ test('the prefix handler routes short admin forms through the shortcut parser', 
     const src = fs.readFileSync(path.join(ROOT, 'events/messageCreate.js'), 'utf8');
     assert.match(src, /parseAiShortcut/);
     assert.match(src, /options\.setting = shortcut\.setting/);
-    const embeds = fs.readFileSync(path.join(ROOT, 'utils/ai/aiEmbeds.js'), 'utf8');
-    assert.match(embeds, /one-word shortcuts/);
+    const commands = fs.readFileSync(path.join(ROOT, 'utils/ai/aiCommands.js'), 'utf8');
+    assert.match(commands, /function parseAiShortcut/, 'the shortcut table lives in aiCommands');
+    assert.match(commands, /CONFIG_SHORTCUTS/);
 });

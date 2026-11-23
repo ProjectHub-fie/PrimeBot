@@ -7,7 +7,7 @@
  */
 
 const { sanitizeUserText } = require('./promptSafety');
-const { answerEmbed, helpEmbed } = require('./aiEmbeds');
+const { answerText, helpEmbed } = require('./aiEmbeds');
 const { aiError } = require('./aiCommands');
 
 function stripMention(client, content) {
@@ -90,7 +90,7 @@ async function handleAiMention(client, message, { prefix = '$', auto = false } =
     const chunks = result.chunks || [result.text];
     try {
         await message.reply({
-            embeds: [answerEmbed({ text: chunks[0], provider: result.provider })],
+            content: answerText({ text: chunks[0], provider: result.provider }),
             allowedMentions: { parse: [] },
         });
         for (const chunk of chunks.slice(1)) {

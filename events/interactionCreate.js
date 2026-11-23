@@ -7,9 +7,9 @@ const { isBetaFeature } = require('../utils/betaFeatureMatcher');
 const { logEvent } = require('../utils/serverLogger');
 const { emoji } = require('../utils/emoji');
 
-function helpCategoryLines() {
+function helpCategoryLines(client = null, prefix = config.prefix) {
     try {
-        return require('../utils/prefixHelp').mainMenuText();
+        return require('../utils/prefixHelp').mainMenuText({ prefix, client });
     } catch (_) {
         return '';
     }
@@ -21,7 +21,7 @@ function helpCategoryLines() {
 async function showMainHelpUpdate(interaction) {
     const { buildHelpPayload, mainMenuText, categorySelectRow, helpActionRow } = require('../utils/prefixHelp');
     await interaction.update(buildHelpPayload({
-        text: mainMenuText(),
+        text: mainMenuText({ prefix: '/', client: interaction.client }),
         rows: [categorySelectRow(null, 'help_select'), helpActionRow()],
     }));
     scheduleComponentExpiry(interaction.message);
@@ -99,7 +99,7 @@ async function showSashHelp(interaction, page) {
                 .setEmoji(emoji('left', '↩️'))
         ));
 
-        await interaction.update(buildHelpPayload({ text: mainMenuText(), rows }));
+        await interaction.update(buildHelpPayload({ text: mainMenuText({ prefix, client: interaction.client }), rows }));
         scheduleComponentExpiry(interaction.message);
         return;
     }
@@ -116,7 +116,7 @@ async function showSashHelp(interaction, page) {
 
     await interaction.update(buildHelpPayload({
         title: categoryTitle(category),
-        text: categoryText(category),
+        text: categoryText(category, { prefix, client: interaction.client }),
         rows: [backButton],
     }));
     scheduleComponentExpiry(interaction.message);
@@ -132,7 +132,7 @@ async function showCategoryHelpUpdate(interaction, category) {
     } = require('../utils/prefixHelp');
     await interaction.update(buildHelpPayload({
         title: categoryTitle(category),
-        text: categoryText(category),
+        text: categoryText(category, { prefix: '/', client: interaction.client }),
         rows: [categorySelectRow(category, 'help_select'), helpActionRow()],
     }));
     scheduleComponentExpiry(interaction.message);
@@ -663,7 +663,7 @@ module.exports = {
                         return;
                     } else if (interaction.customId === 'categories_help') {
                         await interaction.reply({
-                            content: `Use the dropdown menu to browse different command categories. Each category contains specialized commands for different server needs.\n\n**Available Categories:**\n${helpCategoryLines()}`,
+                            content: `Use the dropdown menu to browse different command categories. Each category contains specialized commands for different server needs.\n\n**Available Categories:**\n${helpCategoryLines(interaction.client)}`,
                             flags: MessageFlags.Ephemeral
                         });
                         return;
@@ -674,7 +674,7 @@ module.exports = {
                         const { buildHelpPayload, mainMenuText, categorySelectRow, homeButtonRow } = require('../utils/prefixHelp');
                         try {
                             await interaction.update(buildHelpPayload({
-                                text: mainMenuText(),
+                                text: mainMenuText({ prefix: config.prefix, client: interaction.client }),
                                 rows: [categorySelectRow(null, 'category_select_prefix'), homeButtonRow('categories_prefix_back')],
                             }));
                             scheduleComponentExpiry(interaction.message);
@@ -682,7 +682,7 @@ module.exports = {
                         return;
                     } else if (interaction.customId === 'categories_prefix_help') {
                         await interaction.reply({
-                            content: `Use the dropdown menu to browse different command categories. Each category contains specialized commands for different server needs.\n\n**Available Categories:**\n${helpCategoryLines()}`,
+                            content: `Use the dropdown menu to browse different command categories. Each category contains specialized commands for different server needs.\n\n**Available Categories:**\n${helpCategoryLines(interaction.client)}`,
                             flags: MessageFlags.Ephemeral
                         });
                         return;
@@ -985,7 +985,7 @@ module.exports = {
                         } = require('../utils/prefixHelp');
                         await interaction.update(buildHelpPayload({
                             title: categoryTitle(selectedCategory),
-                            text: categoryText(selectedCategory),
+                            text: categoryText(selectedCategory, { prefix: '/', client: interaction.client }),
                             rows: [categorySelectRow(selectedCategory, 'help_select'), helpActionRow()],
                         }));
                         scheduleComponentExpiry(interaction.message);

@@ -5,7 +5,7 @@
  * with the same canonical `options` object, so the behaviour, permissions,
  * cooldowns, quotas and memory are identical across every entry point. The
  * command layers only translate their transport (interaction vs message) into
- * this shape and send the returned embeds.
+ * this shape and send the returned plain-text content.
  */
 
 const config = require('../../config');
@@ -51,9 +51,9 @@ function aiError(result) {
 }
 
 function answer(result) {
-    const first = E.answerEmbed({ text: result.chunks?.[0] || result.text, provider: result.provider });
+    const first = E.answerText({ text: result.chunks?.[0] || result.text, provider: result.provider });
     const followUps = (result.chunks || []).slice(1);
-    return { embeds: [first], followUps };
+    return { content: first, followUps };
 }
 
 function parseBool(value) {

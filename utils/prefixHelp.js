@@ -75,6 +75,7 @@ const CATALOG = {
             { names: ['stats', 'statistics'], desc: 'Bot statistics and server count' },
             { names: ['updates', 'ulog'], desc: 'Latest bot updates and features' },
             { names: ['ping'], desc: 'Check bot latency and connection status' },
+            { names: ['si', 'serverinfo', 'server'], desc: 'Server information — owner, members, channels, roles, boosts' },
         ],
     },
 
@@ -331,8 +332,40 @@ function categoryLines() {
     return CATEGORY_ORDER.map(categoryLine).filter(Boolean);
 }
 
-function mainMenuText() {
-    const text = categoryLines().join('\n');
+/**
+ * Command totals across the whole catalog: `commands` counts canonical entries,
+ * `withAliases` counts every usable name (entry + aliases).
+ */
+function commandStats() {
+    let commands = 0;
+    let withAliases = 0;
+    for (const key of CATEGORY_ORDER) {
+        for (const cmd of CATALOG[key]?.commands || []) {
+            commands += 1;
+            withAliases += (cmd.names || []).length;
+        }
+    }
+    return { commands, withAliases, categories: CATEGORY_ORDER.length };
+}
+
+/**
+ * One-line summary shown above the category list and on every category page:
+ *   **Prefix** `$` • **Commands** 120 (318 with aliases) • **Servers** 51
+ * `servers` is omitted when the caller has no client to count guilds from.
+ */
+function helpStatsLine({ prefix = config.prefix || '$', client = null, servers = null } = {}) {
+    const { commands, withAliases } = commandStats();
+    const guildCount = Number.isFinite(servers) ? servers : client?.guilds?.cache?.size;
+    const parts = [
+        `**Prefix** \`${prefix}\``,
+        `**Commands** ${commands} (${withAliases} with aliases)`,
+    ];
+    if (Number.isFinite(guildCount)) parts.push(`**Servers** ${guildCount}`);
+    return parts.join(' • ');
+}
+
+function mainMenuText(options = {}) {
+    const text = [helpStatsLine(options), '', categoryLines().join('\n')].join('\n');
     if (!hasBetaCommands()) return text;
     return `${text}\n\n${BETA_TAG} = beta feature — the server must be in the beta program`;
 }
@@ -364,10 +397,12 @@ function categoryCommandNames(category, options = {}) {
 
 function categoryText(category, options = {}) {
     const names = categoryCommandNames(category, options).map(name => `\`${name}\``);
-    return names.join(', ') || 'No commands found for this category.';
+    const list = names.join(', ') || 'No commands found for this category.';
+    return `${helpStatsLine(options)}\n\n${list}`;
 }
 
 function categoryEmbed(category, prefix, options = {}) {
+    options = { prefix, ...options };
     if (!CATALOG[category]) {
         return linixEmbed()
             .t(categoryTitle(category))
@@ -381,9 +416,9 @@ function categoryEmbed(category, prefix, options = {}) {
 }
 
 function mainMenuEmbed(prefix, client, options = {}) {
-    // Help is intentionally only the category list: no intro, no field title,
-    // no thumbnail/footer/image, and no category descriptions.
-    return linixEmbed().d(categoryLines().join('\n'));
+    // Help is intentionally only the stats line + category list: no field
+    // title, thumbnail/footer/image, and no category descriptions.
+    return linixEmbed().d(mainMenuText({ prefix, client, ...options }));
 }
 
 function categorySelectRow(currentCategory = null, customId = 'help_select') {
@@ -475,12 +510,12 @@ async function showPrefixCategoryHelp(message, category, prefix) {
     if (category && CATALOG[category]) {
         return message.reply(buildHelpPayload({
             title: categoryTitle(category),
-            text: categoryText(category),
+            text: categoryText(category, { prefix, client: message.client }),
             rows: [categorySelectRow(category, 'category_select_prefix'), homeButtonRow('categories_prefix_back')],
         }));
     }
     const sent = await message.reply(buildHelpPayload({
-        text: mainMenuText(),
+        text: mainMenuText({ prefix, client: message.client }),
         rows: [categorySelectRow(null, 'category_select_prefix'), homeButtonRow('categories_prefix_back')],
     }));
     scheduleComponentExpiry(sent);
@@ -491,7 +526,7 @@ async function showPrefixCategoryHelp(message, category, prefix) {
 async function showPrefixCategoryMenuHelp(interaction, category, prefix) {
     const payload = buildHelpPayload({
         title: categoryTitle(category),
-        text: categoryText(category),
+        text: categoryText(category, { prefix, client: interaction.client }),
         rows: [categorySelectRow(category, 'category_select_prefix'), homeButtonRow('categories_prefix_back')],
     });
     try {
@@ -556,6 +591,8 @@ module.exports = {
     categoryText,
     hasBetaCommands,
     mainMenuText,
+    helpStatsLine,
+    commandStats,
     categoryLines,
     buildHelpPayload,
     CATEGORY_ORDER,

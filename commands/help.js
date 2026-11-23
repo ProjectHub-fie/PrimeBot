@@ -74,7 +74,7 @@ module.exports = {
 
 async function showMainHelp(interaction) {
     await interaction.editReply(buildHelpPayload({
-        text: mainMenuText(),
+        text: mainMenuText({ prefix: '/', client: interaction.client }),
         rows: [categorySelectRow(null, 'help_select'), helpActionRow()],
     }));
     const sent = await interaction.fetchReply().catch(() => null);
@@ -84,7 +84,7 @@ async function showMainHelp(interaction) {
 async function showCategoryHelp(interaction, category) {
     await interaction.editReply(buildHelpPayload({
         title: categoryTitle(category),
-        text: categoryText(category),
+        text: categoryText(category, { prefix: '/', client: interaction.client }),
         rows: [categorySelectRow(category, 'help_select'), helpActionRow()],
     }));
     const sent = await interaction.fetchReply().catch(() => null);

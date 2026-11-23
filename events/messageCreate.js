@@ -723,7 +723,12 @@ module.exports = {
                     };
 
                     const result = await runAiAction(action, options, ctx);
-                    await message.reply({ embeds: result.embeds, allowedMentions: { parse: [] } });
+                    // The chat answer is plain text; help/status/usage/errors are embeds.
+                    await message.reply({
+                        content: result.content,
+                        embeds: result.embeds,
+                        allowedMentions: { parse: [] },
+                    });
                     for (const chunk of result.followUps || []) {
                         await message.channel.send({ content: chunk, allowedMentions: { parse: [] } }).catch(() => {});
                     }
@@ -1621,7 +1626,7 @@ module.exports = {
 
                     // Otherwise show the main category menu (V2 text + dropdown).
                     const menuPayload = buildHelpPayload({
-                        text: mainMenuText(),
+                        text: mainMenuText({ prefix, client: message.client }),
                         rows: [categorySelectRow(), navigationButtonsRow()],
                     });
                     if (animMsg) {
@@ -4903,6 +4908,18 @@ module.exports = {
                     return message.reply({ embeds: [ytEmbed] });
                 }
                 // About Command
+                case "si":
+                case "serverinfo":
+                case "server": {
+                    if (!message.guild) {
+                        await message.reply("❌ This command only works inside a server.").catch(() => {});
+                        return;
+                    }
+                    const { buildServerInfoEmbed } = require("../utils/serverInfoEmbed");
+                    await message.reply({ embeds: [buildServerInfoEmbed(message.guild)] }).catch(() => {});
+                    return;
+                }
+
                 case "about":
                 case "ab":
                     const prefixAboutEmbed = new EmbedBuilder()

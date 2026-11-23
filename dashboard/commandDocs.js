@@ -479,6 +479,11 @@ const METADATA = {
         description: 'Show information about PrimeBot and its features.',
         usage: ['about'],
     },
+    si: {
+        category: 'Utility',
+        description: 'Show information about the current server: owner, member count, channels, roles, boosts, verification level, emojis, vanity URL and creation date.',
+        usage: ['si', 'serverinfo'],
+    },
     stats: {
         category: 'Utility',
         description: 'Show live bot statistics: uptime, memory, servers, users and failover-node health.',
