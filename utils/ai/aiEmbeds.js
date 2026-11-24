@@ -9,7 +9,7 @@ const { EmbedBuilder } = require('discord.js');
 const config = require('../../config');
 const { AI_PERSONALITIES, AI_MODES, AI_LANGUAGES } = require('../../shared/aiConstants');
 
-const FOOTER = 'PrimeBot AI • free providers';
+const FOOTER = 'PrimeBot AI ';
 const MAX_CONTENT = 2000;
 
 function clip(text, max = MAX_CONTENT) {
@@ -17,11 +17,11 @@ function clip(text, max = MAX_CONTENT) {
     return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
 }
 
-/*
+
 function footerLine(provider) {
-    return provider ? `${FOOTER} • ${provider}` : FOOTER;
+    return provider ? `${FOOTER}` : FOOTER;
 }
-*/
+
 /** The chat answer itself: plain text, never an embed. */
 function answerText({ text, provider } = {}) {
     const body = String(text ?? '');
