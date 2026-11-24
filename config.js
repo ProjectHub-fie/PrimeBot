@@ -12,7 +12,7 @@
 //
 // While this is left as the placeholder, the audit logger stays inert and logs
 // one safe diagnostic on boot (see utils/securityAuditLogger.js).
-const SECURITY_AUDIT_CHANNEL_ID = "YOUR_LOG_CHANNEL_ID";
+const SECURITY_AUDIT_CHANNEL_ID = process.env.AUDIT;
 
 module.exports = {
     // Bot version information
