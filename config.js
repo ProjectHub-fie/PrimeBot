@@ -31,7 +31,7 @@ module.exports = {
     website: 'https://cpanel-primebot.vercel.app/',
     doc: 'https://cpanel-primebot.vercel.app/docs',
     // Bot URLs
-    supportServer: "https://discord.gg/gd7UNSfX86", // PrimeBot support server
+    supportServer: "https://discord.gg/zsqcHRxgNh", // PrimeBot support server
   
     // Beta program configuration
     // betaServers: Guild IDs that are allowed to opt-in to beta features.
