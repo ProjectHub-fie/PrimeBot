@@ -43,15 +43,15 @@ function aiError(result) {
         vision_disabled: 'Image analysis is disabled in this server.',
         attachments_disabled: 'Attachments are disabled for the AI assistant in this server.',
         empty: 'Please include a question or some text.',
-        not_configured: 'No AI provider is configured yet. The bot owner must set `GROQ_API_KEY` (or Gemini/OpenRouter).',
-        unavailable: 'The AI assistant is temporarily unavailable — all free providers are busy. Please try again shortly.',
-        vision_unavailable: 'Image analysis is temporarily unavailable — no free vision model is available right now.',
+        not_configured: 'The AI assistant is not set up yet. Please ask the bot owner to configure it.',
+        unavailable: 'The AI assistant is temporarily unavailable. Please try again shortly.',
+        vision_unavailable: 'Image analysis is temporarily unavailable. Please try again later.',
     };
     return { embeds: [E.errorEmbed(messages[result.reason] || result.message || 'The AI request failed.')], ephemeral: true };
 }
 
 function answer(result) {
-    const first = E.answerText({ text: result.chunks?.[0] || result.text, provider: result.provider });
+    const first = E.answerText({ text: result.chunks?.[0] || result.text });
     const followUps = (result.chunks || []).slice(1);
     return { content: first, followUps };
 }

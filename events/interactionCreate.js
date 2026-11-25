@@ -388,6 +388,17 @@ module.exports = {
                 // generic button switch must therefore leave them untouched.
                 if (require('../music/interactions').isMusicCustomId(customId)) return;
 
+                // Broadcast announcement card controls (Components V2 buttons).
+                if (require('../utils/broadcastInteractions').isBroadcastButton(customId)) {
+                    await safeExecute(
+                        require('../utils/broadcastInteractions').handleBroadcastButton,
+                        [interaction],
+                        null,
+                        `Broadcast button (${customId})`
+                    );
+                    return;
+                }
+
                 // Event Management buttons (customIds: evjoin:/evleave:/evcheckin:/
                 // evparts:/evinfo:/evremind: + <eventId>). The manager rejects any event
                 // that does not belong to the interaction's guild.
@@ -750,11 +761,9 @@ module.exports = {
                                     continue;
                                 }
 
-                                // Find the first available text channel
-                                const channel = guild.channels.cache
-                                    .filter(ch => ch.type === 0) // 0 is GuildText channel type
-                                    .sort((a, b) => a.position - b.position)
-                                    .first();
+                                // The server's chosen broadcast channel, else the first text channel.
+                                const channel = require('../utils/broadcastPayload')
+                                    .resolveBroadcastChannel(guild, client.serverSettingsManager);
 
                                 if (!channel) {
                                     console.log(`[BROADCAST] No suitable text channel found in guild: ${guild.name}`);
@@ -769,7 +778,9 @@ module.exports = {
                                 console.log(`[BROADCAST] Bot has SendMessages permission: ${hasPermission}`);
 
                                 if (hasPermission) {
-                                    await channel.send({ embeds: [broadcastEmbed] });
+                                    await channel.send(
+                                        require('../utils/broadcastPayload').buildBroadcastPayloadFromEmbed(broadcastEmbed)
+                                    );
                                     console.log(`[BROADCAST] Successfully sent broadcast to guild: ${guild.name}`);
                                     successCount++;
                                 } else {
@@ -1009,6 +1020,29 @@ module.exports = {
                     }
                 }
 
+                return;
+            }
+
+            // Handle channel select menus (broadcast channel picker)
+            if (typeof interaction.isChannelSelectMenu === 'function' && interaction.isChannelSelectMenu()) {
+                try {
+                    if (require('../utils/broadcastInteractions').isBroadcastChannelSelect(interaction.customId)) {
+                        await safeExecute(
+                            require('../utils/broadcastInteractions').handleBroadcastChannelSelect,
+                            [interaction],
+                            null,
+                            `Broadcast channel select (${interaction.customId})`
+                        );
+                    }
+                } catch (selectError) {
+                    console.error('Error handling channel select interaction:', selectError);
+                    if (!interaction.replied && !interaction.deferred) {
+                        await interaction.reply({
+                            content: 'There was an error processing your selection. Please try again.',
+                            flags: MessageFlags.Ephemeral,
+                        }).catch(console.error);
+                    }
+                }
                 return;
             }
 

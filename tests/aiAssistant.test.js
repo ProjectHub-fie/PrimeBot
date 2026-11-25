@@ -559,7 +559,8 @@ test('the AI chat answer is plain text — no embed', async () => {
     const E = require('../utils/ai/aiEmbeds');
     const answer = E.answerText({ text: 'hello', provider: 'groq' });
     assert.ok(answer.startsWith('hello'));
-    assert.ok(answer.endsWith('# PrimeBot AI • free providers • groq'));
+    assert.ok(answer.endsWith('# PrimeBot AI'), 'footer is brand-only');
+    assert.doesNotMatch(answer, /groq|gemini|openrouter|provider/i, 'provider details stay internal');
     assert.ok(E.answerText({ text: 'x'.repeat(5000) }).length <= 2000, 'answer is clipped to 2000 chars');
     assert.equal(E.answerText({ text: 'hi' }).includes('**AI Assistant**'), false);
 
@@ -580,6 +581,15 @@ test('the AI chat answer is plain text — no embed', async () => {
     ]) {
         assert.equal(typeof embed.toJSON, 'function', 'helper returns an embed');
         assert.ok(embed.toJSON().title || embed.toJSON().description);
+    }
+});
+
+test('user-facing AI errors never name a provider or an API key', () => {
+    const { aiError } = require('../utils/ai/aiCommands');
+    for (const reason of ['not_configured', 'unavailable', 'vision_unavailable']) {
+        const text = JSON.stringify(aiError({ reason }));
+        assert.doesNotMatch(text, /groq|gemini|openrouter/i, `${reason} must not name a provider`);
+        assert.doesNotMatch(text, /api[_ ]?key/i, `${reason} must not mention API keys`);
     }
 });
 
