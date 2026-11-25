@@ -15,7 +15,9 @@ const IS_SECONDARY = process.env.BOT_FAILOVER_ENABLED !== 'false' &&
                      (['sn2', 'sn3', 'secondary', 'tertiary'].includes(process.env.NODE_ROLE));
 
 if (IS_SECONDARY) {
-    console.log('[BOOT] Running as SECONDARY node — skipping heavy managers to save memory.');
+    // Nothing is skipped: a standby must be able to take over instantly, so it
+    // loads every manager and only runs GC more aggressively.
+    console.log('[BOOT] Running as SECONDARY node — standby mode (all managers load so takeover is instant; GC cadence 30s).');
 }
 
 // Run GC aggressively if --expose-gc was passed (added by start-bot.js).
@@ -473,6 +475,7 @@ async function initializeManagers() {
     }, 2000);
 
     console.log('[MANAGERS] All managers initialized.');
+    reportAntiNukeReadiness(client);
 }
 
 // Live poll manager already initialized above
@@ -585,28 +588,43 @@ for (const src of ANTI_NUKE_FALLBACK_SOURCES) {
         } catch (_) { /* detection must never break the event pipeline */ }
     });
 }
-// Startup diagnostic — whether the primary Anti-Nuke detection path is live.
-// This is NOT a "bot is online" check: it reports the actual wiring (intent set
-// in this process, event handler loaded, manager initialized). A warning here
-// means protection cannot observe destructive events even though the bot is up.
-try {
-    const anManager = client.antiNukeManager;
-    const hasGuildMod = (() => {
-        try {
-            const intents = client.options && client.options.intents;
-            return Boolean(intents && typeof intents.has === 'function' && intents.has(GatewayIntentBits.GuildModeration));
-        } catch (_) { return false; }
-    })();
-    const handlerLoaded = Boolean(anManager && typeof anManager.processEvent === 'function');
-    if (handlerLoaded && hasGuildMod) {
-        console.log('[ANTINUKE] Primary detection path OPERATIONAL: GuildModeration intent on, guildAuditLogEntryCreate handler loaded, manager ready.');
-    } else {
+/**
+ * Startup diagnostic — whether the primary Anti-Nuke detection path is live.
+ * This is NOT a "bot is online" check: it reports the actual wiring (intent set
+ * in this process, event handler loaded, manager initialized). A warning here
+ * means protection cannot observe destructive events even though the bot is up.
+ *
+ * Must run AFTER initializeManagers(): checking at module scope always claimed
+ * `AntiNukeManager.processEvent` was missing because `client.antiNukeManager`
+ * had not been constructed yet.
+ */
+function reportAntiNukeReadiness(client) {
+    try {
+        const manager = client.antiNukeManager;
+        const hasGuildMod = (() => {
+            try {
+                const intents = client.options && client.options.intents;
+                return Boolean(intents && typeof intents.has === 'function' && intents.has(GatewayIntentBits.GuildModeration));
+            } catch (_) { return false; }
+        })();
+        const managerReady = Boolean(manager && typeof manager.processEvent === 'function');
+        const handlerLoaded = Boolean(
+            typeof client.listeners === 'function' && client.listeners('guildAuditLogEntryCreate').length
+        );
+        if (managerReady && hasGuildMod && handlerLoaded) {
+            console.log('[ANTINUKE] Primary detection path OPERATIONAL: GuildModeration intent on, guildAuditLogEntryCreate handler loaded, manager ready.');
+            return true;
+        }
         const missing = [];
         if (!hasGuildMod) missing.push('GuildModeration intent');
-        if (!handlerLoaded) missing.push('AntiNukeManager.processEvent');
+        if (!managerReady) missing.push('AntiNukeManager.processEvent');
+        if (!handlerLoaded) missing.push('guildAuditLogEntryCreate handler');
         console.warn(`[ANTINUKE] Primary detection path NOT fully operational — missing: ${missing.join(', ') || 'unknown'}. Enable the GuildModeration intent in the Discord Developer Portal for reliable audit-log attribution; the per-event fallback remains active.`);
+        return false;
+    } catch (_) {
+        return false; // diagnostic must never prevent boot
     }
-} catch (_) { /* diagnostic must never prevent boot */ }
+}
 
 // Add event handlers for guild join/leave to update status
 client.on('guildCreate', (guild) => {
@@ -721,7 +739,7 @@ async function stepDown(reason) {
     global.botActive = false;
     nodeFailover.stopHeartbeatLoop();
     await nodeFailover.markInactive(nodeFailover.NODE_ROLE).catch(() => {});
-    await nodeFailover.releaseLease(nodeFailover.NODE_NAME).catch(() => {});
+    await nodeFailover.releaseLease(nodeFailover.NODE_NAME, nodeFailover.NODE_ROLE).catch(() => {});
     try { client.destroy(); } catch (_) {}
     setTimeout(() => process.exit(0), 500);
 }

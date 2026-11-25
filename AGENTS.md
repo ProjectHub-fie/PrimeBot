@@ -1927,3 +1927,55 @@ Quick channel management without the dashboard. All four are guild-scoped (looku
 ## Event Management schema repair (production "recurrence_parent_id does not exist")
 
 `CREATE TABLE IF NOT EXISTS` never alters an existing table, and the recurrence index used to be created inside the same multi-statement DDL **before** the ALTERs — Postgres runs that as one implicit transaction, so an older `em_events` aborted the whole bootstrap and the manager fell back to "no events loaded". `server/eventMgmtDb.js` now runs three steps in order: **CREATE TABLE** (no indexes) → **ALTER … ADD COLUMN IF NOT EXISTS** (every column of every `em_*` table) → **CREATE INDEX**. `migrations/0037_fix_eventmgmt_schema.sql` mirrors it for managed deployments. `EventMgmtManager._init()` also retries with bounded backoff (`INIT_MAX_RETRIES`, ~2 min) instead of staying empty forever, and exposes `stop()` to clear its timers. Tests: `tests/eventMgmtSchemaUpgrade.test.js`.
+
+## Shard-node identity — NODE_NAME is NOT unique (dual-active sn1 + sn3)
+
+The three shard nodes run on hosting panels that give **every** node the same
+`NODE_NAME` (production: all three report `CloudeWave`). `NODE_NAME` is also the
+**Lavalink** node label (`music/config.js`), so it cannot be made unique per role
+without renaming the audio node. Failover identity must therefore be
+**`(node_name, role)`**, never the name alone.
+
+Symptoms of getting this wrong (all observed in production): sn3 logs
+`[FAILOVER] Reusing existing lease for role=sn3 node=CloudeWave` while sn1 holds
+the lease, and both nodes serve Discord at once — "sn3 is online while sn1 is
+online".
+
+- **`isLeaseOwner(row, nodeName, role)`** (`utils/nodeFailover.js`) is the single
+  ownership test: same name **and** same role. `acquireLease()` uses it for the
+  reuse branch, so a same-named peer falls through to the priority logic (sn1
+  reclaims, sn3 stands by).
+- **Lease writes are scoped by name + role** — the combined
+  `writeHeartbeatWithLease()` statement, `refreshLease()` and `releaseLease()`
+  all include `AND owner_role = $role`, so a same-named peer can never refresh or
+  delete a lease it does not own. `releaseLease(name, role)` takes the role from
+  `index.js`.
+- **`getOtherActiveNode(selfNodeName, selfRole)` excludes self by ROLE**
+  (`bot_node_status` is keyed by role). Filtering on `node_name != self` matched
+  nothing with a shared name, so a standby concluded "no other active node" and
+  took over while the real active node was online.
+- **`isLeaseHeldByHigherPriority(selfRole, selfNodeName)`** treats the lease as
+  ours only on a name+role match, so a same-named sn1 makes sn3 step down.
+
+Regression tests: `tests/failoverIdentity.test.js` (7 cases against a stubbed
+season pool — sn3 must not adopt sn1's lease, reuse requires name+role, sn1
+reclaims, the standby sees a same-named sn1, priority filtering, lease-held-by-
+higher-priority both ways).
+
+## Boot diagnostics — Anti-Nuke readiness, failover webhook, standby log
+
+- **`reportAntiNukeReadiness(client)` must run AFTER `initializeManagers()`.** It
+  used to run at module scope, where `client.antiNukeManager` did not exist yet,
+  so every boot logged `[ANTINUKE] Primary detection path NOT fully operational —
+  missing: AntiNukeManager.processEvent` even with the GuildModeration intent on
+  and the handler loaded. It now also verifies the `guildAuditLogEntryCreate`
+  listener and names only what is genuinely missing.
+- **`[BOOT] Running as SECONDARY node`** no longer claims managers are skipped:
+  nothing was ever skipped (only the GC cadence changes), and a standby must load
+  every manager to take over instantly.
+- **`utils/webhookLogger.js` disables the failover webhook for the process** on a
+  permanent rejection (401/403/404/410 — a deleted webhook returns 404) and logs
+  one actionable line naming `FAILOVER_WEBHOOK_URL`; the URL/token is never
+  logged. A 5xx keeps retrying. `isDisabled()` / `reset()` are exported for tests.
+
+Tests: `tests/bootDiagnostics.test.js` (6 cases).

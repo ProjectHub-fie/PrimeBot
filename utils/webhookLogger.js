@@ -47,8 +47,43 @@ function getNodeMeta() {
     return { role, name, ...meta };
 }
 
+// A deleted webhook (404), a revoked token (401) or a deleted channel (410) is
+// permanent until the operator changes FAILOVER_WEBHOOK_URL, so we stop posting
+// after the first such response instead of failing on every failover event.
+const PERMANENT_FAILURE_CODES = new Set([401, 403, 404, 410]);
+let disabled = false;
+
+/** True once the configured webhook has been rejected permanently. */
+function isDisabled() {
+    return disabled;
+}
+
+/** Test hook — forget a permanent failure. */
+function reset() {
+    disabled = false;
+}
+
+function handleStatus(statusCode) {
+    if (PERMANENT_FAILURE_CODES.has(statusCode)) {
+        if (disabled) return;
+        disabled = true;
+        const cause = statusCode === 404 || statusCode === 410
+            ? 'the webhook was deleted or its channel no longer exists'
+            : 'the webhook token is invalid or revoked';
+        console.error(
+            `[WEBHOOK] Failover webhook rejected (HTTP ${statusCode}: ${cause}). ` +
+            'Disabling it for this process — update FAILOVER_WEBHOOK_URL and restart to re-enable.'
+        );
+        return;
+    }
+    if (statusCode >= 400) {
+        console.error(`[WEBHOOK] Discord responded HTTP ${statusCode}`);
+    }
+}
+
 /** Post a JSON payload to the Discord webhook. */
 function post(webhookUrl, payload) {
+    if (disabled) return;
     const body = JSON.stringify(payload);
     try {
         const url = new URL(webhookUrl);
@@ -64,9 +99,7 @@ function post(webhookUrl, payload) {
             },
             (res) => {
                 res.resume(); // drain so socket is released
-                if (res.statusCode >= 400) {
-                    console.error(`[WEBHOOK] Discord responded HTTP ${res.statusCode}`);
-                }
+                handleStatus(res.statusCode);
             }
         );
         req.on('error', (err) => console.error('[WEBHOOK] Request error:', err.message));
@@ -92,7 +125,7 @@ function post(webhookUrl, payload) {
  */
 function send({ title, description = '', type = 'info', reason, fromNode, extraFields = [] }) {
     const webhookUrl = process.env.FAILOVER_WEBHOOK_URL;
-    if (!webhookUrl) return;
+    if (!webhookUrl || disabled) return;
 
     const { name, label, priority, icon } = getNodeMeta();
     const statusIcon = STATUS_ICONS[type] ?? STATUS_ICONS.info;
@@ -146,4 +179,4 @@ function send({ title, description = '', type = 'info', reason, fromNode, extraF
     });
 }
 
-module.exports = { send, COLORS, STATUS_ICONS };
+module.exports = { send, isDisabled, reset, COLORS, STATUS_ICONS };

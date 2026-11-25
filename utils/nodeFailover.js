@@ -93,6 +93,17 @@ function isHolderConsideredAlive(leaseAgeMs, holderHeartbeatFresh) {
     return Number(leaseAgeMs) <= FAILOVER_THRESHOLD_MS || holderHeartbeatFresh === true;
 }
 
+/**
+ * Does this row belong to us? A node owns the lease only when BOTH the node
+ * name AND the role match. Hosting panels commonly give every node the same
+ * NODE_NAME (e.g. "CloudeWave"), so comparing the name alone let sn3 treat
+ * sn1's lease as its own — "Reusing existing lease for role=sn3" — leaving two
+ * nodes active at once while sn1 was online.
+ */
+function isLeaseOwner(row, nodeName, role) {
+    return Boolean(row) && row.owner_node_name === nodeName && row.owner_role === role;
+}
+
 /** True when the bot has seen no Discord activity for a while (see activityGate). */
 function activityIsIdle() {
     try {
@@ -268,8 +279,8 @@ async function writeHeartbeatWithLease(role) {
             RETURNING 1
         )
         UPDATE bot_failover_lock
-        SET last_seen = NOW(), owner_role = ${role}
-        WHERE id = 1 AND owner_node_name = ${NODE_NAME}
+        SET last_seen = NOW()
+        WHERE id = 1 AND owner_node_name = ${NODE_NAME} AND owner_role = ${role}
     `);
     // Publish the status pulse on EVERY steady-state tick, not only on the
     // boot/fallback writeHeartbeat() path. The combined heartbeat+lease
@@ -308,18 +319,28 @@ async function getPrimaryAgeMs() {
     return Number(row.age_ms);
 }
 
-// Looks for any OTHER node (different node_name) that is currently marked active
-// with a fresh heartbeat AND has a higher priority than selfRole (lower number).
+// Looks for any OTHER node that is currently marked active with a fresh
+// heartbeat AND has a higher priority than selfRole (lower number).
 // selfRole is optional; when omitted any other active node is returned.
+//
+// Self is excluded by ROLE, not by name: bot_node_status is keyed by role, and
+// hosting panels routinely give every node the same NODE_NAME. Filtering on
+// `node_name != self` therefore matched nothing, so a standby concluded "no
+// other active node" and took over while the real active node was online.
 async function getOtherActiveNode(selfNodeName, selfRole) {
     await ensureTable();
-    const result = await seasonDb.execute(sql`
+    const select = sql`
         SELECT role, node_name, last_heartbeat, active,
                EXTRACT(EPOCH FROM (NOW() - last_heartbeat)) * 1000 AS age_ms,
                heartbeat_interval_ms
         FROM bot_node_status
-        WHERE active = true AND node_name != ${selfNodeName}
-    `);
+        WHERE active = true
+    `;
+    const result = await seasonDb.execute(
+        selfRole
+            ? sql`${select} AND role != ${selfRole}`
+            : sql`${select} AND node_name != ${selfNodeName}`
+    );
     const rows = result.rows || result;
     const selfPriority = ROLE_PRIORITY[selfRole] ?? 99;
     for (const row of rows) {
@@ -433,11 +454,11 @@ async function acquireLease(role, nodeName) {
             return { acquired: true, ownerNodeName: nodeName, ownerRole: role, stolen: false };
         }
 
-        if (row.owner_node_name === nodeName) {
+        if (isLeaseOwner(row, nodeName, role)) {
             await seasonDb.execute(sql`
                 UPDATE bot_failover_lock
                 SET last_seen = NOW()
-                WHERE id = 1 AND owner_node_name = ${nodeName}
+                WHERE id = 1 AND owner_node_name = ${nodeName} AND owner_role = ${role}
             `);
             console.log(`[FAILOVER] Reusing existing lease for role=${role} node=${nodeName}`);
             return { acquired: true, ownerNodeName: nodeName, ownerRole: role, stolen: false };
@@ -513,8 +534,8 @@ async function refreshLease(nodeName, role) {
         await ensureLeaseTable();
         const result = await seasonDb.execute(sql`
             UPDATE bot_failover_lock
-            SET last_seen = NOW(), owner_role = ${role}
-            WHERE id = 1 AND owner_node_name = ${nodeName}
+            SET last_seen = NOW()
+            WHERE id = 1 AND owner_node_name = ${nodeName} AND owner_role = ${role}
         `);
         return Number(result?.rowCount || 0) > 0;
     } catch (err) {
@@ -541,13 +562,21 @@ async function getLease() {
     }
 }
 
-async function releaseLease(nodeName) {
+async function releaseLease(nodeName, role) {
     try {
         await ensureLeaseTable();
-        await seasonDb.execute(sql`
-            DELETE FROM bot_failover_lock
-            WHERE id = 1 AND owner_node_name = ${nodeName}
-        `);
+        // Scope by role when known so a node sharing a name with another role
+        // (all three hosts are often named the same on the panel) can never
+        // delete a lease it does not own.
+        await (role
+            ? seasonDb.execute(sql`
+                DELETE FROM bot_failover_lock
+                WHERE id = 1 AND owner_node_name = ${nodeName} AND owner_role = ${role}
+            `)
+            : seasonDb.execute(sql`
+                DELETE FROM bot_failover_lock
+                WHERE id = 1 AND owner_node_name = ${nodeName}
+            `));
     } catch (err) {
         console.error('[FAILOVER] Lease release failed:', err.message);
     }
@@ -635,7 +664,13 @@ async function isLeaseHeldByHigherPriority(selfRole, selfNodeName) {
     try {
         const lease = await getLease();
         if (!lease) return false;
-        if (lease.ownerNodeName === selfNodeName) return false;
+        // "Mine" means the same node AND the same role — a peer that shares the
+        // panel's node name but runs another role is a different node.
+        if (isLeaseOwner(
+            { owner_node_name: lease.ownerNodeName, owner_role: lease.ownerRole },
+            selfNodeName,
+            selfRole
+        )) return false;
         const myPriority     = ROLE_PRIORITY[selfRole]       ?? 99;
         const holderPriority = ROLE_PRIORITY[lease.ownerRole] ?? 99;
         return holderPriority < myPriority;
