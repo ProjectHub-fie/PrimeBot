@@ -295,6 +295,34 @@ async function writeHeartbeatWithLease(role) {
     return Number(result?.rowCount || 0) > 0;
 }
 
+/**
+ * Wait until `role` reports itself inactive (or its heartbeat goes stale).
+ *
+ * Used by a node that just reclaimed the lease before it logs in: two gateway
+ * sessions for the same bot receive the same interactions, so every command
+ * would run twice until the covering node stepped down. Waiting here means the
+ * fleet is never double-active, at the cost of a few seconds on promotion.
+ */
+async function waitForNodeInactive(role, { timeoutMs = 15000, intervalMs = 250 } = {}) {
+    if (!role) return true;
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+        try {
+            const row = await getStatus(role);
+            if (!row) return true;
+            if (row.active !== true) return true;
+            if (!isHeartbeatFresh(Number(row.age_ms), row.heartbeat_interval_ms)) return true;
+        } catch (_) {
+            return true; // never block a takeover on a status read failure
+        }
+        if (Date.now() >= deadline) return false;
+        await new Promise((resolve) => {
+            const timer = setTimeout(resolve, intervalMs);
+            timer.unref?.();
+        });
+    }
+}
+
 async function getStatus(role) {
     await ensureTable();
     // Compute heartbeat age using the DATABASE's clock (NOW()), not this
@@ -501,7 +529,14 @@ async function acquireLease(role, nodeName) {
             } else {
                 console.warn(`[FAILOVER] ${role} reclaiming stale lease from ${row.owner_node_name} (role=${row.owner_role}, lease age=${Math.round(ageMs / 1000)}s)`);
             }
-            return { acquired: true, ownerNodeName: nodeName, ownerRole: role, stolen: true, wasCovering };
+            return {
+                acquired: true,
+                ownerNodeName: nodeName,
+                ownerRole: role,
+                stolen: true,
+                wasCovering,
+                previousOwner: { nodeName: row.owner_node_name, role: row.owner_role },
+            };
         }
 
         // Lower-priority node (or equal) only takes over when the holder is not
@@ -515,7 +550,13 @@ async function acquireLease(role, nodeName) {
                 WHERE id = 1
             `);
             console.warn(`[FAILOVER] Lease expired for ${row.owner_node_name}; ${role} taking over as node=${nodeName}`);
-            return { acquired: true, ownerNodeName: nodeName, ownerRole: role, stolen: true };
+            return {
+                acquired: true,
+                ownerNodeName: nodeName,
+                ownerRole: role,
+                stolen: true,
+                previousOwner: { nodeName: row.owner_node_name, role: row.owner_role },
+            };
         }
 
         const why = holderHeartbeatFresh
@@ -701,6 +742,7 @@ module.exports = {
     getStatus,
     getPrimaryAgeMs,
     getOtherActiveNode,
+    waitForNodeInactive,
     getLease,
     startHeartbeatLoop,
     stopHeartbeatLoop,

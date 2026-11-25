@@ -178,3 +178,55 @@ test('isLeaseHeldByHigherPriority treats our own name+role as ours', async () =>
 
     assert.equal(await nodeFailover.isLeaseHeldByHigherPriority('sn3', 'CloudeWave'), false);
 });
+
+test('a reclaim reports who it took the lease from', async () => {
+    stubDb([
+        { match: (t) => t.includes('INSERT INTO bot_failover_lock'), result: () => ({ rowCount: 0 }) },
+        {
+            match: (t) => t.includes('FROM bot_failover_lock') && t.includes('SELECT'),
+            result: () => ({
+                rows: [{ owner_node_name: 'CloudeWave', owner_role: 'sn3', age_ms: 1000 }],
+            }),
+        },
+        FRESH_SN1_HEARTBEAT,
+    ]);
+
+    const result = await nodeFailover.acquireLease('sn1', 'CloudeWave');
+    assert.deepEqual(result.previousOwner, { nodeName: 'CloudeWave', role: 'sn3' });
+});
+
+test('waitForNodeInactive returns as soon as the peer reports inactive', async () => {
+    stubDb([{
+        match: (t) => t.includes('FROM bot_node_status'),
+        result: () => ({ rows: [{ role: 'sn3', active: false, age_ms: 1000, heartbeat_interval_ms: 30000 }] }),
+    }]);
+
+    assert.equal(await nodeFailover.waitForNodeInactive('sn3', { timeoutMs: 1000 }), true);
+});
+
+test('waitForNodeInactive treats a stale heartbeat as gone', async () => {
+    stubDb([{
+        match: (t) => t.includes('FROM bot_node_status'),
+        result: () => ({ rows: [{ role: 'sn3', active: true, age_ms: 120000, heartbeat_interval_ms: 30000 }] }),
+    }]);
+
+    assert.equal(await nodeFailover.waitForNodeInactive('sn3', { timeoutMs: 1000 }), true);
+});
+
+test('waitForNodeInactive times out while the peer is still active', async () => {
+    stubDb([{
+        match: (t) => t.includes('FROM bot_node_status'),
+        result: () => ({ rows: [{ role: 'sn3', active: true, age_ms: 1000, heartbeat_interval_ms: 30000 }] }),
+    }]);
+
+    assert.equal(
+        await nodeFailover.waitForNodeInactive('sn3', { timeoutMs: 120, intervalMs: 20 }),
+        false,
+        'a live peer must keep the taker waiting (bounded)'
+    );
+});
+
+test('waitForNodeInactive never blocks a takeover on a status read failure', async () => {
+    seasonDb.execute = async () => { throw new Error('db down'); };
+    assert.equal(await nodeFailover.waitForNodeInactive('sn3', { timeoutMs: 100 }), true);
+});

@@ -1979,3 +1979,25 @@ higher-priority both ways).
   logged. A 5xx keeps retrying. `isDisabled()` / `reset()` are exported for tests.
 
 Tests: `tests/bootDiagnostics.test.js` (6 cases).
+
+### One active node at a time (no dual-active window)
+
+Two gateway sessions for the same bot receive the **same** interactions, so every
+command runs twice while two nodes are logged in. The fleet must therefore never
+be double-active:
+
+- A node that **reclaims** the lease waits for the previous owner to report
+  inactive before logging in — `nodeFailover.waitForNodeInactive(prevRole,
+  { timeoutMs: 15000 })` in `connectBot()` (polls `bot_node_status` every 250ms;
+  an inactive flag OR a stale heartbeat counts as gone; a read failure never
+  blocks). The covering node steps down within ~3s (post-takeover monitor), so
+  the wait is short; the timeout only prevents an outage if the peer is wedged.
+- `acquireLease()` returns `previousOwner: { nodeName, role }` so the log says
+  who the lease came from (it used to print the taker's own name).
+- **Standby nodes stay online**: sn2/sn3 keep their process alive (ref'd
+  keep-alive timer + status pulse) with **no Discord session**, so they can take
+  over instantly. Only the active node holds a gateway connection.
+
+Tests: `tests/failoverIdentity.test.js` (12) — includes the wait returning as soon
+as the peer is inactive, treating a stale heartbeat as gone, timing out while the
+peer is genuinely active, and never blocking on a DB error.

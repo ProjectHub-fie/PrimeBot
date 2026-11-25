@@ -774,7 +774,20 @@ async function connectBot(leaseAlreadyAcquired = false) {
                 return;
             }
             if (lease.stolen) {
-                console.log(`[FAILOVER] Acquired lease from ${lease.ownerNodeName} (role=${nodeFailover.NODE_ROLE}); connecting now.`);
+                const prev = lease.previousOwner || {};
+                const prevLabel = prev.role ? `${prev.role} (${prev.nodeName})` : lease.ownerNodeName;
+                console.log(`[FAILOVER] Acquired lease from ${prevLabel} (role=${nodeFailover.NODE_ROLE}); connecting now.`);
+                // Two gateway sessions for the same bot both receive the same
+                // interactions, so every command would run twice until the
+                // covering node steps down. Wait for it to report inactive
+                // before logging in — one active node at a time.
+                if (prev.role && prev.role !== nodeFailover.NODE_ROLE) {
+                    console.log(`[FAILOVER] Waiting for ${prevLabel} to step down (no dual-active window).`);
+                    const gone = await nodeFailover.waitForNodeInactive(prev.role, { timeoutMs: 15000 });
+                    console.log(gone
+                        ? `[FAILOVER] ${prev.role} is inactive; logging in.`
+                        : `[FAILOVER] ${prev.role} still reported active after 15s; logging in to avoid an outage.`);
+                }
             }
         }
 
