@@ -1,6 +1,11 @@
 const { SlashCommandBuilder, EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder } = require('discord.js');
 const config = require('../config');
 const ms = require('ms');
+const {
+    buildBroadcastEmbed,
+    buildBroadcastPayloadFromEmbed,
+    resolveBroadcastChannel,
+} = require('../utils/broadcastPayload');
 
 /**
  * Creates a visual progress bar for the broadcast progress
@@ -76,45 +81,36 @@ module.exports = {
             console.log(`[BROADCAST] Developer IDs in config: ${config.developerIds.join(', ')}`);
             console.log(`[BROADCAST] User ID: ${interaction.user.id}, In developer list: ${config.developerIds.includes(interaction.user.id)}`);
             
-            // Create the broadcast embed with modern styling
-            const broadcastEmbed = new EmbedBuilder()
-                .setColor(embedColor)
-                .setTitle(customTitle)
-                .setDescription(broadcastMessage)
-                .setTimestamp()
-                .setFooter({
-                    text: `Sent by ${interaction.user.tag} • ${interaction.client.user.username} • Version ${config.version}`,
-                    iconURL: interaction.client.user.displayAvatarURL()
-                });
-                
-            // Add image if provided
-            if (imageUrl) {
-                if (imageUrl.match(/\.(jpeg|jpg|gif|png)$/)) {
-                    broadcastEmbed.setImage(imageUrl);
-                    console.log(`[BROADCAST] Added image: ${imageUrl}`);
-                } else {
-                    console.log(`[BROADCAST] Invalid image URL format: ${imageUrl}`);
-                }
+            // Announced content. The card delivered to servers is the Components V2
+            // payload built from this embed, so its management buttons render inside
+            // the announcement instead of a detached action row.
+            const broadcastEmbed = buildBroadcastEmbed({
+                title: customTitle,
+                message: broadcastMessage,
+                color: embedColor,
+                imageUrl: imageUrl && imageUrl.match(/\.(jpeg|jpg|gif|png)$/) ? imageUrl : null,
+                footer: `Sent by ${interaction.user.tag} • ${interaction.client.user.username} • Version ${config.version}`,
+                footerIcon: interaction.client.user.displayAvatarURL()
+            });
+
+            if (imageUrl && !imageUrl.match(/\.(jpeg|jpg|gif|png)$/)) {
+                console.log(`[BROADCAST] Invalid image URL format: ${imageUrl}`);
             }
-            
+
             // Get count of servers that will receive broadcasts
             const totalServers = interaction.client.guilds.cache.size;
             const receptiveServers = interaction.client.serverSettingsManager.getBroadcastReceptionCount();
             const optedOutCount = totalServers - receptiveServers;
-            
-            // Add server count with opt-out information
-            broadcastEmbed.addFields(
-                { 
-                    name: '📊 Servers', 
-                    value: `This announcement is being sent to ${receptiveServers} servers that have enabled broadcasts. ${optedOutCount} servers have opted out.`, 
-                    inline: false 
-                },
-                {
-                    name: '⚙️ Manage This Server\'s Broadcasts',
-                    value: 'Use `$broadcast enable` / `$broadcast disable` to control broadcast. Use `$broadcast channel` to set the channel.',
-                    inline: false
-                }
-            );
+
+            // The reach line is developer-facing only; the delivered card carries the
+            // announcement plus the per-server management controls.
+            broadcastEmbed.addFields({
+                name: '📊 Servers',
+                value: `This announcement is being sent to ${receptiveServers} servers that have enabled broadcasts. ${optedOutCount} servers have opted out.`,
+                inline: false
+            });
+
+            const deliveredPayload = buildBroadcastPayloadFromEmbed(broadcastEmbed);
 
             // If preview is enabled, show a preview with confirm/cancel buttons
             if (preview) {
@@ -192,17 +188,8 @@ module.exports = {
                             continue;
                         }
                         
-                        // Use the guild's configured broadcast channel if set, otherwise fall back
-                        // to the first available text channel
-                        const customChannelId = interaction.client.serverSettingsManager.getBroadcastChannel(guild.id);
-                        let channel = customChannelId ? guild.channels.cache.get(customChannelId) : null;
-
-                        if (!channel || channel.type !== 0) {
-                            channel = guild.channels.cache
-                                .filter(ch => ch.type === 0) // 0 is GuildText channel type
-                                .sort((a, b) => a.position - b.position)
-                                .first();
-                        }
+                        // The server's chosen broadcast channel, else the first text channel.
+                        const channel = resolveBroadcastChannel(guild, interaction.client.serverSettingsManager);
                         
                         if (!channel) {
                             console.log(`[BROADCAST] No suitable text channel found in guild: ${guild.name}`);
@@ -217,7 +204,7 @@ module.exports = {
                         console.log(`[BROADCAST] Bot has SendMessages permission: ${hasPermission}`);
                         
                         if (hasPermission) {
-                            await channel.send({ embeds: [broadcastEmbed] });
+                            await channel.send(deliveredPayload);
                             console.log(`[BROADCAST] Successfully sent broadcast to guild: ${guild.name}`);
                             successCount++;
                         } else {
