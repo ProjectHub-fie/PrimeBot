@@ -744,6 +744,23 @@ async function stepDown(reason) {
     setTimeout(() => process.exit(0), 500);
 }
 
+/**
+ * Two gateway sessions for the same bot receive the same interactions, so every
+ * command runs twice until the covering node steps down. Wait (bounded) for the
+ * previous lease owner to report inactive before logging in.
+ */
+async function waitForIncumbentToStepDown(lease) {
+    if (!lease || !lease.stolen) return;
+    const prev = lease.previousOwner || {};
+    if (!prev.role || prev.role === nodeFailover.NODE_ROLE) return;
+    const label = `${prev.role} (${prev.nodeName})`;
+    console.log(`[FAILOVER] Waiting for ${label} to step down (no dual-active window).`);
+    const gone = await nodeFailover.waitForNodeInactive(prev.role, { timeoutMs: 15000 });
+    console.log(gone
+        ? `[FAILOVER] ${prev.role} is inactive; logging in.`
+        : `[FAILOVER] ${prev.role} still reported active after 15s; logging in to avoid an outage.`);
+}
+
 // ── Connect bot ────────────────────────────────────────────────────────────
 // leaseAlreadyAcquired: true when startWithFailoverCheck already confirmed the
 // lease before calling us, so we skip the pre-login check (but still confirm
@@ -777,17 +794,7 @@ async function connectBot(leaseAlreadyAcquired = false) {
                 const prev = lease.previousOwner || {};
                 const prevLabel = prev.role ? `${prev.role} (${prev.nodeName})` : lease.ownerNodeName;
                 console.log(`[FAILOVER] Acquired lease from ${prevLabel} (role=${nodeFailover.NODE_ROLE}); connecting now.`);
-                // Two gateway sessions for the same bot both receive the same
-                // interactions, so every command would run twice until the
-                // covering node steps down. Wait for it to report inactive
-                // before logging in — one active node at a time.
-                if (prev.role && prev.role !== nodeFailover.NODE_ROLE) {
-                    console.log(`[FAILOVER] Waiting for ${prevLabel} to step down (no dual-active window).`);
-                    const gone = await nodeFailover.waitForNodeInactive(prev.role, { timeoutMs: 15000 });
-                    console.log(gone
-                        ? `[FAILOVER] ${prev.role} is inactive; logging in.`
-                        : `[FAILOVER] ${prev.role} still reported active after 15s; logging in to avoid an outage.`);
-                }
+                await waitForIncumbentToStepDown(lease);
             }
         }
 
@@ -1022,6 +1029,7 @@ async function startWithFailoverCheck() {
                     reason: `Lease was stale (no heartbeat for >${Math.round(nodeFailover.FAILOVER_THRESHOLD_MS / 1000)}s).`,
                 });
             }
+            await waitForIncumbentToStepDown(lease);
         }
     } catch (error) {
         console.error('[FAILOVER] Startup check failed, proceeding to connect:', error.message);

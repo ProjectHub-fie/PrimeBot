@@ -156,3 +156,12 @@ test('the standby boot line no longer claims managers are skipped', () => {
     assert.match(indexSrc, /standby mode \(all managers load so takeover is instant/);
     assert.doesNotMatch(indexSrc, /skipping heavy managers to save memory/);
 });
+
+test('both connect paths wait for the incumbent before logging in', () => {
+    const calls = indexSrc.match(/await waitForIncumbentToStepDown\(lease\);/g) || [];
+    assert.equal(calls.length, 2, 'connectBot() and startWithFailoverCheck() both wait');
+
+    const loginIndex = indexSrc.indexOf('await client.login(resolvedToken)');
+    const firstWait = indexSrc.indexOf('await waitForIncumbentToStepDown(lease);');
+    assert.ok(firstWait > 0 && firstWait < loginIndex, 'the wait happens before client.login()');
+});
