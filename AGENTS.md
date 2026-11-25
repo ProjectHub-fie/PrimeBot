@@ -1928,6 +1928,79 @@ Quick channel management without the dashboard. All four are guild-scoped (looku
 
 `CREATE TABLE IF NOT EXISTS` never alters an existing table, and the recurrence index used to be created inside the same multi-statement DDL **before** the ALTERs — Postgres runs that as one implicit transaction, so an older `em_events` aborted the whole bootstrap and the manager fell back to "no events loaded". `server/eventMgmtDb.js` now runs three steps in order: **CREATE TABLE** (no indexes) → **ALTER … ADD COLUMN IF NOT EXISTS** (every column of every `em_*` table) → **CREATE INDEX**. `migrations/0037_fix_eventmgmt_schema.sql` mirrors it for managed deployments. `EventMgmtManager._init()` also retries with bounded backoff (`INIT_MAX_RETRIES`, ~2 min) instead of staying empty forever, and exposes `stop()` to clear its timers. Tests: `tests/eventMgmtSchemaUpgrade.test.js`.
 
+## Shard-node identity — NODE_NAME is NOT unique (dual-active sn1 + sn3)
+
+The three shard nodes run on hosting panels that give **every** node the same
+`NODE_NAME` (production: all three report `CloudeWave`). `NODE_NAME` is also the
+**Lavalink** node label (`music/config.js`), so it cannot be made unique per role
+without renaming the audio node. Failover identity must therefore be
+**`(node_name, role)`**, never the name alone.
+
+Symptoms of getting this wrong (all observed in production): sn3 logs
+`[FAILOVER] Reusing existing lease for role=sn3 node=CloudeWave` while sn1 holds
+the lease, and both nodes serve Discord at once — "sn3 is online while sn1 is
+online".
+
+- **`isLeaseOwner(row, nodeName, role)`** (`utils/nodeFailover.js`) is the single
+  ownership test: same name **and** same role. `acquireLease()` uses it for the
+  reuse branch, so a same-named peer falls through to the priority logic (sn1
+  reclaims, sn3 stands by).
+- **Lease writes are scoped by name + role** — the combined
+  `writeHeartbeatWithLease()` statement, `refreshLease()` and `releaseLease()`
+  all include `AND owner_role = $role`, so a same-named peer can never refresh or
+  delete a lease it does not own. `releaseLease(name, role)` takes the role from
+  `index.js`.
+- **`getOtherActiveNode(selfNodeName, selfRole)` excludes self by ROLE**
+  (`bot_node_status` is keyed by role). Filtering on `node_name != self` matched
+  nothing with a shared name, so a standby concluded "no other active node" and
+  took over while the real active node was online.
+- **`isLeaseHeldByHigherPriority(selfRole, selfNodeName)`** treats the lease as
+  ours only on a name+role match, so a same-named sn1 makes sn3 step down.
+
+Regression tests: `tests/failoverIdentity.test.js` (7 cases against a stubbed
+season pool — sn3 must not adopt sn1's lease, reuse requires name+role, sn1
+reclaims, the standby sees a same-named sn1, priority filtering, lease-held-by-
+higher-priority both ways).
+
+## Boot diagnostics — Anti-Nuke readiness, failover webhook, standby log
+
+- **`reportAntiNukeReadiness(client)` must run AFTER `initializeManagers()`.** It
+  used to run at module scope, where `client.antiNukeManager` did not exist yet,
+  so every boot logged `[ANTINUKE] Primary detection path NOT fully operational —
+  missing: AntiNukeManager.processEvent` even with the GuildModeration intent on
+  and the handler loaded. It now also verifies the `guildAuditLogEntryCreate`
+  listener and names only what is genuinely missing.
+- **`[BOOT] Running as SECONDARY node`** no longer claims managers are skipped:
+  nothing was ever skipped (only the GC cadence changes), and a standby must load
+  every manager to take over instantly.
+- **`utils/webhookLogger.js` disables the failover webhook for the process** on a
+  permanent rejection (401/403/404/410 — a deleted webhook returns 404) and logs
+  one actionable line naming `FAILOVER_WEBHOOK_URL`; the URL/token is never
+  logged. A 5xx keeps retrying. `isDisabled()` / `reset()` are exported for tests.
+
+Tests: `tests/bootDiagnostics.test.js` (6 cases).
+
+### One active node at a time (no dual-active window)
+
+Two gateway sessions for the same bot receive the **same** interactions, so every
+command runs twice while two nodes are logged in. The fleet must therefore never
+be double-active:
+
+- A node that **reclaims** the lease waits for the previous owner to report
+  inactive before logging in — `nodeFailover.waitForNodeInactive(prevRole,
+  { timeoutMs: 15000 })` in `connectBot()` (polls `bot_node_status` every 250ms;
+  an inactive flag OR a stale heartbeat counts as gone; a read failure never
+  blocks). The covering node steps down within ~3s (post-takeover monitor), so
+  the wait is short; the timeout only prevents an outage if the peer is wedged.
+- `acquireLease()` returns `previousOwner: { nodeName, role }` so the log says
+  who the lease came from (it used to print the taker's own name).
+- **Standby nodes stay online**: sn2/sn3 keep their process alive (ref'd
+  keep-alive timer + status pulse) with **no Discord session**, so they can take
+  over instantly. Only the active node holds a gateway connection.
+
+Tests: `tests/failoverIdentity.test.js` (12) — includes the wait returning as soon
+as the peer is inactive, treating a stale heartbeat as gone, timing out while the
+peer is genuinely active, and never blocking on a DB error.
 ## Broadcast announcement card (Components V2) + $stats command count
 
 The announcement delivered to servers by `/broadcast` and `$broadcast` is a **Components V2 card** — one `ContainerBuilder` (type 17) holding text displays, an optional media gallery, the reach line, the footer, the manage hint and an action row with **`Broadcast setting`** (`broadcast_setting`) and **`Broadcast channel`** (`broadcast_channel`). The hint text is `MANAGE_TEXT` in `utils/broadcastPayload.js` ("Tap 'Broadcast setting' … 'Broadcast channel' …") — the old `Use $broadcast enable / …` line was removed and must not come back.
