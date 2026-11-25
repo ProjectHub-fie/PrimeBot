@@ -16,7 +16,7 @@ const SECURITY_AUDIT_CHANNEL_ID = process.env.AUDIT;
 
 module.exports = {
     // Bot version information
-    version: '3.1.1',
+    version: '3.2.0',
     buildDate: '2025-05-29',
 
     // Private security audit logging (owner-controlled, no database).
