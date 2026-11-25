@@ -290,7 +290,7 @@ class AiManager {
             reason: vision ? 'vision_unavailable' : 'unavailable',
             message: vision
                 ? 'Image analysis is temporarily unavailable — no free vision model is available right now.'
-                : 'The AI assistant is temporarily unavailable. All free providers are busy or rate-limited — please try again in a few minutes.',
+                : 'The AI assistant is temporarily unavailable. Please try again in a few minutes.',
             lastError,
         };
     }

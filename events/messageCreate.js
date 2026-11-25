@@ -13,6 +13,11 @@ const config = require("../config");
 const nodeFailover = require("../utils/nodeFailover");
 const { scheduleComponentExpiry } = require("../utils/stabilityUtils");
 const channelAdmin = require("../utils/channelAdmin");
+const {
+    buildBroadcastEmbed,
+    buildBroadcastPayloadFromEmbed,
+    resolveBroadcastChannel,
+} = require("../utils/broadcastPayload");
 
 // Measures TCP connection time (ms) to a host:port within a 3s timeout.
 // Returns null if unreachable or timed out.
@@ -2848,22 +2853,17 @@ module.exports = {
                         : totalServersBC;
                     const optedOutCountBC = totalServersBC - receptiveServersBC;
 
-                    const broadcastEmbed = new EmbedBuilder()
-                        .setColor(bcColor)
-                        .setTitle(bcTitle)
-                        .setDescription(bcMessage)
-                        .addFields({
-                            name: "⚙️ Manage This Server's Broadcasts",
-                            value: `Use \`${prefix}broadcast enable\` / \`${prefix}broadcast disable\` to control broadcast. Use \`${prefix}broadcast channel\` to set the channel.`,
-                            inline: false
-                        })
-                        .setTimestamp()
-                        .setFooter({
-                            text: `Version: ${config.version}`,
-                            iconURL: client.user.displayAvatarURL()
-                        });
+                    const broadcastEmbed = buildBroadcastEmbed({
+                        title: bcTitle,
+                        message: bcMessage,
+                        color: bcColor,
+                        imageUrl: bcImage,
+                        footer: `Version: ${config.version}`,
+                        footerIcon: client.user.displayAvatarURL()
+                    });
 
-                    if (bcImage) broadcastEmbed.setImage(bcImage);
+                    // Delivered card: Components V2, so the manage buttons live inside it.
+                    const deliveredPayload = buildBroadcastPayloadFromEmbed(broadcastEmbed);
 
                     const previewInfoEmbed = new EmbedBuilder()
                         .setColor(config.colors.warning)
@@ -2936,20 +2936,12 @@ module.exports = {
                                 continue;
                             }
 
-                            const customChannelId = client.serverSettingsManager.getBroadcastChannel(guild.id);
-                            let channel = customChannelId ? guild.channels.cache.get(customChannelId) : null;
-
-                            if (!channel || channel.type !== 0) {
-                                channel = guild.channels.cache
-                                    .filter(ch => ch.type === 0)
-                                    .sort((a, b) => a.position - b.position)
-                                    .first();
-                            }
+                            const channel = resolveBroadcastChannel(guild, client.serverSettingsManager);
 
                             if (!channel) { failCount++; continue; }
 
                             if (channel.permissionsFor(guild.members.me).has('SendMessages')) {
-                                await channel.send({ embeds: [broadcastEmbed] });
+                                await channel.send(deliveredPayload);
                                 successCount++;
                             } else {
                                 failCount++;
@@ -5012,6 +5004,13 @@ module.exports = {
                         ? `${pool.totalCount} conns · ${pool.idleCount} idle · ${pool.waitingCount} waiting`
                         : 'unavailable';
 
+                    // Use the same total the help menu advertises (catalog entries +
+                    // aliases) instead of only the slash-command collection size.
+                    let commandCount = client.commands.size;
+                    try {
+                        commandCount = require("../utils/prefixHelp").commandStats().withAliases;
+                    } catch (_) { /* fall back to the slash-command count */ }
+
                     const prefixStatsEmbed = new EmbedBuilder()
                         .setColor(config.colors.primary)
                         .setTitle(`📊  ${client.user.username} — Live Statistics`)
@@ -5025,7 +5024,7 @@ module.exports = {
                         .addFields(
                             {
                                 name: '🤖 Bot',
-                                value: `**Version:** ${config.version}\n**Prefix:** \`${config.prefix}\`\n**Commands:** ${client.commands.size}\n**WS Ping:** ${client.ws.ping}ms`,
+                                value: `**Version:** ${config.version}\n**Prefix:** \`${config.prefix}\`\n**Commands:** ${commandCount}\n**WS Ping:** ${client.ws.ping}ms`,
                                 inline: true
                             },
                             {
