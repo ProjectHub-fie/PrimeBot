@@ -1106,7 +1106,78 @@ select:focus {
 .login-legal a:hover { color: var(--accent); }
 /* Invisible Turnstile: the widget renders no visible box. */
 .cf-turnstile-hidden { display: none; }
-.turnstile-error { color: var(--red); font-size: 13px; margin: 10px 0 0; }
+
+/* ── Login: inline Turnstile progress (spinner → ✓) ─────────────────────── */
+/* The indicator lives in a ZERO-WIDTH slot next to the label, so appearing /
+   swapping / disappearing never resizes the button or moves its text. */
+.login-auth-slot {
+  position: relative;
+  flex: 0 0 auto;
+  width: 0;
+  height: 16px;
+  margin-left: -8px; /* cancels the flex gap → the slot adds no width */
+}
+.login-spinner,
+.login-auth-btn .login-check {
+  position: absolute;
+  left: 6px;
+  top: 50%;
+  margin-top: -8px;
+  opacity: 0;
+  transition: opacity 140ms ease;
+  pointer-events: none;
+}
+.login-spinner {
+  width: 14px;
+  height: 14px;
+  margin-top: -7px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+}
+.login-auth-btn .login-check { width: 16px; height: 16px; color: #fff; }
+.login-auth-btn.is-verifying .login-spinner { opacity: 1; animation: login-spin 720ms linear infinite; }
+.login-auth-btn.is-verified .login-check { opacity: 1; animation: login-check-in 180ms ease-out; }
+.login-auth-btn.is-busy,
+.login-auth-btn.is-verified { cursor: progress; pointer-events: none; }
+.login-auth-btn.is-busy { opacity: 0.92; }
+@keyframes login-spin { to { transform: rotate(360deg); } }
+@keyframes login-check-in {
+  from { opacity: 0; transform: scale(0.7); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+/* Status line under the Login button. It reserves its height even when empty,
+   so "Verifying…" / "Verified" / an error never shift the page. */
+.login-auth-status { min-height: 20px; max-width: 440px; margin: 0 auto 12px; }
+.login-status,
+.turnstile-error { margin: 0; font-size: 13px; line-height: 1.4; }
+.login-status { color: var(--text-dim); }
+.login-status[data-tone="ok"] { color: var(--green); }
+.turnstile-error { color: var(--red); }
+
+/* Documentation | Status share one row as two equal halves under the login
+   button. A fixed max-width keeps the pair aligned with the button column. */
+.login-links {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  width: 100%;
+  max-width: 380px;
+  margin: 0 auto;
+}
+.login-links .btn { width: 100%; min-width: 0; }
+@media (max-width: 380px) {
+  .login-links { grid-template-columns: 1fr; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-auth-btn.is-verifying .login-spinner,
+  .login-auth-btn.is-verified .login-check { animation: none; }
+  .login-spinner,
+  .login-auth-btn .login-check { transition: none; }
+  .login-auth-btn.is-verifying .login-spinner { border-top-color: #fff; }
+}
 
 .hidden { display: none !important; }
 
@@ -2547,6 +2618,8 @@ select:focus {
   .login-sub { font-size: 13.5px; margin-bottom: 18px; max-width: 100%; }
   .login-actions { flex-direction: column; align-items: stretch; margin-bottom: 14px; }
   .login-actions .btn, .login-actions + .btn { width: 100%; justify-content: center; }
+  .login-links { gap: 8px; }
+  .login-links .btn { padding: 10px 12px; font-size: 13.5px; gap: 6px; }
   .feature-grid { grid-template-columns: 1fr; margin: 20px auto 0; }
   .stats-band { padding: 16px 14px; margin: 26px auto 0; }
   .stats-band-head { flex-direction: column; align-items: flex-start; gap: 5px; margin-bottom: 12px; }

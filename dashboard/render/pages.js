@@ -23,15 +23,19 @@ function loginPage({ errorKey, turnstileSiteKey } = {}) {
     const errorHTML = errorMsg
         ? `<div class="alert alert-error" style="margin:0 0 16px;text-align:left">${esc(errorMsg)}</div>`
         : '';
-    // Invisible Cloudflare Turnstile: when a site key is configured the
-    // invisible widget starts as soon as the login page loads and caches the
-    // token, so clicking Login forwards it to /auth/discord with no visible
-    // wait (verified before starting Discord OAuth).
+    // Invisible Cloudflare Turnstile: when a site key is configured, pressing
+    // "Login with Discord" runs the invisible challenge on demand (no checkbox,
+    // no separate click), shows an inline spinner + status text, and only
+    // continues to /auth/discord once Cloudflare issued a token. The token is
+    // still verified server-side before the Discord OAuth redirect is issued.
     const turnstileHTML = turnstileSiteKey ? `
       <div id="cf-turnstile-widget" class="cf-turnstile-hidden"></div>
-      <p id="turnstile-error" class="turnstile-error" hidden></p>
       <script>window.__TURNSTILE_SITE_KEY__=${JSON.stringify(turnstileSiteKey)};</script>
       <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>` : '';
+    // The label never changes: verifying/verified are conveyed by the inline
+    // indicator inside the fixed-width slot plus the status line below, so the
+    // button keeps its size and the text stays readable throughout.
+    const loginButtonHTML = `<a href="/auth/discord" id="login-discord-btn" class="btn btn-discord login-auth-btn">${svgIcon('logIn')}<span class="login-auth-label">Login with Discord</span><span class="login-auth-slot" aria-hidden="true"><span class="login-spinner"></span>${svgIcon('check', 'login-check')}</span></a>`;
     const body = `
     <div class="login-wrap">
       <div class="login-hero">${svgIcon('zap')}</div>
@@ -40,10 +44,17 @@ function loginPage({ errorKey, turnstileSiteKey } = {}) {
       ${errorHTML}
       <p class="login-sub">Sign in with Discord to configure PrimeBot for the servers you manage — welcome messages, leveling, prefixes, auto-reactions and more, all in one place.</p>
       <div class="login-actions">
-        <a href="/auth/discord" id="login-discord-btn" class="btn btn-discord">${svgIcon('logIn')} Login with Discord</a>
+        ${loginButtonHTML}
         <a href="${esc(constants.BOT_INVITE_URL)}" class="btn btn-secondary" target="_blank" rel="noopener">${svgIcon('plus')} Invite PrimeBot</a>
       </div>
-      <a href="/docs" class="btn btn-secondary">${svgIcon('book')} Documentation</a>
+      <div class="login-auth-status">
+        <p id="login-status" class="login-status" role="status" aria-live="polite" aria-atomic="true" hidden></p>
+        <p id="turnstile-error" class="turnstile-error" role="alert" hidden></p>
+      </div>
+      <div class="login-links">
+        <a href="/docs" class="btn btn-secondary">${svgIcon('book')} Documentation</a>
+        <a href="/stats" class="btn btn-secondary">${svgIcon('activity')} Status</a>
+      </div>
       <p class="login-legal">By signing in you agree to the <a href="/terms">Terms of Service</a> and <a href="/privacy">Privacy Policy</a>.</p>
       ${turnstileHTML}
 
