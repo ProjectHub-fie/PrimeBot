@@ -89,9 +89,15 @@ async function ensureMonitorTables() {
                     enabled BOOLEAN NOT NULL DEFAULT TRUE,
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )`);
+            // A pulse row is identified by (node_name, role), never by name
+            // alone: hosting panels hand every shard node the SAME NODE_NAME
+            // (e.g. "CloudeWave"), so a name-only key made all three nodes
+            // upsert ONE row and overwrite each other. The fleet then showed
+            // only whichever node wrote last and the two healthy standbys read
+            // as offline.
             await p.query(`
                 CREATE TABLE IF NOT EXISTS monitor_node_pulse (
-                    node_name TEXT PRIMARY KEY,
+                    node_name TEXT NOT NULL,
                     node_id TEXT,
                     role TEXT NOT NULL DEFAULT 'sn1',
                     ts TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -104,12 +110,32 @@ async function ensureMonitorTables() {
                     pid INTEGER,
                     started_at TIMESTAMPTZ,
                     resource JSONB,
-                    detail JSONB
+                    detail JSONB,
+                    PRIMARY KEY (node_name, role)
                 )`);
-            // Older deployments keyed the pulse row on `node_name` only and had
-            // no `node_id`. Add the column; the row stays unique per node_name
-            // (which is now always a stable id — never the literal 'local').
             await p.query(`ALTER TABLE monitor_node_pulse ADD COLUMN IF NOT EXISTS node_id TEXT`);
+            // Migrate a pre-fix table (single-column `node_name` primary key) to
+            // the (node_name, role) key. Idempotent: once the key covers both
+            // columns the block is a no-op.
+            await p.query(`
+                DO $$
+                DECLARE
+                    pk_name TEXT;
+                    pk_cols TEXT;
+                BEGIN
+                    SELECT c.conname, string_agg(a.attname, ',' ORDER BY a.attname)
+                      INTO pk_name, pk_cols
+                      FROM pg_constraint c
+                      JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
+                     WHERE c.conrelid = 'monitor_node_pulse'::regclass AND c.contype = 'p'
+                     GROUP BY c.conname;
+                    IF pk_cols = 'node_name' THEN
+                        UPDATE monitor_node_pulse SET role = 'sn1' WHERE role IS NULL;
+                        ALTER TABLE monitor_node_pulse ALTER COLUMN role SET NOT NULL;
+                        EXECUTE format('ALTER TABLE monitor_node_pulse DROP CONSTRAINT %I', pk_name);
+                        ALTER TABLE monitor_node_pulse ADD PRIMARY KEY (node_name, role);
+                    END IF;
+                END $$`);
             // One row per (role) is the invariant that makes the three-node
             // fleet coherent: a role can only ever have one live pulse. Collapse
             // any legacy duplicate rows (e.g. several 'local' writers) so the
@@ -220,14 +246,16 @@ async function upsertNodePulse(pulse) {
     } = pulse;
     // A node's identity is its stable node_id (falling back to node_name).
     // Writing the same id from every node is what collapsed the fleet into a
-    // single row — callers now supply a per-node id.
+    // single row — callers now supply a per-node id. The row is keyed by
+    // (node_name, role) because every host on a shared hosting panel reports
+    // the same NODE_NAME; the role is what makes the three nodes distinct.
     const id = nodeId || nodeName;
     await monitorPool.query(`
         INSERT INTO monitor_node_pulse
             (node_name, node_id, role, ts, process_health, gateway_connected, gateway_ready,
              shards_total, shards_ready, shards_active, pid, started_at, resource, detail)
         VALUES ($1,$2,$3,NOW(),$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-        ON CONFLICT (node_name) DO UPDATE SET
+        ON CONFLICT (node_name, role) DO UPDATE SET
             node_id = EXCLUDED.node_id,
             role = EXCLUDED.role,
             ts = NOW(),

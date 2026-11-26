@@ -19,12 +19,21 @@ const { linixEmbed } = require('./linixEmbed');
 //
 // Categories (per the remade help):
 //   • General            — basic info + the category browser itself
+//   • Information        — bot/server info
+//   • AI Assistant       — /ai and its shortcuts
 //   • Leveling           — XP/ranks/badges (badges are 🧪 BETA)
-//   • Games & Activities — games + in-server polls/giveaways/birthdays
+//   • Games & Activities — games + in-server polls/giveaways
 //   • Community          — cross-server live polls & live giveaways
+//   • Invite             — invite tracking ($invite)
+//   • Birthdays          — birthday celebrations
+//   • Music              — music & radio
 //   • Tickets            — ticket support commands
+//   • YouTube            — creator notifications
 //   • Welcome            — welcome system configuration
 //   • Moderation         — mod tools + self-roles ($role) + $beta
+//   • Automation         — auto-reactions & auto-responder
+//   • Anti-Nuke          — Anti-Nuke protection
+//   • Extra              — quick channel/category management ($cp/$cv/$mkdir/$hmkdir)
 //   • Administration     — feature configuration
 //
 // Excluded by design: broadcast, session ($ses), sync, tokentest, test, np/noprefix,
@@ -145,9 +154,22 @@ const CATALOG = {
         color: config.colors.success,
         commands: [
             { names: ['event'], args: '<create|edit|cancel|delete|list|info|join|leave|config|reminders>', desc: 'Create, join and manage community events' },
-            { names: ['invite', 'invites'], args: '[stats|leaderboard|info|config|reset]', desc: 'Invite tracking — who brought each member to the server' },
             { names: ['lpoll', 'livepoll'], args: '<create|join|results|end|list>', desc: 'Cross-server live polls' },
             { names: ['lgiveway', 'lgiveaway', 'livegiveaway'], args: '<create|join|results|end|list>', desc: 'Cross-server live giveaways' },
+        ],
+    },
+
+    invite: {
+        icon: 'extra',
+        label: 'Invite',
+        title: 'Invite Tracking',
+        color: config.colors.success,
+        commands: [
+            { names: ['invite', 'invites'], args: '[stats] [@user]', desc: 'Your (or a member\'s) invite statistics, rank and active invites' },
+            { names: ['invite'], display: 'invite leaderboard', args: '[page]', desc: 'Top inviters in this server' },
+            { names: ['invite'], display: 'invite info', args: '@member', desc: 'Detailed invite history for a member' },
+            { names: ['invite'], display: 'invite config', args: 'enabled=on channel=#logs join=on leave=on vanity=on bots=on excluded=ids', desc: 'View or change invite tracking configuration (Manage Server)' },
+            { names: ['invite'], display: 'invite reset', args: 'confirm', desc: 'Reset this server\'s invite statistics (Manage Server)' },
         ],
     },
 
@@ -212,17 +234,26 @@ const CATALOG = {
         ],
     },
 
+    extra: {
+        icon: 'extra',
+        label: 'Extra',
+        title: 'Extra — Channel & Category Tools',
+        color: config.colors.secondary,
+        commands: [
+            { names: ['cp', 'createchannel'], args: '<name> [private|public] [category]', desc: 'Create a text channel — public or private, optionally inside a category' },
+            { names: ['cv', 'createvoice'], args: '<name> [private|public] [category]', desc: 'Create a voice channel — public or private, optionally inside a category' },
+            { names: ['mkdir', 'createcategory'], args: '<name>', desc: 'Create a channel category' },
+            { names: ['hmkdir', 'rmdir', 'deletecategory'], args: '<category-name>', desc: 'Delete a channel category (channels inside are kept)' },
+        ],
+    },
+
     admin: {
         icon: 'config',
         label: 'Administration',
         title: 'Administration',
         color: config.colors.error,
         commands: [
-            { names: ['cp', 'createchannel'], args: '<name> [private|public] [category]', desc: 'Create a text channel — public or private, optionally inside a category' },
-            { names: ['cv', 'createvoice'], args: '<name> [private|public] [category]', desc: 'Create a voice channel — public or private, optionally inside a category' },
             { names: ['rm'], args: '<#channel>', desc: 'Delete a channel — with a new name instead it renames' },
-            { names: ['mkdir', 'createcategory'], args: '<name>', desc: 'Create a channel category' },
-            { names: ['hmkdir', 'rmdir', 'deletecategory'], args: '<category-name>', desc: 'Delete a channel category (channels inside are kept)' },
             { names: ['embed'], args: '<send|list>', desc: 'Send an embed saved in the dashboard Embed Builder' },
             { names: ['level-enable', 'levelenable', 'leveling-enable', 'levelingon', 'leveling-on'], desc: 'Enable the leveling system' },
             { names: ['level-disable', 'leveldisable', 'leveling-disable', 'levelingoff', 'leveling-off'], desc: 'Disable the leveling system' },
@@ -301,7 +332,7 @@ const CATALOG = {
     },
 };
 
-const CATEGORY_ORDER = ['general', 'information', 'ai', 'leveling', 'games', 'community', 'birthdays', 'music', 'tickets', 'youtube', 'welcome', 'moderation', 'automation', 'antinuke', 'admin'];
+const CATEGORY_ORDER = ['general', 'information', 'ai', 'leveling', 'games', 'community', 'invite', 'birthdays', 'music', 'tickets', 'youtube', 'welcome', 'moderation', 'automation', 'antinuke', 'extra', 'admin'];
 
 const BETA_TAG = '🧪';
 
@@ -552,6 +583,7 @@ function getCategoryUsageLevel(category) {
         leveling: 'Intermediate',
         games: 'Beginner Friendly',
         community: 'Beginner Friendly',
+        invite: 'Beginner Friendly',
         birthdays: 'Beginner Friendly',
         radio: 'Intermediate',
         music: 'Beginner Friendly',
@@ -561,6 +593,7 @@ function getCategoryUsageLevel(category) {
         moderation: 'Intermediate',
         automation: 'Intermediate',
         antinuke: 'Advanced',
+        extra: 'Intermediate',
         admin: 'Advanced',
     }[category] || 'Unknown';
 }
@@ -572,6 +605,7 @@ function getCategoryPermissionLevel(category) {
         leveling: 'Members / Mods',
         games: 'Everyone',
         community: 'Everyone',
+        invite: 'Everyone (Manage Server to configure)',
         birthdays: 'Everyone',
         radio: 'Everyone (Admins to configure)',
         music: 'Everyone (Admins to configure 24/7)',
@@ -581,6 +615,7 @@ function getCategoryPermissionLevel(category) {
         moderation: 'Moderators',
         automation: 'Admins',
         antinuke: 'Server owner',
+        extra: 'Manage Channels',
         admin: 'Administrators',
     }[category] || 'Unknown';
 }

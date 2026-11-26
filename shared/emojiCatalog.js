@@ -356,6 +356,8 @@ const HELP_CATEGORY_EMOJI = Object.freeze({
     leveling: 'profile',
     games: 'fun',
     community: 'extra',
+    invite: 'extra',
+    extra: 'extra',
     music: 'music',
     radio: 'voice',
     tickets: 'utility',

@@ -858,10 +858,13 @@ test('the AI category is part of the help menu and lists its subcommands', () =>
     for (const label of ['ai ask', 'ai enable', 'ai channel', 'ai mode', 'ai settings', 'ai knowledge']) {
         assert.ok(text.includes(label), `category text missing ${label}: ${text}`);
     }
-    // Event + Invite remain discoverable in Community.
+    // Events remain discoverable in Community; invite tracking has its own
+    // category (the help menu's `invite` category).
     const community = help.categoryText('community');
     assert.ok(community.includes('event'));
-    assert.ok(community.includes('invite'));
+    assert.ok(!community.includes('invite'), 'invite moved to its own category');
+    assert.ok(help.CATEGORY_ORDER.includes('invite'), 'invite category missing from the menu order');
+    assert.ok(help.categoryText('invite').includes('invite'));
     // The main menu (and therefore the Sash menu) lists the AI category.
     assert.ok(help.mainMenuText().includes('AI Assistant'));
 });

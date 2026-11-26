@@ -42,10 +42,14 @@ function buildSashCategories(prefix) {
             title: `${categoryIcon(key, cat.icon)} ${CATEGORY_SEPARATOR} ${cat.label}`,
             color: cat.color,
             fields: cat.commands.map(c => {
-                const aliases = c.names.slice(1);
+                // A row with `display` documents one subcommand (e.g.
+                // "invite config") — show that, and only list aliases for the
+                // canonical row so subcommand rows don't repeat them.
+                const primary = c.display || c.names[0];
+                const aliases = c.display ? [] : c.names.slice(1);
                 const name = aliases.length
-                    ? `${prefix}${c.names[0]}${c.args ? ' ' + c.args : ''} (${aliases.map(a => prefix + a).join(', ')})`
-                    : `${prefix}${c.names[0]}${c.args ? ' ' + c.args : ''}`;
+                    ? `${prefix}${primary}${c.args ? ' ' + c.args : ''} (${aliases.map(a => prefix + a).join(', ')})`
+                    : `${prefix}${primary}${c.args ? ' ' + c.args : ''}`;
                 return { name, value: c.desc };
             }),
         };
