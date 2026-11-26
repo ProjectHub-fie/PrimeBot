@@ -78,98 +78,211 @@ async function loadLoginStats() {
 loadLoginStats();
 
 /* ── Invisible Cloudflare Turnstile gate on "Login with Discord" ────────────
- * When the server rendered a site key (window.__TURNSTILE_SITE_KEY__), the
- * invisible widget starts AS SOON AS THE PAGE LOADS (not on button click), so
- * by the time the user presses Login a token is usually already cached and the
- * click navigates straight to /auth/discord — no visible wait. The issued
- * token rides along to /auth/discord, which verifies it with Cloudflare before
- * starting the Discord OAuth2 redirect. If the challenge is still in flight on
- * click, the click waits for it (pending) and the callback navigates then.
- * Expired tokens (~5 min lifetime) are refreshed in the background so the
- * cache stays warm while the user sits on the page. Without a site key the
- * button stays a plain link.
+ * Pressing the button runs the invisible challenge on demand — Cloudflare
+ * decides whether a puzzle is needed, the user never clicks a checkbox. While
+ * it runs the button is disabled, the label stays exactly as it is, and an
+ * inline spinner + "Verifying…" status appear. On success the spinner is
+ * replaced by a ✓ in the same spot, held briefly, and only then does the
+ * browser continue to the existing /auth/discord OAuth flow with the token.
+ *
+ * Failure, timeout or an unavailable widget stops the spinner, shows a clear
+ * error and leaves the button usable: the widget is reset so the next tap runs
+ * a fresh challenge. The token is ALWAYS verified server-side by
+ * /auth/discord — nothing here is trusted on its own, it is only the UX.
  */
 (function initTurnstile() {
   const siteKey = window.__TURNSTILE_SITE_KEY__;
   const btn = document.getElementById('login-discord-btn');
   if (!siteKey || !btn) return;
 
-  const errEl = document.getElementById('turnstile-error');
-  let widgetId = null;
-  let token = null;    // cached token from the eager page-load execution
-  let pending = false; // a click is waiting for a fresh token
+  const statusEl = document.getElementById('login-status');
+  const errorEl = document.getElementById('turnstile-error');
 
-  function showError(msg) {
-    if (!errEl) return;
-    errEl.textContent = msg;
-    errEl.hidden = false;
+  const API_WAIT_MS = 8000;        // how long to wait for Cloudflare's api.js
+  const VERIFY_TIMEOUT_MS = 15000; // how long the challenge itself may take
+  const SUCCESS_HOLD_MS = 700;     // how long the ✓ stays visible before redirect
+  const MESSAGES = {
+    verifying: 'Verifying…',
+    verified: 'Verified — continuing to Discord…',
+    failed: 'The security check could not be verified. Please try again.',
+    timeout: 'The security check timed out. Please try again.',
+    unavailable: 'The security check is unavailable right now. Please try again.',
+  };
+
+  let widgetId = null;
+  let challenged = false; // a challenge has already run → reset() before the next execute()
+  let state = 'idle';     // idle | verifying | verified | error
+  let verifyTimer = null;
+  let holdTimer = null;
+  let apiTimer = null;
+  let destroyed = false;
+
+  function clearTimers() {
+    if (verifyTimer) { clearTimeout(verifyTimer); verifyTimer = null; }
+    if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+    if (apiTimer) { clearTimeout(apiTimer); apiTimer = null; }
   }
 
-  function navigate() {
-    pending = false;
-    window.location.href = '/auth/discord?cf-turnstile-response=' + encodeURIComponent(token);
+  function setStatus(text, tone) {
+    if (!statusEl) return;
+    statusEl.textContent = text || '';
+    statusEl.hidden = !text;
+    statusEl.dataset.tone = tone || '';
+  }
+
+  function showError(text) {
+    if (!errorEl) return;
+    errorEl.textContent = text || '';
+    errorEl.hidden = !text;
+  }
+
+  function setBusy(busy) {
+    btn.classList[busy ? 'add' : 'remove']('is-busy');
+    if (busy) {
+      btn.setAttribute('aria-busy', 'true');
+      btn.setAttribute('aria-disabled', 'true');
+    } else {
+      btn.removeAttribute('aria-busy');
+      btn.removeAttribute('aria-disabled');
+    }
+  }
+
+  function resetWidget() {
+    if (widgetId === null) return;
+    try {
+      if (window.turnstile && typeof window.turnstile.reset === 'function') window.turnstile.reset(widgetId);
+    } catch { /* the widget is already gone */ }
+  }
+
+  function destroyWidget() {
+    if (widgetId === null) return;
+    try {
+      if (window.turnstile && typeof window.turnstile.remove === 'function') window.turnstile.remove(widgetId);
+    } catch { /* the widget is already gone */ }
+    widgetId = null;
+    challenged = false;
+  }
+
+  function fail(message) {
+    if (destroyed) return;
+    clearTimers();
+    state = 'error';
+    btn.classList.remove('is-verifying', 'is-verified');
+    setBusy(false);
+    setStatus('', '');
+    showError(message);
+    // A completed or errored challenge must be reset before execute() runs again.
+    resetWidget();
+  }
+
+  function succeed(token) {
+    if (destroyed || state !== 'verifying') return;
+    clearTimers();
+    state = 'verified';
+    btn.classList.remove('is-verifying');
+    btn.classList.add('is-verified');
+    showError('');
+    setStatus(MESSAGES.verified, 'ok');
+    holdTimer = setTimeout(() => {
+      holdTimer = null;
+      if (destroyed) return;
+      // Same OAuth entry point as the plain link — only reached once Cloudflare
+      // issued a token, and the server re-verifies it before redirecting.
+      window.location.assign('/auth/discord?cf-turnstile-response=' + encodeURIComponent(token));
+    }, SUCCESS_HOLD_MS);
   }
 
   function renderWidget() {
     if (widgetId !== null) return true;
-    if (!window.turnstile) return false; // api.js still loading
-    widgetId = window.turnstile.render('#cf-turnstile-widget', {
+    if (!window.turnstile || typeof window.turnstile.render !== 'function') return false;
+    const id = window.turnstile.render('#cf-turnstile-widget', {
       sitekey: siteKey,
       size: 'invisible',
-      callback(newToken) {
-        token = newToken;
-        if (pending) navigate();
-      },
-      'error-callback'() {
-        token = null;
-        pending = false;
-        showError('Security check failed to load. Please try again.');
-        if (widgetId !== null) window.turnstile.reset(widgetId);
-      },
-      'expired-callback'() {
-        token = null;
-        warmExecute(); // refresh the cache so the next click is instant again
+      theme: 'dark',
+      retry: 'never', // we own retries, so the button state always matches
+      callback: (token) => succeed(token),
+      'error-callback': () => fail(MESSAGES.failed),
+      'expired-callback': () => {
+        if (state === 'verifying') fail(MESSAGES.timeout);
       },
     });
+    if (id === null || id === undefined) return false;
+    widgetId = id;
     return true;
   }
 
-  // reset() is required before execute() once a challenge completed, otherwise
-  // execute() is a no-op.
-  function warmExecute() {
-    if (widgetId === null) return;
-    try { window.turnstile.reset(widgetId); } catch { /* not yet run */ }
-    window.turnstile.execute(widgetId);
+  // Cloudflare's api.js is loaded async/defer, so the first tap may arrive
+  // before window.turnstile exists. Wait for it instead of failing instantly.
+  function waitForApi() {
+    return new Promise((resolve) => {
+      if (window.turnstile && typeof window.turnstile.render === 'function') return resolve(true);
+      const started = Date.now();
+      const tick = () => {
+        apiTimer = null;
+        if (destroyed) return resolve(false);
+        if (window.turnstile && typeof window.turnstile.render === 'function') return resolve(true);
+        if (Date.now() - started >= API_WAIT_MS) return resolve(false);
+        apiTimer = setTimeout(tick, 100);
+      };
+      tick();
+    });
   }
 
-  // Kick the challenge off on page load, retrying until Cloudflare's api.js
-  // (loaded async/defer) is ready. Gives up after ~15s and lets the click
-  // handler surface a loading error instead.
-  if (renderWidget()) {
-    warmExecute();
-  } else {
-    const poll = setInterval(() => {
-      if (!renderWidget()) return;
-      clearInterval(poll);
-      warmExecute();
-    }, 100);
-    setTimeout(() => clearInterval(poll), 15000);
+  async function startVerification() {
+    // Rapid taps: one challenge at a time, and never restart once verified.
+    if (state === 'verifying' || state === 'verified' || destroyed) return;
+    clearTimers();
+    state = 'verifying';
+    showError('');
+    setStatus(MESSAGES.verifying, 'busy');
+    setBusy(true);
+    btn.classList.remove('is-verified');
+    btn.classList.add('is-verifying');
+
+    const apiReady = await waitForApi();
+    if (destroyed || state !== 'verifying') return;
+    if (!apiReady || !renderWidget()) {
+      fail(MESSAGES.unavailable);
+      return;
+    }
+
+    if (challenged) resetWidget(); // reset() is required before execute() re-runs
+    challenged = true;
+    verifyTimer = setTimeout(() => {
+      verifyTimer = null;
+      if (state === 'verifying') fail(MESSAGES.timeout);
+    }, VERIFY_TIMEOUT_MS);
+
+    try {
+      const running = window.turnstile.execute(widgetId);
+      // v0 execute() returns a promise when the challenge cannot be started.
+      if (running && typeof running.catch === 'function') running.catch(() => fail(MESSAGES.failed));
+    } catch {
+      fail(MESSAGES.failed);
+    }
   }
 
   btn.addEventListener('click', (e) => {
     e.preventDefault();
-    if (pending) return;
-    if (errEl) errEl.hidden = true;
-    if (token) {
-      pending = true;
-      navigate();
-      return;
-    }
-    if (!renderWidget()) {
-      showError('Security check is still loading — please try again in a moment.');
-      return;
-    }
-    pending = true;
-    warmExecute();
+    startVerification();
+  });
+
+  // Never leave a timer or a widget behind when the page goes away; a bfcache
+  // restore re-arms the gate so the button still works after going back.
+  function cleanup() {
+    destroyed = true;
+    clearTimers();
+    destroyWidget();
+  }
+  window.addEventListener('pagehide', cleanup);
+  window.addEventListener('beforeunload', cleanup);
+  window.addEventListener('pageshow', (e) => {
+    if (!e || !e.persisted) return;
+    destroyed = false;
+    state = 'idle';
+    setBusy(false);
+    btn.classList.remove('is-verifying', 'is-verified');
+    setStatus('', '');
+    showError('');
   });
 })();

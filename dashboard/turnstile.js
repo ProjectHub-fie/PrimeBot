@@ -19,6 +19,12 @@
 
 const SITEVERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
 
+// A hung or very slow siteverify call must never hold the login request open:
+// the redirect would eventually fail with no useful error. Bound it, and cap
+// the token length so a bogus/huge value is rejected before any request.
+const VERIFY_TIMEOUT_MS = parseInt(process.env.TURNSTILE_VERIFY_TIMEOUT_MS, 10) || 8000;
+const MAX_TOKEN_LENGTH = 4096;
+
 function isTurnstileEnabled() {
     return Boolean(process.env.TURNSTILE_SECRET_KEY);
 }
@@ -35,12 +41,16 @@ async function verifyTurnstile(token, remoteip) {
     if (!token || typeof token !== 'string') {
         return { success: false, 'error-codes': ['missing-input-response'] };
     }
+    if (token.length > MAX_TOKEN_LENGTH) {
+        return { success: false, 'error-codes': ['invalid-input-response'] };
+    }
     const body = new URLSearchParams({ secret, response: token });
     if (remoteip) body.set('remoteip', remoteip);
     const res = await fetch(SITEVERIFY_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: body.toString(),
+        signal: AbortSignal.timeout(VERIFY_TIMEOUT_MS),
     });
     if (!res.ok) {
         throw new Error(`Turnstile siteverify responded ${res.status}`);
@@ -48,4 +58,4 @@ async function verifyTurnstile(token, remoteip) {
     return res.json();
 }
 
-module.exports = { isTurnstileEnabled, verifyTurnstile, SITEVERIFY_URL };
+module.exports = { isTurnstileEnabled, verifyTurnstile, SITEVERIFY_URL, VERIFY_TIMEOUT_MS, MAX_TOKEN_LENGTH };
