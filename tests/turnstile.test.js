@@ -79,6 +79,15 @@ test('a Status link with an SVG icon sits beside Documentation on the login page
     assert.match(statusLink[1], /Status/);
 });
 
+test('Documentation and Status form one row of two equal halves', () => {
+    const css = fs.readFileSync(path.join(DASH, 'public', 'styles.css'), 'utf8');
+    const rule = /\.login-links \{([\s\S]*?)\}/.exec(css);
+    assert.ok(rule, '.login-links rule missing');
+    assert.match(rule[1], /display: grid/);
+    assert.match(rule[1], /grid-template-columns: 1fr 1fr/);
+    assert.match(rule[1], /max-width/);
+});
+
 test('the login page surfaces the turnstile_failed error', () => {
     const html = pages.loginPage({ errorKey: 'turnstile_failed' });
     assert.match(html, /security check could not be verified/i);

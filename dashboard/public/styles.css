@@ -1156,12 +1156,19 @@ select:focus {
 .login-status[data-tone="ok"] { color: var(--green); }
 .turnstile-error { color: var(--red); }
 
-/* Documentation + Status links sit side by side under the login button. */
+/* Documentation | Status share one row as two equal halves under the login
+   button. A fixed max-width keeps the pair aligned with the button column. */
 .login-links {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  justify-content: center;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  width: 100%;
+  max-width: 380px;
+  margin: 0 auto;
+}
+.login-links .btn { width: 100%; min-width: 0; }
+@media (max-width: 380px) {
+  .login-links { grid-template-columns: 1fr; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2611,8 +2618,8 @@ select:focus {
   .login-sub { font-size: 13.5px; margin-bottom: 18px; max-width: 100%; }
   .login-actions { flex-direction: column; align-items: stretch; margin-bottom: 14px; }
   .login-actions .btn, .login-actions + .btn { width: 100%; justify-content: center; }
-  .login-links { flex-direction: column; align-items: stretch; }
-  .login-links .btn { width: 100%; justify-content: center; }
+  .login-links { gap: 8px; }
+  .login-links .btn { padding: 10px 12px; font-size: 13.5px; gap: 6px; }
   .feature-grid { grid-template-columns: 1fr; margin: 20px auto 0; }
   .stats-band { padding: 16px 14px; margin: 26px auto 0; }
   .stats-band-head { flex-direction: column; align-items: flex-start; gap: 5px; margin-bottom: 12px; }
