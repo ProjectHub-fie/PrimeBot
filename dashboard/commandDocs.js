@@ -31,6 +31,8 @@ const CATEGORIES = [
     { name: 'Automation', icon: 'zap' },
     { name: 'Music', icon: 'music' },
     { name: 'Engagement', icon: 'star' },
+    { name: 'Invite', icon: 'tag' },
+    { name: 'Extra', icon: 'hash' },
     { name: 'Utility', icon: 'terminal' },
     { name: 'Beta', icon: 'flask' },
 ];
@@ -98,22 +100,22 @@ const METADATA = {
         usage: ['role add @user @role', 'role remove @user @role', 'role create [name] [color] [hoist] [mentionable]', 'role list'],
     },
     cp: {
-        category: 'Administration', permission: MANAGE_CHANNELS,
+        category: 'Extra', permission: MANAGE_CHANNELS,
         description: 'Create a text channel — public or private, optionally inside an existing category.',
         usage: ['cp <name>', 'cp <name> private', 'cp <name> public <category>'],
     },
     cv: {
-        category: 'Administration', permission: MANAGE_CHANNELS,
+        category: 'Extra', permission: MANAGE_CHANNELS,
         description: 'Create a voice channel — public or private, optionally inside an existing category.',
         usage: ['cv <name>', 'cv <name> private', 'cv <name> public <category>'],
     },
     mkdir: {
-        category: 'Administration', permission: MANAGE_CHANNELS,
+        category: 'Extra', permission: MANAGE_CHANNELS,
         description: 'Create a channel category.',
         usage: ['mkdir <name>'],
     },
     hmkdir: {
-        category: 'Administration', permission: MANAGE_CHANNELS,
+        category: 'Extra', permission: MANAGE_CHANNELS,
         description: 'Delete a channel category. Channels inside it are kept and become uncategorised.',
         usage: ['hmkdir <category-name>'],
     },
@@ -282,7 +284,7 @@ const METADATA = {
         note: 'Everything can also be configured visually in the dashboard → Event Management.',
     },
     invite: {
-        category: 'Engagement',
+        category: 'Invite',
         description: 'Invite tracking: see who brought each member to the server. Counts joins, leaves and net invites per inviter, keeps a leaderboard and a per-member history. When Discord does not expose which invite was used, the inviter is recorded as Unknown instead of guessing.',
         usage: [
             'invite [stats] [@user]', 'invite leaderboard [page]', 'invite info @user',

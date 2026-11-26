@@ -4282,12 +4282,16 @@ select:focus {
 .dot-down { background: #ed4245; }
 .dot-no-data { background: #8c8c94; }
 .dot-maint { background: #5865f2; }
+/* Healthy STANDBY node: online but not serving shards. Blurple reads as a
+   neutral "standby" state — never red, which means genuinely offline. */
+.dot-standby { background: #5865f2; }
 .status-card-name { font-weight: 600; font-size: 0.95rem; flex: 1 1 auto; }
 .status-pill {
   font-size: 0.7rem; font-weight: 650; text-transform: uppercase; letter-spacing: 0.04em;
   padding: 3px 8px; border-radius: 999px; white-space: nowrap;
 }
 .pill-ok { color: #23a55a; background: rgba(35,165,90,0.14); }
+.pill-standby { color: #8b95ff; background: rgba(88,101,242,0.16); }
 .pill-degraded { color: #d9a43a; background: rgba(240,178,50,0.14); }
 .pill-stale { color: #9aa0aa; background: rgba(154,160,170,0.16); }
 .pill-down { color: #ed4245; background: rgba(237,66,69,0.14); }

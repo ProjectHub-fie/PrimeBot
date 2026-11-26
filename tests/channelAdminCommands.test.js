@@ -200,19 +200,25 @@ test('the prefix switch wires cp / rm / mkdir / hmkdir', () => {
     assert.match(src, /ManageChannels/);
 });
 
-test('the help menu lists the channel commands in Administration', () => {
+test('the help menu lists the channel commands in the Extra category', () => {
     const help = require('../utils/prefixHelp');
-    const text = help.categoryText('admin');
-    for (const name of ['cp', 'cv', 'rm', 'mkdir', 'hmkdir']) {
-        assert.ok(text.includes(name), `admin help missing ${name}: ${text}`);
+    assert.ok(help.CATEGORY_ORDER.includes('extra'), 'Extra category missing from the menu');
+    const extraText = help.categoryText('extra');
+    for (const name of ['cp', 'cv', 'mkdir', 'hmkdir']) {
+        assert.ok(extraText.includes(name), `Extra help missing ${name}: ${extraText}`);
     }
-    const adminCat = help.CATALOG.admin.commands;
-    const cp = adminCat.find(c => c.names[0] === 'cp');
+    // rm (delete/rename) stays in Administration.
+    const adminText = help.categoryText('admin');
+    assert.ok(adminText.includes('rm'), `admin help missing rm: ${adminText}`);
+    assert.ok(!adminText.includes('cp'), 'cp moved out of Administration');
+
+    const extraCat = help.CATALOG.extra.commands;
+    const cp = extraCat.find(c => c.names[0] === 'cp');
     assert.ok(cp, 'cp entry missing');
     assert.match(cp.desc, /Create a text channel/);
-    const hm = adminCat.find(c => c.names[0] === 'hmkdir');
+    const hm = extraCat.find(c => c.names[0] === 'hmkdir');
     assert.ok(hm.names.includes('rmdir'), 'hmkdir should also answer to rmdir');
-    const cv = adminCat.find(c => c.names[0] === 'cv');
+    const cv = extraCat.find(c => c.names[0] === 'cv');
     assert.ok(cv, 'cv entry missing');
     assert.match(cv.args, /private\|public/);
     assert.match(cv.desc, /voice channel/);

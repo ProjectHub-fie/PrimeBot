@@ -1435,6 +1435,50 @@ can never disagree with the page.
   change, background-tab refresh, bfcache restore, and full restore on stop/pagehide.
 
 
+## Shard-node pulse identity — keyed by (node_name, role)
+
+The Stats page showed the two standby nodes as offline/degraded while all three
+nodes were healthy. Root cause: `monitor_node_pulse` was keyed on `node_name`
+alone, and **hosting panels give every node the same `NODE_NAME`** (production:
+all three report `CloudeWave`, see "Shard-node identity — NODE_NAME is NOT
+unique"). All three pulses therefore upserted ONE row and overwrote each other;
+`evaluateState` then had data for a single role and the other two classified as
+`never`/no-data. Monitoring identity is `(node_name, role)` — never the name.
+
+- **Schema:** `PRIMARY KEY (node_name, role)` for fresh databases; a
+  pre-fix single-column key is migrated by an idempotent `DO $$ … $$` block in
+  `server/monitorDb.js` `ensureMonitorTables()` (it drops the old PK only when it
+  covers `node_name` alone). `upsertNodePulse()` uses
+  `ON CONFLICT (node_name, role)`. No env/startup/failover change — the bot keeps
+  its existing roles, leases and standby behaviour.
+- **Active/standby:** `statusWorker.evaluateState()` `isNodeActive()` prefers the
+  lease **role** over the lease node id, because with a shared name every node
+  matched `activeNodeId` and all three read as "Active".
+- **Restart detection:** baselines are keyed `nodeName|role` so one role's
+  `startedAt` is never compared against another's (that produced phantom
+  restarts on a shared-name fleet).
+- **Dashboard:** `dashboard/public/js/status.js` `nodeMeta()` (node cards only)
+  decouples ONLINE state from ROLE — `Online` (green, active) / `Online` (blurple
+  `.dot-standby` / `.pill-standby`, standby) / `Stale` / `Degraded` /
+  `Offline` (red, only when the heartbeat genuinely lapsed) / `No data` (grey).
+  The role chip stays `Active` / `Standby` and a standby's missing gateway reads
+  `Gateway idle (standby)`. Never use red for a healthy standby.
+- **Tests:** `tests/shardNodeStatus.test.js` (11) — active+healthy → online/active,
+  standby+healthy → online/standby, unreachable → offline, health failure →
+  degraded, shared-name fleet keeps three pulse rows (fake pool models the real
+  conflict target), restart keys, and a vm render check that a standby card is
+  never `dot-down`/`pill-down`.
+
+### Help-menu categories `invite` + `extra`
+
+`utils/prefixHelp.js` CATALOG/CATEGORY_ORDER gained **Invite** (`$invite`) and
+**Extra** (`$cp`, `$cv`, `$mkdir`, `$hmkdir`); `$rm` stayed in Administration and
+`event`/`lpoll`/`lgiveway` in Community. `HELP_CATEGORY_EMOJI` maps `invite` and
+`extra` to the existing `extra` emoji key (the emoji servers have no dedicated
+invite emoji). `/docs` mirrors it (`dashboard/commandDocs.js` CATEGORIES +
+`METADATA`). 17 categories still fit Discord's 5×5 button cap.
+
+
 ## Private security audit log (owner-controlled, no database)
 
 A private audit trail of PrimeBot's own server membership and of voice activity in

@@ -108,18 +108,35 @@
         return map;
     }
 
+    // Shard nodes report ONLINE state separately from their ROLE. A healthy
+    // standby has no gateway connection and zero assigned shards because it is
+    // not serving Discord — that is its normal state, not a fault, so it must
+    // never render red. Only a node whose heartbeat has genuinely lapsed is
+    // Offline; a node with no pulse data at all is "No data" (grey).
+    // `status` is the component-level status from the API (the node object
+    // carries online/healthy, not a status of its own).
+    function nodeMeta(n, status) {
+        if (!n || status === 'unknown' || status === 'never' || n.status === 'never') return { label: 'No data', cls: 'no-data' };
+        if (!n.online) return { label: 'Offline', cls: 'down' };
+        if (status === 'stale' || n.status === 'stale') return { label: 'Stale', cls: 'stale' };
+        if (!n.healthy || status === 'degraded') return { label: 'Degraded', cls: 'degraded' };
+        return { label: 'Online', cls: n.isActive ? 'ok' : 'standby' };
+    }
+
     function componentCard(c, incByDay) {
-        const meta = STATUS_META[c.status] || STATUS_META.unknown;
         const label = c.label || c.key;
         const isNode = c.key === 'sn1' || c.key === 'sn2' || c.key === 'sn3';
+        const meta = isNode ? nodeMeta(c.node, c.status) : (STATUS_META[c.status] || STATUS_META.unknown);
         const stri = c.series ? barStrip(c.series, label, incByDay) : '';
         // Independent node chips: role (active/standby), gateway, shards.
         let nodeChips = '';
         if (isNode && c.node) {
             const n = c.node;
+            const isStandby = !n.isActive;
             const roleChip = n.isActive ? 'Active' : 'Standby';
             const gwChip = n.gateway && n.gateway.ready ? 'Gateway ready'
-                : (n.gateway && n.gateway.connected ? 'Gateway connecting' : 'No gateway');
+                : (n.gateway && n.gateway.connected ? 'Gateway connecting'
+                    : (isStandby ? 'Gateway idle (standby)' : 'No gateway'));
             const shardChip = n.shards && n.shards.assigned > 0
                 ? `${n.shards.ready}/${n.shards.assigned} shards`
                 : 'No shards assigned';

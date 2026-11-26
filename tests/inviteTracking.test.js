@@ -454,3 +454,26 @@ test('no credential is ever written to logs or returned by the manager', () => {
         assert.ok(!/process\.env\.DATABASE_URL/.test(src), `${file} reads DATABASE_URL directly`);
     }
 });
+
+test('the help menu has a dedicated Invite category listing the config subcommands', () => {
+    const help = require('../utils/prefixHelp');
+    assert.ok(help.CATEGORY_ORDER.includes('invite'), 'invite category missing from the menu order');
+    assert.ok(help.CATEGORY_ORDER.indexOf('invite') < help.CATEGORY_ORDER.indexOf('moderation'), 'Invite sits with the community-style categories');
+
+    const text = help.categoryText('invite');
+    for (const expected of ['`invite`', '`invite leaderboard`', '`invite info`', '`invite config`', '`invite reset`']) {
+        assert.ok(text.includes(expected), `Invite category missing ${expected}: ${text}`);
+    }
+    assert.equal(help.getCategoryPermissionLevel('invite'), 'Everyone (Manage Server to configure)');
+    assert.equal(help.getCategoryPermissionLevel('extra'), 'Manage Channels');
+    // The config subcommand is documented with its real options + permission.
+    const row = help.CATALOG.invite.commands.find(c => c.display === 'invite config');
+    assert.ok(row, 'invite config row missing');
+    assert.match(row.args, /channel=#/);
+    assert.match(row.args, /join=on/);
+    assert.match(row.desc, /Manage Server/);
+
+    // The Sash menu renders one field per row and honours `display`.
+    const src = require('node:fs').readFileSync(require('node:path').join(ROOT, 'events', 'interactionCreate.js'), 'utf8');
+    assert.match(src, /const primary = c\.display \|\| c\.names\[0\]/);
+});

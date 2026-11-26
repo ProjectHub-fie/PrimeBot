@@ -305,12 +305,13 @@ function evaluateState(pulses, lease) {
 
     const isNodeActive = (p) => {
         if (!p) return false;
-        if (activeNodeId && (p.nodeId === activeNodeId || p.nodeName === activeNodeId)) return true;
-        if (activeNodeId) return false;
-        // No lease id at all: fall back to the lease role, else the highest
-        // priority node that reports a ready gateway (so an unleased single
-        // node is still treated as the active one).
+        // Prefer the lease ROLE: a role is unique per node, while node_name is
+        // shared by every host on many hosting panels (e.g. all three report
+        // "CloudeWave"). Matching the shared name first would mark all three
+        // nodes "Active" and leave none as a standby.
         if (activeRoleFromLease) return p.role === activeRoleFromLease;
+        if (activeNodeId) return p.nodeId === activeNodeId || p.nodeName === activeNodeId;
+        // No lease at all: no node is serving Discord.
         return false;
     };
 
@@ -552,7 +553,11 @@ function incidentDescription(component, status, snapshot) {
 // baseline we recorded for that node (and we had a baseline). Best-effort but
 // reliable while a worker is running (the common operational window); a worker
 // crash re-baselines on its next tick.
-const restartBaselines = new Map(); // nodeName -> startedAt (ms)
+// Keyed by (node_name, role), never by name alone: every host on a shared
+// hosting panel reports the same NODE_NAME, so a name-only baseline compared
+// one role's startedAt against another's and reported phantom restarts.
+const restartBaselines = new Map(); // "nodeName|role" -> startedAt (ms)
+const restartKey = p => `${p.nodeName}|${p.role}`;
 
 function detectRestart(nodeName, startedAt, prevStartedAt) {
     if (!startedAt || !prevStartedAt) return false;
@@ -563,14 +568,15 @@ async function applyRestartDetection(pulses) {
     for (const p of pulses || []) {
         const started = p.startedAt ? new Date(p.startedAt) : null;
         if (!started) continue;
-        const prev = restartBaselines.get(p.nodeName);
+        const key = restartKey(p);
+        const prev = restartBaselines.get(key);
         if (prev) {
             if (detectRestart(p.nodeName, started, prev)) {
                 await monitorDb.recordNodeRestart(p.nodeName, p.role, p.pid, { gatewayReady: p.gatewayReady });
                 log(`Detected restart of node ${p.nodeName} (${p.role})`);
             }
         }
-        restartBaselines.set(p.nodeName, started);
+        restartBaselines.set(key, started);
     }
 }
 
