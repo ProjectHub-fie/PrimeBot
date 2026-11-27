@@ -225,13 +225,45 @@ function statsPage({ user } = {}) {
       <p>Live infrastructure status, uptime history and incidents across the PrimeBot cluster.</p>
     </div>
 
+    <div class="stats-band" id="fleet-band" aria-live="polite">
+      <div class="stats-band-head">
+        <span class="stats-band-title">Fleet</span>
+        <span class="stats-band-sub" id="fleet-sub">Loading fleet totals…</span>
+      </div>
+      <div class="stats-cards" id="fleet-cards">
+        <div class="stat-card stat-primary">
+          <div class="stat-icon">${svgIcon('server')}</div>
+          <div class="stat-value" id="fleet-servers">—</div>
+          <div class="stat-label" id="fleet-servers-label">Servers</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon">${svgIcon('users')}</div>
+          <div class="stat-value" id="fleet-members">—</div>
+          <div class="stat-label" id="fleet-members-label">Members</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon">${svgIcon('layers')}</div>
+          <div class="stat-value" id="fleet-nodes">—</div>
+          <div class="stat-label">Nodes serving</div>
+        </div>
+      </div>
+      <div class="fleet-nodes-wrap" id="fleet-nodes-wrap" hidden>
+        <table class="fleet-table">
+          <thead>
+            <tr><th>Node</th><th>Servers</th><th>Members</th><th>Heartbeat</th></tr>
+          </thead>
+          <tbody id="fleet-nodes-body"></tbody>
+        </table>
+      </div>
+    </div>
+
     <div id="stats-status" class="status-board" aria-busy="true">
       ${statsSkeletonHTML()}
     </div>`;
     // login: !user renders the no-nav shell for logged-out visitors (Stats is a
     // public status page, linked from the login screen). tab-status.js must load
     // BEFORE status.js — the board boots the tab indicator with its summary.
-    return render({ title: 'PrimeBot · Stats', body, active: 'stats', scripts: ['/js/tab-status.js', '/js/status.js'], user, login: !user });
+    return render({ title: 'PrimeBot · Stats', body, active: 'stats', scripts: ['/js/tab-status.js', '/js/status.js', '/js/fleet.js'], user, login: !user });
 }
 
 // ── Live (split into Polls and Giveaways) ────────────────────────────────────

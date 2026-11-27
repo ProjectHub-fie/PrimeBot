@@ -86,6 +86,18 @@ function describeFleet({
         if (!ownersFromDb.has(shardId)) ownersFromDb.set(shardId, []);
         ownersFromDb.get(shardId).push({ role: String(row.ownerRole).toLowerCase(), ageMs: row.ageMs });
     }
+    // The heartbeat publishes each node's shard ids, and not every caller can
+    // pass the assignment rows ($stats does not read bot_shard_assignment).
+    // Without this every shard reads as unassigned — "0/3 assigned" on a fleet
+    // that is fully serving.
+    for (const [role, node] of byRole.entries()) {
+        const ids = Array.isArray(node.shardIds) ? node.shardIds.map(Number).filter(Number.isInteger) : [];
+        for (const shardId of ids) {
+            if (!ownersFromDb.has(shardId)) ownersFromDb.set(shardId, []);
+            const owners = ownersFromDb.get(shardId);
+            if (!owners.some(o => o.role === role)) owners.push({ role, ageMs: node.ageMs });
+        }
+    }
 
     const clusters = roles.map((role, index) => {
         const node = byRole.get(role) || null;

@@ -1,5 +1,6 @@
 const debug = require('debug')('bot:main');
 
+const { getFleetGuildCount } = require('./utils/fleetStats');
 const discord = require('discord.js');
 require('./utils/embedTheme').installEmbedTheme(discord);
 const { Client, GatewayIntentBits, Collection, ActivityType, Options } = discord;
@@ -485,6 +486,11 @@ async function initializeManagers() {
                 // reported from the Lavalink node `ready` event (see
                 // music/events/Node/ready.js), never from configuration alone.
                 console.log(`[MUSIC] Linix music system configured (${state.nodes} node(s), ${state.commands?.prefix ?? 0} prefix + ${state.commands?.slash ?? 0} slash commands); waiting for Lavalink node connection.`);
+                // One-shot diagnostic: if the node is still not connected ~20s
+                // in, say so with the resolved endpoint and the last error.
+                try {
+                    require('./music').startConnectDiagnostic(client);
+                } catch (_) { /* diagnostics are optional */ }
             }
         } catch (err) {
             console.error('[MANAGERS] Failed to load the music system:', err.message);
@@ -660,7 +666,7 @@ client.on('guildCreate', (guild) => {
         client.user.setPresence({
             activities: [
                 {
-                    name: `${client.guilds.cache.size} servers | $help`,
+                    name: `${getFleetGuildCount(client)} servers | $help`,
                     type: ActivityType.Watching,
                 },
             ],
@@ -676,7 +682,7 @@ client.on('guildDelete', (guild) => {
         client.user.setPresence({
             activities: [
                 {
-                    name: `${client.guilds.cache.size} servers | $help`,
+                    name: `${getFleetGuildCount(client)} servers | $help`,
                     type: ActivityType.Watching,
                 },
             ],

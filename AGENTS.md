@@ -2297,3 +2297,41 @@ serving nodes, and it must be able to see them at all.
 
 Tests: `tests/fleetCountAggregation.test.js` (sum of three nodes = 63, a stepped
 down node never contributes, single-node fleet, `db` fallback, REST precedence).
+
+### Fleet-wide counts in the bot's own surfaces (`utils/fleetStats.js`)
+
+`client.guilds.cache.size` is only **this shard's** share, so every user-facing
+count must come from `utils/fleetStats.js`:
+
+- `getFleetCounts(client, { force })` — async, exact: the cache when the process
+  serves every shard, else Discord REST `GET /users/@me/guilds?with_counts=true`
+  (paginated 200/page, 60s cache, 8s timeout).
+- `getFleetGuildCount()` / `getFleetMemberCount()` — **sync**, return the cached
+  fleet value and refresh in the background, so a render path never blocks.
+  They return `null` for a `null` client (pure render helpers/tests).
+- A REST failure keeps the previously known fleet value — never silently drops
+  to the shard's share.
+
+Wired into: `events/ready.js` (presence + ready log + the per-node server list
+header), `index.js` presence on guild join/leave, `commands/about.js`,
+`utils/mentionReply.js`, `utils/prefixHelp.js` `helpStatsLine`, and `$stats`
+(which also sums members with `|| 0` so a missing `memberCount` cannot print
+`NaN users`).
+
+`utils/sharding/status.js` `describeFleet()` now also counts **node-reported**
+`shardIds` as shard owners, not only `bot_shard_assignment` rows — `$stats`
+passes no assignment rows, so a fully serving fleet used to read
+`0/3 assigned`.
+
+Dashboard: `/stats` has a **Fleet** band (`public/js/fleet.js` → public
+`/api/stats`) showing the summed Servers/Members, the serving-node count and a
+per-node breakdown from `liveNodes`.
+
+### Lavalink "not connected" diagnostics
+
+`music/events/Node/error.js` stores the last error on `client.__musicState`
+(never the password), `musicNodeStatus()` exposes `state` / `lastError`, `$stats`
+prints the reason under the node name, and `startConnectDiagnostic(client)`
+(wired in `index.js` `startMusic`) warns once after 20s with the resolved
+`ws(s)://host:port` when the node still has not connected — a blocked port and a
+wrong `NODE_AUTH` otherwise look identical.

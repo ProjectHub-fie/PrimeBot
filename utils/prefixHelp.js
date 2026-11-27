@@ -9,6 +9,7 @@ const {
     MessageFlags,
 } = require('discord.js');
 const config = require('../config');
+const { getFleetGuildCount: fleetGuildCount } = require('./fleetStats');
 const { emoji } = require('./emoji');
 const { HELP_CATEGORY_EMOJI, EMOJI_FALLBACKS } = require('../shared/emojiCatalog');
 const { scheduleComponentExpiry } = require('./stabilityUtils');
@@ -399,7 +400,8 @@ function commandStats() {
  */
 function helpStatsLine({ prefix = config.prefix || '$', client = null, servers = null } = {}) {
     const { withAliases } = commandStats();
-    const guildCount = Number.isFinite(servers) ? servers : client?.guilds?.cache?.size;
+    // Fleet total (a shard node's cache is only its own share).
+    const guildCount = Number.isFinite(servers) ? servers : fleetGuildCount(client);
     const lines = [
         `**Prefix**: \`${prefix}\``,
         `**Commands**: ${withAliases}`,
