@@ -2358,3 +2358,26 @@ path was used. A client without a REST layer keeps the old gateway-only behaviou
 (off-shard resolves `prc`/`crc`/`clc` + channel aliases, a REST failure degrades
 to Unicode, the owning node makes zero REST calls, both nodes resolve identical
 ids).
+
+### Shard assignment: STATIC by default (`SHARD_MODE`)
+
+`SHARD_MODE=static` (the default) — each host serves the shards its `NODE_ROLE`
+owns, computed locally from `SHARD_COUNT` + `SHARD_NODES` + `NODE_ROLE` via
+`planAssignment()`. There is **no** shard table, no claim, no lease, no renew
+timer and no role negotiation, so nothing (a coordinator outage, an empty
+assignment table, a stale lease) can leave a node standing by. `sn1/sn2/sn3`
+with `SHARD_COUNT=3` → shards `0/1/2`.
+
+`SHARD_MODE=dynamic` keeps the claim-based coordinator (`bot_shard_assignment`,
+`ShardCoordinator`, lease renew, fail-open `serveAllShards()`); use it only if
+shards must move between hosts at runtime, and then the SEASON database has to
+be reachable on every node.
+
+Both modes still publish the failover heartbeat (`bot_node_status`), so `$stats`
+and the dashboard keep showing per-node telemetry — that is reporting only and
+never gates serving.
+
+`utils/nodeIdentity.js` `normalizeNodeRole()` keeps an **unrecognised** role
+instead of defaulting to `sn1`: a typo used to make two hosts serve the same
+shards (every command running twice). An unknown role now owns nothing in the
+static plan and logs why.

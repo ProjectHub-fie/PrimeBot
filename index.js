@@ -36,7 +36,13 @@ const IS_SECONDARY = process.env.BOT_FAILOVER_ENABLED !== 'false' &&
                      (['sn2', 'sn3', 'secondary', 'tertiary'].includes(process.env.NODE_ROLE));
 
 if (SHARDING_ENABLED) {
-    console.log(`[SHARD] Active-active sharding enabled: ${shardRuntime.config.shardCount} shards across ${shardRuntime.config.nodes.join(', ')} (role=${shardRuntime.identity.role}, strategy=${shardRuntime.config.strategy}).`);
+    console.log(
+        `[SHARD] Active-active sharding enabled: ${shardRuntime.config.shardCount} shards across ${shardRuntime.config.nodes.join(', ')} `
+        + `(role=${shardRuntime.identity.role}, mode=${shardRuntime.config.mode}, strategy=${shardRuntime.config.strategy}).`,
+    );
+    if (shardRuntime.config.isStatic) {
+        console.log('[SHARD] Static assignment: each host serves the shards its NODE_ROLE owns — no shard table, no claim, no standby wait.');
+    }
     shardRuntime.checkStore().then((check) => {
         if (check.ok) console.log('[SHARD] Shard store ready (bot_shard_assignment).');
         else console.error(`[SHARD] Shard store UNAVAILABLE: ${check.error || check.reason} — the primary node will serve every shard so the bot stays online.`);

@@ -20,9 +20,13 @@ const assert = require('node:assert');
 const { ShardCoordinator, MemoryShardStore } = require('../utils/sharding/coordinator');
 const { createShardRuntime } = require('../utils/sharding/runtime');
 
+// This suite covers the CLAIM-BASED coordinator, which is opt-in: static
+// assignment (the default) never negotiates a role, never renews a lease and
+// cannot report `coordinator_error`.
 const BASE_ENV = {
     SHARD_COUNT: '6',
     SHARD_NODES: 'sn1,sn2,sn3',
+    SHARD_MODE: 'dynamic',
     SHARD_LEASE_MS: '90000',
     SHARD_HEARTBEAT_INTERVAL_MS: '30000',
 };

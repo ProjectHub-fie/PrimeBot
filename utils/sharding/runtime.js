@@ -37,14 +37,16 @@ function createShardRuntime({
     let roleCollisionWarned = false;
 
     let shardStore = store;
-    if (enabled && !shardStore) {
+    // Static mode never touches the shard table: the plan is a pure function of
+    // the environment, so every host agrees without a database round-trip.
+    if (enabled && !config.isStatic && !shardStore) {
         // Loaded lazily so a deployment without SHARD_COUNT never touches the
         // shard tables (or the season pool) at all.
         const { PostgresShardStore } = require('./store');
         shardStore = new PostgresShardStore();
     }
 
-    const coordinator = enabled
+    const coordinator = enabled && !config.isStatic
         ? new ShardCoordinator({ store: shardStore, role: identity.role, nodeName: identity.nodeName, config, logger })
         : null;
 
@@ -122,6 +124,17 @@ function createShardRuntime({
      */
     async function negotiateRole() {
         if (!enabled) return identity.role;
+        // Static mode: NODE_ROLE is the assignment, never negotiated (a peer
+        // must not be able to move this host off its shards at boot).
+        if (config.isStatic) {
+            if (!explicitRole) {
+                logger.warn(
+                    '[SHARD] SHARD_MODE=static without NODE_ROLE — every host plans sn1\'s shards and they will fight over shard 0. '
+                    + 'Set NODE_ROLE=sn1/sn2/sn3 on each host (or SHARD_MODE=dynamic).',
+                );
+            }
+            return identity.role;
+        }
         if (explicitRole) {
             // An explicit NODE_ROLE is never rewritten, but two hosts that were
             // both configured as sn1 can only ever have one of them online.
@@ -160,6 +173,19 @@ function createShardRuntime({
     /** Claim this node's shards. Never throws — a coordinator outage must not stop boot. */
     async function claim() {
         if (!enabled) return { shardIds: [], reason: 'disabled' };
+        if (config.isStatic) {
+            // Deterministic: role -> shards, computed locally. No store, no
+            // lease, no negotiation, so nothing can leave the fleet offline.
+            const plan = planAssignment({ shardCount: config.shardCount, nodes: config.nodes, strategy: config.strategy });
+            currentShards = shardsFor(plan.plan, identity.role);
+            const label = currentShards.length ? currentShards.join(',') : 'none';
+            if (currentShards.length) {
+                logger.log(`[SHARD] ${identity.role} serves shards ${label} (static plan, ${config.shardCount} total)`);
+            } else {
+                logger.warn(`[SHARD] ${identity.role} has no shards in the static plan (SHARD_NODES=${config.nodes.join(',')}, SHARD_COUNT=${config.shardCount}) — standing by.`);
+            }
+            return { shardIds: [...currentShards], reason: 'static' };
+        }
         try {
             await negotiateRole();
             const result = await coordinator.claim();
@@ -195,6 +221,7 @@ function createShardRuntime({
     /** Check the shard store before relying on it (boot diagnostics). */
     async function checkStore() {
         if (!enabled) return { ok: false, reason: 'disabled' };
+        if (config.isStatic) return { ok: true, reason: 'static' };
         try {
             await shardStore.ensureTables();
             return { ok: true };
@@ -219,6 +246,9 @@ function createShardRuntime({
      */
     function startLoop({ getClient = () => client, intervalMs = config.heartbeatMs } = {}) {
         if (!enabled || loop) return loop;
+        // Static mode has no lease to renew: ownership is the env-derived plan,
+        // so there is nothing a timer could keep alive (and nothing to lose).
+        if (config.isStatic) return null;
         loop = setInterval(() => {
             coordinator.renew().catch(err => logger.warn('[SHARD] renew failed:', err.message));
             const live = shardState(getClient());
@@ -247,7 +277,21 @@ function createShardRuntime({
         if (!enabled) {
             return { enabled: false, plan: {}, order: [], shardCount: 0, assignments: [], nodes: [], owned: [] };
         }
-        return coordinator.snapshot().then(s => ({ enabled: true, ...s }));
+        if (config.isStatic) {
+            const plan = planPreview();
+            return Promise.resolve({
+                enabled: true,
+                mode: 'static',
+                plan: plan.plan,
+                order: plan.order,
+                strategy: plan.strategy,
+                shardCount: plan.shardCount,
+                assignments: [],
+                nodes: [],
+                owned: [...currentShards],
+            });
+        }
+        return coordinator.snapshot().then(s => ({ enabled: true, mode: config.mode, ...s }));
     }
 
     function planPreview() {
