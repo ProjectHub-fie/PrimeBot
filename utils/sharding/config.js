@@ -16,7 +16,15 @@ const DEFAULTS = Object.freeze({
     coordinatorToken: null,
     coordinatorTimeoutMs: 4000,
     maxPerNode: 0,
+    // 'static'  = each host serves the shards its NODE_ROLE owns, computed
+    //             locally from SHARD_COUNT + SHARD_NODES. No database, no
+    //             claim, no negotiation — nothing can leave a node standing by.
+    // 'dynamic' = the claim-based coordinator (bot_shard_assignment) can move
+    //             shards between nodes at runtime.
+    mode: 'static',
 });
+
+const MODES = ['static', 'dynamic'];
 
 function toInt(value, fallback) {
     const n = Number.parseInt(value, 10);
@@ -48,6 +56,8 @@ function resolveShardConfig(env = process.env, { role = null } = {}) {
     const explicitNodes = String(env.SHARD_NODES || '').trim().length > 0;
     const nodes = parseNodeList(env.SHARD_NODES);
     const strategy = String(env.SHARD_STRATEGY || DEFAULTS.strategy).trim().toLowerCase();
+    const rawMode = String(env.SHARD_MODE || DEFAULTS.mode).trim().toLowerCase();
+    const mode = MODES.includes(rawMode) ? rawMode : DEFAULTS.mode;
     const leaseMs = toInt(env.SHARD_LEASE_MS, DEFAULTS.leaseMs);
     const heartbeatMs = toInt(env.SHARD_HEARTBEAT_INTERVAL_MS, DEFAULTS.heartbeatMs);
     const explicitMax = toInt(env.SHARD_MAX_PER_NODE, DEFAULTS.maxPerNode);
@@ -67,6 +77,11 @@ function resolveShardConfig(env = process.env, { role = null } = {}) {
         shardCount,
         nodes: role && !explicitNodes && !nodes.includes(role) ? [...nodes, role] : nodes,
         strategy,
+        mode,
+        // Static assignment is the default: the plan is derived from the env on
+        // every host, so no shared table has to be reachable for a node to
+        // serve (a coordinator outage used to leave the whole fleet standing by).
+        isStatic: mode === 'static',
         leaseMs,
         heartbeatMs,
         // A shard is claimable once its owner has not renewed for this long.

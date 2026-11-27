@@ -317,12 +317,16 @@ class EmojiManager {
         const candidates = [];
 
         const guild = await this._fetchGuild(guildId);
-        if (!guild) {
-            report.error = 'guild_unavailable';
-            return { report, candidates };
-        }
-        if (guild.available === false) {
-            report.error = 'guild_temporarily_unavailable';
+        if (!guild || guild.available === false) {
+            // Active-active sharding: an emoji guild lives on ONE shard, so the
+            // gateway never delivers it to the other nodes and discord.js marks
+            // it unavailable (or `guilds.fetch` cannot resolve it at all).
+            // REST is shard-independent, so read the guild there instead —
+            // otherwise only the owning node resolves the custom emojis and
+            // every other cluster silently renders Unicode fallbacks.
+            const viaRest = await this._loadGuildViaRest(guildId, report, candidates);
+            if (viaRest) return { report, candidates };
+            report.error = report.error || (guild ? 'guild_temporarily_unavailable' : 'guild_unavailable');
             return { report, candidates };
         }
 
@@ -431,6 +435,123 @@ class EmojiManager {
                 source: 'application',
             });
         }
+    }
+
+    /** One REST GET through the client's REST layer (shard-independent). */
+    async _restGet(route, query) {
+        const rest = this.client && this.client.rest;
+        if (!rest || typeof rest.get !== 'function') return null;
+        const opts = query ? { query } : {};
+        return this._withTimeout(rest.get(route, opts), this.options.fetchTimeoutMs);
+    }
+
+    /**
+     * Read an emoji guild over REST when this process does not own its shard.
+     * Mirrors `_loadGuild`'s output exactly (same candidate shape, same
+     * `_liveById` registration) so the rest of the catalog is unchanged.
+     */
+    async _loadGuildViaRest(guildId, report) {
+        // No REST layer (a pure gateway stub) — the caller reports the gateway
+        // reason instead of a misleading REST error.
+        if (!this.client || !this.client.rest || typeof this.client.rest.get !== 'function') return false;
+        let items;
+        try {
+            const res = await this._restGet(`/guilds/${guildId}/emojis`);
+            items = Array.isArray(res) ? res : (res && Array.isArray(res.items) ? res.items : null);
+        } catch (err) {
+            report.error = `rest_emoji_fetch_failed:${sanitizeError(err)}`;
+            return false;
+        }
+        if (!items) {
+            report.error = report.error || 'rest_emoji_fetch_failed';
+            return false;
+        }
+
+        const candidates = [];
+        for (const emoji of items) {
+            if (!emoji || !emoji.id) continue;
+            if (emoji.available === false) {
+                this.unavailable.push({
+                    name: emoji.name,
+                    id: emoji.id,
+                    sourceGuildId: guildId,
+                    reason: 'emoji_unavailable',
+                });
+                continue;
+            }
+            this._liveById.set(emoji.id, {
+                id: emoji.id,
+                name: emoji.name,
+                animated: Boolean(emoji.animated),
+                guildId,
+            });
+            candidates.push({
+                name: emoji.name,
+                id: emoji.id,
+                animated: Boolean(emoji.animated),
+                category: null,
+                semanticName: normalizeKey(emoji.name),
+                sourceGuildId: guildId,
+                source: 'guild',
+            });
+        }
+        report.emojiCount = candidates.length;
+        report.ok = true;
+        report.source = 'rest';
+
+        // `emoji list` channel — discovery only, never modified.
+        try {
+            const channelId = await this._findEmojiListChannelViaRest(guildId);
+            if (channelId) {
+                report.channelFound = true;
+                report.channelId = channelId;
+                const parsed = await this._readEmojiListChannelViaRest(channelId);
+                report.discoveredCount = parsed.length;
+                for (const p of parsed) {
+                    candidates.push({ ...p, sourceGuildId: guildId, source: 'channel' });
+                }
+            }
+        } catch (err) {
+            report.error = report.error || `rest_channel_read_failed:${sanitizeError(err)}`;
+        }
+
+        // `_loadGuild` owns the candidate array it was given, so hand ours back
+        // through the list the caller already holds.
+        const target = arguments[2] || null;
+        if (Array.isArray(target)) target.push(...candidates);
+        return true;
+    }
+
+    async _findEmojiListChannelViaRest(guildId) {
+        const channels = await this._restGet(`/guilds/${guildId}/channels`);
+        if (!Array.isArray(channels)) return null;
+        const names = EMOJI_LIST_CHANNEL_NAMES;
+        const match = (channel) => {
+            if (!channel || !channel.name) return false;
+            const n = String(channel.name).trim().toLowerCase().replace(/\s+/g, ' ');
+            return names.includes(n) || names.includes(n.replace(/\s/g, '-'));
+        };
+        const channel = channels.find(match);
+        return channel ? channel.id : null;
+    }
+
+    async _readEmojiListChannelViaRest(channelId) {
+        const out = [];
+        const limit = this.options.maxMessagesPerChannel;
+        let before = null;
+        let read = 0;
+        while (read < limit) {
+            const query = new URLSearchParams({ limit: String(Math.min(100, limit - read)) });
+            if (before) query.set('before', before);
+            const batch = await this._restGet(`/channels/${channelId}/messages`, query);
+            if (!Array.isArray(batch) || batch.length === 0) break;
+            for (const message of batch) out.push(...this._parseEmojiListMessage(message));
+            read += batch.length;
+            const next = batch[batch.length - 1] && batch[batch.length - 1].id;
+            if (!next || next === before) break; // no cursor progress — stop
+            before = next;
+        }
+        return out;
     }
 
     async _fetchGuild(guildId) {

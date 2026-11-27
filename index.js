@@ -1,5 +1,6 @@
 const debug = require('debug')('bot:main');
 
+const { getFleetGuildCount } = require('./utils/fleetStats');
 const discord = require('discord.js');
 require('./utils/embedTheme').installEmbedTheme(discord);
 const { Client, GatewayIntentBits, Collection, ActivityType, Options } = discord;
@@ -35,7 +36,17 @@ const IS_SECONDARY = process.env.BOT_FAILOVER_ENABLED !== 'false' &&
                      (['sn2', 'sn3', 'secondary', 'tertiary'].includes(process.env.NODE_ROLE));
 
 if (SHARDING_ENABLED) {
-    console.log(`[SHARD] Active-active sharding enabled: ${shardRuntime.config.shardCount} shards across ${shardRuntime.config.nodes.join(', ')} (role=${shardRuntime.identity.role}, strategy=${shardRuntime.config.strategy}).`);
+    console.log(
+        `[SHARD] Active-active sharding enabled: ${shardRuntime.config.shardCount} shards across ${shardRuntime.config.nodes.join(', ')} `
+        + `(role=${shardRuntime.identity.role}, mode=${shardRuntime.config.mode}, strategy=${shardRuntime.config.strategy}).`,
+    );
+    if (shardRuntime.config.isStatic) {
+        console.log('[SHARD] Static assignment: each host serves the shards its NODE_ROLE owns — no shard table, no claim, no standby wait.');
+    }
+    shardRuntime.checkStore().then((check) => {
+        if (check.ok) console.log('[SHARD] Shard store ready (bot_shard_assignment).');
+        else console.error(`[SHARD] Shard store UNAVAILABLE: ${check.error || check.reason} — the primary node will serve every shard so the bot stays online.`);
+    }).catch(() => {});
 } else if (IS_SECONDARY) {
     // Nothing is skipped: a standby must be able to take over instantly, so it
     // loads every manager and only runs GC more aggressively.
@@ -481,6 +492,11 @@ async function initializeManagers() {
                 // reported from the Lavalink node `ready` event (see
                 // music/events/Node/ready.js), never from configuration alone.
                 console.log(`[MUSIC] Linix music system configured (${state.nodes} node(s), ${state.commands?.prefix ?? 0} prefix + ${state.commands?.slash ?? 0} slash commands); waiting for Lavalink node connection.`);
+                // One-shot diagnostic: if the node is still not connected ~20s
+                // in, say so with the resolved endpoint and the last error.
+                try {
+                    require('./music').startConnectDiagnostic(client);
+                } catch (_) { /* diagnostics are optional */ }
             }
         } catch (err) {
             console.error('[MANAGERS] Failed to load the music system:', err.message);
@@ -656,7 +672,7 @@ client.on('guildCreate', (guild) => {
         client.user.setPresence({
             activities: [
                 {
-                    name: `${client.guilds.cache.size} servers | $help`,
+                    name: `${getFleetGuildCount(client)} servers | $help`,
                     type: ActivityType.Watching,
                 },
             ],
@@ -672,7 +688,7 @@ client.on('guildDelete', (guild) => {
         client.user.setPresence({
             activities: [
                 {
-                    name: `${client.guilds.cache.size} servers | $help`,
+                    name: `${getFleetGuildCount(client)} servers | $help`,
                     type: ActivityType.Watching,
                 },
             ],
@@ -823,13 +839,29 @@ async function connectBot(leaseAlreadyAcquired = false) {
             // own shards (no duplicate sessions, no duplicate interactions).
             const claim = await shardRuntime.claim();
             if (!claim.shardIds.length) {
-                console.warn(`[SHARD] ${shardRuntime.identity.role} owns no shards (${claim.reason}) — standing by.`);
-                connectingBot = false;
-                startShardStandby(claim.reason);
-                return;
+                // FAIL-OPEN: an unreachable shard store (or a forced override)
+                // must never leave every node standing by — that is "the bot is
+                // completely offline". The PRIMARY role serves every shard
+                // instead, so exactly one process is online (no dual-active).
+                const primaryRole = shardRuntime.config.nodes[0];
+                const isPrimary = shardRuntime.identity.role === primaryRole;
+                const forced = String(process.env.SHARD_FAIL_OPEN || '').toLowerCase() === 'true';
+                if (isPrimary && (claim.reason === 'coordinator_error' || forced)) {
+                    shardRuntime.serveAllShards(client);
+                    console.warn(
+                        `[SHARD] ${shardRuntime.identity.role} could not claim its shards (${claim.reason}${claim.error ? `: ${claim.error}` : ''}) `
+                        + `— serving ALL ${shardRuntime.config.shardCount} shard(s) from this node so the bot stays online. `
+                        + 'Check SEASON_DATABASE_URL and the bot_shard_assignment table, or unset SHARD_COUNT to run single-active.',
+                    );
+                } else {
+                    console.warn(`[SHARD] ${shardRuntime.identity.role} owns no shards (${claim.reason}) — standing by.`);
+                    connectingBot = false;
+                    startShardStandby(claim.reason);
+                    return;
+                }
             }
             shardRuntime.applyToClient(client);
-            console.log(`[SHARD] Connecting with shards ${claim.shardIds.join(',')} of ${shardRuntime.config.shardCount}.`);
+            console.log(`[SHARD] Connecting with shards ${shardRuntime.shardIds.join(',')} of ${shardRuntime.config.shardCount}.`);
         } else if (failoverEnabled && !leaseAlreadyAcquired) {
             const lease = await nodeFailover.acquireLease(nodeFailover.NODE_ROLE, nodeFailover.NODE_NAME);
             if (!lease.acquired) {

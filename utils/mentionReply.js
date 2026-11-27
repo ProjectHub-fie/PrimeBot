@@ -13,6 +13,7 @@ const {
     ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags,
 } = require('discord.js');
 const config = require('../config');
+const { getFleetGuildCount, getFleetMemberCount } = require('./fleetStats');
 
 /** Custom emoji from the central EmojiManager, Unicode fallback otherwise. */
 function componentEmoji(client, name, fallback) {
@@ -101,8 +102,9 @@ async function sendMentionReply(client, message, { prefix, formatUptime } = {}) 
             prefix,
             ping: client.ws?.ping || 0,
             uptime: typeof formatUptime === 'function' ? formatUptime(process.uptime()) : '0s',
-            guildCount: client.guilds.cache.size,
-            totalUsers: client.guilds.cache.reduce((acc, guild) => acc + (guild.memberCount || 0), 0),
+            // Fleet totals, not this shard's share (see utils/fleetStats.js).
+            guildCount: getFleetGuildCount(client),
+            totalUsers: getFleetMemberCount(client),
             author: message.author,
         });
         await message.reply(payload);

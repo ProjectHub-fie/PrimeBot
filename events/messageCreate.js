@@ -9,6 +9,7 @@ const {
     ChannelType,
 } = require("discord.js");
 const net = require("net");
+const { getFleetGuildCount, getFleetMemberCount } = require('../utils/fleetStats');
 const config = require("../config");
 const nodeFailover = require("../utils/nodeFailover");
 const { scheduleComponentExpiry } = require("../utils/stabilityUtils");
@@ -4920,7 +4921,7 @@ module.exports = {
                         .setDescription("A sophisticated Discord bot for community engagement")
                         .addFields(
                             { name: "Version", value: config.version, inline: true },
-                            { name: "Servers", value: client.guilds.cache.size.toString(), inline: true },
+                            { name: "Servers", value: getFleetGuildCount(client).toString(), inline: true },
                             { name: "Uptime", value: formatUptime(process.uptime()), inline: true }
                         )
                         .setFooter({ text: `Version: ${config.version}` })
@@ -4969,7 +4970,12 @@ module.exports = {
                     const heapTotalMB = (memoryUsage.heapTotal / 1024 / 1024).toFixed(1);
                     const rssMB       = (memoryUsage.rss       / 1024 / 1024).toFixed(1);
                     const extMB       = (memoryUsage.external  / 1024 / 1024).toFixed(1);
-                    const totalUsers  = client.guilds.cache.reduce((a, g) => a + g.memberCount, 0);
+                    // Fleet-wide member total (a shard node only sees its own
+                    // guilds). The local sum is guarded: a guild whose member
+                    // count is not yet cached would otherwise turn the whole
+                    // line into "NaN users".
+                    const localUsers = client.guilds.cache.reduce((a, g) => a + (g.memberCount || 0), 0);
+                    const totalUsers = getFleetMemberCount(client) || localUsers;
                     const totalChannels = client.channels.cache.size;
 
                     // ── Cluster block (active-active shard nodes) ──────────
@@ -5061,7 +5067,12 @@ module.exports = {
                             ? 'connected'
                             : (music.registered ? 'connecting' : 'not connected');
                         const extra = music.configured.length > 1 ? ` (+${music.configured.length - 1} more)` : '';
-                        musicBlock = `\`${music.name}\`${extra} — ${state}`;
+                        // A bare "not connected" hides whether the host is
+                        // unreachable or the password is wrong; show the reason.
+                        const why = !music.connected && music.lastError
+                            ? `\n\`${String(music.lastError).replace(/`/g, '').slice(0, 120)}\``
+                            : '';
+                        musicBlock = `\`${music.name}\`${extra} — ${state}${why}`;
                     } catch (_) { /* music is optional; never break $stats */ }
 
                     // DB pool line
@@ -5080,7 +5091,7 @@ module.exports = {
                         .setColor(config.colors.primary)
                         .setTitle(`📊  ${client.user.username} — Live Statistics`)
                         .setDescription(
-                            `**${client.guilds.cache.size.toLocaleString()}** servers · ` +
+                            `**${getFleetGuildCount(client).toLocaleString()}** servers · ` +
                             `**${totalUsers.toLocaleString()}** users · ` +
                             `**${totalChannels.toLocaleString()}** channels · ` +
                             `up **${uptimeString}**\n\u200b`

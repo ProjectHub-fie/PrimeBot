@@ -95,6 +95,10 @@ function musicNodeStatus(client) {
         connected: liveNodes.some(n => n.state === 1)
             || Boolean(client && client.__musicState && client.__musicState.connected),
         enabled: Boolean(client && client.__musicState && client.__musicState.enabled),
+        // Shoukaku's own state: 0 = connecting, 1 = connected, 2 = reconnecting.
+        state: liveNodes.length ? Number(liveNodes[0].state) : null,
+        lastError: (client && client.__musicState && client.__musicState.lastError) || null,
+        lastErrorAt: (client && client.__musicState && client.__musicState.lastErrorAt) || null,
     };
 }
 
@@ -106,6 +110,33 @@ function musicNodeStatus(client) {
  *
  * @returns {boolean} true when at least one node is registered
  */
+/**
+ * Say once, ~20s in, that the node has still not connected, with the resolved
+ * endpoint. A blocked port or a down host otherwise looks exactly like "the
+ * music commands just do not work".
+ */
+function startConnectDiagnostic(client, delayMs = 20000) {
+    if (!client || client.__musicConnectDiag) return;
+    client.__musicConnectDiag = true;
+    const timer = setTimeout(() => {
+        try {
+            const status = musicNodeStatus(client);
+            if (status.connected) return;
+            const cfg = getMusicConfig();
+            const node = cfg.nodes[0];
+            const endpoint = node ? `${node.secure ? 'wss' : 'ws'}://${node.url}:${node.port}` : 'no node configured';
+            const reason = status.lastError
+                ? `last error: ${status.lastError}`
+                : `no error reported yet (Shoukaku state ${status.state == null ? 'n/a' : status.state})`;
+            console.warn(
+                `[MUSIC] Lavalink "${status.name}" is not connected after ${Math.round(delayMs / 1000)}s — `
+                + `${endpoint} (${reason}). Check that this host can reach that host/port and that NODE_AUTH matches the node password.`,
+            );
+        } catch (_) { /* diagnostics must never throw */ }
+    }, delayMs);
+    if (timer.unref) timer.unref();
+}
+
 function ensureMusicNodes(client) {
     try {
         const manager = client && client.manager;
@@ -131,4 +162,4 @@ function describeNodes(client) {
     }
 }
 
-module.exports = { initMusic, restore247, musicNodeStatus, ensureMusicNodes, describeNodes, DEFAULT_NODE_NAME };
+module.exports = { initMusic, restore247, musicNodeStatus, ensureMusicNodes, describeNodes, startConnectDiagnostic, DEFAULT_NODE_NAME };

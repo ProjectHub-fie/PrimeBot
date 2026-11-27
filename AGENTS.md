@@ -2251,3 +2251,133 @@ serves (now reported once: "NODE_ROLE=sn1 is already served by another node").
   guilds → recommended 1) can still be split across three nodes.
 - `LAVALINK_NAME` is the audio-node label shared by every host; `NODE_ROLE` /
   `NODE_NAME` are the bot's cluster identity. They are unrelated settings.
+
+### Fail-open: a broken shard store must never black out the fleet
+
+An empty claim used to mean "stand by" for *every* node, so one unreachable
+`SEASON_DATABASE_URL` (or a `bot_shard_assignment` the bot cannot create) left
+all three processes alive and none of them logged in — "the bot is completely
+offline" with no error the operator could act on.
+
+- `shardRuntime.checkStore()` runs at boot and logs either
+  `[SHARD] Shard store ready (bot_shard_assignment).` or
+  `[SHARD] Shard store UNAVAILABLE: <reason>`.
+- If the claim fails with `coordinator_error`, the **primary** role
+  (`config.nodes[0]`) calls `serveAllShards()` and serves every shard, so
+  exactly one process is online. Non-primary roles still stand by, so there is
+  never a dual-active fleet.
+- `SHARD_FAIL_OPEN=true` forces the same behaviour for any empty claim (manual
+  escape hatch). It is ignored on non-primary roles.
+- `NODE_ROLE` unset + a broken store → the role stays sn1 (negotiation cannot
+  read the peer rows either), so the primary check still selects one node.
+- The zero-config rollback remains: **unset `SHARD_COUNT`** → the pre-sharding
+  single-active path (`[SHARD] Active-active is OFF …` at boot).
+
+### Dashboard fleet totals under active-active (the "24 instead of 63" number)
+
+Each node serves a **disjoint** shard set, so `client.guilds.cache.size` is only
+that node's share (17 of 63, for example). The dashboard must therefore SUM the
+serving nodes, and it must be able to see them at all.
+
+- `dashboard/db.js` `_liveBotCounts()` reads one row per node (not a bare `SUM`)
+  and sums `guild_count` / `member_count` over rows whose heartbeat is fresh.
+  A row with `active = false` (standby / stepped down) contributes **nothing**:
+  its cached count is stale and summing it would report guilds twice.
+- `getPlatformStats()` returns `liveNodes: [{ role, nodeName, guildCount,
+  memberCount, active, ageMs }]` next to `servers` / `serversSource`, so a
+  partial fleet is visible instead of hidden inside one number.
+- Source precedence for the Servers card: `rest` (Discord `/users/@me/guilds`,
+  shard-independent and authoritative) → `bot` (sum of the heartbeat rows) →
+  `db` (`server_settings` row count). When it lands on `db`, the dashboard logs
+  one warning naming both causes: a missing/expired `DASHBOARD_BOT_TOKEN` /
+  `DISCORD_TOKEN2`, or a `SEASON_DATABASE_URL` that is not the database the bot
+  writes `bot_node_status` to.
+- The bot side needs nothing: `setStatsProvider` is registered at module scope
+  in `index.js`, so every serving node publishes its own share on its heartbeat.
+
+Tests: `tests/fleetCountAggregation.test.js` (sum of three nodes = 63, a stepped
+down node never contributes, single-node fleet, `db` fallback, REST precedence).
+
+### Fleet-wide counts in the bot's own surfaces (`utils/fleetStats.js`)
+
+`client.guilds.cache.size` is only **this shard's** share, so every user-facing
+count must come from `utils/fleetStats.js`:
+
+- `getFleetCounts(client, { force })` — async, exact: the cache when the process
+  serves every shard, else Discord REST `GET /users/@me/guilds?with_counts=true`
+  (paginated 200/page, 60s cache, 8s timeout).
+- `getFleetGuildCount()` / `getFleetMemberCount()` — **sync**, return the cached
+  fleet value and refresh in the background, so a render path never blocks.
+  They return `null` for a `null` client (pure render helpers/tests).
+- A REST failure keeps the previously known fleet value — never silently drops
+  to the shard's share.
+
+Wired into: `events/ready.js` (presence + ready log + the per-node server list
+header), `index.js` presence on guild join/leave, `commands/about.js`,
+`utils/mentionReply.js`, `utils/prefixHelp.js` `helpStatsLine`, and `$stats`
+(which also sums members with `|| 0` so a missing `memberCount` cannot print
+`NaN users`).
+
+`utils/sharding/status.js` `describeFleet()` now also counts **node-reported**
+`shardIds` as shard owners, not only `bot_shard_assignment` rows — `$stats`
+passes no assignment rows, so a fully serving fleet used to read
+`0/3 assigned`.
+
+Dashboard: `/stats` has a **Fleet** band (`public/js/fleet.js` → public
+`/api/stats`) showing the summed Servers/Members, the serving-node count and a
+per-node breakdown from `liveNodes`.
+
+### Lavalink "not connected" diagnostics
+
+`music/events/Node/error.js` stores the last error on `client.__musicState`
+(never the password), `musicNodeStatus()` exposes `state` / `lastError`, `$stats`
+prints the reason under the node name, and `startConnectDiagnostic(client)`
+(wired in `index.js` `startMusic`) warns once after 20s with the resolved
+`ws(s)://host:port` when the node still has not connected — a blocked port and a
+wrong `NODE_AUTH` otherwise look identical.
+
+### Custom emojis on every shard node (emoji guilds live on ONE shard)
+
+The emoji guilds (and their `emoji list` channels) live on a single shard, so on
+the other nodes the gateway never delivers them: `client.guilds.fetch(id)` hands
+back a guild with `available === false` and every custom emoji silently fell back
+to Unicode (`guild_temporarily_unavailable` in the boot log).
+
+`utils/emojiManager.js` `_loadGuild()` now falls back to **REST** whenever the
+gateway guild is missing or unavailable — REST is shard-independent:
+
+- `GET /guilds/{id}/emojis` → the live emoji list (validated, `available:false`
+  dropped, ids registered in `_liveById` exactly like the gateway path),
+- `GET /guilds/{id}/channels` → the `emoji list` channel,
+- `GET /channels/{id}/messages?limit=100&before=` → the alias list (the cursor
+  loop stops when it does not advance).
+
+`report.guilds[i].source` is `'rest'` for those nodes, so the log tells you which
+path was used. A client without a REST layer keeps the old gateway-only behaviour
+(and the old `guild_unavailable` reason). Tests: `tests/emojiShardRest.test.js`
+(off-shard resolves `prc`/`crc`/`clc` + channel aliases, a REST failure degrades
+to Unicode, the owning node makes zero REST calls, both nodes resolve identical
+ids).
+
+### Shard assignment: STATIC by default (`SHARD_MODE`)
+
+`SHARD_MODE=static` (the default) — each host serves the shards its `NODE_ROLE`
+owns, computed locally from `SHARD_COUNT` + `SHARD_NODES` + `NODE_ROLE` via
+`planAssignment()`. There is **no** shard table, no claim, no lease, no renew
+timer and no role negotiation, so nothing (a coordinator outage, an empty
+assignment table, a stale lease) can leave a node standing by. `sn1/sn2/sn3`
+with `SHARD_COUNT=3` → shards `0/1/2`.
+
+`SHARD_MODE=dynamic` keeps the claim-based coordinator (`bot_shard_assignment`,
+`ShardCoordinator`, lease renew, fail-open `serveAllShards()`); use it only if
+shards must move between hosts at runtime, and then the SEASON database has to
+be reachable on every node.
+
+Both modes still publish the failover heartbeat (`bot_node_status`), so `$stats`
+and the dashboard keep showing per-node telemetry — that is reporting only and
+never gates serving.
+
+`utils/nodeIdentity.js` `normalizeNodeRole()` keeps an **unrecognised** role
+instead of defaulting to `sn1`: a typo used to make two hosts serve the same
+shards (every command running twice). An unknown role now owns nothing in the
+static plan and logs why.

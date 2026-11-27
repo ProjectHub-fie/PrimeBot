@@ -14,11 +14,15 @@
  */
 
 function normalizeNodeRole(rawRole) {
-    const value = String(rawRole || 'sn1').trim().toLowerCase();
+    const value = String(rawRole || '').trim().toLowerCase();
+    if (!value) return 'sn1';
     if (value === 'sn2' || value === 'secondary' || value === 'secoundary') return 'sn2';
     if (value === 'sn3' || value === 'tertiary') return 'sn3';
     if (value === 'sn1' || value === 'primary') return 'sn1';
-    return 'sn1';
+    // An unrecognised role is KEPT. Silently becoming sn1 made two hosts serve
+    // the same shards (every command running twice) — standing by with a
+    // warning is the safe outcome, and the static plan reports why.
+    return value;
 }
 
 const DEFAULT_NAME_BY_ROLE = { sn1: 'NR0008', sn2: 'NU3049', sn3: 'NUKN09' };

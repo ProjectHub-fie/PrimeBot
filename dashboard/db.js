@@ -2884,6 +2884,8 @@ async function _antiNukeCount(query, fallback = 0) {
     }
 }
 
+let _dbServersFallbackLogged = false;
+
 // Live guild/member counts reported by the ACTIVE bot node on its failover
 // heartbeat (bot_node_status.guild_count / member_count). This is the only
 // source of the ACTUAL Discord member count: the dashboard runs as a separate
@@ -2899,10 +2901,11 @@ async function _liveBotCounts() {
         // The two counts are independent: a node can report a guild count while
         // its member count is NULL (pre-upgrade row, or the member half of the
         // provider failed), so neither column may gate the other.
+        // One row per node (not a bare SUM) so a partial fleet is diagnosable:
+        // "24 servers" is only correct if 24 is what the nodes actually serve.
         const res = await getSeasonPool().query(`
-            SELECT SUM(guild_count)   AS guild_count,
-                   SUM(member_count)  AS member_count,
-                   COUNT(*)           AS nodes
+            SELECT role, node_name, guild_count, member_count, active,
+                   EXTRACT(EPOCH FROM (NOW() - last_heartbeat)) * 1000 AS age_ms
             FROM bot_node_status
             WHERE (guild_count IS NOT NULL OR member_count IS NOT NULL)
               AND NOW() - last_heartbeat < (
@@ -2910,16 +2913,34 @@ async function _liveBotCounts() {
                   -- slowed to its idle cadence is not mistaken for offline.
                   INTERVAL '5 seconds' * (COALESCE(heartbeat_interval_ms, 30000) / 1000 + 90)
               )
+            ORDER BY role
         `);
-        const row = (res.rows || [])[0];
-        if (!row) return null;
-        // SUM() over zero rows is NULL; nothing to report.
-        if (row.guild_count == null && row.member_count == null) return null;
-        return {
-            guildCount: row.guild_count != null ? Number(row.guild_count) : null,
-            memberCount: row.member_count != null ? Number(row.member_count) : null,
-            nodes: row.nodes == null ? null : Number(row.nodes),
-        };
+        const rows = res.rows || [];
+        if (!rows.length) return null;
+
+        // A node that is NOT serving (standby / stepped down) contributes 0, not
+        // whatever it last saw: its cached count is stale and summing it would
+        // report guilds twice. `active` is what the heartbeat itself publishes.
+        let guildCount = null;
+        let memberCount = null;
+        const nodes = [];
+        for (const row of rows) {
+            const serving = row.active !== false;
+            const guilds = serving && row.guild_count != null ? Number(row.guild_count) : null;
+            const members = serving && row.member_count != null ? Number(row.member_count) : null;
+            if (guilds != null) guildCount = (guildCount || 0) + guilds;
+            if (members != null) memberCount = (memberCount || 0) + members;
+            nodes.push({
+                role: row.role,
+                nodeName: row.node_name,
+                guildCount: guilds,
+                memberCount: members,
+                active: serving,
+                ageMs: row.age_ms == null ? null : Math.round(Number(row.age_ms)),
+            });
+        }
+        if (guildCount == null && memberCount == null) return null;
+        return { guildCount, memberCount, nodes: nodes.length, breakdown: nodes };
     } catch (err) {
         return null;
     }
@@ -3015,6 +3036,20 @@ async function getPlatformStats(serverCountOverride, memberCountOverride) {
         ? 'rest'
         : (liveCounts && liveCounts.guildCount != null ? 'bot' : 'db');
 
+    // A 'db' fallback means BOTH Discord sources failed, so the number shown is
+    // the lazy server_settings row count (always lower than the real fleet).
+    // Say it once per process, with the two causes worth checking, instead of
+    // leaving a plausible-looking but wrong total on the login screen.
+    if (serversSource === 'db' && !_dbServersFallbackLogged) {
+        _dbServersFallbackLogged = true;
+        console.warn(
+            '[DASHBOARD] Server count fell back to the server_settings row count ('
+            + `${totalServers}) — the Discord REST count and the bot heartbeat were both unavailable. `
+            + 'Check DASHBOARD_BOT_TOKEN/DISCORD_TOKEN2 on this deployment and that SEASON_DATABASE_URL '
+            + 'points at the same database the bot writes bot_node_status to.',
+        );
+    }
+
     // The ACTUAL member count across all guilds. It is only ever sourced from
     // Discord — the live bot heartbeat (guild.memberCount) or the REST-summed
     // guild.memberCount. The leveling distinct-user count is deliberately NOT
@@ -3055,6 +3090,9 @@ async function getPlatformStats(serverCountOverride, memberCountOverride) {
         // Where the `servers` number came from (see above). The UI uses it to
         // say "configured" when it can only show the lazy DB row count.
         serversSource,
+        // Per-node guild/member counts behind the fleet total (active-active).
+        // A partial fleet is visible here instead of hiding inside one number.
+        liveNodes: (liveCounts && liveCounts.breakdown) || [],
     };
 }
 

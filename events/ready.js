@@ -1,10 +1,13 @@
 const { ActivityType } = require("discord.js");
 const { logServerActivity } = require('../utils/logUtils');
+const { getFleetCounts, getFleetGuildCount, servesWholeFleet } = require('../utils/fleetStats');
 
 module.exports = {
     name: "clientReady",
     once: true,
-    execute(client) {
+    // async: the ready log needs ONE REST round-trip for the fleet-wide server
+    // count (a shard node's cache only holds its own guilds).
+    async execute(client) {
         console.log(`Logged in as ${client.user.tag}!`);
 
         // Central custom-emoji catalog: fetch the emoji guilds + their `emoji
@@ -54,7 +57,10 @@ module.exports = {
 
         // Set bot status
         const updateStatus = () => {
-            const serverCount = client.guilds.cache.size;
+            // Active-active sharding: this process holds only its own shards, so
+            // the presence must show the FLEET total (cached; refreshed from
+            // Discord in the background — see utils/fleetStats.js).
+            const serverCount = getFleetGuildCount(client);
             client.user.setPresence({
                 activities: [
                     {
@@ -85,12 +91,18 @@ module.exports = {
         // Update activity every 5 minutes
         setInterval(updateStatus, 5 * 60 * 1000);
 
+        // Fleet total first, this node's share second: a shard node's cache is
+        // only its own guilds, and the ready log is what operators read.
+        const fleet = await getFleetCounts(client, { force: true }).catch(() => null);
+        const fleetSize = fleet ? fleet.guilds : client.guilds.cache.size;
         console.log(
-            `Bot is ready! Serving ${client.guilds.cache.size} servers.`,
+            servesWholeFleet(client)
+                ? `Bot is ready! Serving ${fleetSize} servers.`
+                : `Bot is ready! Serving ${fleetSize} servers across the fleet (this node: ${client.guilds.cache.size}).`,
         );
         
         // Log server names for debugging
-        logServerActivity(`Bot is serving the following servers:`);
+        logServerActivity(`This node (${client.guilds.cache.size} of ${fleetSize}) is serving:`);
         client.guilds.cache.forEach(guild => {
             logServerActivity(`- ${guild.name} (ID: ${guild.id}, Members: ${guild.memberCount})`);
         });

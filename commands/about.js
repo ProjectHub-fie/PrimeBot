@@ -1,4 +1,5 @@
 const { SlashCommandBuilder, EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder , PermissionFlagsBits} = require('discord.js');
+const { getFleetGuildCount } = require('../utils/fleetStats');
 const config = require('../config');
 
 module.exports = {
@@ -29,7 +30,7 @@ module.exports = {
             const uptimeString = formatUptime(uptime);
             
             // Get guild count
-            const guildCount = interaction.client.guilds.cache.size;
+            const guildCount = getFleetGuildCount(interaction.client);
             
             // Create buttons
             const inviteButton = new ButtonBuilder()
