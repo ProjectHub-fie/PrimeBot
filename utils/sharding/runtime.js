@@ -173,6 +173,36 @@ function createShardRuntime({
         }
     }
 
+    /**
+     * Serve EVERY shard from this process.
+     *
+     * The escape hatch for a fleet that cannot talk to the shard store: an
+     * empty claim would otherwise leave every node standing by, which is
+     * exactly "the bot is completely offline". Only the primary role calls
+     * this, so at most one node serves (no dual-active).
+     */
+    function serveAllShards(target = client) {
+        if (!enabled) return false;
+        const count = Math.max(1, config.shardCount);
+        currentShards = Array.from({ length: count }, (_, i) => i);
+        if (target && target.options) {
+            target.options.shards = [...currentShards];
+            target.options.shardCount = count;
+        }
+        return true;
+    }
+
+    /** Check the shard store before relying on it (boot diagnostics). */
+    async function checkStore() {
+        if (!enabled) return { ok: false, reason: 'disabled' };
+        try {
+            await shardStore.ensureTables();
+            return { ok: true };
+        } catch (err) {
+            return { ok: false, error: err.message };
+        }
+    }
+
     /** Apply the claimed shards to the client (must run before client.login). */
     function applyToClient(target = client) {
         if (!enabled || !target || !target.options) return false;
@@ -233,6 +263,8 @@ function createShardRuntime({
         claim,
         negotiateRole,
         applyToClient,
+        serveAllShards,
+        checkStore,
         telemetry,
         startLoop,
         stopLoop,
