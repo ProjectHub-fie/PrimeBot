@@ -85,22 +85,17 @@ function helpEmbed(prefix = '$') {
     return infoEmbed('AI Assistant', lines.join('\n'));
 }
 
-const PROVIDER_STATE_LABEL = {
-    ok: 'ready',
-    unconfigured: 'not configured',
-    invalid_key: 'invalid API key',
-    invalid_model: 'model unavailable',
-    rate_limited: 'rate limited',
-};
+/**
+ * Provider and model identity stay internal: the status card only reports
+ * whether the assistant can answer right now.
+ */
+function serviceState(providerStatus = []) {
+    const configured = providerStatus.some(p => p.configured);
+    if (!configured) return 'Not configured';
+    return providerStatus.some(p => p.configured && p.active) ? 'Ready' : 'Temporarily unavailable';
+}
 
 function statusEmbed(settings, providerStatus = []) {
-    const active = providerStatus.filter(p => p.configured && p.active).map(p => p.label);
-    const providers = providerStatus.map((p) => {
-        const state = PROVIDER_STATE_LABEL[p.status] || (p.active ? 'ready' : 'unavailable');
-        return p.configured
-            ? `${p.label} — \`${p.model || 'no model'}\` • ${state}`
-            : `${p.label} — not configured`;
-    });
     return infoEmbed('AI configuration', 'Current AI settings for this server.', [
         { name: 'Enabled', value: settings.enabled ? 'Yes' : 'No', inline: true },
         { name: 'Mode', value: settings.mode, inline: true },
@@ -109,8 +104,7 @@ function statusEmbed(settings, providerStatus = []) {
         { name: 'Channels', value: settings.channelIds.length ? settings.channelIds.map(id => `<#${id}>`).join(', ') : 'Any channel', inline: false },
         { name: 'Roles', value: settings.roleIds.length ? settings.roleIds.map(id => `<@&${id}>`).join(', ') : 'Everyone', inline: false },
         { name: 'Limits', value: `Max ${settings.maxResponseChars} chars • ${settings.sessionTtlMinutes} min sessions • ${settings.cooldownSeconds}s cooldown\n${settings.dailyUserRequests}/user/day • ${settings.dailyGuildRequests}/server/day`, inline: false },
-        { name: 'Providers', value: providers.length ? providers.join('\n') : 'No provider configured', inline: false },
-        { name: 'Available now', value: active.length ? active.join(', ') : 'None (busy or not configured)', inline: false },
+        { name: 'Service', value: serviceState(providerStatus), inline: true },
     ]);
 }
 

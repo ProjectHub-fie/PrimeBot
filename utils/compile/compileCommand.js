@@ -6,9 +6,28 @@
 const view = require('./compileView');
 const { runCompilation } = require('./compileService');
 const { getCompileRuntime } = require('./runtime');
+const { normalizeLanguageInput } = require('./languageCatalog');
 
 const ANIMATION_INTERVAL_MS = 1500;
-const FENCE_RE = /```[a-zA-Z0-9+#._-]*[ \t]*\r?\n([\s\S]*?)```/g;
+const FENCE_RE = /```([\s\S]*?)```/g;
+const LANGUAGE_HINT_RE = /^[A-Za-z0-9+#._-]{1,20}$/;
+
+/**
+ * Split a fenced block into an optional language hint and the code.
+ * The first line is only treated as a hint when it is a real language name,
+ * so ```` ```const numbers = … ```` keeps its first line.
+ */
+function splitFenceBlock(body) {
+    const text = String(body || '').replace(/\r\n/g, '\n').replace(/\n$/, '');
+    const lines = text.split('\n');
+    if (lines.length > 1) {
+        const hint = lines[0].trim();
+        if (LANGUAGE_HINT_RE.test(hint) && normalizeLanguageInput(hint)) {
+            return { info: hint, code: lines.slice(1).join('\n') };
+        }
+    }
+    return { info: '', code: text.replace(/^\n/, '') };
+}
 
 function defaultSleep(ms) {
     return new Promise(resolve => {
@@ -17,13 +36,26 @@ function defaultSleep(ms) {
     });
 }
 
+/** Everything after the command word, with its original whitespace intact. */
+function textAfterCommand(raw, commandName) {
+    const text = String(raw || '');
+    const needle = String(commandName || 'compile').toLowerCase();
+    const at = text.toLowerCase().indexOf(needle);
+    return at >= 0 ? text.slice(at + needle.length) : text;
+}
+
 /**
  * `$compile …` argument parsing.
  *   help | languages
- *   <language> <code…>            (a fenced block is used as the code)
- *   <language> ```code``` ```stdin```
+ *   <language> <code…>                          (inline)
+ *   <language> ```code``` ```stdin```           (fenced, newlines preserved)
+ *   ```python\ncode```                          (language from the fence hint)
+ *
+ * `raw` (the message content) is preferred over `args`: splitting on
+ * whitespace destroys newlines and indentation, which breaks every fenced
+ * block and every indentation-sensitive language.
  */
-function parseCompileArgs(args, { prefix = '$' } = {}) {
+function parseCompileArgs(args, { prefix = '$', raw = null, commandName = 'compile' } = {}) {
     const list = Array.isArray(args) ? args.filter(a => a !== undefined) : [];
     const first = (list[0] || '').toLowerCase();
 
@@ -34,21 +66,42 @@ function parseCompileArgs(args, { prefix = '$' } = {}) {
         return { action: 'languages', prefix };
     }
 
-    const language = list[0];
-    const rest = list.slice(1).join(' ');
-    const blocks = [...rest.matchAll(FENCE_RE)].map(m => m[1].replace(/\r?\n$/, ''));
+    const text = (typeof raw === 'string' && raw.trim()
+        ? textAfterCommand(raw, commandName)
+        : list.join(' ')).replace(/\r\n/g, '\n').trim();
+    if (!text) return { action: 'help', prefix };
+
+    const blocks = [...text.matchAll(FENCE_RE)].map(m => ({
+        ...splitFenceBlock(m[1]),
+        index: m.index,
+    }));
 
     if (blocks.length) {
+        const before = text.slice(0, blocks[0].index).trim();
+        const words = before ? before.split(/\s+/) : [];
+        if (words.length > 1) {
+            // `<language> <inline code> ```stdin``` `
+            return {
+                action: 'run',
+                prefix,
+                language: words[0],
+                code: before.slice(words[0].length).trim(),
+                stdin: blocks[0].code,
+            };
+        }
         return {
             action: 'run',
             prefix,
-            language,
-            code: blocks[0],
-            stdin: blocks[1] || '',
+            language: words[0] || blocks[0].info || '',
+            code: blocks[0].code,
+            stdin: blocks[1] ? blocks[1].code : '',
         };
     }
-    if (!rest.trim()) return { action: 'help', prefix };
-    return { action: 'run', prefix, language, code: rest, stdin: '' };
+
+    const language = text.split(/\s+/)[0];
+    const code = text.slice(language.length).trim();
+    if (!code) return { action: 'help', prefix };
+    return { action: 'run', prefix, language, code, stdin: '' };
 }
 
 /**

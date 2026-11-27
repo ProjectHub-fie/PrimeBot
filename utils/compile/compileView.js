@@ -25,7 +25,7 @@ const EMOJI_SUCCESS = 'crc';
 const EMOJI_FAILURE = 'clc';
 
 const MAX_TEXT_CHARS = 4000;
-const API_NOTE = 'shared public Judge0 CE API — availability is not guaranteed';
+const AVAILABILITY_NOTE = 'availability is not guaranteed';
 
 function resolveEmoji(name) {
     return emoji(name, EMOJI_FALLBACKS[name] || '');
@@ -79,7 +79,7 @@ function formatMemory(kb) {
 }
 
 function footer(extra = '') {
-    const parts = ['PrimeBot', extra, API_NOTE, `v${config.version}`].filter(Boolean);
+    const parts = ['PrimeBot', extra, AVAILABILITY_NOTE, `v${config.version}`].filter(Boolean);
     return `-# ${parts.join(' • ')}`;
 }
 
@@ -111,8 +111,8 @@ const HEADLINES = Object.freeze({
     [KINDS.WRONG_ANSWER]: 'Wrong answer',
     [KINDS.TIME_LIMIT]: 'Time limit exceeded',
     [KINDS.TIMEOUT]: 'Execution timed out',
-    [KINDS.PROVIDER_ERROR]: 'Provider error',
-    [KINDS.RATE_LIMITED]: 'Provider rate limit',
+    [KINDS.PROVIDER_ERROR]: 'Execution unavailable',
+    [KINDS.RATE_LIMITED]: 'Rate limited',
     [KINDS.UNSUPPORTED_LANGUAGE]: 'Unsupported language',
     [KINDS.INVALID_INPUT]: 'Invalid request',
 });
@@ -162,7 +162,7 @@ function buildResultPayload(result) {
     return buildPayload(children);
 }
 
-// ── notices (limits, validation, provider availability) ───────────────────
+// ── notices (limits, validation, service availability) ────────────────────
 function buildNoticePayload({ title, body = '', emojiKey = EMOJI_FAILURE, hint = null } = {}) {
     const mark = resolveEmoji(emojiKey);
     const children = [`${mark} **${title}**`];
@@ -187,17 +187,17 @@ function buildHelpPayload(prefix = '/') {
     const usage = prefix === '/'
         ? [
             '`/compile run language:<language> code:<your code> [stdin:<input>]` — run a snippet',
-            '`/compile languages` — supported languages and their provider ids',
+            '`/compile languages` — supported languages and their ids',
             '`/compile help` — this card',
         ]
         : [
-            `\`${prefix}compile <language> <code>\` — run a snippet (a fenced block also works)`,
-            `\`${prefix}compile <language> <code> <stdin>\` — program input from a second fenced block`,
+            `\`${prefix}compile <language> <code>\` — run a snippet`,
+            'Wrap the code in triple backticks for multi-line code; a second fenced block is the program input.',
             `\`${prefix}compile languages\` — supported languages`,
             `\`${prefix}compile help\` — this card`,
         ];
     const lines = [
-        '**Code Compile** — compile and run code on Judge0 CE',
+        `**Code Compile** — compile and run code in ${TARGET_LANGUAGES.length} languages`,
         '',
         `**Usage**`,
         usage.join('\n'),
@@ -210,7 +210,7 @@ function buildHelpPayload(prefix = '/') {
             + 'One compile at a time per member, plus a short cooldown and rate limits per member and server.',
         '',
         '**Notes**',
-        'Code runs on a shared public API — availability and queue times are not guaranteed.\n'
+        'Code runs on a shared execution service — availability and queue times are not guaranteed.\n'
             + 'PrimeBot never executes submitted code on its own host.',
     ];
     return buildPayload(lines.map(line => (line === '' ? '\u200b' : line)).concat([separator(), footer()]));
@@ -227,14 +227,14 @@ function buildLanguagesPayload(snapshot, { error = null } = {}) {
             .map(l => `\`${l.label}\` — id \`${l.id}\` (\`${l.name}\`)`)
             .join('\n'));
     } else {
-        children.push('-# The language list could not be loaded from the provider.');
+        children.push('-# The language list could not be loaded right now.');
     }
     if (unsupported.length) {
-        children.push(`-# Currently unavailable on the provider: ${unsupported.map(l => l.label).join(', ')}`);
+        children.push(`-# Currently unavailable: ${unsupported.map(l => l.label).join(', ')}`);
     }
     if (error) children.push(`-# ${error}`);
     children.push(
-        `-# Language ids are fetched from the provider's \`/languages\` endpoint and cached; nothing is hardcoded.`,
+        '-# Language ids are resolved automatically and cached; nothing is hardcoded.',
         separator(),
         footer()
     );

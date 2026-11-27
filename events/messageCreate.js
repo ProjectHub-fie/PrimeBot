@@ -5519,7 +5519,7 @@ module.exports = {
                         runCompileRequest,
                     } = require("../utils/compile/compileCommand");
 
-                    const parsed = parseCompileArgs(args, { prefix });
+                    const parsed = parseCompileArgs(args, { prefix, raw: message.content, commandName });
 
                     if (parsed.action === 'help') {
                         return message.reply(compileView.buildHelpPayload(prefix)).catch(() => {});

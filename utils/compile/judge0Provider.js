@@ -23,12 +23,12 @@ const ERROR_KINDS = Object.freeze({
 
 /** User-facing wording per failure kind — never a raw provider response. */
 const ERROR_MESSAGES = Object.freeze({
-    timeout: 'The execution service did not answer in time. The shared public API may be busy — try again shortly.',
-    rate_limited: 'The shared execution service is rate-limiting requests right now. Please try again in a moment.',
-    provider_error: 'The execution service is unavailable right now. This is a provider-side problem, not your code.',
+    timeout: 'The execution service did not answer in time. It may be busy — try again shortly.',
+    rate_limited: 'The execution service is rate-limiting requests right now. Please try again in a moment.',
+    provider_error: 'The execution service is unavailable right now. This is not a problem with your code.',
     network: 'Could not reach the execution service. Please try again shortly.',
     invalid_response: 'The execution service returned an unexpected response.',
-    invalid_token: 'The execution service rejected the submission token.',
+    invalid_token: 'The execution service could not track that submission.',
 });
 
 class Judge0Error extends Error {
