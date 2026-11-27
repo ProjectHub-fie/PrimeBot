@@ -255,3 +255,59 @@ test('.env.example documents the sharding contract', () => {
     assert.match(env, /NODES CANNOT EXCEED SHARD_COUNT/);
     assert.match(env, /SINGLE-ACTIVE/);
 });
+
+test('serveAllShards() covers every shard so a broken store cannot black out the bot', async () => {
+    const clock = { now: 1_000_000 };
+    const store = makeStore(clock);
+    const env = makeEnv({ SHARD_COUNT: '3' });
+    const runtime = createShardRuntime({ env, store, logger: { log() {}, warn() {}, error() {} } });
+    const client = { options: {} };
+
+    assert.equal(runtime.serveAllShards(client), true);
+    assert.deepEqual(runtime.shardIds, [0, 1, 2]);
+    assert.deepEqual(client.options.shards, [0, 1, 2]);
+    assert.equal(client.options.shardCount, 3);
+
+    // Disabled (no SHARD_COUNT) stays inert.
+    const off = createShardRuntime({ env: { ...BASE_ENV, SHARD_COUNT: '' }, store, logger: { log() {}, warn() {}, error() {} } });
+    assert.equal(off.serveAllShards({ options: {} }), false);
+});
+
+test('a claim that cannot reach the store reports coordinator_error, not a crash', async () => {
+    const broken = {
+        async ensureTables() { throw new Error('ECONNREFUSED 5432'); },
+        async listNodes() { throw new Error('ECONNREFUSED 5432'); },
+        async listAssignments() { throw new Error('ECONNREFUSED 5432'); },
+        async claim() { throw new Error('ECONNREFUSED 5432'); },
+        async renew() { throw new Error('ECONNREFUSED 5432'); },
+        async release() { throw new Error('ECONNREFUSED 5432'); },
+    };
+    const env = makeEnv({ SHARD_COUNT: '3' });
+    const runtime = createShardRuntime({ env, store: broken, logger: { log() {}, warn() {}, error() {} } });
+
+    const claim = await runtime.claim();
+    assert.deepEqual(claim.shardIds, []);
+    assert.equal(claim.reason, 'coordinator_error');
+    assert.match(claim.error, /ECONNREFUSED/);
+
+    const check = await runtime.checkStore();
+    assert.equal(check.ok, false);
+    assert.match(check.error, /ECONNREFUSED/);
+});
+
+test('index.js fails open on the primary role only', () => {
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const src = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
+
+    assert.match(src, /const primaryRole = shardRuntime\.config\.nodes\[0\];/);
+    assert.match(src, /isPrimary && \(claim\.reason === 'coordinator_error' \|\| forced\)/);
+    assert.match(src, /shardRuntime\.serveAllShards\(client\);/);
+    assert.match(src, /SHARD_FAIL_OPEN/, 'a manual override exists');
+    // The fail-open path must not also start the standby loop (it is serving).
+    const block = src.slice(src.indexOf('const primaryRole = shardRuntime.config.nodes[0];'));
+    const failOpen = block.slice(0, block.indexOf('shardRuntime.applyToClient(client);'));
+    assert.ok(!/startShardStandby\(/.test(failOpen.replace(/} else \{[\s\S]*?\n                \}/, '')),
+        'the serving branch must not stand by');
+    assert.match(src, /shardRuntime\.checkStore\(\)/, 'boot logs whether the store is usable');
+});

@@ -2251,3 +2251,24 @@ serves (now reported once: "NODE_ROLE=sn1 is already served by another node").
   guilds → recommended 1) can still be split across three nodes.
 - `LAVALINK_NAME` is the audio-node label shared by every host; `NODE_ROLE` /
   `NODE_NAME` are the bot's cluster identity. They are unrelated settings.
+
+### Fail-open: a broken shard store must never black out the fleet
+
+An empty claim used to mean "stand by" for *every* node, so one unreachable
+`SEASON_DATABASE_URL` (or a `bot_shard_assignment` the bot cannot create) left
+all three processes alive and none of them logged in — "the bot is completely
+offline" with no error the operator could act on.
+
+- `shardRuntime.checkStore()` runs at boot and logs either
+  `[SHARD] Shard store ready (bot_shard_assignment).` or
+  `[SHARD] Shard store UNAVAILABLE: <reason>`.
+- If the claim fails with `coordinator_error`, the **primary** role
+  (`config.nodes[0]`) calls `serveAllShards()` and serves every shard, so
+  exactly one process is online. Non-primary roles still stand by, so there is
+  never a dual-active fleet.
+- `SHARD_FAIL_OPEN=true` forces the same behaviour for any empty claim (manual
+  escape hatch). It is ignored on non-primary roles.
+- `NODE_ROLE` unset + a broken store → the role stays sn1 (negotiation cannot
+  read the peer rows either), so the primary check still selects one node.
+- The zero-config rollback remains: **unset `SHARD_COUNT`** → the pre-sharding
+  single-active path (`[SHARD] Active-active is OFF …` at boot).
