@@ -143,7 +143,9 @@ test('NODE_PORT is honoured for a bare NODE_URL host (CloudeWave config)', () =>
             assert.strictEqual(nodes.length, 1);
             assert.strictEqual(nodes[0].url, 'lavalink.cloudewave.in:2336');
             assert.strictEqual(nodes[0].auth, 'cloudewave.in');
-            assert.strictEqual(nodes[0].name, 'CloudeWave');
+            // The Lavalink node identifier is LNODE — NODE_NAME is the shard
+            // cluster identity and must not leak into the audio-node label.
+            assert.strictEqual(nodes[0].name, 'LNODE');
             assert.strictEqual(nodes[0].secure, false);
         },
     );

@@ -194,10 +194,10 @@ test('9b: a status change updates the existing incident instead of duplicating',
 test('9c: node incident descriptions distinguish active vs standby', () => {
     const standbySnap = { nodes: { sn2: { isActive: false } } };
     const activeSnap = { nodes: { sn1: { isActive: true } } };
-    assert.match(statusWorker.incidentDescription('sn2', 'unavailable', standbySnap), /standby node/);
+    assert.match(statusWorker.incidentDescription('sn2', 'unavailable', standbySnap), /standby cluster/);
     assert.match(statusWorker.incidentDescription('sn2', 'unavailable', standbySnap), /redundancy is reduced/);
-    assert.match(statusWorker.incidentDescription('sn1', 'unavailable', activeSnap), /active node/);
-    assert.match(statusWorker.incidentDescription('sn1', 'unavailable', activeSnap), /service availability is affected/);
+    assert.match(statusWorker.incidentDescription('sn1', 'unavailable', activeSnap), /active cluster/);
+    assert.match(statusWorker.incidentDescription('sn1', 'unavailable', activeSnap), /the shards it serves are affected/);
 });
 
 // 9d: confirmed recovery — a single healthy blip does not resolve an incident.
@@ -584,7 +584,7 @@ test('16: the client renders all 30 bar elements for a 30-position series', () =
         assert.ok(result.innerHTML.includes('role-standby'), 'standby chip rendered');
         assert.ok(result.innerHTML.includes('role-active'), 'active chip rendered');
         assert.ok(result.innerHTML.includes('No shards assigned'), 'standby shard chip rendered');
-        assert.ok(result.innerHTML.includes('Standby node(s)'), 'fleet standby count rendered');
+        assert.ok(result.innerHTML.includes('Standby clusters'), 'fleet standby count rendered');
         resolve();
     }, 20));
 });

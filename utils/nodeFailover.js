@@ -138,6 +138,17 @@ function setStatsProvider(fn) {
 // Optional provider of the status-monitoring pulse. Set via setPulseProvider()
 // from index.js; the pulse rides the same heartbeat cadence so every shard node
 // keeps its monitor_node_pulse fresh without a second timer or pool.
+let shardProvider = null;
+/**
+ * Register the active-active shard telemetry provider (see
+ * utils/sharding/runtime.js). Returns `{ shardIds, shardReady, shardTotal,
+ * startedAt, cpuPercent, ramMB, ramTotalMB, pid, version }` or null when
+ * sharding is disabled. A provider failure must never break the heartbeat.
+ */
+function setShardProvider(fn) {
+    shardProvider = typeof fn === 'function' ? fn : null;
+}
+
 let pulseProvider = null;
 function setPulseProvider(fn) {
     pulseProvider = typeof fn === 'function' ? fn : null;
@@ -179,6 +190,18 @@ async function ensureTable() {
     // instead of a single fixed threshold. Without this a node that has slowed
     // to the idle cadence would look dead to a peer on the fast cadence.
     await seasonDb.execute(sql`ALTER TABLE bot_node_status ADD COLUMN IF NOT EXISTS heartbeat_interval_ms INTEGER`);
+    // Active-active sharding telemetry (see utils/sharding/*). One row per node
+    // still describes the node completely: which shards it serves, how many are
+    // ready, and what it costs to run.
+    await seasonDb.execute(sql`ALTER TABLE bot_node_status ADD COLUMN IF NOT EXISTS shard_ids JSONB`);
+    await seasonDb.execute(sql`ALTER TABLE bot_node_status ADD COLUMN IF NOT EXISTS shard_ready INTEGER`);
+    await seasonDb.execute(sql`ALTER TABLE bot_node_status ADD COLUMN IF NOT EXISTS shard_total INTEGER`);
+    await seasonDb.execute(sql`ALTER TABLE bot_node_status ADD COLUMN IF NOT EXISTS started_at TIMESTAMP`);
+    await seasonDb.execute(sql`ALTER TABLE bot_node_status ADD COLUMN IF NOT EXISTS cpu_pct NUMERIC`);
+    await seasonDb.execute(sql`ALTER TABLE bot_node_status ADD COLUMN IF NOT EXISTS ram_mb INTEGER`);
+    await seasonDb.execute(sql`ALTER TABLE bot_node_status ADD COLUMN IF NOT EXISTS ram_total_mb INTEGER`);
+    await seasonDb.execute(sql`ALTER TABLE bot_node_status ADD COLUMN IF NOT EXISTS pid INTEGER`);
+    await seasonDb.execute(sql`ALTER TABLE bot_node_status ADD COLUMN IF NOT EXISTS version VARCHAR(32)`);
     tableReady = true;
 }
 
@@ -215,17 +238,49 @@ async function writeHeartbeat(role, active) {
             console.warn('[FAILOVER] stats provider failed (heartbeat continues):', err.message);
         }
     }
+    // Active-active telemetry: which shards this node serves and what it costs.
+    let shard = null;
+    if (shardProvider) {
+        try {
+            shard = await shardProvider();
+        } catch (err) {
+            console.warn('[SHARD] telemetry provider failed (heartbeat continues):', err.message);
+        }
+    }
     const intervalMs = currentHeartbeatIntervalMs();
     await seasonDb.execute(sql`
-        INSERT INTO bot_node_status (role, node_name, last_heartbeat, active, guild_count, member_count, heartbeat_interval_ms)
-        VALUES (${role}, ${NODE_NAME}, NOW(), ${active}, ${guildCount}, ${memberCount}, ${intervalMs})
+        INSERT INTO bot_node_status (
+            role, node_name, last_heartbeat, active, guild_count, member_count, heartbeat_interval_ms,
+            shard_ids, shard_ready, shard_total, started_at, cpu_pct, ram_mb, ram_total_mb, pid, version
+        )
+        VALUES (
+            ${role}, ${NODE_NAME}, NOW(), ${active}, ${guildCount}, ${memberCount}, ${intervalMs},
+            ${shard && shard.shardIds ? JSON.stringify(shard.shardIds) : null}::jsonb,
+            ${shard ? shard.shardReady ?? null : null},
+            ${shard ? shard.shardTotal ?? null : null},
+            ${shard && shard.startedAt ? shard.startedAt : null},
+            ${shard ? shard.cpuPercent ?? null : null},
+            ${shard ? shard.ramMB ?? null : null},
+            ${shard ? shard.ramTotalMB ?? null : null},
+            ${shard ? shard.pid ?? null : null},
+            ${shard ? shard.version ?? null : null}
+        )
         ON CONFLICT (role) DO UPDATE SET
             node_name = EXCLUDED.node_name,
             last_heartbeat = NOW(),
             active = EXCLUDED.active,
             guild_count = EXCLUDED.guild_count,
             member_count = EXCLUDED.member_count,
-            heartbeat_interval_ms = EXCLUDED.heartbeat_interval_ms
+            heartbeat_interval_ms = EXCLUDED.heartbeat_interval_ms,
+            shard_ids = EXCLUDED.shard_ids,
+            shard_ready = EXCLUDED.shard_ready,
+            shard_total = EXCLUDED.shard_total,
+            started_at = EXCLUDED.started_at,
+            cpu_pct = EXCLUDED.cpu_pct,
+            ram_mb = EXCLUDED.ram_mb,
+            ram_total_mb = EXCLUDED.ram_total_mb,
+            pid = EXCLUDED.pid,
+            version = EXCLUDED.version
     `);
     await writePulse();
 }
@@ -332,8 +387,12 @@ async function getStatus(role) {
     // can make a perfectly fresh heartbeat look stale (or vice versa),
     // causing both nodes to think they should be active at the same time.
     const result = await seasonDb.execute(sql`
-        SELECT node_name, last_heartbeat, active, heartbeat_interval_ms,
-               EXTRACT(EPOCH FROM (NOW() - last_heartbeat)) * 1000 AS age_ms
+        SELECT role, node_name, last_heartbeat, active, heartbeat_interval_ms,
+               guild_count, member_count, shard_ids, shard_ready, shard_total,
+               started_at, cpu_pct, ram_mb, ram_total_mb, pid, version,
+               EXTRACT(EPOCH FROM (NOW() - last_heartbeat)) * 1000 AS age_ms,
+               CASE WHEN started_at IS NULL THEN NULL
+                    ELSE EXTRACT(EPOCH FROM (NOW() - started_at)) END AS uptime_s
         FROM bot_node_status
         WHERE role = ${role}
     `);
@@ -430,6 +489,29 @@ function startHeartbeatLoop(role, onLeaseStolen) {
     };
     heartbeatTimer = setTimeout(tick, HEARTBEAT_INTERVAL_MS);
     heartbeatTimer.unref?.();
+}
+
+/**
+ * Active-active heartbeat: publishes the node row + pulse on the normal cadence
+ * WITHOUT touching the failover lease. In active-active sharding there is no
+ * single active node, so the lease must not gate anything; this loop only makes
+ * the node visible to the coordinator and the status surfaces.
+ */
+function startShardHeartbeatLoop(role, { onTick = null, isActive = null } = {}) {
+    stopHeartbeatLoop();
+    const tick = async () => {
+        try {
+            const active = typeof isActive === 'function' ? Boolean(await isActive()) : true;
+            await writeHeartbeat(role, active);
+            if (onTick) await onTick();
+        } catch (err) {
+            console.warn('[SHARD] heartbeat tick failed:', err.message);
+        }
+    };
+    tick();
+    heartbeatTimer = setInterval(tick, currentHeartbeatIntervalMs());
+    if (heartbeatTimer.unref) heartbeatTimer.unref();
+    return heartbeatTimer;
 }
 
 function stopHeartbeatLoop() {
@@ -739,6 +821,8 @@ module.exports = {
     writeHeartbeatWithLease,
     setStatsProvider,
     setPulseProvider,
+    setShardProvider,
+    startShardHeartbeatLoop,
     getStatus,
     getPrimaryAgeMs,
     getOtherActiveNode,

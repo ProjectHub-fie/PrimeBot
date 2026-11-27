@@ -35,12 +35,13 @@ function pulse(role, over = {}) {
 
 // ── 1. Three shard nodes report independently ────────────────────────────────
 test('all three shard nodes report independently', () => {
+    const STANDBY = { shardsTotal: 0, shardsReady: 0, shardsActive: 0, gatewayReady: false, gatewayConnected: false };
     const pulses = [
         pulse('sn1', { nodeName: 'NR0008' }),
-        pulse('sn2', { nodeName: 'NU3049' }),
-        pulse('sn3', { nodeName: 'NUKN09', gatewayReady: false, gatewayConnected: false }),
+        pulse('sn2', { nodeName: 'NU3049', ...STANDBY }),
+        pulse('sn3', { nodeName: 'NUKN09', ...STANDBY }),
     ];
-    // Only sn1 is the active lease holder with a ready gateway.
+    // Only sn1 serves shards; sn2/sn3 are genuine standbys (no shards).
     const lease = { holder: 'NR0008' };
     const state = statusWorker.evaluateState(pulses, lease);
     assert.equal(state.nodes.sn1.status, 'operational');
@@ -48,7 +49,11 @@ test('all three shard nodes report independently', () => {
     // sn3 is a standby (not the holder) — its lack of gateway is NOT a fault.
     assert.equal(state.nodes.sn3.status, 'operational');
     // Mutating one node's freshness must not affect the others.
-    const changed = statusWorker.evaluateState([pulse('sn1', { nodeName: 'NR0008' }), pulse('sn2', { ageMs: 99999999 }), pulse('sn3', { nodeName: 'NUKN09' })], { holder: 'NR0008' });
+    const changed = statusWorker.evaluateState([
+        pulse('sn1', { nodeName: 'NR0008' }),
+        pulse('sn2', { ageMs: 99999999, ...STANDBY }),
+        pulse('sn3', { nodeName: 'NUKN09', ...STANDBY }),
+    ], { holder: 'NR0008' });
     assert.equal(changed.nodes.sn1.status, 'operational');
     assert.equal(changed.nodes.sn2.status, 'unavailable');
     assert.equal(changed.nodes.sn3.status, 'operational');
@@ -91,7 +96,9 @@ test('gateway disconnection is detected (holder) and bot is degraded', () => {
     // Active node's process is healthy but its gateway is disconnected.
     const pulses = [
         pulse('sn1', { nodeName: 'NR0008', gatewayConnected: false, gatewayReady: false }),
-        pulse('sn2', { nodeName: 'NU3049' }),
+        // sn2 is a genuine standby: it owns no shards, so it cannot mask the
+        // serving node's gateway outage.
+        pulse('sn2', { nodeName: 'NU3049', shardsTotal: 0, shardsReady: 0, shardsActive: 0, gatewayConnected: false, gatewayReady: false }),
     ];
     const lease = { holder: 'NR0008' };
     const state = statusWorker.evaluateState(pulses, lease);

@@ -2078,3 +2078,83 @@ Compile and run snippets in 12 languages through the public **Judge0 CE** API. S
 - **Help/docs:** `utils/prefixHelp.js` gained a **Developer** category (icon `utility`, `HELP_CATEGORY_EMOJI.developer`) holding `compile`; `dashboard/commandDocs.js` METADATA has the curated `/docs` entry. The Linix music tree is untouched (the `default:` branch still delegates to `music/prefixRunner`).
 - **Env (all optional):** `JUDGE0_API_URL`, `JUDGE0_REQUEST_TIMEOUT_MS` (15s), `JUDGE0_POLL_INTERVAL_MS` (900), `JUDGE0_POLL_DEADLINE_MS` (30s), `JUDGE0_LANGUAGE_CACHE_TTL_MS` (6h), `COMPILE_COOLDOWN_MS`, `COMPILE_MAX_CONCURRENT_USER`, `COMPILE_MAX_CONCURRENT_GUILD`, `COMPILE_RATE_LIMIT_USER`, `COMPILE_RATE_LIMIT_GUILD`, `COMPILE_RATE_WINDOW_MS`.
 - **Tests:** `tests/codeCompile.test.js` (42) — mocked provider for success / compilation error / runtime error / stdin / unsupported language / invalid + oversized input / poll deadline / HTTP 429 / malformed responses / 10 KB truncation / per-user cooldown / concurrency + windows, the provider's error classification and Base64 round-trip, dynamic language resolution + cache TTL, the EmojiManager application-emoji discovery, fenced-block parsing (multi-line, indentation, fence hint, stdin block, raw-vs-args), the no-provider/no-token rendering audit, and both command paths (the prefix tests drive the **real** `events/messageCreate.js` handler). Nothing contacts the public API.
+
+## Active-active sharding — three clusters serve at once (Cluster terminology)
+
+The three hosting nodes no longer run active/standby. **Every node runs PrimeBot
+simultaneously** and the fleet is split into shards; the `bot_failover_lock`
+single-active lease is bypassed entirely when sharding is on.
+
+- **Enable:** `SHARD_COUNT` (number of shards). Unset → the whole subsystem is
+  inert and the bot boots exactly as before. Also `SHARD_NODES` (default
+  `sn1,sn2,sn3`; when set explicitly it is authoritative — a role outside it
+  owns nothing), `SHARD_STRATEGY` (`balanced` | `contiguous`),
+  `SHARD_LEASE_MS` (default 90 s), `SHARD_HEARTBEAT_MS` (default 30 s).
+- **Modules** (`utils/sharding/`): `config` (env → plan inputs), `assignment`
+  (pure `planAssignment`/`validatePlan`), `coordinator` (`ShardCoordinator` +
+  `MemoryShardStore`), `store` (Postgres store over the SEASON pool),
+  `status` (`describeFleet`/`clusterLabel`), `runtime` (glue used by `index.js`).
+- **Ownership** lives in `bot_shard_assignment` (SEASON pool, no new database):
+  one row per shard with `owner_role`/`owner_node`/`epoch`. Claiming is an
+  atomic `INSERT … ON CONFLICT (shard_id) DO UPDATE … WHERE <lease lapsed AND
+  the node is not ours>`, so a live owner is never preempted and no shard can be
+  served twice. The fencing `epoch` only bumps when the OWNER CHANGES.
+- **Takeover needs two signals:** the shard lease lapsed **and** the owning
+  node stopped heartbeating. One missed renew never steals a running node's
+  shards — that is what keeps duplicate ownership impossible.
+- **`index.js` claims shards BEFORE `client.login()`** and applies them via
+  `client.options.shards`, which is what limits a process to its own shards
+  (Discord delivers each shard to exactly one session, so interactions are not
+  duplicated). A node that owns no shards stands by (heartbeating, re-claiming
+  every heartbeat) instead of crashing or exiting.
+- **Telemetry** rides the existing heartbeat row (`bot_node_status`):
+  `shard_ids`, `shard_ready`, `shard_total`, `started_at`, `cpu_pct`, `ram_mb`,
+  `ram_total_mb`, `pid`, `version`. `nodeFailover.setShardProvider()` feeds it.
+- **Role is derived from shard ownership**, not from a lease:
+  `statusWorker.evaluateState` treats any node with `shardsTotal > 0` as active,
+  so three healthy nodes are all Active. The gateway/bot components aggregate
+  over EVERY serving node (operational only when all of them are ready).
+- **User-facing wording is "Cluster 1/2/3"** (`clusterLabel`, `COMPONENT_LABELS`,
+  the `$stats` embed, the status page captions). Technical identifiers stay
+  `sn1/sn2/sn3` (roles, env vars, DB columns, API keys) — rename labels, never
+  identifiers.
+- **One aggregation for both surfaces:** `describeFleet` is consumed by
+  `dashboard/db.js` `getNodeStats` AND the `$stats` command, so Discord and the
+  status page can never disagree. `getNodeStats` returns `{ nodes, clusters,
+  totals, duplicates, healthy, shardCount, assignments, lease }`.
+- **Totals are summed across fresh nodes** (`_liveBotCounts`), never a single
+  row: each node serves a disjoint shard set, so `LIMIT 1` used to report a
+  third of the bot. `guildsReliable` is false when a shard is double-owned or a
+  serving cluster has not reported its guild count — a partial sum is never
+  presented as the fleet total.
+- **Honest health vocabulary:** `online | degraded | stale | offline | never`.
+  `healthy` requires no duplicates, no offline cluster, no unknown cluster and
+  at least one active cluster. A node that never reported is `unknown`
+  (role `Unknown`), NOT a standby.
+- Tests: `tests/sharding.test.js` (assignment, concurrent claims, takeover after
+  timeout, restart recovery, fleet vocabulary, `getNodeStats`, wiring).
+
+## Lavalink node identifier — `LNODE` (never a shard cluster name)
+
+The music (Lavalink) node is identified as **`LNODE`**.
+
+- `music/config.js` `DEFAULT_NODE_NAME = 'LNODE'`; `resolveNodes()` uses
+  `LAVALINK_NAME` when set, otherwise `LNODE`. **`NODE_NAME` is deliberately not
+  consulted** — it is the shard *cluster* identity (`utils/nodeIdentity.js`), so
+  a host label like `CloudeWave` can no longer leak into the audio-node name.
+  `LAVALINK_NODES` entries may still carry an explicit `name`.
+- Host, port, password and TLS resolution are untouched; only the label changed.
+  The password is never logged (the boot log prints `name (host, TLS)`).
+- Displays: the boot log (`Music initialized with N … : LNODE (host)`), the
+  Shoukaku node events (`Lavalink "LNODE" connected.`), the `$music` card
+  (`Lavalink Node` field) and `$stats` (`🎵 Lavalink` field) all read
+  `musicNodeStatus(client)` → `{ name, registered, connected }`.
+- A missing node no longer dumps a `KazagumoError: No node found` stack at the
+  user: both the prefix and slash paths reply "Music is temporarily unavailable
+  — the audio node `LNODE` isn't connected yet."
+- `music/loaders/loadNodes.js` now isolates node-event failures (sync throws and
+  rejected promises), so an unreachable `MUSIC_DATABASE_URL` during the node
+  `ready` handler logs instead of killing the process.
+- Tests: `tests/lavalinkNodeName.test.js` (default, override precedence, shard
+  identity never leaking, unchanged connection fields, no credential in display
+  fields, displays, docs).

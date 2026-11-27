@@ -85,8 +85,23 @@ async function runPrefixCommand(client, message, commandName, args, prefix) {
     }
 
     return command.execute(message, args, client, prefix).catch((err) => {
-        console.error(`[MUSIC] $${command.name} failed:`, err);
+        // Kazagumo throws `No node found` when no Lavalink node is registered.
+        // That is an infrastructure state, not a user error — say so plainly
+        // (naming the audio node) instead of surfacing a provider stack trace.
+        if (/no node found/i.test(String(err && err.message))) {
+            const name = nodeName(client);
+            return message.channel.send(`Music is temporarily unavailable — the audio node \`${name}\` isn't connected yet.`).catch(() => null);
+        }
+        console.error(`[MUSIC] $${command.name} failed:`, err && err.message ? err.message : err);
     });
+}
+
+function nodeName(client) {
+    try {
+        return require('./index').musicNodeStatus(client).name;
+    } catch (_) {
+        return 'LNODE';
+    }
 }
 
 module.exports = { runPrefixCommand, findCommand };

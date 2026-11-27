@@ -16,6 +16,9 @@
  */
 
 const { pool } = require('../server/db');
+// Shared fleet aggregation — the SAME function the bot's $stats command uses,
+// so the dashboard and Discord can never disagree about node health or totals.
+const { describeFleet } = require('../utils/sharding/status');
 
 let welcomePool = null;
 function getWelcomePool() {
@@ -2889,33 +2892,33 @@ async function _antiNukeCount(query, fallback = 0) {
 // predate this feature) so callers can fall back gracefully.
 async function _liveBotCounts() {
     try {
-        // The two counts arrive on the same heartbeat row but are independent:
-        // a node can report a guild count while its member count is NULL (the
-        // member column may be absent on a pre-upgrade row, or the provider may
-        // have failed for members only). Requiring member_count here used to
-        // discard a perfectly good guild_count, which silently dropped the
-        // server count back to the lazy server_settings row count — the cause of
-        // the dashboard showing fewer servers than Discord does.
+        // Active-active sharding: every node serves a DISJOINT shard set, so the
+        // fleet total is the SUM across fresh nodes — reading a single row (the
+        // old LIMIT 1) would report one third of the bot.
+        //
+        // The two counts are independent: a node can report a guild count while
+        // its member count is NULL (pre-upgrade row, or the member half of the
+        // provider failed), so neither column may gate the other.
         const res = await getSeasonPool().query(`
-            SELECT guild_count, member_count
+            SELECT SUM(guild_count)   AS guild_count,
+                   SUM(member_count)  AS member_count,
+                   COUNT(*)           AS nodes
             FROM bot_node_status
-            WHERE active = true
-              AND (guild_count IS NOT NULL OR member_count IS NOT NULL)
+            WHERE (guild_count IS NOT NULL OR member_count IS NOT NULL)
               AND NOW() - last_heartbeat < (
-                  -- Honour the interval the writer published, so a node that has
-                  -- slowed to its idle cadence (which lets Neon suspend) is not
-                  -- mistaken for offline. Falls back to 30s for rows written
-                  -- before heartbeat_interval_ms existed.
+                  -- Honour the interval each writer published, so a node that has
+                  -- slowed to its idle cadence is not mistaken for offline.
                   INTERVAL '5 seconds' * (COALESCE(heartbeat_interval_ms, 30000) / 1000 + 90)
               )
-            ORDER BY last_heartbeat DESC
-            LIMIT 1
         `);
         const row = (res.rows || [])[0];
         if (!row) return null;
+        // SUM() over zero rows is NULL; nothing to report.
+        if (row.guild_count == null && row.member_count == null) return null;
         return {
             guildCount: row.guild_count != null ? Number(row.guild_count) : null,
             memberCount: row.member_count != null ? Number(row.member_count) : null,
+            nodes: row.nodes == null ? null : Number(row.nodes),
         };
     } catch (err) {
         return null;
@@ -4372,6 +4375,20 @@ function getSeasonPool() {
 const FAILOVER_THRESHOLD_MS = 45000; // mirrors utils/nodeFailover.js
 const NODE_ROLES = ['sn1', 'sn2', 'sn3'];
 
+/** pg returns JSONB already parsed; tolerate a string from an older driver. */
+function toShardIdArray(value) {
+    if (Array.isArray(value)) return value.map(Number).filter(Number.isInteger);
+    if (typeof value === 'string') {
+        try {
+            const parsed = JSON.parse(value);
+            return Array.isArray(parsed) ? parsed.map(Number).filter(Number.isInteger) : [];
+        } catch (_) {
+            return [];
+        }
+    }
+    return [];
+}
+
 async function ensureNodeStatusTables() {
     return once('nodeStatusTables', async () => {
         const p = getSeasonPool();
@@ -4396,16 +4413,47 @@ async function ensureNodeStatusTables() {
                 last_seen TIMESTAMP NOT NULL DEFAULT NOW()
             )
         `);
+        // Active-active sharding: the coordinator's ownership table + the
+        // per-node telemetry columns. Created here as well so the dashboard
+        // renders correctly even before a sharded bot node has ever booted.
+        await p.query(`
+            CREATE TABLE IF NOT EXISTS bot_shard_assignment (
+                shard_id INTEGER PRIMARY KEY,
+                owner_role VARCHAR(20) NOT NULL,
+                owner_node VARCHAR(255) NOT NULL,
+                epoch BIGINT NOT NULL DEFAULT 1,
+                assigned_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                renewed_at TIMESTAMP NOT NULL DEFAULT NOW()
+            )
+        `).catch(() => {});
+        for (const ddl of [
+            'ALTER TABLE bot_node_status ADD COLUMN IF NOT EXISTS shard_ids JSONB',
+            'ALTER TABLE bot_node_status ADD COLUMN IF NOT EXISTS shard_ready INTEGER',
+            'ALTER TABLE bot_node_status ADD COLUMN IF NOT EXISTS shard_total INTEGER',
+            'ALTER TABLE bot_node_status ADD COLUMN IF NOT EXISTS started_at TIMESTAMP',
+            'ALTER TABLE bot_node_status ADD COLUMN IF NOT EXISTS cpu_pct NUMERIC',
+            'ALTER TABLE bot_node_status ADD COLUMN IF NOT EXISTS ram_mb INTEGER',
+            'ALTER TABLE bot_node_status ADD COLUMN IF NOT EXISTS ram_total_mb INTEGER',
+            'ALTER TABLE bot_node_status ADD COLUMN IF NOT EXISTS pid INTEGER',
+            'ALTER TABLE bot_node_status ADD COLUMN IF NOT EXISTS version VARCHAR(32)',
+            'ALTER TABLE bot_node_status ADD COLUMN IF NOT EXISTS heartbeat_interval_ms INTEGER',
+        ]) {
+            await p.query(ddl).catch(() => {});
+        }
     });
 }
 
 async function getNodeStats() {
     await ensureNodeStatusTables();
     const p = getSeasonPool();
-    const [statusRes, leaseRes] = await Promise.all([
+    const [statusRes, leaseRes, assignRes] = await Promise.all([
         p.query(`
             SELECT role, node_name, last_heartbeat, active, guild_count, member_count,
-                   EXTRACT(EPOCH FROM (NOW() - last_heartbeat)) * 1000 AS age_ms
+                   shard_ids, shard_ready, shard_total, started_at, cpu_pct,
+                   ram_mb, ram_total_mb, pid, version,
+                   EXTRACT(EPOCH FROM (NOW() - last_heartbeat)) * 1000 AS age_ms,
+                   CASE WHEN started_at IS NULL THEN NULL
+                        ELSE EXTRACT(EPOCH FROM (NOW() - started_at)) END AS uptime_s
             FROM bot_node_status
         `).catch(() => ({ rows: [] })),
         p.query(`
@@ -4413,34 +4461,54 @@ async function getNodeStats() {
                    EXTRACT(EPOCH FROM (NOW() - last_seen)) * 1000 AS age_ms
             FROM bot_failover_lock WHERE id = 1
         `).catch(() => ({ rows: [] })),
+        p.query(`
+            SELECT shard_id, owner_role, owner_node, epoch,
+                   EXTRACT(EPOCH FROM (NOW() - renewed_at)) * 1000 AS age_ms
+            FROM bot_shard_assignment
+        `).catch(() => ({ rows: [] })),
     ]);
 
-    const byRole = {};
-    for (const row of statusRes.rows || []) {
-        byRole[row.role] = {
-            role: row.role,
-            nodeName: row.node_name,
-            active: !!row.active,
-            lastHeartbeat: row.last_heartbeat,
-            ageMs: Math.round(Number(row.age_ms) || 0),
-            guildCount: row.guild_count != null ? Number(row.guild_count) : null,
-            memberCount: row.member_count != null ? Number(row.member_count) : null,
-        };
-    }
-    // Always surface all three roles so the UI renders a stable grid, even when
-    // a node has never reported (no row yet). A node is "online" if it has a
-    // fresh heartbeat regardless of the active flag (standby nodes are alive
-    // too); "offline" once the heartbeat is older than the failover threshold.
-    const nodes = NODE_ROLES.map(role => byRole[role] || {
-        role,
-        nodeName: null,
-        active: false,
-        lastHeartbeat: null,
-        ageMs: null,
-    }).map(n => ({
-        ...n,
-        status: n.ageMs == null ? 'never' : (n.ageMs > FAILOVER_THRESHOLD_MS ? 'offline' : 'online'),
+    const rows = statusRes.rows || [];
+    const assignments = (assignRes.rows || []).map(row => ({
+        shardId: Number(row.shard_id),
+        ownerRole: String(row.owner_role || '').toLowerCase(),
+        ownerNode: row.owner_node,
+        epoch: Number(row.epoch) || 0,
+        ageMs: row.age_ms == null ? null : Math.round(Number(row.age_ms)),
     }));
+
+    // Shard count: the dashboard is a separate deployment and may not have
+    // SHARD_COUNT set, so fall back to what the nodes themselves reported.
+    // shard_total is the number of shards ONE node serves, so it can never be
+    // the fleet size; derive the fleet size from the highest shard id instead.
+    const shardCount = Number(process.env.SHARD_COUNT)
+        || (assignments.length ? Math.max(...assignments.map(a => a.shardId)) + 1 : 0)
+        || Math.max(0, ...rows.map(r => Number(r.shard_total) || 0));
+    const staleAfterMs = Number(process.env.SHARD_LEASE_MS)
+        || Math.max(90000, ...rows.map(r => (Number(r.heartbeat_interval_ms) || 30000) * 3));
+
+    const fleet = describeFleet({
+        nodes: rows.map(row => ({
+            role: String(row.role || '').toLowerCase(),
+            nodeName: row.node_name,
+            ageMs: row.age_ms == null ? null : Math.round(Number(row.age_ms)),
+            shardIds: toShardIdArray(row.shard_ids),
+            shardReady: row.shard_ready == null ? null : Number(row.shard_ready),
+            shardTotal: row.shard_total == null ? null : Number(row.shard_total),
+            guildCount: row.guild_count == null ? null : Number(row.guild_count),
+            memberCount: row.member_count == null ? null : Number(row.member_count),
+            uptimeSeconds: row.uptime_s == null ? null : Math.round(Number(row.uptime_s)),
+            cpuPercent: row.cpu_pct == null ? null : Number(row.cpu_pct),
+            ramMB: row.ram_mb == null ? null : Number(row.ram_mb),
+            ramTotalMB: row.ram_total_mb == null ? null : Number(row.ram_total_mb),
+            pid: row.pid == null ? null : Number(row.pid),
+            version: row.version || null,
+            lastHeartbeat: row.last_heartbeat,
+        })),
+        assignments,
+        shardCount,
+        staleAfterMs,
+    });
 
     const leaseRow = (leaseRes.rows || [])[0];
     const lease = leaseRow ? {
@@ -4449,10 +4517,23 @@ async function getNodeStats() {
         acquiredAt: leaseRow.acquired_at,
         lastSeen: leaseRow.last_seen,
         ageMs: Math.round(Number(leaseRow.age_ms) || 0),
-        stale: Number(leaseRow.age_ms || Infinity) > FAILOVER_THRESHOLD_MS,
+        stale: Number(leaseRow.age_ms || Infinity) > staleAfterMs,
     } : null;
 
-    return { nodes, lease, thresholdMs: FAILOVER_THRESHOLD_MS };
+    return {
+        // `nodes` stays the canonical API field; each entry now also carries the
+        // user-facing `label` ("Cluster 1"…), shard ownership and telemetry.
+        nodes: fleet.clusters,
+        clusters: fleet.clusters,
+        totals: fleet.totals,
+        duplicates: fleet.duplicates,
+        healthy: fleet.healthy,
+        shardCount,
+        assignments,
+        lease,
+        thresholdMs: staleAfterMs,
+        generatedAt: fleet.generatedAt,
+    };
 }
 
 // ── Website latency (season pool, latency_samples table) ───────────────────
