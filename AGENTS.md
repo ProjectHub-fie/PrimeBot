@@ -2272,3 +2272,28 @@ offline" with no error the operator could act on.
   read the peer rows either), so the primary check still selects one node.
 - The zero-config rollback remains: **unset `SHARD_COUNT`** → the pre-sharding
   single-active path (`[SHARD] Active-active is OFF …` at boot).
+
+### Dashboard fleet totals under active-active (the "24 instead of 63" number)
+
+Each node serves a **disjoint** shard set, so `client.guilds.cache.size` is only
+that node's share (17 of 63, for example). The dashboard must therefore SUM the
+serving nodes, and it must be able to see them at all.
+
+- `dashboard/db.js` `_liveBotCounts()` reads one row per node (not a bare `SUM`)
+  and sums `guild_count` / `member_count` over rows whose heartbeat is fresh.
+  A row with `active = false` (standby / stepped down) contributes **nothing**:
+  its cached count is stale and summing it would report guilds twice.
+- `getPlatformStats()` returns `liveNodes: [{ role, nodeName, guildCount,
+  memberCount, active, ageMs }]` next to `servers` / `serversSource`, so a
+  partial fleet is visible instead of hidden inside one number.
+- Source precedence for the Servers card: `rest` (Discord `/users/@me/guilds`,
+  shard-independent and authoritative) → `bot` (sum of the heartbeat rows) →
+  `db` (`server_settings` row count). When it lands on `db`, the dashboard logs
+  one warning naming both causes: a missing/expired `DASHBOARD_BOT_TOKEN` /
+  `DISCORD_TOKEN2`, or a `SEASON_DATABASE_URL` that is not the database the bot
+  writes `bot_node_status` to.
+- The bot side needs nothing: `setStatsProvider` is registered at module scope
+  in `index.js`, so every serving node publishes its own share on its heartbeat.
+
+Tests: `tests/fleetCountAggregation.test.js` (sum of three nodes = 63, a stepped
+down node never contributes, single-node fleet, `db` fallback, REST precedence).
