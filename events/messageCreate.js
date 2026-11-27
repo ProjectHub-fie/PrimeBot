@@ -5508,6 +5508,48 @@ module.exports = {
                     break;
                 }
 
+                case "compile": {
+                    // Code Compile — same flow as /compile (Judge0 CE by
+                    // default). `$compile help`, `$compile languages`, or
+                    // `$compile <language> <code>` (a fenced block also works).
+                    const compileView = require("../utils/compile/compileView");
+                    const {
+                        buildLanguagesCard,
+                        parseCompileArgs,
+                        runCompileRequest,
+                    } = require("../utils/compile/compileCommand");
+
+                    const parsed = parseCompileArgs(args, { prefix });
+
+                    if (parsed.action === 'help') {
+                        return message.reply(compileView.buildHelpPayload(prefix)).catch(() => {});
+                    }
+                    if (parsed.action === 'languages') {
+                        return message.reply(await buildLanguagesCard()).catch(() => {});
+                    }
+
+                    let progress;
+                    try {
+                        progress = await message.reply(compileView.buildProgressPayload({
+                            stage: 'submitting',
+                            language: parsed.language,
+                        }));
+                    } catch (err) {
+                        console.error('[COMPILE] Could not send the progress message:', err?.message || err);
+                        return;
+                    }
+
+                    return runCompileRequest({
+                        userId: message.author.id,
+                        guildId: message.guild?.id || null,
+                        language: parsed.language,
+                        code: parsed.code,
+                        stdin: parsed.stdin,
+                        progressSent: true,
+                        edit: payload => progress.edit(payload),
+                    });
+                }
+
                 default:
                     // Fall through to the Linix music tree: it resolves the
                     // command name (and its aliases) against `client.commands`

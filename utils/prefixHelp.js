@@ -247,6 +247,16 @@ const CATALOG = {
         ],
     },
 
+    developer: {
+        icon: 'utility',
+        label: 'Developer',
+        title: 'Developer Tools',
+        color: config.colors.secondary,
+        commands: [
+            { names: ['compile'], args: '<language> <code>', desc: 'Compile and run code in 12 languages (Python, JS, C, C++, Java, C#, Go, Rust, PHP, Ruby, Kotlin, TS) — also `/compile`' },
+        ],
+    },
+
     admin: {
         icon: 'config',
         label: 'Administration',
@@ -332,7 +342,7 @@ const CATALOG = {
     },
 };
 
-const CATEGORY_ORDER = ['general', 'information', 'ai', 'leveling', 'games', 'community', 'invite', 'birthdays', 'music', 'tickets', 'youtube', 'welcome', 'moderation', 'automation', 'antinuke', 'extra', 'admin'];
+const CATEGORY_ORDER = ['general', 'information', 'ai', 'leveling', 'games', 'community', 'invite', 'birthdays', 'music', 'tickets', 'youtube', 'welcome', 'moderation', 'automation', 'antinuke', 'extra', 'developer', 'admin'];
 
 const BETA_TAG = '🧪';
 
