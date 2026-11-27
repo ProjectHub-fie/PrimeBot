@@ -71,18 +71,54 @@ module.exports = function loadPlayerManager(client) {
     const connector = manager.shoukaku.connector;
     const registerNodes = connector.ready.bind(connector);
     let nodesRegistered = false;
-    connector.ready = (nodes) => {
-        if (nodesRegistered) return undefined;
-        nodesRegistered = true;
-        return registerNodes(nodes);
-    };
-    if (client.user && typeof client.isReady === 'function' && client.isReady()) {
+    let lastAttempt = 0;
+
+    /**
+     * Register the configured nodes exactly once.
+     *
+     * `nodesRegistered` is only set AFTER a successful call: the old code set it
+     * first, so a single throw (the client's user id not being available yet, a
+     * transient Shoukaku error) permanently disabled registration and every
+     * music command failed with `No node found` for the life of the process.
+     */
+    const registerAll = ({ force = false } = {}) => {
+        if (nodesRegistered) return true;
+        if (manager.shoukaku.nodes.size > 0) {
+            nodesRegistered = true;
+            return true;
+        }
+        // Never hammer addNode: two successful calls would open two sockets.
+        if (!force && Date.now() - lastAttempt < 5000) return false;
+        lastAttempt = Date.now();
         try {
-            connector.ready(cfg.nodes);
+            registerNodes(cfg.nodes);
+            nodesRegistered = true;
+            return true;
         } catch (err) {
             console.error('[MUSIC] Lavalink node registration failed:', err.message);
+            return false;
         }
+    };
+
+    connector.ready = (nodes) => registerAll({ force: true });
+
+    if (client.user && typeof client.isReady === 'function' && client.isReady()) {
+        registerAll({ force: true });
     }
+    // Belt and braces: if the node is still not registered a few seconds after
+    // the subsystem booted (the client was not ready yet, or Shoukaku's own
+    // `clientReady` hook never ran), try again. Unref'd so it never keeps the
+    // process alive, and bounded so a broken config does not retry forever.
+    for (const delayMs of [5000, 15000]) {
+        const timer = setTimeout(() => registerAll(), delayMs);
+        if (timer.unref) timer.unref();
+    }
+
+    /**
+     * Lazy self-heal used by the command paths: if no node is registered yet,
+     * try once more (throttled inside `registerAll`).
+     */
+    manager.ensureNodes = () => registerAll();
 
     manager.searchEngines = searchEngines;
     manager.defaultSearchEngine = cfg.nodeSource;

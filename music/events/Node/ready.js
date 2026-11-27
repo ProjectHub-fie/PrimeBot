@@ -12,7 +12,20 @@ module.exports = {
     console.log(`[MUSIC] Linix music system ready — Lavalink node "${name}" connected.`);
     client.logger.log("Auto Reconnect Collecting player 24/7 data", "log");
 
-    const maindata = await db.find();
+    // No music database configured (MUSIC_DATABASE_URL, or the shared
+    // FALLBACK/DATABASE_URL fallback) → 24/7 sessions cannot be restored.
+    // That is a configuration state, not a node failure: the node is connected
+    // and playback works, so log it once and continue.
+    let maindata = [];
+    try {
+        maindata = await db.find();
+    } catch (err) {
+        client.logger.log(
+            `Auto Reconnect skipped — no music database configured (${err.message})`,
+            "warn",
+        );
+        return;
+    }
     client.logger.log(
       `Auto Reconnect found ${
         maindata.length

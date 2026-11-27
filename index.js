@@ -18,6 +18,17 @@ const { createShardRuntime } = require('./utils/sharding/runtime');
 const shardRuntime = createShardRuntime();
 const SHARDING_ENABLED = shardRuntime.enabled;
 
+// Active-active is opt-in (SHARD_COUNT). Say so loudly when a multi-node fleet
+// is configured but the split is not: the symptom is "only one node is online,
+// the others sit in standby", which looks like a broken failover.
+if (!SHARDING_ENABLED
+    && process.env.BOT_FAILOVER_ENABLED !== 'false'
+    && String(process.env.SHARD_NODES || 'sn1,sn2,sn3').split(',').filter(Boolean).length > 1) {
+    console.warn('[SHARD] Active-active is OFF (SHARD_COUNT is not set) — this fleet runs SINGLE-ACTIVE:');
+    console.warn('[SHARD] one node serves Discord and the others stand by. Set SHARD_COUNT=<total shards>');
+    console.warn('[SHARD] (and NODE_ROLE=sn1/sn2/sn3 per host) to serve all nodes at once.');
+}
+
 // Detect secondary/standby role BEFORE initialising any managers so we can
 // skip the heavy ones that are never needed on a standby-only node.
 const IS_SECONDARY = process.env.BOT_FAILOVER_ENABLED !== 'false' &&
@@ -858,9 +869,7 @@ async function connectBot(leaseAlreadyAcquired = false) {
 
         if (SHARDING_ENABLED) {
             // ── Active-active: publish shards + telemetry, renew ownership ──
-            nodeFailover.startShardHeartbeatLoop(nodeFailover.NODE_ROLE, {
-                isActive: () => shardRuntime.shardIds.length > 0,
-            });
+            startShardHeartbeat();
             shardRuntime.startLoop({ getClient: () => client });
             const shards = shardRuntime.shardIds;
             console.log(`[SHARD] Serving shards ${shards.join(',')} (${shards.length}/${shardRuntime.config.shardCount}) as ${shardRuntime.identity.role}.`);
@@ -1046,16 +1055,34 @@ function startStandbyMonitor() {
 // never offline) and re-claims on a timer, so it picks up work the moment a
 // peer's lease lapses.
 let shardStandbyTimer = null;
+/**
+ * Publish this node's shards on the shared heartbeat, using the role it is
+ * ACTUALLY serving. Restarted whenever the role changes, because the heartbeat
+ * row is keyed by role — a node that adopted a different role must not keep
+ * writing the old one (that row belongs to its peer).
+ */
+let shardHeartbeatRole = null;
+function startShardHeartbeat() {
+    const role = shardRuntime.identity.role;
+    if (shardHeartbeatRole === role) return;
+    shardHeartbeatRole = role;
+    nodeFailover.startShardHeartbeatLoop(role, {
+        isActive: () => shardRuntime.shardIds.length > 0,
+    });
+}
+
 function startShardStandby(reason = 'no_shards') {
     if (shardStandbyTimer) return;
     standbyKeepAlive.arm();
-    nodeFailover.startShardHeartbeatLoop(nodeFailover.NODE_ROLE, {
-        isActive: () => shardRuntime.shardIds.length > 0,
-    });
+    startShardHeartbeat();
     const intervalMs = Math.max(5000, shardRuntime.config.heartbeatMs);
     console.log(`[SHARD] ${shardRuntime.identity.role} is standing by (${reason}) — re-claiming every ${Math.round(intervalMs / 1000)}s.`);
     shardStandbyTimer = setInterval(async () => {
+        // `claim()` re-negotiates the role first when NODE_ROLE is unset, so a
+        // host that booted as a duplicate sn1 adopts a free role on the next
+        // tick instead of standing by forever.
         const claim = await shardRuntime.claim().catch(() => null);
+        startShardHeartbeat();
         if (claim && claim.shardIds.length) {
             clearInterval(shardStandbyTimer);
             shardStandbyTimer = null;
