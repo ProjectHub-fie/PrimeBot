@@ -137,12 +137,19 @@
             const gwChip = n.gateway && n.gateway.ready ? 'Gateway ready'
                 : (n.gateway && n.gateway.connected ? 'Gateway connecting'
                     : (isStandby ? 'Gateway idle (standby)' : 'No gateway'));
+            const ids = Array.isArray(n.shardIds) ? n.shardIds : [];
             const shardChip = n.shards && n.shards.assigned > 0
-                ? `${n.shards.ready}/${n.shards.assigned} shards`
+                ? `${n.shards.ready}/${n.shards.assigned} shards${ids.length ? ` · ${ids.join(', ')}` : ''}`
                 : 'No shards assigned';
+            // Health and ROLE are separate chips; a healthy cluster that owns
+            // shards is always Active, never Standby.
+            const guildChip = n.guildCount != null ? `${n.guildCount} servers` : '';
+            const ramChip = n.ramMB != null ? `${n.ramMB} MB` : '';
             nodeChips = `<span class="status-foot-chip node-role ${n.isActive ? 'role-active' : 'role-standby'}">${roleChip}</span>`
                 + `<span class="status-foot-chip">${gwChip}</span>`
-                + `<span class="status-foot-chip">${shardChip}</span>`;
+                + `<span class="status-foot-chip">${shardChip}</span>`
+                + (guildChip ? `<span class="status-foot-chip">${guildChip}</span>` : '')
+                + (ramChip ? `<span class="status-foot-chip">${ramChip}</span>` : '');
         }
         const uptimeCap = c.uptime30
             ? '30-day uptime'
@@ -162,7 +169,7 @@
             ${stri}
           </div>
           <div class="status-card-foot">
-            ${nodeChips || (isNode ? `<span class="status-foot-chip">Node</span>` : (label === 'Main Website' || label === 'Dashboard / API') ? `<span class="status-foot-chip">HTTP</span>` : '')}
+            ${nodeChips || (isNode ? `<span class="status-foot-chip">Cluster</span>` : (label === 'Main Website' || label === 'Dashboard / API') ? `<span class="status-foot-chip">HTTP</span>` : '')}
             <span class="status-foot-last">Last check ${lastCheckLabel(c.lastObservedAt)}</span>
           </div>
         </button>`;
@@ -201,16 +208,16 @@
         <div class="card status-infra">
           <div class="card-title"><span><span class="icon">${window.svgIcon ? window.svgIcon('activity') : ''}</span> Shard infrastructure</span></div>
           <div class="infra-grid">
-            <div class="infra-stat"><span class="infra-num">${online}/3</span><span class="infra-cap">Nodes online</span></div>
-            <div class="infra-stat"><span class="infra-num">${healthy}/3</span><span class="infra-cap">Healthy nodes</span></div>
-            <div class="infra-stat"><span class="infra-num">${active}/3</span><span class="infra-cap">Active node(s)</span></div>
-            <div class="infra-stat"><span class="infra-num">${standby}/3</span><span class="infra-cap">Standby node(s)</span></div>
-            <div class="infra-stat"><span class="infra-num">${offline}/3</span><span class="infra-cap">Offline nodes</span></div>
-            ${stale > 0 ? `<div class="infra-stat"><span class="infra-num">${stale}/3</span><span class="infra-cap">Stale nodes</span></div>` : ''}
+            <div class="infra-stat"><span class="infra-num">${online}/3</span><span class="infra-cap">Clusters online</span></div>
+            <div class="infra-stat"><span class="infra-num">${healthy}/3</span><span class="infra-cap">Healthy clusters</span></div>
+            <div class="infra-stat"><span class="infra-num">${active}/3</span><span class="infra-cap">Active clusters</span></div>
+            <div class="infra-stat"><span class="infra-num">${standby}/3</span><span class="infra-cap">Standby clusters</span></div>
+            <div class="infra-stat"><span class="infra-num">${offline}/3</span><span class="infra-cap">Offline clusters</span></div>
+            ${stale > 0 ? `<div class="infra-stat"><span class="infra-num">${stale}/3</span><span class="infra-cap">Stale clusters</span></div>` : ''}
             <div class="infra-stat"><span class="infra-num">${fmtPct(combinedPct)}</span><span class="infra-cap">Combined shard availability</span></div>
             <div class="infra-stat"><span class="infra-num">${summary.openIncidents || 0}</span><span class="infra-cap">Open incidents</span></div>
             <div class="infra-stat"><span class="infra-num">${fmtDuration(combinedDown)}</span><span class="infra-cap">Total shard downtime (30d)</span></div>
-            <div class="infra-stat"><span class="infra-num">${mostReliable ? mostReliable.label : '—'}</span><span class="infra-cap">Most reliable node</span></div>
+            <div class="infra-stat"><span class="infra-num">${mostReliable ? mostReliable.label : '—'}</span><span class="infra-cap">Most reliable cluster</span></div>
           </div>
           <div class="infra-service">
             <span>PrimeBot service availability (30d):</span>

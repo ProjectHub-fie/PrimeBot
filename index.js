@@ -9,12 +9,23 @@ const { resolveDiscordToken } = require('./utils/tokenResolver');
 const { reconnectDelayFor } = require('./utils/stabilityUtils');
 require('dotenv').config();
 
+// ── Active-active sharding ────────────────────────────────────────────────
+// When SHARD_COUNT is set, all three nodes run the bot at the same time and the
+// coordinator (utils/sharding/*) gives each node a disjoint slice of the shard
+// set. With SHARD_COUNT unset this is completely inert and the bot starts
+// exactly as before (single process, optional single-active failover).
+const { createShardRuntime } = require('./utils/sharding/runtime');
+const shardRuntime = createShardRuntime();
+const SHARDING_ENABLED = shardRuntime.enabled;
+
 // Detect secondary/standby role BEFORE initialising any managers so we can
 // skip the heavy ones that are never needed on a standby-only node.
 const IS_SECONDARY = process.env.BOT_FAILOVER_ENABLED !== 'false' &&
                      (['sn2', 'sn3', 'secondary', 'tertiary'].includes(process.env.NODE_ROLE));
 
-if (IS_SECONDARY) {
+if (SHARDING_ENABLED) {
+    console.log(`[SHARD] Active-active sharding enabled: ${shardRuntime.config.shardCount} shards across ${shardRuntime.config.nodes.join(', ')} (role=${shardRuntime.identity.role}, strategy=${shardRuntime.config.strategy}).`);
+} else if (IS_SECONDARY) {
     // Nothing is skipped: a standby must be able to take over instantly, so it
     // loads every manager and only runs GC more aggressively.
     console.log('[BOOT] Running as SECONDARY node — standby mode (all managers load so takeover is instant; GC cadence 30s).');
@@ -670,6 +681,10 @@ global.client = client;
 // DB lease; if we no longer hold it we call stepDown() before discord.js can
 // reconnect us and create double-interaction.
 client.on('shardDisconnect', async (closeEvent, shardId) => {
+    // Active-active: ownership is per shard and enforced by the coordinator, so
+    // a disconnect is a reconnect concern (discord.js handles it), never a
+    // reason to step down and drop the shards this node legitimately owns.
+    if (SHARDING_ENABLED) return;
     if (!failoverEnabled || !global.botActive) return;
     // Pause further interaction handling immediately while we verify the lease.
     // Setting botActive=false stops the TOKEN_INVALID handler from treating
@@ -718,6 +733,10 @@ nodeFailover.setStatsProvider(() => ({
 // their own pulse loop (started below) so all three nodes report independently.
 nodeFailover.setPulseProvider(() => monitorPulse.buildPulse(client));
 
+// Active-active telemetry (which shards this node serves, ready count, CPU/RAM)
+// rides the same heartbeat row, so one query describes a node completely.
+nodeFailover.setShardProvider(() => shardRuntime.telemetry(client));
+
 // Webhook logger — sends shard-node events to Discord channel.
 // Reads FAILOVER_WEBHOOK_URL from env; silently no-ops when not set.
 const wh = require('./utils/webhookLogger');
@@ -731,13 +750,17 @@ async function stepDown(reason) {
     steppingDown = true;
     console.warn(`[FAILOVER] Stepping down (${reason}). Releasing lease and disconnecting.`);
     wh.send({
-        title: '🔴 Shard Node Offline',
+        title: '🔴 Cluster Offline',
         description: 'This node is stepping down and releasing the active lease.',
         type: 'offline',
         reason,
     });
     global.botActive = false;
     nodeFailover.stopHeartbeatLoop();
+    if (SHARDING_ENABLED) {
+        const released = await shardRuntime.release();
+        if (released.length) console.log(`[SHARD] Released shards ${released.join(',')} for a fast peer takeover.`);
+    }
     await nodeFailover.markInactive(nodeFailover.NODE_ROLE).catch(() => {});
     await nodeFailover.releaseLease(nodeFailover.NODE_NAME, nodeFailover.NODE_ROLE).catch(() => {});
     try { client.destroy(); } catch (_) {}
@@ -782,7 +805,21 @@ async function connectBot(leaseAlreadyAcquired = false) {
         // This is the key guard against dual-active: we only call client.login()
         // once we hold the DB lease. A node that cannot get the lease never
         // touches Discord, so there is no window where two nodes both handle events.
-        if (failoverEnabled && !leaseAlreadyAcquired) {
+        if (SHARDING_ENABLED) {
+            // ── Active-active: claim this node's shards BEFORE login ───────
+            // client.options.shards is read by discord.js when the gateway
+            // connects, so setting it here is what limits this process to its
+            // own shards (no duplicate sessions, no duplicate interactions).
+            const claim = await shardRuntime.claim();
+            if (!claim.shardIds.length) {
+                console.warn(`[SHARD] ${shardRuntime.identity.role} owns no shards (${claim.reason}) — standing by.`);
+                connectingBot = false;
+                startShardStandby(claim.reason);
+                return;
+            }
+            shardRuntime.applyToClient(client);
+            console.log(`[SHARD] Connecting with shards ${claim.shardIds.join(',')} of ${shardRuntime.config.shardCount}.`);
+        } else if (failoverEnabled && !leaseAlreadyAcquired) {
             const lease = await nodeFailover.acquireLease(nodeFailover.NODE_ROLE, nodeFailover.NODE_NAME);
             if (!lease.acquired) {
                 console.warn(`[FAILOVER] Could not acquire lease before connecting — ${lease.ownerNodeName} is still active. Returning to standby.`);
@@ -819,7 +856,20 @@ async function connectBot(leaseAlreadyAcquired = false) {
             console.log('[FAILOVER] Cleared standby keep-alive timer (Discord connection now keeps the process alive).');
         }
 
-        if (failoverEnabled) {
+        if (SHARDING_ENABLED) {
+            // ── Active-active: publish shards + telemetry, renew ownership ──
+            nodeFailover.startShardHeartbeatLoop(nodeFailover.NODE_ROLE, {
+                isActive: () => shardRuntime.shardIds.length > 0,
+            });
+            shardRuntime.startLoop({ getClient: () => client });
+            const shards = shardRuntime.shardIds;
+            console.log(`[SHARD] Serving shards ${shards.join(',')} (${shards.length}/${shardRuntime.config.shardCount}) as ${shardRuntime.identity.role}.`);
+            wh.send({
+                title: '🟢 Cluster Online',
+                description: `Serving shard(s) ${shards.join(', ')} of ${shardRuntime.config.shardCount}.`,
+                type: 'online',
+            });
+        } else if (failoverEnabled) {
             // ── Step 2: confirm we still hold the lease after login ────────
             // Another higher-priority node might have stolen it during the login
             // round-trip (e.g. sn1 arrived while sn2/sn3 was mid-login).
@@ -837,7 +887,7 @@ async function connectBot(leaseAlreadyAcquired = false) {
             );
             console.log(`[FAILOVER] Host ready: role=${nodeFailover.NODE_ROLE} node=${nodeFailover.NODE_NAME}`);
             wh.send({
-                title: '🟢 Shard Node Online',
+                title: '🟢 Cluster Online',
                 description: 'This node has acquired the active lease and is now handling Discord events.',
                 type: 'online',
             });
@@ -898,7 +948,7 @@ function startStandbyMonitor() {
 
     console.log(`[FAILOVER] Running as STANDBY node (${nodeFailover.NODE_NAME}, configured role: ${nodeFailover.NODE_ROLE}). Watching for another active node...`);
     wh.send({
-        title: '🟡 Shard Node Standby',
+        title: '🟡 Cluster Standby',
         description: 'This node started in standby mode. It will take over if no higher-priority node is active.',
         type: 'standby',
     });
@@ -990,12 +1040,44 @@ function startStandbyMonitor() {
     scheduleNext();
 }
 
+// ── Active-active standby ─────────────────────────────────────────────────
+// A node that owns no shards is a GENUINE standby: every shard is served by a
+// live peer. It still heartbeats (so the dashboard shows it as online/standby,
+// never offline) and re-claims on a timer, so it picks up work the moment a
+// peer's lease lapses.
+let shardStandbyTimer = null;
+function startShardStandby(reason = 'no_shards') {
+    if (shardStandbyTimer) return;
+    standbyKeepAlive.arm();
+    nodeFailover.startShardHeartbeatLoop(nodeFailover.NODE_ROLE, {
+        isActive: () => shardRuntime.shardIds.length > 0,
+    });
+    const intervalMs = Math.max(5000, shardRuntime.config.heartbeatMs);
+    console.log(`[SHARD] ${shardRuntime.identity.role} is standing by (${reason}) — re-claiming every ${Math.round(intervalMs / 1000)}s.`);
+    shardStandbyTimer = setInterval(async () => {
+        const claim = await shardRuntime.claim().catch(() => null);
+        if (claim && claim.shardIds.length) {
+            clearInterval(shardStandbyTimer);
+            shardStandbyTimer = null;
+            console.log(`[SHARD] ${shardRuntime.identity.role} was granted shards ${claim.shardIds.join(',')} — connecting.`);
+            await connectBot(false);
+        }
+    }, intervalMs);
+    if (shardStandbyTimer.unref) shardStandbyTimer.unref();
+}
+
 // Before connecting, check whether another host is already online and healthy.
 // sn1 always steals the lease (highest priority); sn2/sn3 defer to whoever
 // holds a fresh lease and enter the standby monitor instead.
 // leaseAlreadyAcquired=true is passed to connectBot() so it skips a redundant
 // second acquireLease call at the start of connectBot().
 async function startWithFailoverCheck() {
+    if (SHARDING_ENABLED) {
+        // All three nodes are active at once; there is no single-active lease to
+        // check. Ownership is per shard and enforced by the coordinator.
+        await connectBot(false);
+        return;
+    }
     if (!failoverEnabled) {
         console.log('[FAILOVER] Failover guard disabled; connecting directly from this host.');
         await connectBot(false);
@@ -1086,7 +1168,7 @@ process.on('uncaughtException', (error) => {
         // TOKEN_INVALID — but the token itself is fine; only our session was
         // displaced. If the lease is gone a higher-priority node took over and
         // we exit cleanly. If we still hold the lease it is a genuine bad token.
-        if (failoverEnabled && !steppingDown) {
+        if (failoverEnabled && !SHARDING_ENABLED && !steppingDown) {
             nodeFailover.refreshLease(nodeFailover.NODE_NAME, nodeFailover.NODE_ROLE)
                 .then(stillHaveLease => {
                     if (!stillHaveLease) {

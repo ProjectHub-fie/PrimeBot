@@ -4972,32 +4972,97 @@ module.exports = {
                     const totalUsers  = client.guilds.cache.reduce((a, g) => a + g.memberCount, 0);
                     const totalChannels = client.channels.cache.size;
 
-                    // Node / lease block
-                    let nodesBlock = '⚪ Unavailable';
+                    // ── Cluster block (active-active shard nodes) ──────────
+                    // The SAME aggregation the dashboard uses
+                    // (utils/sharding/status.js) so both surfaces agree on
+                    // health, role, shard ownership and totals.
+                    let clustersBlock = '`Unavailable`';
+                    let shardsBlock = '`Unavailable`';
                     try {
-                        const [sn1s, sn2s, sn3s, lease] = await Promise.all([
-                            nodeFailover.getStatus('sn1'),
-                            nodeFailover.getStatus('sn2'),
-                            nodeFailover.getStatus('sn3'),
-                            nodeFailover.getLease()
-                        ]);
-                        const nodeRow = (role, status) => {
-                            if (!status) return `⚪ **${role}** — never reported`;
-                            const ageSec = Math.round(Number(status.age_ms) / 1000);
-                            const isHolder = lease && lease.ownerRole === role;
-                            if (isHolder) {
-                                const icon = ageSec > nodeFailover.FAILOVER_THRESHOLD_MS / 1000 ? '🔴' : '🟢';
-                                return `${icon} **${role}** \`${status.node_name}\` — Active, ${ageSec}s ago 🔑`;
-                            }
-                            return `🟠 **${role}** \`${status.node_name}\` — Standby`;
+                        const { describeFleet } = require('../utils/sharding/status');
+                        const emojiFor = (name, fallback) => {
+                            try {
+                                return client.emojiManager?.emoji?.(name, fallback)
+                                    || require('../utils/emojiManager').emoji(name, fallback)
+                                    || fallback;
+                            } catch (_) { return fallback; }
                         };
-                        const leaseLabel = lease ? `${lease.ownerRole} · \`${lease.ownerNodeName}\`` : '⚠️ none';
-                        nodesBlock =
-                            `**Lease:** ${leaseLabel}\n` +
-                            nodeRow('sn1', sn1s) + '\n' +
-                            nodeRow('sn2', sn2s) + '\n' +
-                            nodeRow('sn3', sn3s);
-                    } catch (_) {}
+                        const HEALTH_EMOJI = {
+                            online: () => emojiFor('online', '🟢'),
+                            degraded: () => emojiFor('idle', '🟡'),
+                            stale: () => emojiFor('idle', '🟡'),
+                            offline: () => emojiFor('dnd', '🔴'),
+                            never: () => emojiFor('offline', '⚪'),
+                        };
+                        const asArray = (value) => {
+                            if (Array.isArray(value)) return value.map(Number).filter(Number.isInteger);
+                            if (typeof value === 'string') {
+                                try {
+                                    const parsed = JSON.parse(value);
+                                    return Array.isArray(parsed) ? parsed.map(Number).filter(Number.isInteger) : [];
+                                } catch (_) { return []; }
+                            }
+                            return [];
+                        };
+                        const rows = (await Promise.all(['sn1', 'sn2', 'sn3'].map(async (role) => {
+                            const row = await nodeFailover.getStatus(role).catch(() => null);
+                            return row ? { ...row, role } : null;
+                        })))
+                            .filter(Boolean)
+                            .map(row => ({
+                                role: row.role || null,
+                                nodeName: row.node_name,
+                                ageMs: row.age_ms == null ? null : Math.round(Number(row.age_ms)),
+                                shardIds: asArray(row.shard_ids),
+                                shardReady: row.shard_ready == null ? null : Number(row.shard_ready),
+                                shardTotal: row.shard_total == null ? null : Number(row.shard_total),
+                                guildCount: row.guild_count == null ? null : Number(row.guild_count),
+                                uptimeSeconds: row.uptime_s == null ? null : Math.round(Number(row.uptime_s)),
+                                ramMB: row.ram_mb == null ? null : Number(row.ram_mb),
+                                cpuPercent: row.cpu_pct == null ? null : Number(row.cpu_pct),
+                            }));
+                        const shardCount = Number(process.env.SHARD_COUNT)
+                            || Math.max(0, ...rows.flatMap(r => r.shardIds || []).map(id => id + 1))
+                            || Math.max(0, ...rows.map(r => Number(r.shardTotal) || 0));
+                        const staleAfterMs = Number(process.env.SHARD_LEASE_MS)
+                            || Math.max(90000, ...rows.map(r => (Number(r.heartbeatIntervalMs) || 30000) * 3));
+                        const fleet = describeFleet({ nodes: rows, assignments: [], shardCount, staleAfterMs });
+
+                        clustersBlock = fleet.clusters.map((c) => {
+                            const bits = [`${HEALTH_EMOJI[c.health]()} **${c.label}**`];
+                            if (c.nodeName) bits.push(`\`${c.nodeName}\``);
+                            bits.push(`— ${c.healthLabel}`);
+                            bits.push(c.servingRole === 'active'
+                                ? `· ${c.shardCount} shard${c.shardCount === 1 ? '' : 's'}`
+                                : '· standby');
+                            if (c.guildCount != null) bits.push(`· ${c.guildCount} servers`);
+                            if (c.uptimeSeconds != null) bits.push(`· up ${formatUptime(c.uptimeSeconds)}`);
+                            if (c.ramMB != null) bits.push(`· ${c.ramMB} MB`);
+                            return bits.join(' ');
+                        }).join('\n');
+
+                        const shardOwner = rows.flatMap(r => (r.shardIds || []).map(id => ({ id, role: r.role })));
+                        const ownerLine = shardOwner
+                            .sort((a, b) => a.id - b.id)
+                            .map(o => `\`${o.id}\`→${(fleet.clusters.find(c => c.role === o.role) || {}).label || o.role}`)
+                            .join(' ');
+                        shardsBlock =
+                            `**${fleet.totals.shardsAssigned}/${fleet.totals.shards || shardCount}** assigned · ` +
+                            `**${fleet.totals.shardsReady}** ready · **${fleet.totals.clustersActive}** active cluster${fleet.totals.clustersActive === 1 ? '' : 's'}` +
+                            (ownerLine ? `\n${ownerLine}` : '');
+                    } catch (_) { /* the block degrades to "Unavailable", never throws */ }
+
+                    // ── Lavalink audio node ────────────────────────────────
+                    let musicBlock = '`Not configured`';
+                    try {
+                        const { musicNodeStatus } = require('../music');
+                        const music = musicNodeStatus(client);
+                        const state = music.connected
+                            ? 'connected'
+                            : (music.registered ? 'connecting' : 'not connected');
+                        const extra = music.configured.length > 1 ? ` (+${music.configured.length - 1} more)` : '';
+                        musicBlock = `\`${music.name}\`${extra} — ${state}`;
+                    } catch (_) { /* music is optional; never break $stats */ }
 
                     // DB pool line
                     const poolLine = pool
@@ -5038,8 +5103,21 @@ module.exports = {
                                 inline: true
                             },
                             {
-                                name: '🖥️ Failover Nodes',
-                                value: nodesBlock,
+                                name: '🧩 Clusters',
+                                value: clustersBlock,
+                                inline: false
+                            },
+                            {
+                                name: '🧵 Shards',
+                                value: shardsBlock,
+                                inline: false
+                            },
+                            {
+                                // The Lavalink audio node is NOT one of the
+                                // shard clusters above — it is named separately
+                                // so the two are never confused.
+                                name: '🎵 Lavalink',
+                                value: musicBlock,
                                 inline: false
                             }
                         )

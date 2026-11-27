@@ -290,7 +290,9 @@ test("LAVALINK_NAME wins over PrimeBot's shard NODE_NAME for the node label", ()
     try {
         assert.strictEqual(resolveNodes()[0].name, 'linix-node-1');
         delete process.env.LAVALINK_NAME;
-        assert.strictEqual(resolveNodes()[0].name, 'NUKN09', 'NODE_NAME is the Linix-compatible fallback');
+        // The shard cluster identity must NEVER become the audio-node label:
+        // the Lavalink node is LNODE unless LAVALINK_NAME says otherwise.
+        assert.strictEqual(resolveNodes()[0].name, 'LNODE', 'the Lavalink node is LNODE, not the shard identity');
     } finally {
         for (const [k, v] of Object.entries(saved)) {
             if (v === undefined) delete process.env[k];
@@ -420,7 +422,7 @@ test('Lavalink nodes are registered even when music boots after clientReady', ()
 
         const nodes = [...client.manager.shoukaku.nodes.values()];
         assert.strictEqual(nodes.length, 1, 'the configured node must be registered');
-        assert.strictEqual(nodes[0].name, 'Lavalink');
+        assert.strictEqual(nodes[0].name, 'LNODE');
     });
 });
 

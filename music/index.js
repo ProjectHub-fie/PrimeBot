@@ -17,7 +17,7 @@ const loadPlayerManager = require('./loaders/loadPlayerManager');
 const loadNodes = require('./loaders/loadNodes');
 const loadPlayers = require('./loaders/loadPlayers');
 const loadCommands = require('./loaders/loadCommands');
-const { getMusicConfig } = require('./config');
+const { getMusicConfig, DEFAULT_NODE_NAME } = require('./config');
 
 /**
  * Initialize the music subsystem on a logged-in client.
@@ -32,7 +32,10 @@ function initMusic(client) {
     const cfg = getMusicConfig();
     if (!cfg.nodes.length) {
         client.logger.log(
-            'Music is not configured: set NODE_URL/NODE_AUTH/NODE_NAME/NODE_SECURE (or LAVALINK_NODES). Music commands will report the missing node.',
+            'Music is not configured: set NODE_URL/NODE_AUTH/NODE_SECURE (or LAVALINK_NODES). '
+            + 'The Lavalink node is named LNODE by default (override with LAVALINK_NAME); '
+            + 'NODE_NAME is the shard cluster identity and is not used for it. '
+            + 'Music commands will report the missing node.',
             'warn',
         );
         client.__musicState = { enabled: false, reason: 'no_lavalink_node', nodes: 0 };
@@ -49,7 +52,9 @@ function initMusic(client) {
         loadPlayers(client);
         const commands = loadCommands(client);
         client.__musicState.commands = commands;
-        client.logger.log(`Music initialized with ${cfg.nodes.length} Lavalink node(s)`, 'log');
+        // Name + host only — the password (`auth`) is never logged.
+        const described = cfg.nodes.map(n => `${n.name} (${n.url}${n.secure ? ', TLS' : ''})`).join(', ');
+        client.logger.log(`Music initialized with ${cfg.nodes.length} Lavalink node(s): ${described}`, 'log');
         return client.__musicState;
     } catch (err) {
         console.error('[MUSIC] Initialization failed:', err);
@@ -69,4 +74,24 @@ async function restore247(client) {
     }
 }
 
-module.exports = { initMusic, restore247 };
+/**
+ * Music-node status for displays (`$stats`, `$music`). Reports the CONFIGURED
+ * node name (LNODE unless LAVALINK_NAME overrides it), whether the node has
+ * actually connected, and never any credential.
+ */
+function musicNodeStatus(client) {
+    const cfg = getMusicConfig();
+    const configured = cfg.nodes.map(n => n.name);
+    const live = client && client.manager && client.manager.shoukaku && client.manager.shoukaku.nodes
+        ? [...client.manager.shoukaku.nodes.keys()]
+        : [];
+    return {
+        configured,
+        name: configured[0] || DEFAULT_NODE_NAME,
+        registered: live.length,
+        connected: Boolean(client && client.__musicState && client.__musicState.connected),
+        enabled: Boolean(client && client.__musicState && client.__musicState.enabled),
+    };
+}
+
+module.exports = { initMusic, restore247, musicNodeStatus, DEFAULT_NODE_NAME };

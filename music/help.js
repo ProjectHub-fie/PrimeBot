@@ -9,6 +9,24 @@
 
 const { linixEmbed } = require('../utils/linixEmbed');
 
+/**
+ * The configured audio-node name (LNODE by default) plus its live state. The
+ * Lavalink node is NOT one of the three shard clusters, so it is labelled
+ * explicitly to avoid the two being confused.
+ */
+function nodeLine(client) {
+    try {
+        // Lazy require: keeps this module loadable before the music subsystem
+        // has finished initialising.
+        const { musicNodeStatus } = require('./index');
+        const status = musicNodeStatus(client);
+        const state = status.connected ? 'connected' : (status.registered ? 'connecting' : 'not connected');
+        return `\`${status.name}\` — ${state}`;
+    } catch (_) {
+        return '`LNODE` — not connected';
+    }
+}
+
 function musicHelpEmbed(client, prefix = '$') {
     const e = (key, fallback) => client.emoji?.[key] || fallback;
 
@@ -34,6 +52,10 @@ function musicHelpEmbed(client, prefix = '$') {
         .addFields({
             name: `${e('music', '🎵')} Music Commands`,
             value: names.length ? names.join(', ') : 'No music commands loaded',
+        })
+        .addFields({
+            name: 'Lavalink Node',
+            value: nodeLine(client),
         })
         .f(names.length ? `${names.length} music commands loaded` : 'Music is not configured on this deployment');
 }

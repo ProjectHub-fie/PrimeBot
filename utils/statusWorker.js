@@ -48,9 +48,9 @@ const COMPONENT_LABELS = {
     api: 'Dashboard / API',
     db: 'Database',
     gateway: 'Discord Gateway',
-    sn1: 'Shard Node 1',
-    sn2: 'Shard Node 2',
-    sn3: 'Shard Node 3',
+    sn1: 'Cluster 1',
+    sn2: 'Cluster 2',
+    sn3: 'Cluster 3',
 };
 
 const COMPONENT_SEVERITY = {
@@ -305,13 +305,17 @@ function evaluateState(pulses, lease) {
 
     const isNodeActive = (p) => {
         if (!p) return false;
+        // ACTIVE-ACTIVE: a node that owns shards is serving, full stop. Role is
+        // derived from shard ownership, never from a single-active lease, so
+        // three healthy nodes are all "active" at the same time.
+        if (Number(p.shardsTotal) > 0) return true;
+        // Backward compatibility for a shard-less deployment (or a node that has
+        // not started its shards yet): fall back to the single-active lease.
         // Prefer the lease ROLE: a role is unique per node, while node_name is
         // shared by every host on many hosting panels (e.g. all three report
-        // "CloudeWave"). Matching the shared name first would mark all three
-        // nodes "Active" and leave none as a standby.
+        // "CloudeWave").
         if (activeRoleFromLease) return p.role === activeRoleFromLease;
         if (activeNodeId) return p.nodeId === activeNodeId || p.nodeName === activeNodeId;
-        // No lease at all: no node is serving Discord.
         return false;
     };
 
@@ -320,27 +324,49 @@ function evaluateState(pulses, lease) {
     for (const role of NODE_ROLES) {
         const p = byRole[role];
         const cls = classifyNode(p, { isActive: isNodeActive(p) });
-        nodes[role] = { ...cls, role, nodeId: p ? (p.nodeId || p.nodeName) : null, ...nodeDetail(cls) };
+        nodes[role] = {
+            ...cls,
+            role,
+            nodeId: p ? (p.nodeId || p.nodeName) : null,
+            // Active-active telemetry for the dashboard card: which shards this
+            // cluster owns and what serving them costs.
+            shardIds: Array.isArray(p?.shardIds) ? p.shardIds.map(Number).filter(Number.isInteger) : [],
+            guildCount: p?.guildCount == null ? null : Number(p.guildCount),
+            cpuPercent: p?.cpuPercent == null ? null : Number(p.cpuPercent),
+            ramMB: p?.resource?.memoryMB == null ? null : Number(p.resource.memoryMB),
+            uptimeSeconds: p?.resource?.uptimeSeconds ?? null,
+            lastHeartbeatAgeMs: cls.heartbeat.ageMs,
+            ...nodeDetail(cls),
+        };
     }
 
-    // ── gateway (from the active node's pulse) ───────────────────────────
-    const activePulse = pulsesArr.find(p => isNodeActive(p)) || null;
-    const activeIsStale = !!activePulse && nodes[activePulse.role] && nodes[activePulse.role].status === 'stale';
+    // ── gateway (aggregated over every serving node) ─────────────────────
+    // In active-active mode several nodes serve at once, so the gateway is only
+    // operational when EVERY serving node reports a ready gateway. With one
+    // active node this is exactly the previous behaviour.
+    const servingPulses = pulsesArr.filter(p => isNodeActive(p) && nodes[p.role]);
+    const staleServing = servingPulses.filter(p => nodes[p.role].status === 'stale');
+    const readyServing = servingPulses.filter(p => p.gatewayReady);
+    const connectedServing = servingPulses.filter(p => p.gatewayConnected);
     let gateway;
-    if (!activePulse) {
-        // No node holds the failover lease. If any node is still online this is
-        // a missing active node (degraded), not a confirmed gateway outage.
+    if (!servingPulses.length) {
+        // No node owns a shard (or holds the failover lease). If any node is
+        // still online this is a missing serving node (degraded), not a
+        // confirmed gateway outage.
         const anyNodeOnline = NODE_ROLES.some(r => nodes[r].online);
         gateway = anyNodeOnline
             ? { status: 'unavailable', detail: { reason: 'no_active_node' } }
             : { status: 'never', detail: { reason: 'no_active_node' } };
-    } else if (activeIsStale) {
-        // The active node's heartbeat is late — its last gateway reading is
-        // outdated, so report STALE rather than asserting a gateway outage.
+    } else if (staleServing.length === servingPulses.length) {
+        // Every serving node's heartbeat is late — its last gateway reading is
+        // outdated, so report STALE rather than asserting an outage.
         gateway = { status: 'stale', detail: { reason: 'active_node_pulse_stale' } };
-    } else if (activePulse.gatewayReady) {
-        gateway = { status: 'operational', detail: { shardsReady: activePulse.shardsReady } };
-    } else if (activePulse.gatewayConnected) {
+    } else if (readyServing.length === servingPulses.length) {
+        gateway = {
+            status: 'operational',
+            detail: { shardsReady: readyServing.reduce((n, p) => n + (Number(p.shardsReady) || 0), 0) },
+        };
+    } else if (connectedServing.length > 0 || readyServing.length > 0) {
         gateway = { status: 'degraded', detail: { reason: 'connecting_or_reconnecting' } };
     } else {
         gateway = { status: 'unavailable', detail: { reason: 'disconnected' } };
@@ -349,32 +375,31 @@ function evaluateState(pulses, lease) {
     const fleet = summarizeFleet(nodes);
 
     // ── bot (overall PrimeBot service availability) ──────────────────────
-    // The bot is available when the ACTIVE node's own CLASSIFICATION is
-    // operational — i.e. it is online AND serving a ready gateway. Using the
-    // classification (not the raw pulse) means a stale active node counts as
-    // outdated rather than down. Standbys alone (no active node) cannot serve,
-    // so the bot is degraded — but the nodes themselves stay ONLINE/HEALTHY.
-    //
-    // Crucially the bot is NEVER declared unavailable from stale/unknown data:
-    // only a CONFIRMED active-node outage (or every node down) is an outage.
-    const activeNodeState = activePulse ? nodes[activePulse.role] : null;
+    // The bot is available when EVERY serving node is operational. A single
+    // stale/degraded node degrades the service instead of hiding behind the
+    // healthiest one; only a confirmed outage of all serving nodes is an
+    // outage. Standbys alone cannot serve, so that is degraded — the nodes
+    // themselves still stay ONLINE/HEALTHY.
+    const servingStates = servingPulses.map(p => nodes[p.role].status);
     let bot;
     if (fleet.online === 0 && fleet.unknown === fleet.total) {
         bot = { status: 'never', detail: { reason: 'no_nodes_reported' } };
     } else if (fleet.online === 0) {
         bot = { status: 'unavailable', detail: { reason: 'all_nodes_down' } };
-    } else if (!activePulse || !activeNodeState) {
+    } else if (!servingPulses.length) {
         bot = { status: 'degraded', detail: { reason: 'no_active_node' } };
-    } else if (activeNodeState.status === 'operational') {
+    } else if (servingStates.every(s => s === 'operational')) {
         bot = { status: 'operational', detail: {} };
-    } else if (activeNodeState.status === 'stale') {
-        // Outdated monitoring data for the active node — NOT a confirmed outage.
+    } else if (servingStates.every(s => s === 'stale')) {
         bot = { status: 'stale', detail: { reason: 'active_node_pulse_stale' } };
-    } else if (activeNodeState.status === 'unavailable') {
-        // The node holding the lease is down: a real service outage.
+    } else if (servingStates.every(s => s === 'unavailable')) {
         bot = { status: 'unavailable', detail: { reason: 'active_node_down' } };
     } else {
-        bot = { status: 'degraded', detail: { reason: 'active_node:' + activeNodeState.statusReason } };
+        const broken = servingPulses.filter(p => nodes[p.role].status !== 'operational');
+        bot = {
+            status: 'degraded',
+            detail: { reason: 'active_node:' + (nodes[broken[0].role].statusReason || 'degraded'), nodes: broken.length },
+        };
     }
 
     return {
@@ -383,7 +408,10 @@ function evaluateState(pulses, lease) {
         gateway,
         bot,
         lease: activeNodeId,
-        activeRole: activePulse ? activePulse.role : activeRoleFromLease,
+        // The role the rest of the system treats as "the" active one. With
+        // several serving nodes this is simply the first one; consumers that
+        // care about all of them read `nodes[role].isActive`.
+        activeRole: servingPulses.length ? servingPulses[0].role : activeRoleFromLease,
     };
 }
 
@@ -434,7 +462,7 @@ async function evaluate() {
 // Consecutive OPERATIONAL readings required before an open incident is
 // resolved. Without this a single flapping sample (one missed heartbeat, one
 // 5xx blip) would close and immediately re-open an incident, producing the
-// endless "Shard Node 3 down" churn. Recovery must be CONFIRMED, not assumed.
+// endless "Cluster 3 down" churn. Recovery must be CONFIRMED, not assumed.
 const RECOVERY_CONFIRMATIONS = Math.max(1, parseInt(process.env.STATUS_RECOVERY_CONFIRMATIONS, 10) || 2);
 const _recoveryStreak = new Map(); // component -> consecutive operational observations
 
@@ -540,9 +568,9 @@ function incidentDescription(component, status, snapshot) {
             return `${label} (${role}) is reporting degraded health.`;
         }
         if (role === 'active') {
-            return `${label} (active node) is not responding — Discord service availability is affected.`;
+            return `${label} (active cluster) is not responding — the shards it serves are affected.`;
         }
-        return `${label} (standby node) is not responding — redundancy is reduced but Discord service is unaffected.`;
+        return `${label} (standby cluster) is not responding — it serves no shards, so redundancy is reduced but Discord service is unaffected.`;
     }
     if (status === 'degraded') return `${label} is experiencing degraded performance.`;
     return `${label} is currently unavailable.`;

@@ -47,12 +47,15 @@ function buildPulse(client, opts = {}) {
     const shardsTotal = shards ? (Number(shards.size) || 0) : 0;
     let shardsReady = 0;
     let shardsActive = 0;
+    const shardIds = [];
     if (shards && typeof shards[Symbol.iterator] === 'function') {
         for (const shard of shards) {
+            shardIds.push(Number(shard.id));
             if (shard.status === 'ready') shardsReady++;
             if (shard.status === 'ready' || shard.status === 'idle') shardsActive++;
         }
     }
+    shardIds.sort((a, b) => a - b);
 
     return {
         nodeName: NODE_IDENTITY.nodeId,
@@ -68,6 +71,11 @@ function buildPulse(client, opts = {}) {
         shardsTotal,
         shardsReady,
         shardsActive,
+        // Active-active: WHICH shards this node owns (the dashboard shows the
+        // assignment per node), plus the guilds and CPU cost of serving them.
+        shardIds,
+        guildCount: clientObj.guilds?.cache?.size ?? null,
+        cpuPercent: typeof opts.cpuPercent === 'function' ? opts.cpuPercent() : null,
         pid: process.pid,
         startedAt: STARTED_AT,
         resource: {

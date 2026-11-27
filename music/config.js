@@ -10,13 +10,23 @@
  * Linix names (`NODE_URL`, `NODE_AUTH`, `NODE_NAME`, `NODE_SECURE`) and the
  * PrimeBot names work.
  *
- * NOTE on `NODE_NAME`: PrimeBot's shard-failover subsystem already reads
- * `NODE_NAME` as the *shard node* identity (`utils/nodeIdentity.js`). The
- * Lavalink node name is only a display label, so `LAVALINK_NAME` takes
- * precedence and `NODE_NAME` is used only as the Linix-compatible fallback.
+ * NOTE on the node name: the Lavalink node identifier is `LNODE` (a constant —
+ * see DEFAULT_NODE_NAME). It is NOT derived from `NODE_NAME`, because
+ * `NODE_NAME` is PrimeBot's *shard cluster* identity (`utils/nodeIdentity.js`)
+ * and the audio node must never be confused with the shard clusters. Override
+ * the audio label with `LAVALINK_NAME` (or an explicit `name` in
+ * `LAVALINK_NODES`); everything else about the connection (host, port,
+ * password, TLS) is untouched by this naming.
  */
 
 const primeConfig = require('../config');
+
+/**
+ * The Lavalink (music) node identifier. Deliberately a constant: the shard
+ * cluster identity lives in NODE_NAME/NODE_ID and must never leak into the
+ * audio node label.
+ */
+const DEFAULT_NODE_NAME = 'LNODE';
 
 function parseBoolean(value, fallback = false) {
     if (value === undefined || value === null || value === '') return fallback;
@@ -57,7 +67,7 @@ function normalizeNode(node) {
 
     return {
         url,
-        name: String(node.name || 'Lavalink'),
+        name: String(node.name || DEFAULT_NODE_NAME),
         auth: String(node.auth || ''),
         secure,
     };
@@ -96,10 +106,10 @@ function resolveNodes() {
     if (!url) return [];
     return [normalizeNode({
         url,
-        // `LAVALINK_NAME` is the Lavalink node display name; `NODE_NAME` is
-        // PrimeBot's shard-node identity (utils/nodeIdentity.js), so it is
-        // only used as a last-resort fallback and never takes precedence.
-        name: process.env.LAVALINK_NAME || process.env.NODE_NAME || 'Lavalink',
+        // Lavalink node identifier: `LAVALINK_NAME` when explicitly set,
+        // otherwise `LNODE`. `NODE_NAME` is intentionally NOT consulted — it
+        // is the shard cluster identity, not an audio-node label.
+        name: process.env.LAVALINK_NAME || DEFAULT_NODE_NAME,
         auth: process.env.NODE_AUTH || process.env.LAVALINK_PASSWORD || '',
         secure: process.env.NODE_SECURE || process.env.LAVALINK_SECURE,
     })];
@@ -222,11 +232,9 @@ function getMusicConfig() {
     };
 }
 
-module.exports = {
-    getMusicConfig,
+module.exports = { getMusicConfig,
     resolveNodes,
     resolveNodeUrl,
     resolveNodeOptions,
     resolveEmoji,
-    parseBoolean,
-};
+    parseBoolean, DEFAULT_NODE_NAME };
