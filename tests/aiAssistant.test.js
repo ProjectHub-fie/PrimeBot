@@ -877,3 +877,28 @@ test('the prefix handler routes short admin forms through the shortcut parser', 
     assert.match(commands, /function parseAiShortcut/, 'the shortcut table lives in aiCommands');
     assert.match(commands, /CONFIG_SHORTCUTS/);
 });
+
+test('the AI configuration card never names a provider or a model', () => {
+    const E = require('../utils/ai/aiEmbeds');
+    const settings = {
+        enabled: true, mode: 'mention', language: 'auto', personality: 'balanced',
+        channelIds: [], roleIds: [], maxResponseChars: 1800, sessionTtlMinutes: 60,
+        cooldownSeconds: 0, dailyUserRequests: 60, dailyGuildRequests: 600,
+    };
+    const statuses = [
+        { label: 'Groq', configured: true, active: true, status: 'ok', model: 'openai/gpt-oss-120b' },
+        { label: 'Gemini', configured: true, active: false, status: 'rate_limited', model: 'gemini-2.5-flash' },
+        { label: 'OpenRouter', configured: false, active: false, status: 'unconfigured', model: null },
+    ];
+
+    const ready = JSON.stringify(E.statusEmbed(settings, statuses).toJSON());
+    assert.doesNotMatch(ready, /groq|gemini|openrouter|llama|gpt-oss|gemma|model/i, 'no provider or model identity');
+    assert.match(ready, /"Service"/);
+    assert.match(ready, /Ready/);
+
+    const busy = JSON.stringify(E.statusEmbed(settings, statuses.map(s => ({ ...s, active: false }))).toJSON());
+    assert.match(busy, /Temporarily unavailable/);
+
+    const none = JSON.stringify(E.statusEmbed(settings, statuses.map(s => ({ ...s, configured: false }))).toJSON());
+    assert.match(none, /Not configured/);
+});

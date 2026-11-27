@@ -108,6 +108,110 @@ function payloadText(payload) {
     return (container.components || []).map(c => c.content || '').join('\n');
 }
 
+// ── fenced blocks (the shape users actually paste) ───────────────────────
+const { parseCompileArgs } = require('../utils/compile/compileCommand');
+
+function parseMessage(content, prefix = '$') {
+    const args = content.trim().split(/\s+/).slice(1);
+    return parseCompileArgs(args, { prefix, raw: content, commandName: 'compile' });
+}
+
+test('a fenced block keeps its newlines and every line', () => {
+    const content = [
+        'compile nodejs ```const numbers = [10, 20, 30, 40, 50];',
+        'const total = numbers.reduce((sum, n) => sum + n, 0);',
+        'console.log("Total:", total);',
+        'console.log("Average:", total / numbers.length);```',
+    ].join('\n');
+
+    const parsed = parseMessage(content);
+    assert.equal(parsed.action, 'run');
+    assert.equal(parsed.language, 'nodejs');
+    assert.equal(parsed.stdin, '');
+    assert.equal(parsed.code.split('\n').length, 4, 'all four lines survive');
+    assert.ok(parsed.code.startsWith('const numbers = [10, 20, 30, 40, 50];'), 'the first line is code, not a language hint');
+    assert.ok(parsed.code.endsWith('total / numbers.length);'));
+    // The extracted program is valid JavaScript (it used to arrive mangled).
+    assert.doesNotThrow(() => new Function(parsed.code));
+});
+
+test('indentation survives for indentation-sensitive languages', () => {
+    const content = 'compile python ```def add(a, b):\n    return a + b\n\nprint(add(2, 3))```';
+    const parsed = parseMessage(content);
+    assert.equal(parsed.language, 'python');
+    assert.equal(parsed.code, 'def add(a, b):\n    return a + b\n\nprint(add(2, 3))');
+});
+
+test('fenced parsing handles the info string, stdin blocks and inline forms', () => {
+    // language inside the fence
+    const hinted = parseMessage('compile ```python\nprint(1)```');
+    assert.equal(hinted.language, 'python');
+    assert.equal(hinted.code, 'print(1)');
+
+    // code and stdin as two fenced blocks
+    const withStdin = parseMessage('compile py ```print(input())``` ```7```');
+    assert.equal(withStdin.language, 'py');
+    assert.equal(withStdin.code, 'print(input())');
+    assert.equal(withStdin.stdin, '7');
+
+    // inline code + fenced stdin (previous behaviour, still supported)
+    const inlineStdin = parseMessage('compile python print(1) ```5```');
+    assert.equal(inlineStdin.code, 'print(1)');
+    assert.equal(inlineStdin.stdin, '5');
+
+    // single-line fence, no hint
+    const inline = parseMessage('compile js ```console.log(1)```');
+    assert.equal(inline.language, 'js');
+    assert.equal(inline.code, 'console.log(1)');
+
+    // plain inline form
+    const plain = parseMessage('compile python print("hi")');
+    assert.equal(plain.code, 'print("hi")');
+});
+
+test('the raw message is preferred over whitespace-split args', () => {
+    const content = 'compile cpp ```int main() {\n  return 0;\n}```';
+    const splitArgs = content.split(/\s+/).slice(1);
+    const fromArgsOnly = parseCompileArgs(splitArgs, { prefix: '$' });
+    assert.ok(!fromArgsOnly.code.includes('\n'), 'args alone cannot preserve newlines');
+
+    const fromRaw = parseCompileArgs(splitArgs, { prefix: '$', raw: content, commandName: 'compile' });
+    assert.ok(fromRaw.code.includes('\n'), 'raw content keeps the layout');
+});
+
+
+// ── nothing internal leaks into Discord ──────────────────────────────────
+test('cards never expose the provider, its endpoint or the submission token', () => {
+    const language = { key: 'python', label: 'Python', id: 71, name: 'Python (3.8.1)' };
+    const result = service.normalizeSubmission(
+        { ...submission({ stdout: b64('ok') }), token: 'TOPSECRET-SUBMISSION-TOKEN' },
+        language,
+        { maxOutputBytes: 10 * 1024, maxSectionChars: 3200 },
+    );
+    result.token = 'TOPSECRET-SUBMISSION-TOKEN';
+
+    const payloads = [
+        view.buildResultPayload(result),
+        view.buildResultPayload({ ...result, kind: service.KINDS.RATE_LIMITED, error: { code: 'rate_limited', message: 'slow down' } }),
+        view.buildResultPayload({ ...result, kind: service.KINDS.PROVIDER_ERROR, error: { code: 'provider_error', message: 'down' } }),
+        view.buildProgressPayload({ stage: 'running', elapsedMs: 1200, language: 'Python' }),
+        view.buildHelpPayload('$'),
+        view.buildHelpPayload('/'),
+        view.buildLanguagesPayload({ supported: [language], unsupported: [] }),
+        view.buildLimitPayload({ reason: 'cooldown', message: 'Wait a moment.' }),
+    ];
+
+    for (const payload of payloads) {
+        const text = payloadText(payload) + JSON.stringify(payload.components);
+        assert.doesNotMatch(text, /TOPSECRET/i, 'the submission token is never rendered');
+        assert.doesNotMatch(text, /judge0/i, 'the provider is never named');
+        assert.doesNotMatch(text, /https?:\/\//i, 'no endpoint is rendered');
+        assert.doesNotMatch(text, /api[ _-]?key/i, 'no key is ever mentioned');
+        assert.doesNotMatch(text, /provider/i, 'no provider wording');
+        assert.equal(payload.allowed_mentions?.parse?.length ?? 0, 0, 'no mentions are allowed');
+    }
+});
+
 // ── provider ─────────────────────────────────────────────────────────────
 test('provider lists languages, submits base64 code and reads base64 output', async () => {
     const seen = [];
@@ -445,7 +549,7 @@ test('HTTP 429 from the provider surfaces as a rate-limit result', async () => {
     assert.equal(result.kind, service.KINDS.RATE_LIMITED);
     assert.match(result.error.message, /rate-limiting/);
     const text = payloadText(view.buildResultPayload(result));
-    assert.match(text, /Provider rate limit/);
+    assert.match(text, /Rate limited/);
     assert.match(text, /❌/);
 });
 
@@ -773,7 +877,7 @@ test('$compile reports a provider outage without crashing the handler', async ()
     const { runtime } = makeRuntime({ createError: new Judge0Error('provider_error', 'boom', { status: 502 }) });
     try {
         const { edits } = await runPrefix('$compile python print(1)', { runtime });
-        assert.match(payloadText(edits.at(-1)), /Provider error/);
+        assert.match(payloadText(edits.at(-1)), /Execution unavailable/);
     } finally {
         resetCompileRuntime();
     }
@@ -788,7 +892,7 @@ test('the command is wired into deploy-commands, the prefix switch and the help 
 
     const messageCreate = fs.readFileSync(path.join(ROOT, 'events', 'messageCreate.js'), 'utf8');
     assert.match(messageCreate, /case "compile": \{/);
-    assert.match(messageCreate, /parseCompileArgs\(args, \{ prefix \}\)/);
+    assert.match(messageCreate, /parseCompileArgs\(args, \{ prefix, raw: message\.content, commandName \}\)/);
     assert.match(messageCreate, /runCompileRequest\(/);
     // Linix music routing is untouched: the default branch still delegates.
     assert.match(messageCreate, /require\('\.\.\/music\/prefixRunner'\)/);

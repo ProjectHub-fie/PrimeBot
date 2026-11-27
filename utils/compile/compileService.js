@@ -163,7 +163,7 @@ function providerFailure(err) {
         : code === 'timeout' ? KINDS.TIMEOUT
             : KINDS.PROVIDER_ERROR;
     return emptyResult(kind, {
-        status: { id: null, label: kind === KINDS.TIMEOUT ? 'Timed out' : 'Provider unavailable' },
+        status: { id: null, label: kind === KINDS.TIMEOUT ? 'Timed out' : 'Unavailable' },
         error: {
             code,
             message: (err && err.userMessage)
