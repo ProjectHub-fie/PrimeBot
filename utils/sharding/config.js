@@ -54,6 +54,14 @@ function resolveShardConfig(env = process.env, { role = null } = {}) {
     const liveNodes = Math.max(1, nodes.length);
     const maxPerNode = explicitMax > 0 ? explicitMax : Math.max(1, Math.ceil(shardCount / liveNodes) + 1);
 
+    // A host whose role is not in the (defaulted) list would silently join the
+    // plan and compute a DIFFERENT split than its peers, which makes two nodes
+    // fight over the same shard. That only happens with more than three hosts,
+    // so say so instead of guessing.
+    if (role && !explicitNodes && !parseNodeList(env.SHARD_NODES).includes(String(role).toLowerCase())) {
+        console.warn(`[SHARD] NODE_ROLE=${role} is not in the default node list (sn1,sn2,sn3) — set SHARD_NODES on EVERY host (e.g. SHARD_NODES=sn1,sn2,sn3,${String(role).toLowerCase()}) so all hosts agree on the same plan.`);
+    }
+
     return {
         enabled: shardCount > 0,
         shardCount,

@@ -34,6 +34,7 @@ function createShardRuntime({
     // have ONE of them online (they all plan the same shards). So a node
     // without an explicit role negotiates a free one instead.
     const explicitRole = String(env.NODE_ROLE || '').trim().length > 0;
+    let roleCollisionWarned = false;
 
     let shardStore = store;
     if (enabled && !shardStore) {
@@ -120,7 +121,20 @@ function createShardRuntime({
      * @returns {Promise<string>} the role this node will use
      */
     async function negotiateRole() {
-        if (!enabled || explicitRole) return identity.role;
+        if (!enabled) return identity.role;
+        if (explicitRole) {
+            // An explicit NODE_ROLE is never rewritten, but two hosts that were
+            // both configured as sn1 can only ever have one of them online.
+            // Say so once, with the fix, instead of standing by silently.
+            if (!roleCollisionWarned) {
+                const peer = await coordinator.roleTakenByPeer().catch(() => null);
+                if (peer) {
+                    roleCollisionWarned = true;
+                    logger.warn(`[SHARD] NODE_ROLE=${identity.role} is already served by another node (pid ${peer.pid}) — this host cannot serve. Give every host its own NODE_ROLE (sn1/sn2/sn3) or unset NODE_ROLE so it is negotiated.`);
+                }
+            }
+            return identity.role;
+        }
         try {
             const taken = await coordinator.roleTakenByPeer();
             if (!taken) return identity.role;
@@ -131,6 +145,10 @@ function createShardRuntime({
             const previous = identity.role;
             identity.role = free;
             coordinator.setRole(free);
+            // Every other identity consumer (monitor pulse, status views)
+            // resolves from the environment, so keep it in sync.
+            env.NODE_ROLE = free;
+            if (env === process.env) process.env.NODE_ROLE = free;
             logger.log(`[SHARD] role ${previous} is already served by another node (pid ${taken.pid}) — adopting ${free}`);
             return free;
         } catch (err) {

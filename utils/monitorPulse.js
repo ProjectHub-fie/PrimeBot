@@ -25,7 +25,6 @@
 const { resolveNodeIdentity } = require('./nodeIdentity');
 
 const STARTED_AT = new Date();
-const NODE_IDENTITY = resolveNodeIdentity(process.env);
 
 /**
  * Build the pulse payload for this process.
@@ -34,6 +33,12 @@ const NODE_IDENTITY = resolveNodeIdentity(process.env);
  * @param {{ pulseIntervalMs?: number }} [opts]
  */
 function buildPulse(client, opts = {}) {
+    // Resolved per pulse, not at module load: a node without an explicit
+    // NODE_ROLE adopts a free role during shard negotiation (see
+    // utils/sharding/runtime.js), and the pulse must report the role the
+    // process actually serves — otherwise every host pulses as sn1 and the
+    // (node_name, role) keyed table keeps only one of them.
+    const nodeIdentity = resolveNodeIdentity(process.env);
     const clientObj = client || {};
     const ws = clientObj.ws || {};
     const shards = clientObj.shards || null;
@@ -58,9 +63,9 @@ function buildPulse(client, opts = {}) {
     shardIds.sort((a, b) => a - b);
 
     return {
-        nodeName: NODE_IDENTITY.nodeId,
-        nodeId: NODE_IDENTITY.nodeId,
-        role: NODE_IDENTITY.role,
+        nodeName: nodeIdentity.nodeId,
+        nodeId: nodeIdentity.nodeId,
+        role: nodeIdentity.role,
         // 'healthy' means the process is up AND has a usable gateway; 'running'
         // means the process is up with no gateway (a normal standby). We never
         // report 'dead' - an unresponsive process simply stops pulsing, which
@@ -135,4 +140,8 @@ function stopPulseLoop() {
     pulseClient = null;
 }
 
-module.exports = { buildPulse, STARTED_AT, startPulseLoop, stopPulseLoop, PULSE_INTERVAL_MS, NODE_IDENTITY };
+module.exports = {
+    buildPulse, STARTED_AT, startPulseLoop, stopPulseLoop, PULSE_INTERVAL_MS,
+    // Kept for callers that read it at load time; the live role is on the pulse.
+    get NODE_IDENTITY() { return resolveNodeIdentity(process.env); },
+};

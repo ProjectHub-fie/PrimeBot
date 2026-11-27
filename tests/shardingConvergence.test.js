@@ -202,3 +202,45 @@ test('the standby loop re-negotiates the role on every tick', () => {
     assert.match(standby, /shardRuntime\.claim\(\)/, 'the standby tick claims (and negotiates) again');
     assert.match(standby, /startShardHeartbeat\(\)/, 'the heartbeat follows the adopted role');
 });
+
+test('the adopted role is published to the environment and to the pulse', async () => {
+    const clock = { now: 1_000_000 };
+    const store = makeStore(clock);
+    const env = makeEnv();
+    const runtime = createShardRuntime({ env, store, logger: { log() {}, warn() {}, error() {} } });
+
+    // Another live process already owns sn1 (different pid → a peer).
+    store.setNode('sn1', { nodeName: 'CloudeWave', pid: 999, ageMs: 0, shardIds: [0, 3] });
+    await runtime.claim();
+    assert.equal(runtime.identity.role, 'sn2');
+    assert.equal(env.NODE_ROLE, 'sn2', 'the environment follows the adopted role');
+
+    const { buildPulse } = require('../utils/monitorPulse');
+    const prev = process.env.NODE_ROLE;
+    process.env.NODE_ROLE = 'sn2';
+    try {
+        assert.equal(buildPulse({ user: null }).role, 'sn2', 'the pulse reports the served role');
+    } finally {
+        if (prev === undefined) delete process.env.NODE_ROLE;
+        else process.env.NODE_ROLE = prev;
+    }
+});
+
+test('a duplicate explicit NODE_ROLE is reported once, with the fix', async () => {
+    const clock = { now: 1_000_000 };
+    const store = makeStore(clock);
+    const env = makeEnv({ NODE_ROLE: 'sn1' });
+    const warnings = [];
+    const runtime = createShardRuntime({
+        env, store,
+        logger: { log() {}, warn: (msg) => warnings.push(msg), error() {} },
+    });
+    store.setNode('sn1', { nodeName: 'CloudeWave', pid: 999, ageMs: 0, shardIds: [0, 3] });
+
+    await runtime.claim();
+    await runtime.claim();
+    const collisions = warnings.filter(w => w.includes('already served by another node'));
+    assert.equal(collisions.length, 1, 'warned once, not on every tick');
+    assert.match(collisions[0], /NODE_ROLE=sn1/);
+    assert.match(collisions[0], /sn1\/sn2\/sn3/);
+});

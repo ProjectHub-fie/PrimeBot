@@ -2231,3 +2231,23 @@ same-identity hosts, restart release, reclaim-from-live-owner, unknown
 telemetry never stolen, explicit role authoritative, boot warning, standby
 re-negotiation) and `tests/musicNodeRegistration.test.js` (6 — retry, no-op when
 healthy, diagnostics, flag ordering, both command paths self-heal).
+
+### Fleet sizing: roles are unique slots, shards cannot be split
+
+`SHARD_NODES` defines the plan; `NODE_ROLE` picks which slot a host occupies.
+Two hosts with the **same** role compete for the same shards, so only one of them
+serves (now reported once: "NODE_ROLE=sn1 is already served by another node").
+
+- **Nodes cannot exceed `SHARD_COUNT`.** A shard is one gateway session — it
+  cannot be split across processes. A 4th/5th/6th host with
+  `SHARD_COUNT=3` gets `not_in_plan` and stands by by design.
+- **More than three hosts** requires `SHARD_NODES=sn1,sn2,sn3,sn4,…` **on every
+  host** plus `SHARD_COUNT` ≥ the node count. Leaving `SHARD_NODES` unset on a
+  4th host makes it append its own role to its *local* plan, so it computes a
+  different split than its peers — `resolveShardConfig()` now warns about it.
+- `SHARD_COUNT` must be identical on every host (it is the gateway
+  `num_shards`). Discord's *recommended* count (`GET /gateway/bot` → `shards`)
+  is a minimum; using a larger count is allowed and is how a small bot (e.g. 51
+  guilds → recommended 1) can still be split across three nodes.
+- `LAVALINK_NAME` is the audio-node label shared by every host; `NODE_ROLE` /
+  `NODE_NAME` are the bot's cluster identity. They are unrelated settings.
