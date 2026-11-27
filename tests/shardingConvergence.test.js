@@ -244,3 +244,14 @@ test('a duplicate explicit NODE_ROLE is reported once, with the fix', async () =
     assert.match(collisions[0], /NODE_ROLE=sn1/);
     assert.match(collisions[0], /sn1\/sn2\/sn3/);
 });
+
+test('.env.example documents the sharding contract', () => {
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const env = fs.readFileSync(path.join(__dirname, '..', '.env.example'), 'utf8');
+    for (const key of ['SHARD_COUNT', 'SHARD_NODES', 'NODE_ROLE', 'LAVALINK_NAME']) {
+        assert.match(env, new RegExp(`# ${key}=`), `${key} must be documented`);
+    }
+    assert.match(env, /NODES CANNOT EXCEED SHARD_COUNT/);
+    assert.match(env, /SINGLE-ACTIVE/);
+});
