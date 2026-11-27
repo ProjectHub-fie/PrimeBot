@@ -2335,3 +2335,26 @@ prints the reason under the node name, and `startConnectDiagnostic(client)`
 (wired in `index.js` `startMusic`) warns once after 20s with the resolved
 `ws(s)://host:port` when the node still has not connected — a blocked port and a
 wrong `NODE_AUTH` otherwise look identical.
+
+### Custom emojis on every shard node (emoji guilds live on ONE shard)
+
+The emoji guilds (and their `emoji list` channels) live on a single shard, so on
+the other nodes the gateway never delivers them: `client.guilds.fetch(id)` hands
+back a guild with `available === false` and every custom emoji silently fell back
+to Unicode (`guild_temporarily_unavailable` in the boot log).
+
+`utils/emojiManager.js` `_loadGuild()` now falls back to **REST** whenever the
+gateway guild is missing or unavailable — REST is shard-independent:
+
+- `GET /guilds/{id}/emojis` → the live emoji list (validated, `available:false`
+  dropped, ids registered in `_liveById` exactly like the gateway path),
+- `GET /guilds/{id}/channels` → the `emoji list` channel,
+- `GET /channels/{id}/messages?limit=100&before=` → the alias list (the cursor
+  loop stops when it does not advance).
+
+`report.guilds[i].source` is `'rest'` for those nodes, so the log tells you which
+path was used. A client without a REST layer keeps the old gateway-only behaviour
+(and the old `guild_unavailable` reason). Tests: `tests/emojiShardRest.test.js`
+(off-shard resolves `prc`/`crc`/`clc` + channel aliases, a REST failure degrades
+to Unicode, the owning node makes zero REST calls, both nodes resolve identical
+ids).
