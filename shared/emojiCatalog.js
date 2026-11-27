@@ -340,6 +340,8 @@ const EMOJI_FALLBACKS = Object.freeze({
     i: '🇮', j: '🇯', k: '🇰', l: '🇱', m: '🇲', n: '🇳', o: '🇴', p: '🇵',
     q: '🇶', r: '🇷', s: '🇸', t: '🇹', u: '🇺', v: '🇻', w: '🇼', x: '🇽',
     y: '🇾', z: '🇿',
+    // Code Compile status emojis (Discord application emojis; Unicode fallbacks).
+    prc: '⏳', crc: '✅', clc: '❌',
 });
 
 /**
@@ -366,6 +368,7 @@ const HELP_CATEGORY_EMOJI = Object.freeze({
     moderation: 'moderation',
     admin: 'config',
     antinuke: 'antinuke',
+    developer: 'utility',
     utility: 'utility',
     playlist: 'playlist',
     profile: 'profile',

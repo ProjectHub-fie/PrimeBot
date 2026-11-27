@@ -271,6 +271,11 @@ class EmojiManager {
             for (const c of row.candidates) candidates.push(c);
         }
 
+        // Discord application emojis (uploaded to the bot itself, e.g. the
+        // Code Compile `prc`/`crc`/`clc` status marks). They are owned by the
+        // application, so their ids are discovered — never hardcoded.
+        await this._loadApplicationEmojis(candidates);
+
         // Catalog entries are candidates too, but only survive if their id was
         // actually present in a live guild collection. Resolve the source guild
         // up front so priority sorting sees the real guild.
@@ -386,6 +391,46 @@ class EmojiManager {
         }
 
         return { report, candidates };
+    }
+
+    /**
+     * Application emojis belong to the bot application, not to a guild. They
+     * are validated the same way (their id must exist in the live collection)
+     * so a catalog/`emoji list` reference to one still has to be real.
+     */
+    async _loadApplicationEmojis(candidates) {
+        const application = this.client && this.client.application;
+        if (!application || !application.emojis) return;
+
+        let collection = application.emojis.cache;
+        try {
+            if (typeof application.emojis.fetch === 'function') {
+                collection = await application.emojis.fetch();
+            }
+        } catch (err) {
+            console.warn('[EMOJI] Application emoji fetch failed:', sanitizeError(err));
+            collection = application.emojis.cache || collection;
+        }
+        if (!collection || typeof collection.values !== 'function') return;
+
+        for (const emoji of collection.values()) {
+            if (!emoji || !emoji.id) continue;
+            this._liveById.set(emoji.id, {
+                id: emoji.id,
+                name: emoji.name,
+                animated: Boolean(emoji.animated),
+                guildId: 'application',
+            });
+            candidates.push({
+                name: emoji.name,
+                id: emoji.id,
+                animated: Boolean(emoji.animated),
+                category: null,
+                semanticName: normalizeKey(emoji.name),
+                sourceGuildId: null,
+                source: 'application',
+            });
+        }
     }
 
     async _fetchGuild(guildId) {

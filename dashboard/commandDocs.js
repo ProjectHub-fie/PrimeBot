@@ -486,6 +486,17 @@ const METADATA = {
         description: 'Show information about the current server: owner, member count, channels, roles, boosts, verification level, emojis, vanity URL and creation date.',
         usage: ['si', 'serverinfo'],
     },
+    compile: {
+        category: 'Utility',
+        description: 'Compile and run code in Python, JavaScript (Node.js), C, C++, Java, C#, Go, Rust, PHP, Ruby, Kotlin and TypeScript. Execution runs on the configured provider (Judge0 CE by default) — never on PrimeBot itself. The language list and their ids are fetched from the provider, not hardcoded. Source code is capped at 15 KB, program input at 5 KB and returned output at 10 KB, with a per-member cooldown, concurrency limit and rate limits per member and server. The public API is shared, so availability and queue times are not guaranteed.',
+        usage: [
+            'compile <language> <code>',
+            'compile <language> ```code``` ```stdin```',
+            'compile languages',
+            'compile help',
+        ],
+        note: 'Also available as `/compile run language:… code:… [stdin:…]`, `/compile languages` and `/compile help`.',
+    },
     stats: {
         category: 'Utility',
         description: 'Show live bot statistics: uptime, memory, servers, users and failover-node health.',
