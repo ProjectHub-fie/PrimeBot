@@ -82,53 +82,16 @@ async function restore247(client) {
 function musicNodeStatus(client) {
     const cfg = getMusicConfig();
     const configured = cfg.nodes.map(n => n.name);
-    const liveNodes = client && client.manager && client.manager.shoukaku && client.manager.shoukaku.nodes
-        ? [...client.manager.shoukaku.nodes.values()]
+    const live = client && client.manager && client.manager.shoukaku && client.manager.shoukaku.nodes
+        ? [...client.manager.shoukaku.nodes.keys()]
         : [];
-    // Shoukaku's `State.CONNECTED` is 1 (see its default nodeResolver, which
-    // only ever picks `state === 1`). Reading the live state keeps this honest
-    // when a node drops after it has connected once.
     return {
         configured,
         name: configured[0] || DEFAULT_NODE_NAME,
-        registered: liveNodes.length,
-        connected: liveNodes.some(n => n.state === 1)
-            || Boolean(client && client.__musicState && client.__musicState.connected),
+        registered: live.length,
+        connected: Boolean(client && client.__musicState && client.__musicState.connected),
         enabled: Boolean(client && client.__musicState && client.__musicState.enabled),
     };
 }
 
-/**
- * Self-heal the Lavalink registration before a command needs a node.
- * Kazagumo resolves a node lazily, so a registration that failed at boot (the
- * client was not ready yet) otherwise leaves every music command broken until
- * the process restarts.
- *
- * @returns {boolean} true when at least one node is registered
- */
-function ensureMusicNodes(client) {
-    try {
-        const manager = client && client.manager;
-        if (!manager || !manager.shoukaku) return false;
-        if (manager.shoukaku.nodes.size > 0) return true;
-        if (typeof manager.ensureNodes === 'function') manager.ensureNodes();
-        return manager.shoukaku.nodes.size > 0;
-    } catch (_) {
-        return false;
-    }
-}
-
-/** One-line description of the registered nodes, for failure diagnostics. */
-function describeNodes(client) {
-    try {
-        const nodes = client && client.manager && client.manager.shoukaku
-            ? [...client.manager.shoukaku.nodes.values()]
-            : [];
-        if (!nodes.length) return 'none registered';
-        return nodes.map(n => `${n.name}=${n.state}`).join(', ');
-    } catch (_) {
-        return 'unavailable';
-    }
-}
-
-module.exports = { initMusic, restore247, musicNodeStatus, ensureMusicNodes, describeNodes, DEFAULT_NODE_NAME };
+module.exports = { initMusic, restore247, musicNodeStatus, DEFAULT_NODE_NAME };

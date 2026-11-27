@@ -29,12 +29,6 @@ function createShardRuntime({
     const identity = resolveNodeIdentity(env);
     const config = resolveShardConfig(env, { role: identity.role });
     const enabled = config.enabled;
-    // `NODE_ROLE` is authoritative when set. When it is not, every host falls
-    // back to sn1 — and three hosts that all think they are sn1 can only ever
-    // have ONE of them online (they all plan the same shards). So a node
-    // without an explicit role negotiates a free one instead.
-    const explicitRole = String(env.NODE_ROLE || '').trim().length > 0;
-    let roleCollisionWarned = false;
 
     let shardStore = store;
     if (enabled && !shardStore) {
@@ -111,57 +105,10 @@ function createShardRuntime({
         };
     }
 
-    /**
-     * Pick a role that no other live process is reporting.
-     *
-     * Only runs when `NODE_ROLE` is unset. A peer is identified by `pid` (the
-     * heartbeat table is keyed by role, so two hosts with the same role
-     * overwrite each other's row — the pid is what distinguishes them).
-     *
-     * @returns {Promise<string>} the role this node will use
-     */
-    async function negotiateRole() {
-        if (!enabled) return identity.role;
-        if (explicitRole) {
-            // An explicit NODE_ROLE is never rewritten, but two hosts that were
-            // both configured as sn1 can only ever have one of them online.
-            // Say so once, with the fix, instead of standing by silently.
-            if (!roleCollisionWarned) {
-                const peer = await coordinator.roleTakenByPeer().catch(() => null);
-                if (peer) {
-                    roleCollisionWarned = true;
-                    logger.warn(`[SHARD] NODE_ROLE=${identity.role} is already served by another node (pid ${peer.pid}) — this host cannot serve. Give every host its own NODE_ROLE (sn1/sn2/sn3) or unset NODE_ROLE so it is negotiated.`);
-                }
-            }
-            return identity.role;
-        }
-        try {
-            const taken = await coordinator.roleTakenByPeer();
-            if (!taken) return identity.role;
-            const live = await shardStore.listNodes();
-            const fresh = live.filter(n => n.ageMs != null && n.ageMs <= config.staleAfterMs);
-            const free = config.nodes.find(role => !fresh.some(n => n.role === role));
-            if (!free) return identity.role; // every role is live — stand by
-            const previous = identity.role;
-            identity.role = free;
-            coordinator.setRole(free);
-            // Every other identity consumer (monitor pulse, status views)
-            // resolves from the environment, so keep it in sync.
-            env.NODE_ROLE = free;
-            if (env === process.env) process.env.NODE_ROLE = free;
-            logger.log(`[SHARD] role ${previous} is already served by another node (pid ${taken.pid}) — adopting ${free}`);
-            return free;
-        } catch (err) {
-            logger.warn('[SHARD] role negotiation failed:', err.message);
-            return identity.role;
-        }
-    }
-
     /** Claim this node's shards. Never throws — a coordinator outage must not stop boot. */
     async function claim() {
         if (!enabled) return { shardIds: [], reason: 'disabled' };
         try {
-            await negotiateRole();
             const result = await coordinator.claim();
             currentShards = result.shardIds;
             const label = result.shardIds.length ? result.shardIds.join(',') : 'none';
@@ -231,7 +178,6 @@ function createShardRuntime({
         identity,
         coordinator,
         claim,
-        negotiateRole,
         applyToClient,
         telemetry,
         startLoop,
@@ -240,8 +186,6 @@ function createShardRuntime({
         snapshot,
         planPreview,
         get shardIds() { return [...currentShards]; },
-        get role() { return identity.role; },
-        explicitRole,
         get shardLost() { return shardLost; },
         startedAt: STARTED_AT,
         MemoryShardStore,

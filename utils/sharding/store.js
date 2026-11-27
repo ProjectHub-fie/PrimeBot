@@ -49,13 +49,7 @@ function ensureTables() {
     return ready;
 }
 
-/**
- * `null` means "this node never published its shard list" (unknown), which is
- * NOT the same as `[]` ("this node explicitly serves no shards"). Ownership
- * decisions must tell the two apart.
- */
 function toShardIds(value) {
-    if (value == null) return null;
     if (Array.isArray(value)) return value.map(Number).filter(Number.isInteger);
     if (typeof value === 'string') {
         try {
@@ -72,7 +66,7 @@ class PostgresShardStore {
     async listNodes() {
         await ensureTables();
         const { rows } = await seasonPool.query(`
-            SELECT role, node_name, shard_ids, pid,
+            SELECT role, node_name, shard_ids,
                    EXTRACT(EPOCH FROM (NOW() - last_heartbeat)) * 1000 AS age_ms
             FROM bot_node_status
         `);
@@ -80,9 +74,6 @@ class PostgresShardStore {
             role: String(row.role).toLowerCase(),
             nodeName: row.node_name,
             shardIds: toShardIds(row.shard_ids),
-            // The heartbeat table is keyed by ROLE, so `pid` is what tells this
-            // process apart from a peer that thinks it has the same role.
-            pid: row.pid == null ? null : Number(row.pid),
             ageMs: row.age_ms == null ? null : Math.round(Number(row.age_ms)),
         }));
     }

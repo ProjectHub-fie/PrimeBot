@@ -128,13 +128,10 @@ async function handleMusicSlash(client, interaction) {
     }
 
     try {
-        // Same lazy self-heal as the prefix path (see music/prefixRunner.js).
-        require('./index').ensureMusicNodes(client);
         await command.run(client, interaction, prefix);
     } catch (error) {
         // A missing Lavalink node is an infrastructure state, not a user error.
         if (/no node found/i.test(String(error && error.message))) {
-            console.error(`[MUSIC] /${command.name}: no usable Lavalink node (registered: ${require('./index').describeNodes(client)})`);
             let name = 'LNODE';
             try { name = require('./index').musicNodeStatus(client).name; } catch (_) { /* keep default */ }
             const payload = { content: `Music is temporarily unavailable — the audio node \`${name}\` isn't connected yet.` };
