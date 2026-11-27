@@ -44,6 +44,23 @@ class ShardCoordinator {
         this._lastPlan = null;
     }
 
+    /** Adopt a different role (only used when NODE_ROLE is unset). */
+    setRole(role) {
+        const next = String(role || '').trim().toLowerCase();
+        if (next) this.role = next;
+        return this.role;
+    }
+
+    /** True when another live process is already reporting this role. */
+    async roleTakenByPeer() {
+        const nodes = await this.store.listNodes();
+        const mine = nodes.find(n => n.role === this.role);
+        if (!mine) return null;
+        if (mine.ageMs != null && mine.ageMs > this.config.staleAfterMs) return null;
+        if (mine.pid == null) return null;
+        return Number(mine.pid) === process.pid ? null : mine;
+    }
+
     /** The static plan for the configured node list. */
     plan() {
         const plan = planAssignment({
@@ -83,9 +100,9 @@ class ShardCoordinator {
         ]);
 
         const owners = new Map(assignments.map(row => [row.shardId, row]));
-        const liveRoles = new Set(
-            nodes.filter(n => n.ageMs != null && n.ageMs <= this.config.staleAfterMs).map(n => n.role),
-        );
+        const liveNodes = nodes.filter(n => n.ageMs != null && n.ageMs <= this.config.staleAfterMs);
+        const liveByRole = new Map(liveNodes.map(n => [n.role, n]));
+        const liveRoles = new Set(liveNodes.map(n => n.role));
         const deadPeers = this.config.nodes.filter(role => role !== this.role && !liveRoles.has(role)).length;
 
         // Healthy fleet: stick to the plan share (plus one slot of slack).
@@ -101,8 +118,20 @@ class ShardCoordinator {
         const isAbandoned = (row) => {
             if (row.ownerRole === this.role) return false;
             const leaseLapsed = row.ageMs == null || row.ageMs > this.config.staleAfterMs;
-            const ownerSilent = !liveRoles.has(row.ownerRole);
-            return leaseLapsed && ownerSilent;
+            if (!leaseLapsed) return false;
+            // The lease is the contract: a node renews every shard it actually
+            // serves on each heartbeat. A lapsed lease therefore means the
+            // owner is not serving it — even when the process is still alive.
+            // `shard_ids` on the heartbeat makes that explicit, so a node that
+            // restarted with a smaller share releases its old shards instead of
+            // blocking its peers forever.
+            const owner = liveByRole.get(row.ownerRole);
+            if (!owner) return true;
+            // Unknown (never published) → assume it is serving: never steal a
+            // shard from a live node we cannot see into. An empty list is an
+            // explicit "I serve nothing", which is safe to reclaim.
+            if (owner.shardIds == null) return false;
+            return !owner.shardIds.includes(row.shardId);
         };
 
         for (const shardId of desired) {
@@ -137,6 +166,21 @@ class ShardCoordinator {
         const stale = this._owned.filter(id => !owned.includes(id));
         if (stale.length) {
             await this.store.release(stale, { role: this.role }).catch(() => {});
+        }
+
+        // Also release rows this ROLE still owns but this process is not
+        // serving (a restart that came back with a smaller share, or a role the
+        // node adopted later). Without this the peer that the plan gives those
+        // shards to waits for the lease to lapse every single time.
+        // Only LAPSED rows: a second process that mistakenly shares this role
+        // must never release a shard its twin is actively serving.
+        const orphaned = assignments
+            .filter(row => row.ownerRole === this.role
+                && !owned.includes(row.shardId)
+                && (row.ageMs == null || row.ageMs > this.config.staleAfterMs))
+            .map(row => row.shardId);
+        if (orphaned.length) {
+            await this.store.release(orphaned, { role: this.role }).catch(() => {});
         }
         this._owned = owned.sort((a, b) => a - b);
 
@@ -196,8 +240,11 @@ class MemoryShardStore {
         this.nodes = new Map(); // role -> { role, nodeName, lastHeartbeat }
     }
 
-    setNode(role, { nodeName = role, ageMs = 0 } = {}) {
-        this.nodes.set(role, { role, nodeName, lastHeartbeat: this.now() - ageMs });
+    setNode(role, { nodeName = role, ageMs = 0, pid = null, shardIds = null } = {}) {
+        this.nodes.set(role, {
+            role, nodeName, pid, shardIds,
+            lastHeartbeat: this.now() - ageMs,
+        });
         return this;
     }
 
@@ -210,6 +257,8 @@ class MemoryShardStore {
         return [...this.nodes.values()].map(n => ({
             role: n.role,
             nodeName: n.nodeName,
+            shardIds: n.shardIds == null ? null : [...n.shardIds],
+            pid: n.pid,
             ageMs: Math.max(0, this.now() - n.lastHeartbeat),
         }));
     }
