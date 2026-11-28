@@ -1772,6 +1772,63 @@ first use — no migration needed, and the vendored schema files stay unchanged.
 **Same-DB requirement:** every shard node must share it so a 24/7 session created
 on one node is restored by whichever node takes the guild over.
 
+### Lavalink connection diagnostics + registration order (the `:undefined` log)
+
+`[MUSIC] Lavalink "X" is not connected after 20s — ws://host:2336:undefined` was a
+**logging-format bug only**, not a missing password: `music/index.js`
+`startConnectDiagnostic()` printed `${node.url}:${node.port}`, but
+`music/config.js` `normalizeNode()` returns `{ url, name, auth, secure }` and no
+`port` — the port is already inside `url`. The endpoint is now built once, in
+`music/nodeDiagnostics.js` `nodeEndpoint()` → `ws(s)://host:port/v4/websocket`.
+Never rebuild it from parts in a log line.
+
+- **Sanitized diagnostics:** `music/nodeDiagnostics.js` (`describeNode`,
+  `maskAuth`, `sanitizeText`, `buildBootReport`, `buildConnectDiagnostic`) reports
+  host/port/scheme + **password presence** (`auth set (13 chars) from NODE_AUTH`)
+  and redacts the password from any library error. `musicNodeStatus()` exposes
+  `endpoint`, `host`, `port`, `secure`, `hasAuth`, `authSource`, `stateName`.
+  `$stats`/`$music` keep their existing wording.
+- **Config validation:** `resolveNodeConfig()` returns `{ nodes, problems }`;
+  `getMusicConfig().problems` + `buildBootReport().problems` warn at boot about a
+  missing host, a missing port (a bare host dials :80) and a missing password.
+  `LAVALINK_NODES` entries now accept the documented
+  `{ name, host, port, password, secure }` shape (previously only
+  `url`/`auth` worked, so the documented form produced an empty url + empty
+  password). Password aliases: `NODE_AUTH` → `LAVALINK_PASSWORD` → `LAVALINK_AUTH`.
+- **Registration order = crash fix.** `addNode()` connects immediately and a
+  failed connection emits `error` **on the Shoukaku manager**; Kazagumo binds no
+  `error` listener, and Node treats an unhandled `error` event as fatal. The old
+  `initMusic()` registered nodes *before* `loadNodes()` bound the handlers, so a
+  fast failure (client already ready — the standby-takeover path) killed the
+  process → the "SN1/SN3 report restarts" loop. `loadPlayerManager` now only
+  exposes `manager.startNodes()`, which `initMusic` calls **after** `loadNodes`/
+  `loadPlayers`; `loadPlayerManager` also binds its own bootstrap `error` guard
+  first. Never call `registerAll`/`connector.ready` before the node events exist.
+- **Single init per process:** `client.__musicInitialized` still guards
+  `initMusic` (now logging that it skipped); `registerAll` is idempotent and
+  `startNodes()`/`ensureNodes()` never open a second socket. The connector's
+  `clientReady` hook and `startNodes()` converge on the same guard.
+- **Safe reconnect:** Shoukaku handles live-socket retries; once it gives up it
+  deletes the node from the pool, so `music/events/Node/disconnect.js` +
+  `manager.scheduleNodeReconnect()` re-register with a **bounded** backoff
+  (2s/5s/15s/30s/60s, then give up) that resets on `ready`. One timer at a time.
+- **No players without a node:** `manager.createPlayer` is wrapped and throws a
+  typed `MUSIC_NODE_UNAVAILABLE` (see `music/nodeAvailability.js`) **before**
+  Kazagumo touches voice; `prefixRunner`/`interactions` recognise it (and
+  Kazagumo's raw `No node found`) and keep replying "Music is temporarily
+  unavailable — the audio node `X` isn't connected yet." while logging the
+  sanitized endpoint/state. `musicNodeStatus().connected` = Shoukaku state 1.
+- **Tests:** `tests/lavalinkConnection.test.js` (mocked kazagumo/shoukaku via
+  `Module._load`): missing password/problems, timeout diagnostic (no
+  `undefined`), successful connection, deferred registration + no unhandled
+  error, one re-registration after a drop, bounded backoff reset, createPlayer
+  refusal, friendly prefix reply, init-once ordering.
+- **Provider-side unknown (cannot be verified from the repo):** whether
+  `lavalink.cloudewave.in:2336` is reachable from the bot host and whether it
+  speaks plaintext `ws://` (NODE_SECURE=false) or TLS `wss://`. The sandbox gets
+  `EHOSTUNREACH`, so the scheme/password must be confirmed against the provider's
+  panel. The diagnostic now says which of the two it is.
+
 ## Voice defense — the bot is always self-deafened (default)
 
 The bot is **defended in voice by default**: its own voice state is always

@@ -45,6 +45,11 @@ function intEnv(value, fallback) {
  * flag, so `url` must be bare `host:port`. A full `ws://`/`wss://` URL in
  * NODE_URL (or LAVALINK_NODES) is unwrapped here: the scheme decides `secure`
  * and is stripped from the host.
+ *
+ * `LAVALINK_NODES` entries may use the documented `host` / `port` / `password`
+ * keys instead of `url` / `auth`; those were documented in `.env.example` but
+ * never implemented, so such an entry resolved to an empty url and an empty
+ * password (a node that can never connect). Both shapes are accepted now.
  */
 function normalizeNode(node) {
     let url = String(node.url || '').trim();
@@ -65,10 +70,30 @@ function normalizeNode(node) {
         url = url.split('/')[0];
     }
 
+    // `{ host, port }` form (LAVALINK_NODES). A bare host dials :80, which is
+    // never the intended Lavalink port, so the port is always appended.
+    if (!url && node.host) {
+        const host = String(node.host).trim();
+        const port = node.port ? String(node.port).trim() : '';
+        url = port ? `${host}:${port}` : host;
+    } else if (url && !/:[0-9]+$/.test(url) && node.port) {
+        url = `${url}:${String(node.port).trim()}`;
+    }
+
+    let auth = node.auth !== undefined && node.auth !== null ? String(node.auth) : '';
+    let authSource = auth ? 'entry.auth' : 'none';
+    if (!auth && node.password !== undefined && node.password !== null) {
+        auth = String(node.password);
+        if (auth) authSource = 'entry.password';
+    }
+    // The env resolver knows which variable the password came from; keep it.
+    if (node.authSource) authSource = auth ? node.authSource : 'none';
+
     return {
         url,
         name: String(node.name || DEFAULT_NODE_NAME),
-        auth: String(node.auth || ''),
+        auth,
+        authSource,
         secure,
     };
 }
@@ -93,26 +118,48 @@ function resolveNodeUrl() {
 
 /** Linix `config.nodes` — the authorized Lavalink node(s). */
 function resolveNodes() {
+    return resolveNodeConfig().nodes;
+}
+
+/** The password, plus the name of the env var it came from (never the value). */
+function resolveNodeAuth() {
+    if (process.env.NODE_AUTH) return { auth: process.env.NODE_AUTH, source: 'NODE_AUTH' };
+    if (process.env.LAVALINK_PASSWORD) return { auth: process.env.LAVALINK_PASSWORD, source: 'LAVALINK_PASSWORD' };
+    if (process.env.LAVALINK_AUTH) return { auth: process.env.LAVALINK_AUTH, source: 'LAVALINK_AUTH' };
+    return { auth: '', source: 'none' };
+}
+
+/**
+ * Resolve the node list plus the configuration problems that would prevent a
+ * connection. `problems` holds sanitized, human-readable strings only.
+ */
+function resolveNodeConfig() {
     const url = resolveNodeUrl();
 
     if (process.env.LAVALINK_NODES) {
         try {
             const parsed = JSON.parse(process.env.LAVALINK_NODES);
-            if (Array.isArray(parsed) && parsed.length) return parsed.map(normalizeNode);
+            if (Array.isArray(parsed) && parsed.length) {
+                return { nodes: parsed.map(normalizeNode), problems: [] };
+            }
         } catch (err) {
             console.error('[MUSIC] LAVALINK_NODES is not valid JSON:', err.message);
+            return { nodes: [], problems: ['LAVALINK_NODES is not valid JSON — no Lavalink node was configured.'] };
         }
     }
-    if (!url) return [];
-    return [normalizeNode({
+    if (!url) return { nodes: [], problems: [] };
+    const { auth, source } = resolveNodeAuth();
+    const node = normalizeNode({
         url,
         // Lavalink node identifier: `LAVALINK_NAME` when explicitly set,
         // otherwise `LNODE`. `NODE_NAME` is intentionally NOT consulted — it
         // is the shard cluster identity, not an audio-node label.
         name: process.env.LAVALINK_NAME || DEFAULT_NODE_NAME,
-        auth: process.env.NODE_AUTH || process.env.LAVALINK_PASSWORD || '',
+        auth,
+        authSource: source,
         secure: process.env.NODE_SECURE || process.env.LAVALINK_SECURE,
-    })];
+    });
+    return { nodes: [node], problems: [] };
 }
 
 /** Shoukaku options — Linix's values, overridable per deployment. */
@@ -199,8 +246,12 @@ function resolvePlaylistMenu() {
 }
 
 function getMusicConfig() {
+    const { nodes, problems } = resolveNodeConfig();
     return {
-        nodes: resolveNodes(),
+        nodes,
+        // Sanitized configuration problems (missing host/port/password). The
+        // boot path logs these instead of letting a broken node fail silently.
+        problems,
         nodeOptions: resolveNodeOptions(),
         nodeSource: process.env.LAVALINK_SEARCH_ENGINE || process.env.NODE_SOURCE || 'ytsearch',
         spotify: {
@@ -234,6 +285,8 @@ function getMusicConfig() {
 
 module.exports = { getMusicConfig,
     resolveNodes,
+    resolveNodeConfig,
+    resolveNodeAuth,
     resolveNodeUrl,
     resolveNodeOptions,
     resolveEmoji,
