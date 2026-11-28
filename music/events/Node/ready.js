@@ -7,8 +7,21 @@ module.exports = {
   run: async (client, name) => {
     // The node connected — THIS is "music ready". Configuration alone never
     // reports ready (see music/index.js and index.js).
-    if (client.__musicState) client.__musicState.connected = true;
-    client.logger.log(`Lavalink "${name}" connected.`, "ready");
+    if (client.__musicState) {
+        client.__musicState.connected = true;
+        client.__musicState.lastError = null;
+        client.__musicState.lastErrorAt = null;
+        client.__musicState.connectDiagnostic = null;
+    }
+    client.__musicConnectDiagDone = true;
+    // Endpoint only (host/port/scheme) — never the password.
+    let endpoint = "";
+    try {
+        const { describeNode } = require("../../nodeDiagnostics");
+        const { getMusicConfig } = require("../../config");
+        endpoint = describeNode((getMusicConfig().nodes || [])[0]).endpoint;
+    } catch (_) { /* diagnostics are optional */ }
+    client.logger.log(`Lavalink "${name}" connected${endpoint ? ` (${endpoint})` : ""}.`, "ready");
     console.log(`[MUSIC] Linix music system ready — Lavalink node "${name}" connected.`);
     client.logger.log("Auto Reconnect Collecting player 24/7 data", "log");
 

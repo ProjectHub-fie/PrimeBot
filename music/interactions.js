@@ -133,11 +133,15 @@ async function handleMusicSlash(client, interaction) {
         await command.run(client, interaction, prefix);
     } catch (error) {
         // A missing Lavalink node is an infrastructure state, not a user error.
-        if (/no node found/i.test(String(error && error.message))) {
-            console.error(`[MUSIC] /${command.name}: no usable Lavalink node (registered: ${require('./index').describeNodes(client)})`);
-            let name = 'LNODE';
-            try { name = require('./index').musicNodeStatus(client).name; } catch (_) { /* keep default */ }
-            const payload = { content: `Music is temporarily unavailable — the audio node \`${name}\` isn't connected yet.` };
+        const music = require('./index');
+        if (music.isNodeUnavailableError(error)) {
+            const status = music.musicNodeStatus(client);
+            console.error(
+                `[MUSIC] /${command.name}: no usable Lavalink node (registered: ${music.describeNodes(client)}, `
+                + `endpoint: ${status.endpoint || 'none'}, state: ${status.stateName}`
+                + `${status.lastError ? `, last error: ${status.lastError}` : ''})`,
+            );
+            const payload = { content: `Music is temporarily unavailable — the audio node \`${status.name}\` isn't connected yet.` };
             if (interaction.replied) await interaction.editReply(payload).catch(() => {});
             else await interaction.reply({ ...payload, flags: MessageFlags.Ephemeral }).catch(() => {});
             return true;

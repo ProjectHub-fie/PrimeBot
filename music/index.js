@@ -18,13 +18,31 @@ const loadNodes = require('./loaders/loadNodes');
 const loadPlayers = require('./loaders/loadPlayers');
 const loadCommands = require('./loaders/loadCommands');
 const { getMusicConfig, DEFAULT_NODE_NAME } = require('./config');
+const { buildBootReport, buildConnectDiagnostic, describeNode, stateName } = require('./nodeDiagnostics');
+const availability = require('./nodeAvailability');
+
+const NODE_UNAVAILABLE = availability.NODE_UNAVAILABLE;
+const hasUsableNode = availability.hasUsableNode;
+const isNodeUnavailableError = availability.isNodeUnavailableError;
+const describeNodes = availability.describeNodes;
+
+/**
+ * A typed, user-safe "music is unavailable" error. Thrown *before* Kazagumo
+ * touches voice, so a missing node never joins a channel or creates a player.
+ */
+function nodeUnavailableError(client) {
+    return availability.nodeUnavailableError(client, musicNodeStatus(client));
+}
 
 /**
  * Initialize the music subsystem on a logged-in client.
  * @returns {{enabled:boolean, reason?:string, nodes?:number, commands?:object}}
  */
 function initMusic(client) {
-    if (client.__musicInitialized) return client.__musicState || { enabled: false, reason: 'already initialized' };
+    if (client.__musicInitialized) {
+        client.logger && client.logger.log('Music already initialized on this client — skipping the second init.', 'debug');
+        return client.__musicState || { enabled: false, reason: 'already initialized' };
+    }
     client.__musicInitialized = true;
 
     installMusicClientSurface(client);
@@ -38,6 +56,9 @@ function initMusic(client) {
             + 'Music commands will report the missing node.',
             'warn',
         );
+        for (const problem of cfg.problems || []) {
+            client.logger.log(`[MUSIC] Lavalink config: ${problem}`, 'warn');
+        }
         client.__musicState = { enabled: false, reason: 'no_lavalink_node', nodes: 0 };
         return client.__musicState;
     }
@@ -48,13 +69,24 @@ function initMusic(client) {
         // `connected` flips true only from the Lavalink node `ready` event.
         client.__musicState = { enabled: true, nodes: cfg.nodes.length, commands: null, connected: false };
         loadPlayerManager(client);
+        // Node/player event handlers MUST be bound before the first node is
+        // registered: `addNode` connects immediately, and a failed connection
+        // emits `error` on the Shoukaku manager. With no listener yet that is
+        // an unhandled 'error' event → the whole process dies and restarts
+        // (the "SN1/SN3 report restarts" symptom).
         loadNodes(client);
         loadPlayers(client);
+        if (client.manager && typeof client.manager.startNodes === 'function') {
+            client.manager.startNodes();
+        }
         const commands = loadCommands(client);
         client.__musicState.commands = commands;
-        // Name + host only — the password (`auth`) is never logged.
-        const described = cfg.nodes.map(n => `${n.name} (${n.url}${n.secure ? ', TLS' : ''})`).join(', ');
-        client.logger.log(`Music initialized with ${cfg.nodes.length} Lavalink node(s): ${described}`, 'log');
+        // Name + endpoint + password PRESENCE only — the password is never logged.
+        const report = buildBootReport(cfg.nodes);
+        client.logger.log(`Music initialized with ${cfg.nodes.length} Lavalink node(s): ${report.line}`, 'log');
+        for (const problem of [...cfg.problems, ...report.problems]) {
+            client.logger.log(`[MUSIC] Lavalink config: ${problem}`, 'warn');
+        }
         return client.__musicState;
     } catch (err) {
         console.error('[MUSIC] Initialization failed:', err);
@@ -76,15 +108,18 @@ async function restore247(client) {
 
 /**
  * Music-node status for displays (`$stats`, `$music`). Reports the CONFIGURED
- * node name (LNODE unless LAVALINK_NAME overrides it), whether the node has
- * actually connected, and never any credential.
+ * node name (LNODE unless LAVALINK_NAME overrides it), the exact WebSocket
+ * endpoint, whether the node has actually connected, and never a credential.
  */
 function musicNodeStatus(client) {
     const cfg = getMusicConfig();
     const configured = cfg.nodes.map(n => n.name);
+    const node = cfg.nodes[0] || null;
     const liveNodes = client && client.manager && client.manager.shoukaku && client.manager.shoukaku.nodes
         ? [...client.manager.shoukaku.nodes.values()]
         : [];
+    const described = node ? describeNode(node) : null;
+    const liveState = liveNodes.length ? Number(liveNodes[0].state) : null;
     // Shoukaku's `State.CONNECTED` is 1 (see its default nodeResolver, which
     // only ever picks `state === 1`). Reading the live state keeps this honest
     // when a node drops after it has connected once.
@@ -92,51 +127,77 @@ function musicNodeStatus(client) {
         configured,
         name: configured[0] || DEFAULT_NODE_NAME,
         registered: liveNodes.length,
-        connected: liveNodes.some(n => n.state === 1)
+        connected: liveNodes.some(n => Number(n.state) === 1)
             || Boolean(client && client.__musicState && client.__musicState.connected),
         enabled: Boolean(client && client.__musicState && client.__musicState.enabled),
-        // Shoukaku's own state: 0 = connecting, 1 = connected, 2 = reconnecting.
-        state: liveNodes.length ? Number(liveNodes[0].state) : null,
+        // Shoukaku's own state: 0 = connecting, 1 = connected, 3 = disconnected.
+        state: liveState,
+        stateName: stateName(liveState),
+        // Sanitized configuration (host/port/TLS/password presence only).
+        endpoint: described ? described.endpoint : null,
+        host: described ? described.host : null,
+        port: described ? described.port : null,
+        secure: described ? described.secure : null,
+        hasAuth: described ? described.hasAuth : false,
+        authSource: described ? described.authSource : 'unknown',
         lastError: (client && client.__musicState && client.__musicState.lastError) || null,
         lastErrorAt: (client && client.__musicState && client.__musicState.lastErrorAt) || null,
     };
 }
 
 /**
- * Self-heal the Lavalink registration before a command needs a node.
- * Kazagumo resolves a node lazily, so a registration that failed at boot (the
- * client was not ready yet) otherwise leaves every music command broken until
- * the process restarts.
- *
- * @returns {boolean} true when at least one node is registered
+ * Say, ~20s in (and once more at 60s), that the node has still not connected,
+ * with the exact resolved endpoint, the node state and whether a password was
+ * configured. A blocked port, a wrong scheme and a wrong password otherwise
+ * look identical ("the music commands just do not work").
  */
-/**
- * Say once, ~20s in, that the node has still not connected, with the resolved
- * endpoint. A blocked port or a down host otherwise looks exactly like "the
- * music commands just do not work".
- */
-function startConnectDiagnostic(client, delayMs = 20000) {
+function startConnectDiagnostic(client, delayMs = 20000, { setTimer = setTimeout, extraDelays = [40000] } = {}) {
     if (!client || client.__musicConnectDiag) return;
     client.__musicConnectDiag = true;
-    const timer = setTimeout(() => {
-        try {
-            const status = musicNodeStatus(client);
-            if (status.connected) return;
-            const cfg = getMusicConfig();
-            const node = cfg.nodes[0];
-            const endpoint = node ? `${node.secure ? 'wss' : 'ws'}://${node.url}:${node.port}` : 'no node configured';
-            const reason = status.lastError
-                ? `last error: ${status.lastError}`
-                : `no error reported yet (Shoukaku state ${status.state == null ? 'n/a' : status.state})`;
-            console.warn(
-                `[MUSIC] Lavalink "${status.name}" is not connected after ${Math.round(delayMs / 1000)}s — `
-                + `${endpoint} (${reason}). Check that this host can reach that host/port and that NODE_AUTH matches the node password.`,
-            );
-        } catch (_) { /* diagnostics must never throw */ }
-    }, delayMs);
-    if (timer.unref) timer.unref();
+
+    const report = () => {
+        const status = musicNodeStatus(client);
+        if (status.connected) {
+            client.__musicConnectDiagDone = true;
+            return;
+        }
+        const cfg = getMusicConfig();
+        const message = buildConnectDiagnostic({
+            node: cfg.nodes[0],
+            status,
+            elapsedMs: delayMs,
+            lastError: status.lastError,
+        });
+        // Store it so `$stats` / the dashboard can show the same reason.
+        if (client.__musicState) client.__musicState.connectDiagnostic = message;
+        console.warn(message);
+    };
+
+    const schedule = (wait) => {
+        const timer = setTimer(() => {
+            try { report(); } catch (_) { /* diagnostics must never throw */ }
+        }, wait);
+        if (timer && timer.unref) timer.unref();
+        return timer;
+    };
+
+    schedule(delayMs);
+    // One follow-up: a node that connects late (slow provider) should not be
+    // reported once and forgotten, and a node stuck CONNECTING gets a second,
+    // equally sanitized line.
+    for (const extra of extraDelays) {
+        const timer = setTimer(() => {
+            try {
+                if (client.__musicConnectDiagDone) return;
+                if (musicNodeStatus(client).connected) return;
+                report();
+            } catch (_) { /* ignore */ }
+        }, delayMs + extra);
+        if (timer && timer.unref) timer.unref();
+    }
 }
 
+/** Self-heal the Lavalink registration before a command needs a node. */
 function ensureMusicNodes(client) {
     try {
         const manager = client && client.manager;
@@ -149,17 +210,16 @@ function ensureMusicNodes(client) {
     }
 }
 
-/** One-line description of the registered nodes, for failure diagnostics. */
-function describeNodes(client) {
-    try {
-        const nodes = client && client.manager && client.manager.shoukaku
-            ? [...client.manager.shoukaku.nodes.values()]
-            : [];
-        if (!nodes.length) return 'none registered';
-        return nodes.map(n => `${n.name}=${n.state}`).join(', ');
-    } catch (_) {
-        return 'unavailable';
-    }
-}
-
-module.exports = { initMusic, restore247, musicNodeStatus, ensureMusicNodes, describeNodes, startConnectDiagnostic, DEFAULT_NODE_NAME };
+module.exports = {
+    initMusic,
+    restore247,
+    musicNodeStatus,
+    ensureMusicNodes,
+    describeNodes,
+    startConnectDiagnostic,
+    hasUsableNode,
+    nodeUnavailableError,
+    isNodeUnavailableError,
+    NODE_UNAVAILABLE,
+    DEFAULT_NODE_NAME,
+};

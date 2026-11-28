@@ -86,28 +86,27 @@ async function runPrefixCommand(client, message, commandName, args, prefix) {
 
     // Kazagumo resolves the node lazily, so a registration that failed at boot
     // would break every music command until a restart. Heal it here (throttled).
-    const { ensureMusicNodes, describeNodes } = require('./index');
+    const { ensureMusicNodes, describeNodes, isNodeUnavailableError, musicNodeStatus } = require('./index');
     ensureMusicNodes(client);
 
     return command.execute(message, args, client, prefix).catch((err) => {
-        // Kazagumo throws `No node found` when no Lavalink node is registered.
-        // That is an infrastructure state, not a user error — say so plainly
-        // (naming the audio node) instead of surfacing a provider stack trace.
-        if (/no node found/i.test(String(err && err.message))) {
-            const name = nodeName(client);
-            console.error(`[MUSIC] $${command.name}: no usable Lavalink node (registered: ${describeNodes(client)})`);
-            return message.channel.send(`Music is temporarily unavailable — the audio node \`${name}\` isn't connected yet.`).catch(() => null);
+        // No usable Lavalink node is an infrastructure state, not a user error —
+        // say so plainly (naming the audio node) instead of surfacing a provider
+        // stack trace, and log the sanitized endpoint/state to diagnose it.
+        if (isNodeUnavailableError(err)) {
+            const status = musicNodeStatus(client);
+            console.error(
+                `[MUSIC] $${command.name}: no usable Lavalink node (registered: ${describeNodes(client)}, `
+                + `endpoint: ${status.endpoint || 'none'}, state: ${status.stateName}`
+                + `${status.lastError ? `, last error: ${status.lastError}` : ''})`,
+            );
+            return message.channel.send(
+                `Music is temporarily unavailable — the audio node \`${status.name}\` isn't connected yet.`,
+            ).catch(() => null);
         }
         console.error(`[MUSIC] $${command.name} failed:`, err && err.message ? err.message : err);
     });
 }
 
-function nodeName(client) {
-    try {
-        return require('./index').musicNodeStatus(client).name;
-    } catch (_) {
-        return 'LNODE';
-    }
-}
 
 module.exports = { runPrefixCommand, findCommand };

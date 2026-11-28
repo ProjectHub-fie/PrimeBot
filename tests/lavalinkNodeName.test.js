@@ -130,11 +130,17 @@ test('musicNodeStatus reports the configured name and live state', () => {
     });
 });
 
-test('the boot log names the node and never the password', () => {
+test('the boot log names the node/endpoint and never the password', () => {
     const src = fs.readFileSync(path.join(ROOT, 'music/index.js'), 'utf8');
-    assert.match(src, /Music initialized with \$\{cfg\.nodes\.length\} Lavalink node\(s\): \$\{described\}/);
-    assert.match(src, /cfg\.nodes\.map\(n => `\$\{n\.name\} \(\$\{n\.url\}/);
+    // The boot line is built by buildBootReport(): name + ws(s) endpoint +
+    // TLS flag + password PRESENCE ("auth set (N chars) from NODE_AUTH").
+    assert.match(src, /Music initialized with \$\{cfg\.nodes\.length\} Lavalink node\(s\): \$\{report\.line\}/);
+    assert.match(src, /buildBootReport\(cfg\.nodes\)/);
     assert.doesNotMatch(src, /n\.auth/, 'the auth field is never logged');
+
+    const diag = fs.readFileSync(path.join(ROOT, 'music/nodeDiagnostics.js'), 'utf8');
+    assert.match(diag, /authHint/, 'only a password hint (length) is reported');
+    assert.doesNotMatch(diag, /auth:\s*n\.auth/, 'the password value is never rendered');
 });
 
 test('$music and $stats both surface the audio-node name', () => {
@@ -150,9 +156,13 @@ test('$music and $stats both surface the audio-node name', () => {
 test('a missing node produces a clear message, not a raw stack trace', () => {
     for (const rel of ['music/prefixRunner.js', 'music/interactions.js']) {
         const src = fs.readFileSync(path.join(ROOT, rel), 'utf8');
-        assert.match(src, /no node found/i, `${rel} recognises the no-node state`);
+        // Recognises both our typed MUSIC_NODE_UNAVAILABLE and Kazagumo's raw
+        // `No node found` (see music/nodeAvailability.js).
+        assert.match(src, /isNodeUnavailableError/, `${rel} recognises the no-node state`);
         assert.match(src, /isn't connected yet/, `${rel} tells the user what is wrong`);
     }
+    const availability = fs.readFileSync(path.join(ROOT, 'music/nodeAvailability.js'), 'utf8');
+    assert.match(availability, /no node found/i, 'the raw Kazagumo error is still recognised');
 });
 
 test('documentation points at LAVALINK_NAME/LNODE, not NODE_NAME, for the audio node', () => {
